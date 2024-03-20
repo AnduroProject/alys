@@ -1,0 +1,74 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+# lighthouse
+execution_layer = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+types = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+store = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+bls = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+
+# workspace
+bridge = { package = "federation", path = "../crates/federation" }
+
+# misc
+clap = { workspace = true }
+eyre = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+strum = { version = "0.24", features = ["derive"] }
+thiserror = { workspace = true }
+slog = { version = "2", features = ["max_level_trace", "release_max_level_trace"] }
+snap = "1"
+smallvec = "1"
+unsigned-varint = { version = "0.6", features = ["codec"] }
+ssz_types = "0.5"
+regex = "1"
+fnv = "1"
+lazy_static = "1"
+rand = "0.8.5"
+once_cell = "1.19.0"
+
+# async
+futures = { workspace = true }
+futures-timer = "3.0.1"
+tokio = { workspace = true, features = ["time"] }
+tokio-util = { version = "0.6", features = ["codec", "compat", "time"] }
+tokio-io-timeout = "1"
+async-trait = "0.1"
+
+# storage
+leveldb = { version = "0.8" }
+
+# encoding
+ethereum_ssz = { version = "0.5", features = ["arbitrary"] }
+ethereum_ssz_derive = "0.5"
+serde = { workspace = true }
+serde_derive = { workspace = true }
+serde_json = "1.0.94"
+rmp-serde = "1.1.2"
+
+# ethereum
+superstruct = "0.6"
+tree_hash = "0.5"
+tree_hash_derive = "0.5"
+ethereum-types = { workspace = true }
+ethers-core = { workspace = true }
+ethers = { workspace = true }
+
+# bitcoin
+bitcoin = { workspace = true, features = ["serde"] }
+
+# networking
+hyper = { version = "0.14", features = ["full"] }
+
+[dependencies.libp2p]
+version = "0.52"
+default-features = false
+features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
+

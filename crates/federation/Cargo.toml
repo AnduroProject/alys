@@ -1,0 +1,29 @@
+[package]
+name = "federation"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+futures = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
+
+num = "0.2"
+num-traits = "0.2"
+num-derive = "0.3"
+
+# bitcoin
+bitcoincore-rpc = { workspace = true }
+bdk = { version = "0.29.0", features = ["key-value-db"]}
+
+# ethereum
+ethers = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+hex = "0.4.3"

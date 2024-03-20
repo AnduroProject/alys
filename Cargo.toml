@@ -1,0 +1,34 @@
+[workspace]
+members = [
+    "app",
+    "crates/federation",
+    "crates/miner"
+]
+
+resolver = "2"
+
+[workspace.dependencies]
+futures = "0.3.26"
+tracing = "0.1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+thiserror = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_derive = "1.0.116"
+eyre = "0.6"
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4.3"
+
+# bitcoin
+bitcoin = "0.30.0"
+bitcoincore-rpc = "0.17"
+
+# ethereum
+ethereum-types = "0.14.1"
+ethers-core = "2.0.11"
+ethers = "2.0.11"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

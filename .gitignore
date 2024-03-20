@@ -1,0 +1,32 @@
+# Network files
+eth-pos-devnet/consensus/beacondata
+eth-pos-devnet/consensus/genesis.ssz
+eth-pos-devnet/consensus/validatordata
+eth-pos-devnet/execution/geth
+eth-pos-devnet/execution/geth.ipc
+
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+/contracts/broadcast
+/contracts/broadcast/*/31337/
+/contracts/broadcast/**/dry-run/
+
+# Docs
+docs/book/
+
+# Dotenv file
+.env
+
+# Rust stuff
+/target
+
+# Sidechain
+/.bob
+/data/execution
+/data/logs
+
+# Mac
+.DS_Store
