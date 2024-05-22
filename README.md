@@ -1,10 +1,10 @@
-# Alice by BOB
+# Alys by BOB
 
-Alice is a merged mined Bitcoin sidechain.
+Alys is a merged mined Bitcoin sidechain.
 
 - Uses BTC as its base currency.
-- Reaches consensus through [Optimistic Merged Mining](https://www.gobob.xyz/optimine) executed by Bitcoin miners and a federation.
-- Facilitates a two-way peg between Bitcoin and the Alice sidechain through the federation members.
+- Reaches consensus through aux PoW executed by Bitcoin miners and a federation.
+- Facilitates a two-way peg between Bitcoin and the Alys sidechain through the federation members.
 
 ## Overview
 
@@ -25,17 +25,17 @@ On a high level, the repository consists of three parts:
     - Arch: `yay bitcoin-core`
     - Download a binary: https://bitcoin.org/en/download
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
-- Install Alice:
+- Install Alys:
 
 ```shell
-git clone git@github.com:bob-collective/alice.git
-cd alice 
+git clone git@github.com:AnduroProject/Alys.git
+cd Alys 
 cargo build
 ```
 
 ## Getting Started
 
-We will describe how to run an Alice sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
+We will describe how to run an Alys sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
 
 ### Geth and Bitcoin
 
@@ -58,9 +58,9 @@ We will start a single geth node and a Bitcoin regtest node.
 bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
 ```
 
-### Alice node
+### Alys node
 
-Next, we start a single Alice node with the federation having exactly one member.
+Next, we start a single Alys node with the federation having exactly one member.
 
 ```shell
 # dev (single node)
@@ -90,17 +90,17 @@ Block production will resume once the next valid AuxPoW is submitted.
 
 ### Peg-In
 
-Next, we move funds from Bitcoin to Alice via the peg-in to be able to send transactions on the Alice sidechain.
+Next, we move funds from Bitcoin to Alys via the peg-in to be able to send transactions on the Alys sidechain.
 
 #### Get the Deposit Address
 
-From the running Alice node, we can get the federation deposit address via the `getdepositaddress` RPC:
+From the running Alys node, we can get the federation deposit address via the `getdepositaddress` RPC:
 
 ```shell
 curl --silent -H "Content-Type: application/json" -d '{"id":"1", "jsonrpc":"2.0", "method": "getdepositaddress", "params":[]}' http://localhost:3000 | jq -r .result
 ```
 
-This returns the federation deposit address of your local Alice node, e.g.:
+This returns the federation deposit address of your local Alys node, e.g.:
 
 ```
 bcrt1p83w7fnutkcyy5zdknkh3kjah47jg2j6etltpa542wjd6chzj7yksyz0zqw
@@ -108,7 +108,7 @@ bcrt1p83w7fnutkcyy5zdknkh3kjah47jg2j6etltpa542wjd6chzj7yksyz0zqw
 
 #### Send BTC to the Deposit Address
 
-Next, we do a bit of bitcoin-cli magic to create an "Alice" wallet. We send some BTC on regtest from the Alice wallet to the federation deposit address and add an EVM account (`0x09Af4E864b84706fbCFE8679BF696e8c0B472201`) in an OP_RETURN field for which we know the private key (`0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01`).
+Next, we do a bit of bitcoin-cli magic to create an "Alys" wallet. We send some BTC on regtest from the Alys wallet to the federation deposit address and add an EVM account (`0x09Af4E864b84706fbCFE8679BF696e8c0B472201`) in an OP_RETURN field for which we know the private key (`0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01`).
 
 You can run this script to achieve the peg in. The script will automatically fetch the deposit address from the federation nodes.
 
@@ -121,9 +121,9 @@ EVM_ADDRESS="09Af4E864b84706fbCFE8679BF696e8c0B472201"
 ./scripts/regtest_pegin.sh
 ```
 
-The Alice node will automatically bridge the BTC.
+The Alys node will automatically bridge the BTC.
 
-#### Check that Funds are Allocated in Alice
+#### Check that Funds are Allocated inAlys 
 
 Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1 * 10^18 wei instead of 1 * 10^8 satoshis.
 
@@ -138,7 +138,7 @@ Next up, we want to peg out.
 
 #### Peg-out Funds
 
-We are returning the funds to the Alice wallet we created in Bitcoin.
+We are returning the funds to the Alys wallet we created in Bitcoin.
 
 We can use the peg out contract set the genesis at address `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`, see also the [genesis file](./data/genesis.json).
 
@@ -157,7 +157,7 @@ PRIVATE_KEY=0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01
 # OR use the $DEV_PRIVATE_KEY
 ./scripts/regtest_pegout.sh
 
-# check the last 3 transactions. The 2 last should be the mining reward to alice (with category "immature") and the 3rd last txs should be a normal receive tx from the foundation
+# check the last 3 transactions. The 2 last should be the mining reward to alys (with category "immature") and the 3rd last txs should be a normal receive tx from the foundation
 bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions "*" 3
 ```
 
@@ -191,17 +191,17 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 ```
 </details>
 
-## Running an Alice Network
+## Running an Alys Network
 
-Above, we show how to run Alice with a single node and a single federation member. The dev setup is meant for ease of testing without having to set various parameters. For operating an Alice network with multiple federation members, we need to take more steps.
+Above, we show how to run Alys with a single node and a single federation member. The dev setup is meant for ease of testing without having to set various parameters. For operating an Alys network with multiple federation members, we need to take more steps.
 
-We will now run an Alice network with three federation members where each member will run a geth and Alice consensus client and share a Bitcoin node.
+We will now run an Alys network with three federation members where each member will run a geth and Alys consensus client and share a Bitcoin node.
 
 In practice, each federation member will run their own Bitcoin node.
 
 ### Keys
 
-Each Alice node will require two keys:
+Each Alys node will require two keys:
 
 - A Bitcoin key to participate in generating a deposit address on peg-in and to sign peg-out transactions.
 - An Aura key to sign blocks.
@@ -253,9 +253,9 @@ Public Key: 02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
 
 ```shell
 bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword createwallet alice
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword loadwallet alice
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword generatetoaddress 101 $(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -rpcwallet=alice getnewaddress)
+bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword createwallet alys
+bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword loadwallet alys
+bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword generatetoaddress 101 $(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -rpcwallet=alys getnewaddress)
 ```
 
 #### Testnet
@@ -276,12 +276,12 @@ bitcoind -rpcuser=rpcuser -rpcpassword=rpcpassword
 
 ### Run Three Nodes
 
-Each Alice node takes several arguments:
+Each Alys node takes several arguments:
 
 - `chain`: A chain configuration like [chain.json](./data/chain.json)
 - `aura-secret-key`: The secret key used to sign blocks by the federation member.
-- `geth-url`: The URL to the geth node for the Alice node.
-- `db-path`: The path where the Alice blocks are stored.
+- `geth-url`: The URL to the geth node for the Alys node.
+- `db-path`: The path where the Alys blocks are stored.
 - `wallet-path`: The Bitcoin wallet path.
 - `bitcoin-secret-key`: The Bitcoin secret key generates the shared deposit address and processes peg-outs.
 - `bitcoin-rpc-url`: The URL of the Bitcoin RPC.
@@ -461,7 +461,7 @@ cargo run --bin app -- \
 
 ## Development
 
-### Alice Node (Consensus Layer)
+### Alys Node (Consensus Layer)
 
 #### Build and Deploy
 
@@ -602,11 +602,11 @@ geth --sepolia dumpgenesis | jq .
 
 Ensure that the chain is configured to start post-capella (set `shanghaiTime` to 0).
 
-The Alice sidechain expects the bridge contract to be pre-deployed at `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`, this is set in `alloc`.
+The Alys sidechain expects the bridge contract to be pre-deployed at `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`, this is set in `alloc`.
 
 ## Chain Spec
 
-When you start the Alice sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./data/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
+When you start the Alys sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./data/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
 
 ```json
 {
