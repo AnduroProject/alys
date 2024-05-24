@@ -1,4 +1,4 @@
-# Alys by BOB
+# Alys
 
 Alys is a merged mined Bitcoin sidechain.
 
