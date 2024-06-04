@@ -28,9 +28,9 @@ function resume_chain() {
     $PWD/target/debug/app \
         --chain $PWD/data/chain.json \
         --geth-url "http://localhost:${AUTHRPC_PORT}/" \
-        --db-path "$PWD/.bob/chain_db${NUM}" \
+        --db-path "$PWD/.alys/chain_db${NUM}" \
         --rpc-port $((3000 + $1)) \
-        --wallet-path "$PWD/.bob/wallet${NUM}" \
+        --wallet-path "$PWD/.alys/wallet${NUM}" \
         --bitcoin-rpc-url http://localhost:18443 \
         --bitcoin-rpc-user rpcuser \
         --bitcoin-rpc-pass rpcpassword \
@@ -43,8 +43,8 @@ function resume_chain() {
 function start_chain_from_genesis() {
     NUM=$1
 
-    rm -rf "${PWD}/.bob/chain_db${NUM}"
-    rm -rf "${PWD}/.bob/wallet${NUM}"
+    rm -rf "${PWD}/.alys/chain_db${NUM}"
+    rm -rf "${PWD}/.alys/wallet${NUM}"
     echo "" > $PWD/data/logs/app${NUM}.txt
 
     resume_chain $NUM
@@ -60,8 +60,8 @@ function start_multiple_chain() {
 function start_full_node_from_genesis() {
     NUM=$1
 
-    rm -rf "${PWD}/.bob/chain_db${NUM}"
-    rm -rf "${PWD}/.bob/wallet${NUM}"
+    rm -rf "${PWD}/.alys/chain_db${NUM}"
+    rm -rf "${PWD}/.alys/wallet${NUM}"
     echo "" > $PWD/data/logs/app${NUM}.txt
 
     FULL_NODE=1

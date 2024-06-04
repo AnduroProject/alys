@@ -16,8 +16,9 @@ function start_geth() {
     WS_PORT=$((8546 + $NUM * 10))
     PORT=$((30303 + $NUM * 10))
 
-    geth init --datadir "./data/execution/node${NUM}" ./data/genesis.json > "$PWD/data/logs/geth${NUM}.txt" 2>&1
+    geth init --state.scheme "hash" --datadir "./data/execution/node${NUM}" ./data/genesis.json > "$PWD/data/logs/geth${NUM}.txt" 2>&1
     geth --datadir "./data/execution/node${NUM}" \
+        --state.scheme "hash" \
         --networkid 212121 \
         --authrpc.vhosts "*" \
         --authrpc.addr "0.0.0.0" \

@@ -312,10 +312,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --geth-url http://localhost:8551/ \
-  --db-path .bob/chain_db0/ \
+  --db-path .alys/chain_db0/ \
   --rpc-port 3000 \
   --mine \
-  --wallet-path .bob/wallet0 \
+  --wallet-path .alys/wallet0 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --bitcoin-rpc-url localhost:18443 \
   --bitcoin-rpc-user rpcuser \
@@ -329,10 +329,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --geth-url http://localhost:8561/ \
-  --db-path .bob/chain_db1/ \
+  --db-path .alys/chain_db1/ \
   --rpc-port 3001 \
   --mine \
-  --wallet-path .bob/wallet1 \
+  --wallet-path .alys/wallet1 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --bitcoin-rpc-url localhost:18443 \
   --bitcoin-rpc-user rpcuser \
@@ -346,10 +346,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --geth-url http://localhost:8571/ \
-  --db-path .bob/chain_db2/ \
+  --db-path .alys/chain_db2/ \
   --rpc-port 3002 \
   --mine \
-  --wallet-path .bob/wallet2 \
+  --wallet-path .alys/wallet2 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --bitcoin-rpc-url localhost:18443 \
   --bitcoin-rpc-user rpcuser \
@@ -365,10 +365,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --geth-url http://localhost:8551/ \
-  --db-path .bob/chain_db0/ \
+  --db-path .alys/chain_db0/ \
   --rpc-port 3000 \
   --mine \
-  --wallet-path .bob/wallet0 \
+  --wallet-path .alys/wallet0 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --bitcoin-rpc-url localhost:18332 \
   --bitcoin-rpc-user rpcuser \
@@ -383,10 +383,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --geth-url http://localhost:8561/ \
-  --db-path .bob/chain_db1/ \
+  --db-path .alys/chain_db1/ \
   --rpc-port 3001 \
   --mine \
-  --wallet-path .bob/wallet1 \
+  --wallet-path .alys/wallet1 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --bitcoin-rpc-url localhost:18332 \
   --bitcoin-rpc-user rpcuser \
@@ -401,10 +401,10 @@ cargo run --bin app -- \
   --chain data/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --geth-url http://localhost:8571/ \
-  --db-path .bob/chain_db2/ \
+  --db-path .alys/chain_db2/ \
   --rpc-port 3002 \
   --mine \
-  --wallet-path .bob/wallet2 \
+  --wallet-path .alys/wallet2 \
   --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --bitcoin-rpc-url localhost:18332 \
   --bitcoin-rpc-user rpcuser \
@@ -444,9 +444,9 @@ Running a full node is similar to running a federation node. The main difference
 cargo run --bin app -- \
   --chain data/chain.json \ 
   --geth-url http://localhost:8551/ \
-  --db-path .bob/chain_db0/ \
+  --db-path .alys/chain_db0/ \
   --rpc-port 3000 \
-  --wallet-path .bob/wallet0 \
+  --wallet-path .alys/wallet0 \
   --bitcoin-rpc-url localhost:18332 \
   --bitcoin-rpc-user rpcuser \
   --bitcoin-rpc-pass rpcpassword \

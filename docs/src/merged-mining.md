@@ -7,8 +7,6 @@ Federation consensus nodes create signed blocks optimistically by collecting tra
 
 If no valid PoW mined blocks are generated for a pre-defined timeout period, the rollup/sidechain considers this a consensus failure and block production is halted - until a mined block is found.
 
-More details can be found in the paper [Optimistically Sequenced Merged Mining](https://gobob.xyz/optimine).
-
 ## Preliminaries
 
 **Actors**
@@ -88,7 +86,7 @@ Figure 2: Overview of the Alice Architecture
 In black, we show the interaction between the Alice sidechain nodes (authority nodes) and the miner (mining pool):
 
 - Authority nodes are responsible for block production and verification as part of the PoA consensus protocol.
-- The authority nodes run the consensus client and the execution client (geth). Alice implements a [custom consensus client](https://github.com/bob-collective/merged-bob/tree/main/app) integrated with vanilla [go-ethereum](https://github.com/ethereum/go-ethereum) as an execution client that interfaces via the [Engine API](https://hackmd.io/@danielrachi/engine_api). This means Alice adopts the [same architecture as the PoS Ethereum clients](https://ethresear.ch/t/eth1-eth2-client-relationship/7248).
+- The authority nodes run the consensus client and the execution client (geth). Alice implements a custom consensus client integrated with vanilla [go-ethereum](https://github.com/ethereum/go-ethereum) as an execution client that interfaces via the [Engine API](https://hackmd.io/@danielrachi/engine_api). This means Alice adopts the [same architecture as the PoS Ethereum clients](https://ethresear.ch/t/eth1-eth2-client-relationship/7248).
   - The execution client is responsible for transaction gossiping, executing transactions and smart contracts. Alice does not modify geth and therefore, other execution clients such as [reth](https://github.com/paradigmxyz/reth) can also be used.
   - The consensus client is responsible for block gossiping, block production, and finalization. The leader of the current slot proposes a block to the other federation members (to their authority nodes). The other federation members approve the blocks by signing the block.
   - The consensus and execution client communicate via the via the `getPayload` and `newPayload` RPCs.

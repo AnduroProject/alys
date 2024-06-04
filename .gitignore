@@ -24,7 +24,7 @@ docs/book/
 /target
 
 # Sidechain
-/.bob
+/.alys
 /data/execution
 /data/logs
 
