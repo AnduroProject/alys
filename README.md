@@ -569,11 +569,11 @@ Change the environment variables:
 
 ```
 # /docker-compose/envs/common-blockscout.yml
-SUBNETWORK=Merged BOB
+SUBNETWORK=Merged ALYS
 CHAIN_ID=212121
 # /docker-compose/envs/common-frontend.yml
-NEXT_PUBLIC_NETWORK_NAME=Merged BOB Alpha	
-NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged BOB Alpha
+NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha	
+NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
 ```
 
 Start the explorer with:
