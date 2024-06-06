@@ -29,7 +29,7 @@ pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
 }
 
 #[derive(Parser)]
-#[command(author, about = "BOB", long_about = None)]
+#[command(author, about = "ALYS", long_about = None)]
 pub struct App {
     #[arg(
         long = "chain",

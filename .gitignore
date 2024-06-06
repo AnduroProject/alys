@@ -30,3 +30,7 @@ docs/book/
 
 # Mac
 .DS_Store
+
+# IDE files
+.idea/
+.vscode/

@@ -49,7 +49,7 @@ We will start a single geth node and a Bitcoin regtest node.
 <details>
 <summary>Expected output</summary>
   
-<img width="752" alt="image" src="https://github.com/bob-collective/merged-bob/assets/14966470/44bec4de-1205-4f3a-b2cb-cef4fc6b3410">
+<img width="752" alt="image" src="">
 
 </details>
 
@@ -72,17 +72,17 @@ You will see that the node is producing blocks continuously.
 <details>
 <summary>Expected output and AuxPoW submission</summary>
   
-<img width="755" alt="image" src="https://github.com/bob-collective/merged-bob/assets/14966470/e7b2f5a6-94c9-4602-a9e3-44b12499fb6a">
+<img width="755" alt="image" src="">
 
 According to the target time of merged mining, eventually, a merged mining block bundle is added to the chain, finalizing the previously created blocks together with the federation's validation and signing of the AuxPoW.
 
 In dev mode, we use an embedded miner to get the AuxPoW.
 
-<img width="753" alt="image" src="https://github.com/bob-collective/merged-bob/assets/14966470/18d1b5af-c1ee-406b-a0b4-f67f7d093c0e">
+<img width="753" alt="image" src="">
 
 When the AuxPoW is not submitted, the node will stop producing blocks.
 
-<img width="758" alt="image" src="https://github.com/bob-collective/merged-bob/assets/14966470/bc2d5307-ba45-4205-b81d-64802d7e4b08">
+<img width="758" alt="image" src="">
 
 Block production will resume once the next valid AuxPoW is submitted.
 
