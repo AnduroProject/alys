@@ -1,0 +1,6 @@
+[Eth]
+NetworkId = 212121
+StateScheme = "hash"
+
+[Node.P2P]
+MaxPeers = 0
