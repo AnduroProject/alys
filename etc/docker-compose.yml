@@ -83,7 +83,7 @@ services:
     restart: unless-stopped
 #    image: ghcr.io/anduroproject/alys:main
     image: ghcr.io/anduroproject/alys:dev
-    image: alys:latest
+#    image: alys:latest
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
