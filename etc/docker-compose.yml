@@ -102,7 +102,6 @@ services:
 #      - --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --bitcoin-rpc-url
       - http://host.docker.internal:18443
-#      - http://44.214.218.28:18443
       - --bitcoin-rpc-user
       - bitcoin
       - --bitcoin-rpc-pass
