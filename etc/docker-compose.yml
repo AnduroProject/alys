@@ -81,16 +81,17 @@ services:
   alys:
     container_name: alys
     restart: unless-stopped
-#    image: ghcr.io/anduroproject/alys:main
+#    build:
+#      context: ../
+#      dockerfile: Dockerfile
     image: ghcr.io/anduroproject/alys:dev
-#    image: alys:latest
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
     environment:
-      - HOST_SERVICE_URL=http://host.docker.internal:18443
+#      - HOST_SERVICE_URL=http://host.docker.internal:18443
     command:
-      - /opt/alys/target/release/app
+      - /bin/alys
       - --dev
 #      - --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --geth-url
@@ -103,13 +104,15 @@ services:
       - /lib/alys/data/wallet
 #      - --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --bitcoin-rpc-url
-      - http://host.docker.internal:18443
+      - http://bitcoin-core:18443
+#      - http://host.docker.internal:18443
       - --bitcoin-rpc-user
       - bitcoin
       - --bitcoin-rpc-pass
       - bitcoin
     depends_on:
       - reth
+      - bitcoin-core
     ports:
       - 3000:3000
 

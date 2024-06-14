@@ -1,6 +1,6 @@
 # Start from the latest Rust base image
-FROM rust:latest as builder
-FROM rust:latest
+FROM rust:bullseye as builder
+#FROM rust:latest
 
 SHELL ["/bin/bash", "-c"]
 
@@ -52,10 +52,10 @@ COPY . .
 RUN cargo build --release --bin app
 #
 ## Our second stage will use Debian
-#FROM debian:buster-slim
+FROM debian:bullseye-slim
 #
 ## Copy the build artifact from the builder stage and set the startup command
-#COPY --from=builder /opt/alys/target/release/app /usr/local/bin/alys
+COPY --from=builder /opt/alys/target/release/app /bin/alys
 #
 ## Set the startup command to run your binary
-#CMD ["alys --dev"]
+CMD ["alys --dev"]
