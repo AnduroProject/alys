@@ -119,6 +119,7 @@ services:
     container_name: bitcoin_node
     restart: always
     network_mode: host
+≈
     volumes:
       - ./data/bitcoin:$PWD/.bitcoin
     command:
