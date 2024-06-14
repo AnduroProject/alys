@@ -118,7 +118,6 @@ services:
     image: balajimara/bitcoin:25.99
     container_name: bitcoin_node
     restart: always
-    network_mode: host
     ports:
       - 18333:18333
       - 18443:18443
