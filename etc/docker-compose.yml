@@ -88,8 +88,6 @@ services:
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
-    environment:
-#      - HOST_SERVICE_URL=http://host.docker.internal:18443
     command:
       - /bin/alys
       - --dev
