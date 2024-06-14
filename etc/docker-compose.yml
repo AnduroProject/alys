@@ -119,7 +119,9 @@ services:
     container_name: bitcoin_node
     restart: always
     network_mode: host
-≈
+    ports:
+      - 18333:18333
+      - 18443:18443
     volumes:
       - ./data/bitcoin:$PWD/.bitcoin
     command:
