@@ -61,7 +61,7 @@ impl Aura {
         let authority = if let Some(signer) = maybe_signer {
             let index = authorities
                 .iter()
-                .position(|x| signer.pk.serialize().eq(&x.serialize()))
+                .position(|x| signer.pk.eq(&x))
                 .expect("Authority not found in set") as u8;
             Some(Authority { index, signer })
         } else {
@@ -284,7 +284,7 @@ mod test {
         let authority = {
             let index = authorities
                 .iter()
-                .position(|x| aura_signer.pk.serialize().eq(&x.serialize()))
+                .position(|x| aura_signer.pk.eq(&x))
                 .expect("Authority not found in set") as u8;
         };
     }
