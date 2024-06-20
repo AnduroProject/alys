@@ -9,7 +9,7 @@ function stop_all_reth() {
 function start_reth() {
     NUM=$1
 
-    rm -rf "${PWD}/data/execution/node${NUM}"
+    rm -rf "${PWD}/.alys/data/execution/node${NUM}"
 
     AUTHRPC_PORT=$((8551 + $NUM * 10))
     HTTP_PORT=$((8545 + $NUM * 10))
@@ -18,16 +18,16 @@ function start_reth() {
 
     reth init \
     --config ./etc/config/eth-config.toml \
-    --datadir "$PWD/etc/data/execution/node${NUM}" \
+    --datadir "$PWD/.alys/data/execution/node${NUM}" \
     --chain "$PWD/etc/config/genesis.json" \
-    > "$PWD/etc/data/logs/reth${NUM}.txt" 2>&1
+    > "$PWD/.alys/logs/reth${NUM}.txt" 2>&1
 
     reth node \
-    --datadir "$PWD/etc/data/execution/node${NUM}" \
+    --datadir "$PWD/.alys/data/execution/node${NUM}" \
     --config "$PWD/etc/config/eth-config.toml" \
     --chain "$PWD/etc/config/genesis.json" \
     --metrics 0.0.0.0:9001 \
-    --log.file.directory "$PWD/etc/data/logs/reth${NUM}.txt" \
+    --log.file.directory "$PWD/.alys/logs/reth${NUM}.txt" \
     --authrpc.addr 0.0.0.0 \
     --authrpc.port ${AUTHRPC_PORT} \
     --authrpc.jwtsecret "$PWD/etc/jwttoken/jwt.hex" \

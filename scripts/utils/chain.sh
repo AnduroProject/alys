@@ -36,7 +36,7 @@ function resume_chain() {
         --bitcoin-rpc-pass rpcpassword \
         --bitcoin-network regtest \
         ${APP_ARGS[$NUM]} \
-        > "$PWD/data/logs/app${NUM}.txt" 2>&1 &
+        > "$PWD/.alys/logs/app${NUM}.txt" 2>&1 &
     CHAIN_PIDS[$NUM]=$!
 }
 
@@ -45,7 +45,7 @@ function start_chain_from_genesis() {
 
     rm -rf "${PWD}/.alys/chain_db${NUM}"
     rm -rf "${PWD}/.alys/wallet${NUM}"
-    echo "" > $PWD/data/logs/app${NUM}.txt
+    echo "" > $PWD/.alys/logs/app${NUM}.txt
 
     resume_chain $NUM
 }
@@ -62,7 +62,7 @@ function start_full_node_from_genesis() {
 
     rm -rf "${PWD}/.alys/chain_db${NUM}"
     rm -rf "${PWD}/.alys/wallet${NUM}"
-    echo "" > $PWD/data/logs/app${NUM}.txt
+    echo "" > $PWD/.alys/logs/app${NUM}.txt
 
     FULL_NODE=1
     resume_chain $NUM
