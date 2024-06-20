@@ -533,7 +533,7 @@ Other useful scripts:
 # Send some of the ERC20 tokens from the deployed contract (0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146) to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
 cast send --private-key ${PRIVATE_KEY} \
   --rpc-url "localhost:8545" \
-  --chain 212121 \
+  --chain 263634 \
   0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146 \
   "transfer(address,uint256)" 0xd362E49EE9453Bf414c35288cD090189af2B2C55 100000000
 # Send 16200000000007550 wei bridged BTC to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
@@ -570,7 +570,7 @@ Change the environment variables:
 ```
 # /docker-compose/envs/common-blockscout.yml
 SUBNETWORK=Merged ALYS
-CHAIN_ID=212121
+CHAIN_ID=263634
 # /docker-compose/envs/common-frontend.yml
 NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha	
 NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
@@ -621,7 +621,7 @@ When you start the Alys sidechain it will use a chain spec to configure it's own
     // initial PoW mining difficulty
     "bits": 553713663,
     // should be the same as the geth `genesis.json`
-    "chainId": 212121,
+    "chainId": 263634,
     // stall block production if no AuxPow is received
     "maxBlocksWithoutPow": 10,
     // set the scanning height, use latest height for testnet or mainnet

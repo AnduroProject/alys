@@ -19,7 +19,7 @@ function start_geth() {
     geth init --state.scheme "hash" --datadir "./etc/data/execution/node${NUM}" ./etc/config/genesis.json > "$PWD/etc/data/logs/geth${NUM}.txt" 2>&1
     geth --datadir "./etc/data/execution/node${NUM}" \
         --state.scheme "hash" \
-        --networkid 212121 \
+        --networkid 263634 \
         --authrpc.vhosts "*" \
         --authrpc.addr "0.0.0.0" \
         --authrpc.jwtsecret "./etc/config/jwt/jwt" \

@@ -47,7 +47,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
         ],
         bits: 505794034,
-        chain_id: 212121,
+        chain_id: 263634,
         max_blocks_without_pow: 20,
         bitcoin_start_height: 0,
         retarget_params: BitcoinConsensusParams {
