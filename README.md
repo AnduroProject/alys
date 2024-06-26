@@ -25,12 +25,11 @@ On a high level, the repository consists of three parts:
     - Arch: `yay bitcoin-core`
     - Download a binary: https://bitcoin.org/en/download
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
-- Install Alys:
+- Clone Alys repo:
 
 ```shell
 git clone git@github.com:AnduroProject/Alys.git
 cd Alys 
-cargo build
 ```
 
 ## Getting Started
@@ -46,13 +45,6 @@ We will start a single geth node and a Bitcoin regtest node.
 ./scripts/start_geth.sh
 ```
 
-<details>
-<summary>Expected output</summary>
-  
-<img width="752" alt="image" src="">
-
-</details>
-
 ```shell
 # in a new terminal start bitcoin
 bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
@@ -64,25 +56,21 @@ Next, we start a single Alys node with the federation having exactly one member.
 
 ```shell
 # dev (single node)
+
+# From the Alys root directory
 cargo run --bin app -- --dev
 ```
 
 You will see that the node is producing blocks continuously.
 
 <details>
-<summary>Expected output and AuxPoW submission</summary>
-  
-<img width="755" alt="image" src="">
+<summary>Further details on AuxPoW submission</summary>
 
 According to the target time of merged mining, eventually, a merged mining block bundle is added to the chain, finalizing the previously created blocks together with the federation's validation and signing of the AuxPoW.
 
 In dev mode, we use an embedded miner to get the AuxPoW.
 
-<img width="753" alt="image" src="">
-
 When the AuxPoW is not submitted, the node will stop producing blocks.
-
-<img width="758" alt="image" src="">
 
 Block production will resume once the next valid AuxPoW is submitted.
 
@@ -533,7 +521,7 @@ Other useful scripts:
 # Send some of the ERC20 tokens from the deployed contract (0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146) to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
 cast send --private-key ${PRIVATE_KEY} \
   --rpc-url "localhost:8545" \
-  --chain 212121 \
+  --chain 263634 \
   0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146 \
   "transfer(address,uint256)" 0xd362E49EE9453Bf414c35288cD090189af2B2C55 100000000
 # Send 16200000000007550 wei bridged BTC to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
@@ -570,7 +558,7 @@ Change the environment variables:
 ```
 # /docker-compose/envs/common-blockscout.yml
 SUBNETWORK=Merged ALYS
-CHAIN_ID=212121
+CHAIN_ID=263634
 # /docker-compose/envs/common-frontend.yml
 NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha	
 NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
@@ -621,7 +609,7 @@ When you start the Alys sidechain it will use a chain spec to configure it's own
     // initial PoW mining difficulty
     "bits": 553713663,
     // should be the same as the geth `genesis.json`
-    "chainId": 212121,
+    "chainId": 263634,
     // stall block production if no AuxPow is received
     "maxBlocksWithoutPow": 10,
     // set the scanning height, use latest height for testnet or mainnet
