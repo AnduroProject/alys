@@ -16,4 +16,4 @@ mkdir -p data/logs/
 
 NUM=${NUM:-0}
 start_reth $NUM
-tail -f "$PWD/data/logs/reth${NUM}.txt"
+tail -f "$PWD/etc/data/logs/reth${NUM}.txt"

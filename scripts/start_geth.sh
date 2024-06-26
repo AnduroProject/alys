@@ -16,4 +16,4 @@ mkdir -p data/logs/
 
 NUM=${NUM:-0}
 start_geth $NUM
-tail -f "$PWD/data/logs/geth${NUM}.txt"
+tail -f "$PWD/etc/data/logs/geth${NUM}.txt"
