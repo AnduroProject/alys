@@ -9,20 +9,22 @@ function stop_all_geth() {
 function start_geth() {
     NUM=$1
 
-    rm -rf "${PWD}/data/execution/node${NUM}"
+    rm -rf "${PWD}/etc/data/execution/node${NUM}"
 
     AUTHRPC_PORT=$((8551 + $NUM * 10))
     HTTP_PORT=$((8545 + $NUM * 10))
     WS_PORT=$((8546 + $NUM * 10))
     PORT=$((30303 + $NUM * 10))
 
-    geth init --state.scheme "hash" --datadir "./data/execution/node${NUM}" ./data/genesis.json > "$PWD/data/logs/geth${NUM}.txt" 2>&1
-    geth --datadir "./data/execution/node${NUM}" \
+    touch "$PWD/etc/data/logs/geth${NUM}.txt"
+
+    geth init --state.scheme "hash" --datadir "$PWD/etc/data/execution/node${NUM}" ./etc/config/genesis.json > "$PWD/etc/data/logs/geth${NUM}.txt" 2>&1
+    geth --datadir "$PWD/etc/data/execution/node${NUM}" \
         --state.scheme "hash" \
         --networkid 212121 \
         --authrpc.vhosts "*" \
         --authrpc.addr "0.0.0.0" \
-        --authrpc.jwtsecret "./data/jwtsecret" \
+        --authrpc.jwtsecret "$PWD/etc/config/jwt/jwt" \
         --authrpc.port ${AUTHRPC_PORT} \
         --http \
         --http.addr "0.0.0.0" \
@@ -38,7 +40,7 @@ function start_geth() {
         --port ${PORT} \
         --gcmode "archive" \
         --maxpeers 0 \
-        >> "$PWD/data/logs/geth${NUM}.txt" 2>&1 &
+        >> "$PWD/etc/data/logs/geth${NUM}.txt" 2>&1 &
     GETH_PIDS[$i]=$!
 }
 

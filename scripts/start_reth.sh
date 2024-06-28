@@ -2,9 +2,9 @@
 # includes
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-. $SCRIPT_DIR/utils/geth.sh
+. $SCRIPT_DIR/utils/reth.sh
 
-trap stop_all_geth SIGINT
+trap stop_all_reth SIGINT
 
 if [[ -z "${NUM}" ]]; then
     # when running dev mode (single node)
@@ -15,5 +15,5 @@ fi
 mkdir -p data/logs/
 
 NUM=${NUM:-0}
-start_geth $NUM
-tail -f "$PWD/etc/data/logs/geth${NUM}.txt"
+start_reth $NUM
+tail -f "$PWD/etc/data/logs/reth${NUM}.txt"

@@ -1,0 +1,12 @@
+target
+.github
+.git
+.alys
+**/assertoor
+**/data
+**/ethereum-metrics-exporter
+**/grafana
+**/jwttoken
+**/prometheus
+**/docker-compose.yml
+docs

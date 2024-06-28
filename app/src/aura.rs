@@ -61,7 +61,7 @@ impl Aura {
         let authority = if let Some(signer) = maybe_signer {
             let index = authorities
                 .iter()
-                .position(|x| signer.pk.eq(x))
+                .position(|x| signer.pk.eq(&x))
                 .expect("Authority not found in set") as u8;
             Some(Authority { index, signer })
         } else {
@@ -245,6 +245,8 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use bls::SecretKey;
+    use hex;
 
     #[test]
     fn should_find_slot_author() {
@@ -254,5 +256,36 @@ mod test {
             *slot_author(slot_now, &vec![1, 2, 3, 4, 5, 6]).unwrap().1,
             6
         );
+    }
+
+    #[test]
+    fn should_find_authority() {
+        // Replace with your secret key
+        let secret_key_hex = "0000000000000000000000000000000000000000000000000000000000000001";
+
+        // Convert the secret key from hex to bytes
+        let secret_key_bytes = hex::decode(secret_key_hex).unwrap();
+
+        // Create a SecretKey instance from the bytes
+        let aura_sk = SecretKey::deserialize(&secret_key_bytes[..]).unwrap();
+
+        let aura_pk = aura_sk.public_key();
+
+        let aura_signer = Keypair::from_components(aura_pk, aura_sk);
+
+        let aura_authority_key_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
+
+        let aura_authority_key_bytes = hex::decode(aura_authority_key_hex).unwrap();
+
+        let aura_authority_key = PublicKey::deserialize(&aura_authority_key_bytes[..]).unwrap();
+
+        let authorities = vec![aura_authority_key];
+
+        let authority = {
+            let index = authorities
+                .iter()
+                .position(|x| aura_signer.pk.eq(&x))
+                .expect("Authority not found in set") as u8;
+        };
     }
 }
