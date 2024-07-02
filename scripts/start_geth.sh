@@ -12,7 +12,7 @@ if [[ -z "${NUM}" ]]; then
     rm -rf ".alys/wallet"
 fi
 
-mkdir -p data/logs/
+mkdir -p etc/data/logs/
 
 NUM=${NUM:-0}
 start_geth $NUM

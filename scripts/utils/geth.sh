@@ -16,9 +16,18 @@ function start_geth() {
     WS_PORT=$((8546 + $NUM * 10))
     PORT=$((30303 + $NUM * 10))
 
-    touch "$PWD/etc/data/logs/geth${NUM}.txt"
+    LOG_FILE="$PWD/etc/data/logs/geth${NUM}.txt"
 
-    geth init --state.scheme "hash" --datadir "$PWD/etc/data/execution/node${NUM}" ./etc/config/genesis.json > "$PWD/etc/data/logs/geth${NUM}.txt" 2>&1
+    # Check if the log file exists
+    if [ -f "$LOG_FILE" ]; then
+        # If it exists, delete it
+        rm "$LOG_FILE"
+    fi
+    # Create a new log file
+    touch "$LOG_FILE"
+
+
+    geth init --state.scheme "hash" --datadir "$PWD/etc/data/execution/node${NUM}" ./etc/config/genesis.json >  "$LOG_FILE" 2>&1
     geth --datadir "$PWD/etc/data/execution/node${NUM}" \
         --state.scheme "hash" \
         --networkid 212121 \
@@ -40,7 +49,7 @@ function start_geth() {
         --port ${PORT} \
         --gcmode "archive" \
         --maxpeers 0 \
-        >> "$PWD/etc/data/logs/geth${NUM}.txt" 2>&1 &
+        >> "$LOG_FILE" 2>&1 &
     GETH_PIDS[$i]=$!
 }
 
