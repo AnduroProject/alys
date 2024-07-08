@@ -1,23 +1,24 @@
 {
-    "slotDuration": 2000,
+    "slotDuration": 10000,
     "authorities": [
-        "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
-        "0xa572cbea904d67468808c8eb50a9450c9721db309128012543902d0ac358a62ae28f75bb8f1c7c42c39a8c5529bf0f4e",
-        "0x89ece308f9d1f0131765212deca99697b112d61f9be9a5f1f3780a51335b3ff981747a0b2ca2179b96d2c0c9024e5224"
+        "0x808a244ecab77de183998420c196b497b59cb58cede6988595d3d3567436c52ecf0808247477f7aaa5678dc681375f66",
+        "0x8031f53f5abebeb931e5820f769abee7bfb6923e1c8e8b7a4bea424d54f632ddc2fcf44582e04fa939e76a76635c4328",
+        "0xa6ac87b891f757ab7c703d2a005ce8985d3744826ff60a1c24b7c9bc1070ba8a729d8bc8cbcfed92d7c6cf0c933d4287"
     ],
     "federation": [
-        "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
-        "0x2b5ad5c4795c026514f8317c7a215e218dccd6cf",
-        "0x6813eb9362372eef6200f3b1dbc3f819671cba69"
+        "0x124d1EFebbF99d86508174f0cD70A9a4E182EC5f",
+        "0xE4f5eF5beDcA5e22Fe1E9F2Da3d4663B9fF5713e",
+        "0xbc613FbA385CfDAAB0F4349B4904C46F9ee4c725"
     ],
     "federationBitcoinPubkeys": [
-        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-        "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-        "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+        "030813afb52ce4daec816222a538d559dce9a56a02d1ad1ee6bd1f6ae5287efc98",
+        "0231674dbd7e22dc24dd088f54efaea6f2c3c5a90a0d0b44dc952aeb59ca907bca",
+        "02c3212b7d22c261213d22f352c29d74b47afb5e2e5fc33fc050e91eaafa089644"
+
     ],
     "bits": 486604799,
-    "chainId": 263634,
-    "maxBlocksWithoutPow": 10000000000000,
+    "chainId": 212121,
+    "maxBlocksWithoutPow": 500000000000,
     "bitcoinStartHeight": 0,
     "retargetParams": {
         "powNoRetargeting": false,

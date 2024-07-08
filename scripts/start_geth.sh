@@ -1,19 +1,26 @@
 #!/bin/bash
-# includes
+# Load utility functions from geth.sh
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+BASE_DIR=$(realpath "$SCRIPT_DIR/../")
+. "$SCRIPT_DIR/utils/geth.sh"
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-. $SCRIPT_DIR/utils/geth.sh
-
+# Trap SIGINT for a graceful shutdown
 trap stop_all_geth SIGINT
 
+# Set default number of nodes if not already set
+NUM=${NUM:-0}
+
+# Clear previous blockchain data in dev mode
 if [[ -z "${NUM}" ]]; then
-    # when running dev mode (single node)
-    rm -rf ".alys/chain_db"
-    rm -rf ".alys/wallet"
+    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/chain_db"
+    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/wallet"
 fi
 
-mkdir -p data/logs/
+# Initialize logs directory
+mkdir -p "${BASE_DIR}/etc/data/logs"
 
-NUM=${NUM:-0}
+# Start the Geth node(s)
 start_geth $NUM
-tail -f "$PWD/etc/data/logs/geth${NUM}.txt"
+
+# Tail the log file to keep the shell open and display logs
+tail -f "$(get_log_path $NUM)"
