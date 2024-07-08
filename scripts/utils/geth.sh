@@ -20,7 +20,11 @@ function start_geth() {
     local NUM=$1
     local LOG_FILE=$(get_log_path $NUM)
 
+
     rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}"
+    mkdir -p "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/data/logs"
+    touch "$LOG_FILE"
+
 
     # Port calculations
     local AUTHRPC_PORT=$((8551 + $NUM * 10))

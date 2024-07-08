@@ -10,6 +10,8 @@ trap stop_all_geth SIGINT
 # Set default number of nodes if not already set
 NUM=${NUM:-0}
 
+echo "${NUM}"
+
 # Clear previous blockchain data in dev mode
 if [[ -z "${NUM}" ]]; then
     rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/chain_db"
