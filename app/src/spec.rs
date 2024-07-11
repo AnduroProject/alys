@@ -53,7 +53,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
         bits: 505794034,
         chain_id: 212121,
         max_blocks_without_pow: 20,
-        bitcoin_start_height: 235,
+        bitcoin_start_height: 0,
         retarget_params: BitcoinConsensusParams {
             pow_limit: 553713663,
             pow_target_timespan: 120000,
