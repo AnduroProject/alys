@@ -32,13 +32,13 @@ pub struct ChainSpec {
     pub is_validator: bool,
 }
 
-pub const DEV_SECRET_KEY: &str = "2dcc87facf0963070b0422ab170e9cf219d885206d9d8fd06eaa643848cc7c63";
+pub const DEV_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-pub const DEV_BITCOIN_SECRET_KEY: &str = "037d0b6371526997dca0bb59ae44be0b0d6ee812393d996d749c0ef85d8adaea";
+pub const DEV_BITCOIN_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
-        slot_duration: 10000,
+        slot_duration: 2000,
         authorities: vec![
             PublicKey::from_str(
                 "0xa7f3f50888a4548114709476738555a01ed83eef8b0d0b45e50c4c224ee86d98d6ea69a2d3e619aed8693d59411d1ae2"
@@ -53,14 +53,14 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
         bits: 505794034,
         chain_id: 212121,
         max_blocks_without_pow: 20,
-        bitcoin_start_height: 0,
+        bitcoin_start_height: 235,
         retarget_params: BitcoinConsensusParams {
             pow_limit: 553713663,
             pow_target_timespan: 120000,
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
         },
-        is_validator: true
+        is_validator: false
     }
 });
 

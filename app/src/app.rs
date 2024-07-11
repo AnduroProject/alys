@@ -179,7 +179,6 @@ impl App {
 
         let (maybe_aura_signer, maybe_bitcoin_signer);
         if chain_spec.is_validator {
-          println!("testing value");
           (maybe_aura_signer, maybe_bitcoin_signer) =
             match (self.aura_secret_key, self.bitcoin_secret_key) {
                 (Some(aura_sk), Some(bitcoin_sk)) => {
@@ -203,7 +202,6 @@ impl App {
             };
 
         } else {
-            println!("testing value1");
             (maybe_aura_signer, maybe_bitcoin_signer) = (None, None);
         }
 
