@@ -25,5 +25,6 @@
         "powLimit": 553713663,
         "powTargetTimespan": 12000,
         "powTargetSpacing": 1000
-    }
+    },
+    "isValidator": false
 }
