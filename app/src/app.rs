@@ -2,7 +2,7 @@ use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
-use crate::spec::{genesis_value_parser, ChainSpec, DEV_SECRET_KEY};
+use crate::spec::{genesis_value_parser, ChainSpec, DEV_SECRET_KEY, DEV_BITCOIN_SECRET_KEY};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bls::{Keypair, SecretKey};
 use bridge::{
@@ -12,6 +12,8 @@ use bridge::{
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use futures::pin_mut;
+use types::chain_spec;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
 use tracing::*;
@@ -24,6 +26,12 @@ pub fn run() -> eyre::Result<()> {
 
 pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
     let secret_key = SecretKey::deserialize(&hex::decode(s)?[..])
+        .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
+    Ok(secret_key)
+}
+
+pub fn parse_bitcoin_secret_key(s: &str) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
+    let secret_key = bitcoin::key::secp256k1::SecretKey::from_str(s)
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
 }
@@ -48,8 +56,9 @@ pub struct App {
     pub aura_secret_key: Option<SecretKey>,
 
     #[arg(
-        long,
-        default_value_if("dev", ArgPredicate::IsPresent, Some(DEV_SECRET_KEY))
+        long = "bitcoin-secret-key",
+        value_parser = parse_bitcoin_secret_key,
+        default_value_if("dev", ArgPredicate::IsPresent, Some(DEV_BITCOIN_SECRET_KEY))
     )]
     pub bitcoin_secret_key: Option<BitcoinSecretKey>,
 
@@ -80,7 +89,7 @@ pub struct App {
     #[clap(
         long,
         env = "BITCOIN_RPC_URL",
-        default_value_if("dev", ArgPredicate::IsPresent, Some("http://localhost:18443")),
+        default_value_if("dev", ArgPredicate::IsPresent, Some("http://0.0.0.0:18443")),
         required_unless_present = "dev"
     )]
     pub bitcoin_rpc_url: Option<String>,
@@ -168,7 +177,10 @@ impl App {
         let bitcoin_signature_collector =
             BitcoinSignatureCollector::new(bitcoin_federation.clone());
 
-        let (maybe_aura_signer, maybe_bitcoin_signer) =
+        let (maybe_aura_signer, maybe_bitcoin_signer);
+        if chain_spec.is_validator {
+          println!("testing value");
+          (maybe_aura_signer, maybe_bitcoin_signer) =
             match (self.aura_secret_key, self.bitcoin_secret_key) {
                 (Some(aura_sk), Some(bitcoin_sk)) => {
                     let aura_pk = aura_sk.public_key();
@@ -190,11 +202,17 @@ impl App {
                 }
             };
 
+        } else {
+            println!("testing value1");
+            (maybe_aura_signer, maybe_bitcoin_signer) = (None, None);
+        }
+
         let aura = Aura::new(
             authorities.clone(),
             slot_duration,
             maybe_aura_signer.clone(),
         );
+
         let chain = Arc::new(Chain::new(
             engine,
             network,

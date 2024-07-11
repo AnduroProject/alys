@@ -28,23 +28,27 @@ pub struct ChainSpec {
     pub bitcoin_start_height: u32,
     /// Configuration of the retargeting algorithm
     pub retarget_params: BitcoinConsensusParams,
+    /// Variable to identify node type 0 - full node, 1 - validator node
+    pub is_validator: bool,
 }
 
-pub const DEV_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+pub const DEV_SECRET_KEY: &str = "2dcc87facf0963070b0422ab170e9cf219d885206d9d8fd06eaa643848cc7c63";
+
+pub const DEV_BITCOIN_SECRET_KEY: &str = "037d0b6371526997dca0bb59ae44be0b0d6ee812393d996d749c0ef85d8adaea";
 
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
-        slot_duration: 2000,
+        slot_duration: 10000,
         authorities: vec![
             PublicKey::from_str(
-                "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+                "0xa7f3f50888a4548114709476738555a01ed83eef8b0d0b45e50c4c224ee86d98d6ea69a2d3e619aed8693d59411d1ae2"
             ).unwrap()
         ],
         federation: vec![
             "2e80ab37dfb510a64526296fd1f295c42ef19c29".parse().unwrap(),
         ],
         federation_bitcoin_pubkeys: vec![
-            BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
+            BitcoinPublicKey::from_str("02767b3ebfdee7190772742cbeacf678e21f1aa043b66e8bfd6d07ac9e50b0049a").unwrap()
         ],
         bits: 505794034,
         chain_id: 212121,
@@ -55,7 +59,8 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             pow_target_timespan: 120000,
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
-        }
+        },
+        is_validator: true
     }
 });
 
