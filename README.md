@@ -46,13 +46,6 @@ We will start a single geth node and a Bitcoin regtest node.
 ./scripts/start_geth.sh
 ```
 
-<details>
-<summary>Expected output</summary>
-  
-<img width="752" alt="image" src="">
-
-</details>
-
 ```shell
 # in a new terminal start bitcoin
 bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
@@ -206,17 +199,15 @@ The two main scripts of focus are:
 <details>
 <summary>./scripts/start_testnet_alys.sh</summary>
 
-```shell
-./scripts/start_testnet_alys.sh
-```
-</details>
-
-<details>
-<summary>Shell Scripts ENVs</summary>
+Set the following Environment variables before starting the script:
 
 - BTC_RPC_USER: The username for the Bitcoin RPC client. Default is "rpcuser".
 - BTC_RPC_PASSWORD: The password for the Bitcoin RPC client. Default is "rpcpassword".
 - BTC_RPC_URL: The URL for the Bitcoin RPC client. Default is "http://localhost:18332"
+
+```shell
+./scripts/start_testnet_alys.sh
+```
 </details>
 
 <details>
