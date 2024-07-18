@@ -10,19 +10,12 @@ trap stop_all_geth SIGINT
 # Set default number of nodes if not already set
 NUM=${NUM:-0}
 
-echo "${NUM}"
-
-# Clear previous blockchain data in dev mode
-if [[ -z "${NUM}" ]]; then
-    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/chain_db"
-    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/wallet"
-fi
 
 # Initialize logs directory
 mkdir -p "${BASE_DIR}/etc/data/logs"
 
 # Start the Geth node(s)
-start_geth $NUM
+start_testnet_geth $NUM
 
 # Tail the log file to keep the shell open and display logs
 tail -f "$(get_log_path $NUM)"

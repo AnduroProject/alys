@@ -179,6 +179,56 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 ```
 </details>
 
+## Running a Full Testnet Node
+
+To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution. We provide shell scripts to speed up this process, but regardless if you use the scripts or the manually run your clients, the execution client needs to be run first.
+
+The two main scripts of focus are:
+<details>
+<summary>./scripts/start_testnet_geth.sh</summary>
+
+```shell
+./scripts/start_testnet_geth.sh
+```
+</details>
+<details>
+<summary>./scripts/start_testnet_alys.sh</summary>
+
+Set the following Environment variables before starting the script:
+
+- BTC_RPC_USER: The username for the Bitcoin RPC client. Default is "rpcuser".
+- BTC_RPC_PASSWORD: The password for the Bitcoin RPC client. Default is "rpcpassword".
+- BTC_RPC_URL: The URL for the Bitcoin RPC client. Default is "http://localhost:18332"
+
+```shell
+./scripts/start_testnet_alys.sh
+```
+</details>
+
+<details>
+<summary>Execution Client Bootnodes</summary>
+
+- enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303
+ 
+- enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120:30303
+
+- enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303
+</details>
+
+
+<details>
+<summary>Consensus Client Bootnodes</summary>
+
+- /ip4/54.224.209.248/tcp/55444
+- /ip4/107.22.120.71/tcp/55444
+- /ip4/54.161.100.208/tcp/55444
+</details>
+
+
+
+
+The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time.
+
 ## Running an Alys Network
 
 Above, we show how to run Alys with a single node and a single federation member. The dev setup is meant for ease of testing without having to set various parameters. For operating an Alys network with multiple federation members, we need to take more steps.
