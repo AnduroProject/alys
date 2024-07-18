@@ -19,7 +19,7 @@ On a high level, the repository consists of three parts:
 
 - Install Rust `1.75.0` or higher: https://www.rust-lang.org/tools/install
 - Install Geth: https://geth.ethereum.org/docs/getting-started/installing-geth
-- Install Bitcoin Core `25.0` or higher ,so that you have access to the `bitcoind` and `bitcoin-cli` commands:
+- Install Bitcoin Core `25.0` or higher, so that you have access to the `bitcoind` and `bitcoin-cli` commands:
     - MacOS: `brew install bitcoin`
     - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
     - Arch: `yay bitcoin-core`
