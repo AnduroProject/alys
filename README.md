@@ -178,20 +178,6 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
   },
 ```
 </details>
-## MetaMask network configuration details
-
-Network Name: Alys Testnet
-
-RPC URL (use one of them in metamask):
-- 54.224.209.248:8545
-- 107.22.120.71:8545
-- 54.161.100.208:8545
-
-Chain ID: 212121
-
-Currency symbol: tAlys
-
-Block explorer URL: https://alyscan.io/
 
 
 ## Running a Full Testnet Node
@@ -543,7 +529,7 @@ cargo test
 cargo fmt
 ```
 
-### Metamask Configuration
+## MetaMask network configuration details
 
 **Network Name**
 Alys Testnet
