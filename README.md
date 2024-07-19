@@ -24,6 +24,9 @@ On a high level, the repository consists of three parts:
     - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
     - Arch: `yay bitcoin-core`
     - Download a binary: https://bitcoin.org/en/download
+- Install CMake:
+  - MacOS: `brew install cmake`
+  - Ubuntu: `sudo apt install cmake
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
 - Clone Alys repo:
 
@@ -211,7 +214,7 @@ Set the following Environment variables before starting the script:
 
 - enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303
  
-- enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120:30303
+- enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120.71:30303
 
 - enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303
 </details>
