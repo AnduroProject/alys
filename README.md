@@ -44,7 +44,7 @@ To run a full testnet node, similar to Ethereum you need to run 2 clients, one f
 Start with running local Bitcoin testnet node:
 ```shell
 # in a new terminal start bitcoin
-bitcoind -testnet -rpcuser=rpcuser -rpcpassword=rpcpassword
+bitcoind -testnet -rpcuser=rpcuser -rpcpassword=rpcpassword -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -server
 ```
 
 Then, run the following 2 scripts in the order they are listed:
