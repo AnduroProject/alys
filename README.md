@@ -34,9 +34,15 @@ cd Alys
 
 ## Running a Full Testnet Node
 
-To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution. We provide shell scripts to speed up this process, but regardless if you use the scripts or the manually run your clients, the execution client needs to be run first.
+To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution (Note: execution client needs to be run first). You also need to have a local Bitcoin regtest node running prior to starting an Alys node.
 
-Run the following 2 scripts in the order they are listed:
+Start with running local Bitcoin regtest node:
+```shell
+# in a new terminal start bitcoin
+bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
+```
+
+Then, run the following 2 scripts in the order they are listed:
 
 ```shell
 $ ./scripts/start_testnet_geth.sh
@@ -69,7 +75,27 @@ Set the following Environment variables before starting `start_testnet_alys` scr
 - /ip4/54.161.100.208/tcp/55444
 </details>
 
-The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time.
+The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time. At this point you can continue to the next section to configure your MetaMask wallet to connect to the Alys testnet.
+
+## MetaMask network configuration details
+
+**Network Name**
+Alys Testnet
+ 
+**RPC URL (use one of them in metamask)**
+54.224.209.248:8545
+107.22.120.71:8545
+54.161.100.208:8545
+ 
+**Chain ID:**
+212121
+ 
+**Currency symbol**
+tAlys
+ 
+**Block explorer URL**
+https://alyscan.io/
+
 
 ## Quick Start
 
@@ -516,25 +542,6 @@ cargo test
 ```shell
 cargo fmt
 ```
-
-## MetaMask network configuration details
-
-**Network Name**
-Alys Testnet
- 
-**RPC URL (use one of them in metamask)**
-54.224.209.248:8545
-107.22.120.71:8545
-54.161.100.208:8545
- 
-**Chain ID:**
-212121
- 
-**Currency symbol**
-tAlys
- 
-**Block explorer URL**
-https://alyscan.io/
 
 ### Smart Contracts
 
