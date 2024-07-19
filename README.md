@@ -39,12 +39,12 @@ cd Alys
 
 ## Running a Full Testnet Node
 
-To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution (Note: execution client needs to be run first). You also need to have a local Bitcoin regtest node running prior to starting an Alys node.
+To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution (Note: execution client needs to be run first). You also need to have a local Bitcoin testnet node running prior to starting an Alys node or access to a testnet RPC endpoint.
 
-Start with running local Bitcoin regtest node:
+Start with running local Bitcoin testnet node:
 ```shell
 # in a new terminal start bitcoin
-bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
+bitcoind -testnet -rpcuser=rpcuser -rpcpassword=rpcpassword
 ```
 
 Then, run the following 2 scripts in the order they are listed:
