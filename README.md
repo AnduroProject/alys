@@ -36,27 +36,20 @@ cd Alys
 
 To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution. We provide shell scripts to speed up this process, but regardless if you use the scripts or the manually run your clients, the execution client needs to be run first.
 
-The two main scripts of focus are:
-<details>
-<summary>./scripts/start_testnet_geth.sh</summary>
+Run the following 2 scripts in the order they are listed:
 
 ```shell
-./scripts/start_testnet_geth.sh
+$ ./scripts/start_testnet_geth.sh
+
+# AND
+$ ./scripts/start_testnet_alys.sh
 ```
-</details>
-<details>
-<summary>./scripts/start_testnet_alys.sh</summary>
 
-Set the following Environment variables before starting the script:
-
+**NOTE:** 
+Set the following Environment variables before starting `start_testnet_alys` script:
 - BTC_RPC_USER: The username for the Bitcoin RPC client. Default is "rpcuser".
 - BTC_RPC_PASSWORD: The password for the Bitcoin RPC client. Default is "rpcpassword".
 - BTC_RPC_URL: The URL for the Bitcoin RPC client. Default is "http://localhost:18332"
-
-```shell
-./scripts/start_testnet_alys.sh
-```
-</details>
 
 <details>
 <summary>Execution Client Bootnodes</summary>
