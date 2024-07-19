@@ -29,6 +29,12 @@ if [[ "$TARGET_ARCH" == "arm64-apple-darwin" ]]; then
     codesign -s - bitcoind
 fi
 
+# Move the binaries to the /usr/local/bin directory
+sudo mv bitcoin-cli /usr/local/bin
+sudo mv bitcoind /usr/local/bin
+
+
 # Cleanup the downloaded files and extracted directory
 rm -rf *.tar.gz
 rm -rf ./bitcoin-${VERSION}
+
