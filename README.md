@@ -81,7 +81,7 @@ Set the following Environment variables before starting `start_testnet_alys` scr
 
 The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time. At this point you can continue to the next section to configure your MetaMask wallet to connect to the Alys testnet.
 
-## MetaMask network configuration details
+## Configuring MetaMask for Alys
 
 **Network Name**
 Alys Testnet
