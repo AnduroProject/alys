@@ -40,7 +40,6 @@ Run the following 2 scripts in the order they are listed:
 
 ```shell
 $ ./scripts/start_testnet_geth.sh
-
 # AND
 $ ./scripts/start_testnet_alys.sh
 ```
