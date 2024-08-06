@@ -24,7 +24,7 @@ docs/book/
 /target
 
 # Sidechain
-/.alys
+**/.alys
 /etc/data/
 
 # Mac

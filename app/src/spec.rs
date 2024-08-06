@@ -38,10 +38,10 @@ pub const DEV_BITCOIN_SECRET_KEY: &str = "00000000000000000000000000000000000000
 
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
-        slot_duration: 2000,
+        slot_duration:5000,
         authorities: vec![
             PublicKey::from_str(
-                "0xa7f3f50888a4548114709476738555a01ed83eef8b0d0b45e50c4c224ee86d98d6ea69a2d3e619aed8693d59411d1ae2"
+                "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
             ).unwrap()
         ],
         federation: vec![
@@ -60,7 +60,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
         },
-        is_validator: false
+        is_validator: true
     }
 });
 
