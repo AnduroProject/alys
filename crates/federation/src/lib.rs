@@ -1,8 +1,8 @@
 mod bitcoin_signing;
 mod bitcoin_stream;
-use thiserror::Error;
 use bdk::bitcoin::hashes::hex::FromHex;
 pub use bitcoin_stream::bitcoin;
+use thiserror::Error;
 
 use bitcoin::{Address as BitcoinAddress, BlockHash, Transaction, TxOut, Txid};
 use bitcoin_stream::stream_blocks;
@@ -163,7 +163,9 @@ impl Bridge {
         block_height: u32,
     ) -> Option<PegInInfo> {
         fn extract_evm_address(tx_out: &TxOut) -> Option<H160> {
-            if !tx_out.script_pubkey.is_provably_unspendable() || !tx_out.script_pubkey.is_op_return() {
+            if !tx_out.script_pubkey.is_provably_unspendable()
+                || !tx_out.script_pubkey.is_op_return()
+            {
                 return None;
             }
             let opreturn = tx_out.script_pubkey.to_asm_string();
@@ -173,7 +175,7 @@ impl Bridge {
             let data = Vec::from_hex(&op_return_hex_string);
             if let Err(_e) = data {
                 return None;
-            } 
+            }
             let opreturn_data = String::from_utf8(data.clone().unwrap());
             if let Err(_e) = opreturn_data.clone() {
                 let address = H160::from_str(&op_return_hex_string);
@@ -181,7 +183,7 @@ impl Bridge {
                     return None;
                 }
                 return Some(address.unwrap());
-            } 
+            }
             let address_str = opreturn_data.unwrap();
             let address = H160::from_str(&address_str);
             if let Err(_e) = address {
