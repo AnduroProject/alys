@@ -1,14 +1,9 @@
 use crate::error::Error;
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
-use execution_layer::{
-    auth::{Auth, JwtKey},
-    BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc,
-    PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
-};
+use execution_layer::{auth::{Auth, JwtKey}, BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc, PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG, NewPayloadRequest, NewPayloadRequestDeneb};
 use sensitive_url::SensitiveUrl;
 use serde_json::json;
-use ssz_types::VariableList;
 use std::{
     ops::{Div, Mul},
     str::FromStr,
@@ -16,9 +11,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tracing::{instrument, trace};
-    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
-    Uint256, Withdrawal,
-};
+use types::{Address, VariableList, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadDeneb, MainnetEthSpec, Transaction, Transactions, Uint256, Withdrawal, Withdrawals, Hash256};
 
 const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
 
@@ -94,6 +87,7 @@ impl Engine {
         timestamp: Duration,
         payload_head: Option<ExecutionBlockHash>,
         add_balances: Vec<AddBalance>,
+        previous_consensus_block_hash: Hash256,
     ) -> Result<ExecutionPayload<MainnetEthSpec>, Error> {
         // FIXME: geth is not accepting >4 withdrawals
         let payload_attributes = PayloadAttributes::new(
@@ -103,6 +97,7 @@ impl Engine {
             // NOTE: we burn fees at the EL and mint later
             Address::from_str(DEAD_ADDRESS).unwrap(),
             Some(add_balances.into_iter().map(Into::into).collect()),
+            Some(previous_consensus_block_hash),
         );
 
         let head = match payload_head {
@@ -135,7 +130,7 @@ impl Engine {
 
         let response = self
             .api
-            .get_payload::<MainnetEthSpec>(types::ForkName::Capella, payload_id)
+            .get_payload::<MainnetEthSpec>(types::ForkName::Deneb, payload_id)
             .await
             .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
 
@@ -151,9 +146,19 @@ impl Engine {
     pub async fn commit_block(
         &self,
         execution_payload: ExecutionPayload<MainnetEthSpec>,
+        previous_consensus_block_hash: Hash256,
     ) -> Result<ExecutionBlockHash, Error> {
         let finalized = self.finalized.read().await.unwrap_or_default();
 
+        let payload_attributes = PayloadAttributes::new(
+            execution_payload.timestamp(),
+            // TODO: set randao
+            Default::default(),
+            // NOTE: we burn fees at the EL and mint later
+            Address::from_str(DEAD_ADDRESS).unwrap(),
+            Some(execution_payload.withdrawals().unwrap().to_vec()),
+            Some(previous_consensus_block_hash),
+        );
         self.api
             .forkchoice_updated(
                 ForkchoiceState {
@@ -161,21 +166,27 @@ impl Engine {
                     safe_block_hash: finalized,
                     finalized_block_hash: finalized,
                 },
-                None,
+                Some(payload_attributes.clone()),
             )
             .await
             .unwrap();
 
         // we need to push the payload back to geth
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/eth/catalyst/api.go#L259
+        trace!("Pushing payload to geth");
+        trace!("Parent hash: {:?}", hex::encode(previous_consensus_block_hash));
         let response = self
-            .api
-            .new_payload::<MainnetEthSpec>(execution_payload)
-            .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+          .api
+          .new_payload::<MainnetEthSpec>(NewPayloadRequest::Deneb( NewPayloadRequestDeneb{
+              execution_payload: execution_payload.as_deneb().unwrap(),
+              versioned_hashes: vec![],
+              parent_beacon_block_root: previous_consensus_block_hash,
+          }))
+          .await
+          .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
         let head = response.latest_valid_hash.ok_or(Error::InvalidBlockHash)?;
 
-        // update now to the new head so we can fetch the txs and
+        // update to the new head to fetch the txs and
         // receipts from the ethereum rpc
         self.api
             .forkchoice_updated(
@@ -184,7 +195,7 @@ impl Engine {
                     safe_block_hash: finalized,
                     finalized_block_hash: finalized,
                 },
-                None,
+                Some(payload_attributes),
             )
             .await
             .unwrap();
@@ -238,59 +249,60 @@ impl Engine {
 
     // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
     #[instrument(level = "trace", skip(self))]
+    pub async fn get_payload_by_tag_from_engine<'a, E: EthSpec>(
         &self,
         query: BlockByNumberQuery<'a>,
-    ) -> Result<ExecutionPayloadCapella<MainnetEthSpec>, Error> {
+    ) -> Result<ExecutionPayloadDeneb<E>, Error> {
         // TODO: handle errors
         let execution_block = self.api.get_block_by_number(query).await.unwrap().unwrap();
 
         // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
         let execution_block_with_txs = self
             .api
-            .get_block_by_hash_with_txns::<MainnetEthSpec>(
+            .get_block_by_hash_with_txns::<E>(
                 execution_block.block_hash,
-                types::ForkName::Capella,
+                types::ForkName::Deneb,
             )
             .await
             .unwrap()
             .unwrap();
 
-        let transactions = VariableList::new(
-            execution_block_with_txs
-                .transactions()
-                .iter()
-                .map(|transaction| VariableList::new(transaction.rlp().to_vec()))
-                .collect::<Result<_, _>>()
-                .unwrap(),
-        )
-        .unwrap();
+        let transactions_vec: Vec<Transaction<<E as EthSpec>::MaxBytesPerTransaction>> = execution_block_with_txs
+          .transactions()
+          .iter()
+          .map(|transaction| VariableList::new(transaction.rlp().to_vec()).unwrap())
+          .collect();
+
+        let transactions: Transactions<E> = VariableList::from(transactions_vec);
 
         Ok(match execution_block_with_txs {
-            ExecutionBlockWithTransactions::Capella(capella_block) => {
-                let withdrawals = VariableList::new(
-                    capella_block
+            ExecutionBlockWithTransactions::Deneb(deneb_block) => {
+                let withdrawals = Withdrawals::<E>::new(
+                    deneb_block
                         .withdrawals
                         .into_iter()
                         .map(Into::into)
                         .collect(),
                 )
                 .unwrap();
-                ExecutionPayloadCapella {
-                    parent_hash: capella_block.parent_hash,
-                    fee_recipient: capella_block.fee_recipient,
-                    state_root: capella_block.state_root,
-                    receipts_root: capella_block.receipts_root,
-                    logs_bloom: capella_block.logs_bloom,
-                    prev_randao: capella_block.prev_randao,
-                    block_number: capella_block.block_number,
-                    gas_limit: capella_block.gas_limit,
-                    gas_used: capella_block.gas_used,
-                    timestamp: capella_block.timestamp,
-                    extra_data: capella_block.extra_data,
-                    base_fee_per_gas: capella_block.base_fee_per_gas,
-                    block_hash: capella_block.block_hash,
+                ExecutionPayloadDeneb {
+                    parent_hash: deneb_block.parent_hash,
+                    fee_recipient: deneb_block.fee_recipient,
+                    state_root: deneb_block.state_root,
+                    receipts_root: deneb_block.receipts_root,
+                    logs_bloom: deneb_block.logs_bloom,
+                    prev_randao: deneb_block.prev_randao,
+                    block_number: deneb_block.block_number,
+                    gas_limit: deneb_block.gas_limit,
+                    gas_used: deneb_block.gas_used,
+                    timestamp: deneb_block.timestamp,
+                    extra_data: deneb_block.extra_data,
+                    base_fee_per_gas: deneb_block.base_fee_per_gas,
+                    block_hash: deneb_block.block_hash,
                     transactions,
                     withdrawals,
+                    blob_gas_used: deneb_block.blob_gas_used,
+                    excess_blob_gas: deneb_block.excess_blob_gas,
                 }
             }
             _ => panic!("Unknown fork"),

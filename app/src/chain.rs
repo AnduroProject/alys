@@ -1,5 +1,5 @@
 use crate::auxpow::AuxPow;
-use crate::auxpow_miner::{get_next_work_required, BitcoinConsensusParams, ChainManager};
+use crate::auxpow_miner::{get_next_work_required, BitcoinConsensusParams, ChainManager, BlockIndex};
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::network::rpc::InboundRequest;
@@ -337,9 +337,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 timestamp,
                 prev_payload_head,
                 add_balances.into_iter().map(Into::into).collect(),
+                prev,
             )
             .await
-            .unwrap();
+        .unwrap();
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
@@ -789,7 +790,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     pub async fn store_genesis(self: &Arc<Self>, chain_spec: ChainSpec) -> Result<(), Error> {
         let execution_payload = self
             .engine
-            .get_payload_by_tag_from_engine(execution_layer::BlockByNumberQuery::Tag("0x0"))
+            .get_payload_by_tag_from_engine::<MainnetEthSpec>(execution_layer::BlockByNumberQuery::Tag("0x0"))
             .await
             .expect("Should have genesis");
 
@@ -983,8 +984,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self: &Arc<Self>,
         verified_block: SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<(), Error> {
+
         self.engine
-            .commit_block(verified_block.message.execution_payload.clone().into())
+            .commit_block(verified_block.message.execution_payload.clone().into(), verified_block.message.block_hash().to_block_hash())
             .await
             .unwrap();
 

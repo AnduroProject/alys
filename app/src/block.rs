@@ -11,7 +11,7 @@ use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use serde_derive::{Deserialize, Serialize};
 use types::{
-    Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, FixedVector,
+    Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadDeneb, FixedVector,
     Hash256, MainnetEthSpec, Transactions, Uint256, VariableList, Withdrawals,
 };
 
@@ -60,8 +60,8 @@ pub struct ConsensusBlock<T: EthSpec> {
     /// Proof of work, used for finalization. Not every block is expected to have this.
     pub auxpow_header: Option<AuxPowHeader>,
     // we always assume the geth node is configured
-    // to start after the capella hard fork
-    pub execution_payload: ExecutionPayloadCapella<T>,
+    // to start after the deneb hard fork
+    pub execution_payload: ExecutionPayloadDeneb<T>,
     /// Transactions that are sending funds to the bridge
     pub pegins: Vec<(Txid, BlockHash)>,
     /// Bitcoin payments for pegouts
@@ -112,7 +112,7 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
             parent_hash: Hash256::zero(),
             slot: 0,
             auxpow_header: None,
-            execution_payload: ExecutionPayloadCapella {
+            execution_payload: ExecutionPayloadDeneb {
                 parent_hash: ExecutionBlockHash::zero(),
                 fee_recipient: Address::zero(),
                 state_root: Hash256::zero(),
@@ -128,6 +128,8 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
                 block_hash: ExecutionBlockHash::zero(),
                 transactions: Transactions::<MainnetEthSpec>::default(),
                 withdrawals: Withdrawals::<MainnetEthSpec>::default(),
+                blob_gas_used: 0,
+                excess_blob_gas: 0,
             },
             pegins: vec![],
             pegout_payment_proposal: None,
@@ -149,7 +151,7 @@ impl ConsensusBlock<MainnetEthSpec> {
         Self {
             slot,
             parent_hash: prev,
-            execution_payload: payload.as_capella().unwrap().clone(),
+            execution_payload: payload.as_deneb().unwrap().clone(),
             auxpow_header,
             pegins,
             pegout_payment_proposal,
@@ -222,7 +224,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
 
     pub fn genesis(
         chain_spec: ChainSpec,
-        execution_payload: ExecutionPayloadCapella<MainnetEthSpec>,
+        execution_payload: ExecutionPayloadDeneb<MainnetEthSpec>,
     ) -> Self {
         // sanity checks
         if execution_payload.block_number != 0 {
