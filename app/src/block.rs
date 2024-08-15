@@ -272,4 +272,46 @@ mod test {
         let signed_block = block.sign_block(&authority);
         assert!(signed_block.verify_signature(&[key_pair.pk]));
     }
+
+    #[test]
+    fn should_verify_signature() {
+        let exec_payload = ExecutionPayloadDeneb::default();
+        let chain_spec = ChainSpec::default();
+        let block = SignedConsensusBlock::genesis(chain_spec, exec_payload).message;
+
+        let key_pair = Keypair::random();
+
+        let authority = Authority {
+            signer: key_pair.clone(),
+            index: 0,
+        };
+
+        let signed_approval = block.sign_block(&authority);
+        assert!(signed_approval.verify_signature(&[key_pair.pk]));
+    }
+    #[test]
+    fn should_verify_aggregate_signature() {
+        let exec_payload = ExecutionPayloadDeneb::default();
+        let chain_spec = ChainSpec::default();
+        let block = SignedConsensusBlock::genesis(chain_spec, exec_payload).message;
+
+        let keypair_0 = Keypair::random();
+        let keypair_1 = Keypair::random();
+
+        let authorities = vec![
+            Authority {
+                signer: keypair_0.clone(),
+                index: 0,
+            },
+            Authority {
+                signer: keypair_1.clone(),
+                index: 1,
+            },
+        ];
+
+        let mut signed_block = block.sign_block(&authorities[0]);
+        let signed_approval = signed_block.message.sign(&authorities[1]);
+         signed_block.add_approval(signed_approval).unwrap();
+        assert!(signed_block.verify_signature(&[keypair_0.pk, keypair_1.pk]));
+    }
 }
