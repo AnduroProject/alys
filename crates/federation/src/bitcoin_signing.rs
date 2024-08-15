@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::str::FromStr;
+use tracing::trace;
 
 pub struct UtxoManager<T: Database> {
     pub(crate) tree: T,
@@ -319,6 +320,7 @@ impl<T: Database> UtxoManager<T> {
         let signing_messages = self.get_signing_inputs(transaction)?;
         for (msg, input) in signing_messages.iter().zip(transaction.input.iter()) {
             let witnesses = input.witness.to_vec();
+            trace!("Checking witness prior to iter: {:?}", witnesses);
 
             let sigs = witnesses
                 .iter()
@@ -330,6 +332,9 @@ impl<T: Database> UtxoManager<T> {
             if witnesses.len() != self.federation.pubkeys.len() + 2
                 || sigs.len() != self.federation.threshold
             {
+                trace!("Witnesses: {:?}", witnesses);
+                trace!("Checking witness conditional: {:?}", witnesses.len() == self.federation.pubkeys.len() + 2);
+
                 return Err(Error::InvalidWitnessLength);
             }
 

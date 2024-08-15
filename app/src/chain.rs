@@ -330,6 +330,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         };
         let pegins = self.fill_pegins(&mut add_balances).await;
 
+        trace!("Producing block: {}", hex::encode(prev));
         let payload = self
             .engine
             .build_block(
@@ -343,6 +344,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
 
+        if pegouts.is_some() {
+            debug!("⬅️  Created bitcoin tx for peg-outs");
+        }
+
         let block = ConsensusBlock::new(
             slot,
             payload.clone(),
@@ -352,6 +357,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             pegouts,
             finalized_pegouts,
         );
+        
+        if block.finalized_pegouts.len() > 0 {
+            debug!("⬅️  Finalized {} peg-outs", block.finalized_pegouts.len());
+        }
 
         let signed_block =
             block.sign_block(&self.aura.authority.as_ref().expect("Only called by signer"));
@@ -381,6 +390,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
+    #[instrument(level = "trace", skip(self))]
     async fn create_pegout_payments(
         &self,
         payload_hash: Option<ExecutionBlockHash>,
@@ -502,6 +512,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 }
 
                 let wallet = self.bitcoin_wallet.read().await;
+
+                trace!("Txn being verified: {:?}", tx);
                 wallet.check_transaction_signatures(tx)?;
             }
         } else {

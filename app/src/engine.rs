@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::RwLock;
-use types::{
+use tracing::{instrument, trace};
     Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
     Uint256, Withdrawal,
 };
@@ -49,6 +49,7 @@ impl std::ops::Add for ConsensusAmount {
     }
 }
 
+#[derive(Debug)]
 pub struct AddBalance(Address, ConsensusAmount);
 
 impl From<(Address, ConsensusAmount)> for AddBalance {
@@ -87,6 +88,7 @@ impl Engine {
         *self.finalized.write().await = Some(block_hash);
     }
 
+    #[instrument(level = "trace", skip(self, add_balances))]
     pub async fn build_block(
         &self,
         timestamp: Duration,
@@ -145,6 +147,7 @@ impl Engine {
         Ok(execution_payload)
     }
 
+    #[instrument(level = "trace", skip(self))]
     pub async fn commit_block(
         &self,
         execution_payload: ExecutionPayload<MainnetEthSpec>,
@@ -192,6 +195,7 @@ impl Engine {
     // workaround for a problem where the non-engine rpc interfaces fail to fetch blocks:
     // we use the engine's rpc connection. Despite the spec not requiring the support
     // of this function, it works for geth
+    #[instrument(level = "trace", skip(self))]
     pub async fn get_block_with_txs(
         &self,
         block_hash: &ExecutionBlockHash,
@@ -215,6 +219,7 @@ impl Engine {
     // workaround for a problem where the non-engine rpc interfaces fail to fetch blocks:
     // we use the engine's rpc connection. Despite the spec not requiring the support
     // of this function, it works for geth
+    #[instrument(level = "trace", skip(self))]
     pub async fn get_transaction_receipt(
         &self,
         transaction_hash: H256,
@@ -232,7 +237,7 @@ impl Engine {
     }
 
     // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
-    pub async fn get_payload_by_tag_from_engine<'a>(
+    #[instrument(level = "trace", skip(self))]
         &self,
         query: BlockByNumberQuery<'a>,
     ) -> Result<ExecutionPayloadCapella<MainnetEthSpec>, Error> {
