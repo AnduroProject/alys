@@ -15,7 +15,7 @@ thiserror = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_derive = "1.0.116"
 eyre = "0.6"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "^4.5.4", features = ["derive", "env"] }
 hex = "0.4.3"
 
 # bitcoin

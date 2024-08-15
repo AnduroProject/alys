@@ -128,7 +128,7 @@ impl App {
     fn init_tracing(&self) {
         let rust_log_level = Level::from_str(
             std::env::var("RUST_LOG")
-                .unwrap_or("info".to_string())
+                .unwrap_or("INFO".to_string())
                 .as_str(),
         )
         .unwrap();

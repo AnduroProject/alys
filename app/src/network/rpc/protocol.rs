@@ -225,7 +225,7 @@ impl ProtocolId {
             Protocol::Goodbye => RpcLimits::new(0, 0), // Goodbye request has no response
             Protocol::BlocksByRange => RpcLimits::new(
                 *SIGNED_CONSENSUS_BLOCK_BASE_MIN, // Base block is smaller than altair and merge blocks
-                *SIGNED_CONSENSUS_BLOCK_CAPELLA_MAX, // Capella block is larger than base, altair and merge blocks
+                *SIGNED_CONSENSUS_BLOCK_CAPELLA_MAX, // Deneb block is larger than base, altair and merge blocks
             ),
             Protocol::Ping => RpcLimits::new(
                 <Ping as Encode>::ssz_fixed_len(),
