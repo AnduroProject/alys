@@ -15,7 +15,7 @@ use types::Unsigned;
 /// upper bound on number of validators
 type MaxValidators = U15;
 
-#[derive(Debug, Encode, Decode, TreeHash, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Encode, Decode, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndividualApproval {
     pub signature: Signature,
     pub authority_index: u8,
@@ -27,7 +27,7 @@ impl IndividualApproval {
     }
 }
 
-#[derive(Debug, Encode, Decode, TreeHash, Clone, PartialEq)]
+#[derive(Debug, Encode, Decode, Clone, PartialEq)]
 pub struct CheckedIndividualApproval {
     data: IndividualApproval,
 }
@@ -64,7 +64,7 @@ impl IndividualApproval {
     }
 }
 
-#[derive(Debug, Encode, Decode, Serialize, Deserialize, TreeHash, Clone, PartialEq)]
+#[derive(Debug, Encode, Decode, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AggregateApproval {
     aggregation_bits: BitList<MaxValidators>,
     aggregate_signature: AggregateSignature,
@@ -174,10 +174,12 @@ mod test {
 
         // test the verify function
         assert!(aggregate.verify(&pubkeys, hash));
+        println!("Aggregate signature verified: {:?}", aggregate.aggregate_signature);
 
         // change one of the pubkeys - this is equivalent to signing with an invalid key.
         // Verify should return false
         pubkeys[0] = pubkeys[1].clone();
         assert!(!aggregate.verify(&pubkeys, hash));
+        println!("Aggregate signature correctly failed to verify: {:?}", aggregate.aggregate_signature);
     }
 }
