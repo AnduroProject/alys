@@ -333,7 +333,10 @@ impl<T: Database> UtxoManager<T> {
                 || sigs.len() != self.federation.threshold
             {
                 trace!("Witnesses: {:?}", witnesses);
-                trace!("Checking witness conditional: {:?}", witnesses.len() == self.federation.pubkeys.len() + 2);
+                trace!(
+                    "Checking witness conditional: {:?}",
+                    witnesses.len() == self.federation.pubkeys.len() + 2
+                );
 
                 return Err(Error::InvalidWitnessLength);
             }

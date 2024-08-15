@@ -311,7 +311,7 @@ mod test {
 
         let mut signed_block = block.sign_block(&authorities[0]);
         let signed_approval = signed_block.message.sign(&authorities[1]);
-         signed_block.add_approval(signed_approval).unwrap();
+        signed_block.add_approval(signed_approval).unwrap();
         assert!(signed_block.verify_signature(&[keypair_0.pk, keypair_1.pk]));
     }
 }

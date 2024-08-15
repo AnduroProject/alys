@@ -174,12 +174,18 @@ mod test {
 
         // test the verify function
         assert!(aggregate.verify(&pubkeys, hash));
-        println!("Aggregate signature verified: {:?}", aggregate.aggregate_signature);
+        println!(
+            "Aggregate signature verified: {:?}",
+            aggregate.aggregate_signature
+        );
 
         // change one of the pubkeys - this is equivalent to signing with an invalid key.
         // Verify should return false
         pubkeys[0] = pubkeys[1].clone();
         assert!(!aggregate.verify(&pubkeys, hash));
-        println!("Aggregate signature correctly failed to verify: {:?}", aggregate.aggregate_signature);
+        println!(
+            "Aggregate signature correctly failed to verify: {:?}",
+            aggregate.aggregate_signature
+        );
     }
 }

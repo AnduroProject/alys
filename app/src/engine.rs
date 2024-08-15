@@ -1,7 +1,12 @@
 use crate::error::Error;
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
-use execution_layer::{auth::{Auth, JwtKey}, BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc, PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG, NewPayloadRequest, NewPayloadRequestDeneb};
+use execution_layer::{
+    auth::{Auth, JwtKey},
+    BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc,
+    NewPayloadRequest, NewPayloadRequestDeneb, PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT,
+    LATEST_TAG,
+};
 use sensitive_url::SensitiveUrl;
 use serde_json::json;
 use std::{
@@ -11,7 +16,10 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tracing::{instrument, trace};
-use types::{Address, VariableList, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadDeneb, MainnetEthSpec, Transaction, Transactions, Uint256, Withdrawal, Withdrawals, Hash256};
+use types::{
+    Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadDeneb, Hash256,
+    MainnetEthSpec, Transaction, Transactions, Uint256, VariableList, Withdrawal, Withdrawals,
+};
 
 const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
 
@@ -174,16 +182,19 @@ impl Engine {
         // we need to push the payload back to geth
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/eth/catalyst/api.go#L259
         trace!("Pushing payload to geth");
-        trace!("Parent hash: {:?}", hex::encode(previous_consensus_block_hash));
+        trace!(
+            "Parent hash: {:?}",
+            hex::encode(previous_consensus_block_hash)
+        );
         let response = self
-          .api
-          .new_payload::<MainnetEthSpec>(NewPayloadRequest::Deneb( NewPayloadRequestDeneb{
-              execution_payload: execution_payload.as_deneb().unwrap(),
-              versioned_hashes: vec![],
-              parent_beacon_block_root: previous_consensus_block_hash,
-          }))
-          .await
-          .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+            .api
+            .new_payload::<MainnetEthSpec>(NewPayloadRequest::Deneb(NewPayloadRequestDeneb {
+                execution_payload: execution_payload.as_deneb().unwrap(),
+                versioned_hashes: vec![],
+                parent_beacon_block_root: previous_consensus_block_hash,
+            }))
+            .await
+            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
         let head = response.latest_valid_hash.ok_or(Error::InvalidBlockHash)?;
 
         // update to the new head to fetch the txs and
@@ -259,19 +270,17 @@ impl Engine {
         // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
         let execution_block_with_txs = self
             .api
-            .get_block_by_hash_with_txns::<E>(
-                execution_block.block_hash,
-                types::ForkName::Deneb,
-            )
+            .get_block_by_hash_with_txns::<E>(execution_block.block_hash, types::ForkName::Deneb)
             .await
             .unwrap()
             .unwrap();
 
-        let transactions_vec: Vec<Transaction<<E as EthSpec>::MaxBytesPerTransaction>> = execution_block_with_txs
-          .transactions()
-          .iter()
-          .map(|transaction| VariableList::new(transaction.rlp().to_vec()).unwrap())
-          .collect();
+        let transactions_vec: Vec<Transaction<<E as EthSpec>::MaxBytesPerTransaction>> =
+            execution_block_with_txs
+                .transactions()
+                .iter()
+                .map(|transaction| VariableList::new(transaction.rlp().to_vec()).unwrap())
+                .collect();
 
         let transactions: Transactions<E> = VariableList::from(transactions_vec);
 
