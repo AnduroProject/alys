@@ -5,7 +5,6 @@ Alys is a merged mined Bitcoin sidechain.
 - Uses BTC as its base currency.
 - Reaches consensus through aux PoW executed by Bitcoin miners and a federation.
 - Facilitates a two-way peg between Bitcoin and the Alys sidechain through the federation members.
-- Utilizes the Ethereum Virtual Machine (EVM) for execution and is compatible with any standard EVM execution client. 
 
 ## Overview
 
@@ -20,142 +19,24 @@ On a high level, the repository consists of three parts:
 
 - Install Rust `1.75.0` or higher: https://www.rust-lang.org/tools/install
 - Install Geth: https://geth.ethereum.org/docs/getting-started/installing-geth
-- Install Bitcoin Core `25.0` or higher (we recommend `27.0`), so that you have access to the `bitcoind` and `bitcoin-cli` commands:
-    - Recommended: `sudo ./scripts/get_bitcoin.sh` - Run this script from the root of the repository to install Bitcoin Core.
+- Install Bitcoin Core `25.0` or higher so that you have access to the `bitcoind` and `bitcoin-cli` commands:
     - MacOS: `brew install bitcoin`
     - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
     - Arch: `yay bitcoin-core`
     - Download a binary: https://bitcoin.org/en/download
-- Install CMake:
-  - MacOS: `brew install cmake`
-  - Ubuntu: `sudo apt install cmake
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
 - Clone Alys repo:
 
 ```shell
-git clone git@github.com:AnduroProject/Alys.git
+git clone git@github.com:AnduroHackathon/Alys.git
 cd Alys 
 ```
 
-## Running a Full Testnet Node
-
-To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution (Note: execution client needs to be run first). You also need to have a local Bitcoin testnet node running prior to starting an Alys node or access to a testnet RPC endpoint.
-
-Start with running local Bitcoin testnet node:
-```shell
-# in a new terminal start bitcoin
-bitcoind -testnet -rpcuser=rpcuser -rpcpassword=rpcpassword -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -server
-```
-
-Then, run the following 2 scripts in the order they are listed:
-
-```shell
-$ ./scripts/start_testnet_geth.sh
-# AND
-$ ./scripts/start_testnet_alys.sh
-```
-
-**NOTE:** 
-Set the following Environment variables before starting `start_testnet_alys` script:
-- BTC_RPC_USER: The username for the Bitcoin RPC client. Default is "rpcuser".
-- BTC_RPC_PASSWORD: The password for the Bitcoin RPC client. Default is "rpcpassword".
-- BTC_RPC_URL: The URL for the Bitcoin RPC client. Default is "http://localhost:18332"
-
-<details>
-<summary>Execution Client Bootnodes</summary>
-
-- enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303
- 
-- enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120:30303
-
-- enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303
-</details>
-
-
-<details>
-<summary>Consensus Client Bootnodes</summary>
-
-- /ip4/54.224.209.248/tcp/55444
-- /ip4/107.22.120.71/tcp/55444
-- /ip4/54.161.100.208/tcp/55444
-</details>
-
-The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time. At this point you can continue to the next section to configure your MetaMask wallet to connect to the Alys testnet.
-
-## Configuring MetaMask for Alys
-
-**Network Name**
-Alys Testnet
- 
-**RPC URL (use one of them in metamask)**
-54.224.209.248:8545
-107.22.120.71:8545
-54.161.100.208:8545
- 
-**Chain ID:**
-212121
- 
-**Currency symbol**
-tAlys
- 
-**Block explorer URL**
-https://alyscan.io/
-
-
-## Quick Start
-
-
-### Running a Full Testnet Node
-
-To run a full testnet node, similar to Ethereum you need to run 2 clients, one for consensus, and one for execution. We provide shell scripts to speed up this process, but regardless if you use the scripts or the manually run your clients, the execution client needs to be run first.
-
-The two main scripts of focus are:
-<details>
-<summary>./scripts/start_testnet_geth.sh</summary>
-
-```shell
-./scripts/start_testnet_geth.sh
-```
-</details>
-<details>
-<summary>./scripts/start_testnet_alys.sh</summary>
-
-Set the following Environment variables before starting the script & are REQUIRED if the values are different from the default values:
-
-- BTC_RPC_USER: The username for the Bitcoin RPC client. Default is "rpcuser".
-- BTC_RPC_PASSWORD: The password for the Bitcoin RPC client. Default is "rpcpassword".
-- BTC_RPC_URL: The URL for the Bitcoin RPC client. Default is "http://localhost:18332"
-
-```shell
-./scripts/start_testnet_alys.sh
-```
-</details>
-
-<details>
-<summary>Execution Client Bootnodes</summary>
-
-- enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303
-
-- enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120.71:30303
-
-- enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303
-</details>
-
-
-<details>
-<summary>Consensus Client Bootnodes</summary>
-
-- /ip4/54.224.209.248/tcp/55444
-- /ip4/107.22.120.71/tcp/55444
-- /ip4/54.161.100.208/tcp/55444
-</details>
-
-The start_testnet_alys.sh script is designed to initialize and start a testnet node for the Alys blockchain project. It sets up the necessary environment and runs the node, tailing the log file to output logs in real-time.
-
-
-### Running a Regtest Node
+## Getting Started
 
 We will describe how to run an Alys sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
+
+### Geth and Bitcoin
 
 We will start a single geth node and a Bitcoin regtest node.
 
@@ -385,7 +266,7 @@ bitcoind -rpcuser=rpcuser -rpcpassword=rpcpassword
 
 Each Alys node takes several arguments:
 
-- `chain`: A chain configuration like [chain.json](./data/chain.json)
+- `chain`: A chain configuration like [chain.json](./etc/config/chain.json)
 - `aura-secret-key`: The secret key used to sign blocks by the federation member.
 - `geth-url`: The URL to the geth node for the Alys node.
 - `db-path`: The path where the Alys blocks are stored.
@@ -416,7 +297,7 @@ Node 1
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --geth-url http://localhost:8551/ \
   --db-path .alys/chain_db0/ \
@@ -433,7 +314,7 @@ Node 2
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --geth-url http://localhost:8561/ \
   --db-path .alys/chain_db1/ \
@@ -450,7 +331,7 @@ Node 3
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --geth-url http://localhost:8571/ \
   --db-path .alys/chain_db2/ \
@@ -469,7 +350,7 @@ Node 1
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
   --geth-url http://localhost:8551/ \
   --db-path .alys/chain_db0/ \
@@ -487,7 +368,7 @@ Node 2
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
   --geth-url http://localhost:8561/ \
   --db-path .alys/chain_db1/ \
@@ -505,7 +386,7 @@ Node 3
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \
+  --chain etc/config/chain.json \
   --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
   --geth-url http://localhost:8571/ \
   --db-path .alys/chain_db2/ \
@@ -549,7 +430,7 @@ Running a full node is similar to running a federation node. The main difference
 
 ```shell
 cargo run --bin app -- \
-  --chain data/chain.json \ 
+  --chain etc/config/chain.json \ 
   --geth-url http://localhost:8551/ \
   --db-path .alys/chain_db0/ \
   --rpc-port 3000 \
@@ -583,7 +464,18 @@ bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
 cargo run --bin app -- --dev
 ```
 
-#### Test
+#### Testnet
+
+```shell
+Node IP: 107.20.115.193
+Node Port: 8545
+```
+
+#### Faucet
+
+https://faucet.anduro.io/
+
+#### Unit tests
 
 Tests are self-contained such that none of the services need to run.
 
@@ -713,7 +605,7 @@ The Alys sidechain expects the bridge contract to be pre-deployed at `0xbBbBBBBb
 
 ## Chain Spec
 
-When you start the Alys sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./data/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
+When you start the Alys sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./etc/config/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
 
 ```json
 {
