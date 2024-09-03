@@ -4,12 +4,12 @@ FROM rust:bullseye as builder
 
 SHELL ["/bin/bash", "-c"]
 
-RUN #cargo install --git https://github.com/foundry-rs/foundry --profile local --locked forge cast chisel anvil
+# RUN cargo install --git https://github.com/foundry-rs/foundry --profile local --locked forge cast chisel anvil
 
-RUN curl -L https://foundry.paradigm.xyz | bash
-RUN source ~/.bashrc
-ENV PATH="~/.foundry/bin:${PATH}"
-RUN foundryup
+# RUN curl -L https://foundry.paradigm.xyz | bash
+# RUN source ~/.bashrc
+# ENV PATH="~/.foundry/bin:${PATH}"
+# RUN foundryup
 
 RUN apt-get update && \
     apt-get install -y cmake && \
