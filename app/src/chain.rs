@@ -393,13 +393,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             x if x.is_empty() => None,
             payments => {
                 info!("⬅️  Creating bitcoin tx for {} peg-outs", payments.len());
-                let unsigned_tx = self
-                    .bitcoin_wallet
-                    .write()
-                    .await
-                    .create_payment(payments, fee_rate)
-                    .unwrap();
-                Some(unsigned_tx)
+                match self.bitcoin_wallet.write().await.create_payment(payments, fee_rate) {
+                    Ok(unsigned_txn) => Some(unsigned_txn),
+                    Err(e) => {
+                        error!("Failed to create pegout payment: {e}");
+                        None
+                    }
+                }
             }
         }
     }
