@@ -34,7 +34,8 @@ pub struct ChainSpec {
 
 pub const DEV_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-pub const DEV_BITCOIN_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+pub const DEV_BITCOIN_SECRET_KEY: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
 
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
@@ -60,7 +61,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
         },
-        is_validator: true
+        is_validator: false
     }
 });
 

@@ -92,7 +92,8 @@ impl Bridge {
         }
     }
 
-    #[instrument(level = "trace", skip(self, cb), fields(self.pegin_address = %self.pegin_address, start_height = %start_height))]
+    // TODO: See if this was causing the sync issue
+    // #[instrument(level = "trace", skip(self, cb), fields(self.pegin_address = %self.pegin_address, start_height = %start_height))]
     pub async fn stream_blocks_for_pegins<F, R>(&self, start_height: u32, cb: F)
     where
         F: Fn(Vec<PegInInfo>, u32) -> R,
