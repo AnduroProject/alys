@@ -1,8 +1,8 @@
 mod bitcoin_signing;
 mod bitcoin_stream;
-use thiserror::Error;
 use bdk::bitcoin::hashes::hex::FromHex;
 pub use bitcoin_stream::bitcoin;
+use thiserror::Error;
 
 use bitcoin::{Address as BitcoinAddress, BlockHash, Transaction, TxOut, Txid};
 use bitcoin_stream::stream_blocks;
@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -54,6 +54,8 @@ pub enum Error {
     InvalidPegoutOutput,
     #[error("Invalid pegout output count")]
     InvalidPegoutOutputCount,
+    #[error("Fees exceed pegout value")]
+    FeesExceedPegoutValue,
     #[error("Invalid change output")]
     InvalidChangeOutput,
     #[error("Unspendable input")]
@@ -92,6 +94,8 @@ impl Bridge {
         }
     }
 
+    // TODO: See if this was causing the sync issue
+    // #[instrument(level = "trace", skip(self, cb), fields(self.pegin_address = %self.pegin_address, start_height = %start_height))]
     pub async fn stream_blocks_for_pegins<F, R>(&self, start_height: u32, cb: F)
     where
         F: Fn(Vec<PegInInfo>, u32) -> R,
@@ -162,7 +166,9 @@ impl Bridge {
         block_height: u32,
     ) -> Option<PegInInfo> {
         fn extract_evm_address(tx_out: &TxOut) -> Option<H160> {
-            if !tx_out.script_pubkey.is_provably_unspendable() || !tx_out.script_pubkey.is_op_return() {
+            if !tx_out.script_pubkey.is_provably_unspendable()
+                || !tx_out.script_pubkey.is_op_return()
+            {
                 return None;
             }
             let opreturn = tx_out.script_pubkey.to_asm_string();
@@ -172,7 +178,7 @@ impl Bridge {
             let data = Vec::from_hex(&op_return_hex_string);
             if let Err(_e) = data {
                 return None;
-            } 
+            }
             let opreturn_data = String::from_utf8(data.clone().unwrap());
             if let Err(_e) = opreturn_data.clone() {
                 let address = H160::from_str(&op_return_hex_string);
@@ -180,7 +186,7 @@ impl Bridge {
                     return None;
                 }
                 return Some(address.unwrap());
-            } 
+            }
             let address_str = opreturn_data.unwrap();
             let address = H160::from_str(&address_str);
             if let Err(_e) = address {
@@ -241,7 +247,9 @@ impl Bridge {
                             value: wei_to_sats(event.value),
                         };
 
-                        pegouts.push(txout);
+                        if txout.value >= 100000000000000 {
+                            pegouts.push(txout);
+                        }
                     }
                 }
             }

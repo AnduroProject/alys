@@ -242,8 +242,11 @@ impl<T: Database> UtxoManager<T> {
         // note: adding `num_pegouts - 1` to get a rounded up division
         let fee_per_output = (total_fee + num_pegouts - 1) / num_pegouts;
         for output in tx.output.iter_mut().take(num_pegouts as usize) {
-            // todo: this will panic if fee > value
-            output.value -= fee_per_output;
+            if output.value <= fee_per_output {
+                return Err(Error::FeesExceedPegoutValue);
+            } else {
+                output.value -= fee_per_output;
+            }
         }
 
         Ok(tx)

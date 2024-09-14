@@ -2,7 +2,7 @@ use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
-use crate::spec::{genesis_value_parser, ChainSpec, DEV_SECRET_KEY, DEV_BITCOIN_SECRET_KEY};
+use crate::spec::{genesis_value_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bls::{Keypair, SecretKey};
 use bridge::{
@@ -12,12 +12,13 @@ use bridge::{
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use futures::pin_mut;
-use types::chain_spec;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
+use tracing::log::Level::{Debug, Trace};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
+use types::chain_spec;
 
 #[inline]
 pub fn run() -> eyre::Result<()> {
@@ -30,7 +31,9 @@ pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
     Ok(secret_key)
 }
 
-pub fn parse_bitcoin_secret_key(s: &str) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
+pub fn parse_bitcoin_secret_key(
+    s: &str,
+) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
     let secret_key = bitcoin::key::secp256k1::SecretKey::from_str(s)
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -123,18 +126,31 @@ impl App {
     }
 
     fn init_tracing(&self) {
-        let with_target = std::env::var("RUST_LOG")
-            .map(|val| val != "0")
-            .unwrap_or(true);
+        let rust_log_level = Level::from_str(
+            std::env::var("RUST_LOG")
+                .unwrap_or("info".to_string())
+                .as_str(),
+        )
+        .unwrap();
 
         let filter = EnvFilter::builder()
-            .with_default_directive(Level::INFO.into())
-            .parse_lossy("none,app=info,federation=info"); // .from_env_lossy();
+            .with_default_directive(rust_log_level.into())
+            .parse_lossy(format!(
+                "none,app={},federation={}",
+                rust_log_level, rust_log_level
+            )); // .from_env_lossy();
 
-        let layers = vec![tracing_subscriber::fmt::layer()
-            .with_target(with_target)
-            .with_filter(filter)
-            .boxed()];
+        let main_layer = tracing_subscriber::fmt::layer().with_target(true);
+
+        let layers = if rust_log_level == Level::DEBUG || rust_log_level == Level::TRACE {
+            vec![main_layer
+                .with_file(true)
+                .with_line_number(true)
+                .with_filter(filter)
+                .boxed()]
+        } else {
+            vec![main_layer.with_filter(filter).boxed()]
+        };
 
         tracing_subscriber::registry().with(layers).init();
     }
@@ -179,28 +195,27 @@ impl App {
 
         let (maybe_aura_signer, maybe_bitcoin_signer);
         if chain_spec.is_validator {
-          (maybe_aura_signer, maybe_bitcoin_signer) =
-            match (self.aura_secret_key, self.bitcoin_secret_key) {
-                (Some(aura_sk), Some(bitcoin_sk)) => {
-                    let aura_pk = aura_sk.public_key();
-                    info!("Using aura public key {aura_pk}");
-                    let aura_signer = Keypair::from_components(aura_pk, aura_sk);
+            (maybe_aura_signer, maybe_bitcoin_signer) =
+                match (self.aura_secret_key, self.bitcoin_secret_key) {
+                    (Some(aura_sk), Some(bitcoin_sk)) => {
+                        let aura_pk = aura_sk.public_key();
+                        info!("Using aura public key {aura_pk}");
+                        let aura_signer = Keypair::from_components(aura_pk, aura_sk);
 
-                    let bitcoin_pk = bitcoin_sk.public_key(&bitcoin::key::Secp256k1::new());
-                    info!("Using bitcoin public key {bitcoin_pk}");
-                    let bitcoin_signer = BitcoinSigner::new(bitcoin_sk);
+                        let bitcoin_pk = bitcoin_sk.public_key(&bitcoin::key::Secp256k1::new());
+                        info!("Using bitcoin public key {bitcoin_pk}");
+                        let bitcoin_signer = BitcoinSigner::new(bitcoin_sk);
 
-                    info!("Running authority");
-                    (Some(aura_signer), Some(bitcoin_signer))
-                }
-                (None, Some(_)) => panic!("Aura secret not configured"),
-                (Some(_), None) => panic!("Bitcoin secret not configured"),
-                (None, None) => {
-                    info!("Running full node");
-                    (None, None)
-                }
-            };
-
+                        info!("Running authority");
+                        (Some(aura_signer), Some(bitcoin_signer))
+                    }
+                    (None, Some(_)) => panic!("Aura secret not configured"),
+                    (Some(_), None) => panic!("Bitcoin secret not configured"),
+                    (None, None) => {
+                        info!("Running full node");
+                        (None, None)
+                    }
+                };
         } else {
             (maybe_aura_signer, maybe_bitcoin_signer) = (None, None);
         }
