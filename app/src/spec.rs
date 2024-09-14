@@ -39,7 +39,7 @@ pub const DEV_BITCOIN_SECRET_KEY: &str =
 
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
-        slot_duration:5000,
+        slot_duration:10000,
         authorities: vec![
             PublicKey::from_str(
                 "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
