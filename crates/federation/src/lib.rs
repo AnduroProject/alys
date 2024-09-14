@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -94,6 +94,8 @@ impl Bridge {
         }
     }
 
+    // TODO: See if this was causing the sync issue
+    // #[instrument(level = "trace", skip(self, cb), fields(self.pegin_address = %self.pegin_address, start_height = %start_height))]
     pub async fn stream_blocks_for_pegins<F, R>(&self, start_height: u32, cb: F)
     where
         F: Fn(Vec<PegInInfo>, u32) -> R,
