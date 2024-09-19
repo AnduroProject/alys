@@ -61,7 +61,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
         },
-        is_validator: false
+        is_validator: true
     }
 });
 
