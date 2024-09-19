@@ -8,8 +8,8 @@ trap stop_all_reth SIGINT
 
 if [[ -z "${NUM}" ]]; then
     # when running dev mode (single node)
-    rm -rf ".alys/chain_db"
-    rm -rf ".alys/wallet"
+    rm -rf "$PWD/etc/data/consensus/node_${NUM}/chain_db"
+    rm -rf "$PWD/etc/data/consensus/node_${NUM}/wallet"
 fi
 
 mkdir -p data/logs/
