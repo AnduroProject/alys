@@ -9,7 +9,7 @@ use strum::{EnumString, IntoStaticStr};
 use tracing::*;
 use types::{EthSpec, Hash256, MainnetEthSpec};
 
-pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus";
+pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 
 pub const HEAD_KEY: Hash256 = Hash256::repeat_byte(5);
 pub const LATEST_POW_BLOCK_KEY: Hash256 = Hash256::repeat_byte(6);
