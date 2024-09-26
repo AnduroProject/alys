@@ -13,11 +13,11 @@ NUM=${NUM:-0}
 echo "${NUM}"
 
 # Clear previous blockchain data in dev mode
-if [[ -z "${NUM}" ]]; then
-    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/chain_db"
-    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/wallet"
-fi
-
+# if [[ -z "${NUM}" ]]; then
+#     rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/chain_db"
+#     rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}/wallet"
+# fi
+#
 # Initialize logs directory
 mkdir -p "${BASE_DIR}/etc/data/logs"
 

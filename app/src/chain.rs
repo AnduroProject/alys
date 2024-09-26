@@ -330,15 +330,35 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         };
         let pegins = self.fill_pegins(&mut add_balances).await;
 
-        let payload = self
+        let payload_result = self
             .engine
             .build_block(
                 timestamp,
                 prev_payload_head,
                 add_balances.into_iter().map(Into::into).collect(),
             )
-            .await
-            .unwrap();
+            .await;
+
+        let payload = match payload_result {
+            Ok(payload) => payload,
+            Err(err) => {
+                match err {
+                    Error::PayloadIdUnavailable => {
+                        warn!(
+                            "PayloadIdUnavailable: Slot {}, Timestamp {:?}",
+                            slot, timestamp
+                        );
+                        self.clone().sync().await;
+                        // we are missing a parent, this is normal if we are syncing
+                        return Ok(());
+                    }
+                    _ => {
+                        warn!("Failed to build block payload: {:?}", err);
+                        return Ok(());
+                    }
+                }
+            }
+        };
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
@@ -393,7 +413,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             x if x.is_empty() => None,
             payments => {
                 info!("⬅️  Creating bitcoin tx for {} peg-outs", payments.len());
-                match self.bitcoin_wallet.write().await.create_payment(payments, fee_rate) {
+                match self
+                    .bitcoin_wallet
+                    .write()
+                    .await
+                    .create_payment(payments, fee_rate)
+                {
                     Ok(unsigned_txn) => Some(unsigned_txn),
                     Err(e) => {
                         error!("Failed to create pegout payment: {e}");
@@ -1043,7 +1068,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         // sync first then process block so we don't skip and trigger a re-sync
                         if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
                             // TODO: we need to sync before processing (this is triggered by proposal)
-                            info!("Syncing!");
                             self.clone().sync().await;
                         }
 
@@ -1123,6 +1147,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     async fn sync(self: Arc<Self>) {
+        info!("Syncing!");
         *self.sync_status.write().await = SyncStatus::InProgress;
 
         let peer_id = loop {

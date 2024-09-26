@@ -21,9 +21,9 @@ function start_geth() {
     local LOG_FILE=$(get_log_path $NUM)
 
 
-    rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}"
-    mkdir -p "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/data/logs"
-    touch "$LOG_FILE"
+    # rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}"
+    # mkdir -p "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/data/logs"
+    # touch "$LOG_FILE"
 
 
     # Port calculations
@@ -54,8 +54,16 @@ function start_geth() {
          --ws.origins "*" \
          --port ${PORT} \
          --gcmode "archive" \
-         --maxpeers 0 \
-         > "$LOG_FILE" 2>&1 &
+         --verbosity 5 \
+         --log.file $LOG_FILE \
+         --nodiscover \
+         --maxpeers 20 \
+         --gpo.ignoreprice 1 \
+         --metrics \
+         --metrics.expensive \
+         --miner.gasprice 1 \
+         --history.state 0 \
+         --nodekey "${BASE_DIR}/etc/data/execution/node_0/bootnode.key"
     GETH_PIDS[$NUM]=$!
 }
 
@@ -97,12 +105,18 @@ function start_testnet_geth() {
          --ws.addr "0.0.0.0" \
          --ws.port ${WS_PORT} \
          --ws.origins "*" \
+         --verbosity 5 \
+         --log.file $LOG_FILE \
+         --gpo.ignoreprice 1 \
+         --metrics \
+         --metrics.expensive \
+         --miner.gasprice 1 \
+         --history.state 0 \
          --port ${PORT} \
          --gcmode "archive" \
          --maxpeers 20 \
          --nodekey "${BASE_DIR}/etc/data/execution/node_${NUM}/bootnode.key" \
-         --bootnodes "enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303,enode://c24c88c6eef3bb53c8be49e8fe0837088e66e200a3b3a7d097c3af861617de13487cfd665cbc0d313cde6b1aa8159774dc9c29842ffce1d9fc286af44f7eedf4@107.22.120.71:30303,enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303"
-         > "$LOG_FILE" 2>&1 &
+         --bootnodes "enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303,enode://6fa3a059cde5853f5702fcba00d7d682dfd8af4140fc088fe19ced7aaf245c238377bfa2c3fbb058593c412cfd20b26192b86ba4266770beff79d9fb8a18bc07@107.22.120.71:30303" &
     GETH_PIDS[$NUM]=$!
 }
 
