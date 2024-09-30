@@ -39,6 +39,7 @@ services:
         --ws.port 8456
         --ws.origins "*"
         --port 30303
+        
 
   prometheus:
     container_name: prometheus
