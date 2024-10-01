@@ -1,5 +1,4 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 # Script to create a commit
 
 echo "Auto Commit Script"
