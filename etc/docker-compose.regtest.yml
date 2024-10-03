@@ -85,8 +85,8 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: localhost/alys_podman:latest
-    # image: ghcr.io/anduroproject/alys:dev
+#image: localhost/alys_podman:latest
+    image: ghcr.io/anduroproject/alys:development
     
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
