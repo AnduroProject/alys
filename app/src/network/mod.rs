@@ -332,13 +332,13 @@ impl NetworkBackend {
                             Ok(RPCReceived::Response(request_id, received_response)) => {
                                 // propagate response
                                 // todo: make robust
-                                let propagated_response_result = rpc_response_channels[request_id].send(received_response.clone()).await;
+                                // let propagated_response_result = rpc_response_channels[request_id].send(received_response.clone()).await;
 
                                 if let Err(err) = rpc_response_channels[request_id].send(received_response.clone()).await {
-                                    warn!("Failed to propagate response: {:?}", err);
-                                    trace!("Removing response channel: {}", request_id);
+                                    warn!("Failed to propagate response: {}", request_id);
+                                    error!("{}", err.to_string());
                                     // remove the channel
-                                    rpc_response_channels.remove(request_id);
+                                    // rpc_response_channels.remove(request_id);
 
                                 }
                             }

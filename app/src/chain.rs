@@ -14,7 +14,7 @@ use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
-use ethereum_types::Address;
+use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use futures::future::try_join_all;
 use libp2p::PeerId;
@@ -439,7 +439,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .ok_or(Error::MissingParent)
     }
 
-    #[tracing::instrument(name = "block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
+    // #[tracing::instrument(name = "block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
     async fn process_block(
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
@@ -825,25 +825,45 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         block_hash: &ExecutionBlockHash,
     ) -> Result<(Block<Transaction>, Vec<TransactionReceipt>), Error> {
-        let block_with_txs = self
-            .engine
-            .get_block_with_txs(block_hash)
-            .await
-            .unwrap()
-            .unwrap();
-        let receipts = try_join_all(
+        let block_with_txs = match self.engine.get_block_with_txs(block_hash).await {
+            Ok(block_option) => match block_option {
+                Some(block) => {
+                    trace!(
+                        "Block found - Hash: {:x} Number: {}",
+                        block.hash.unwrap_or(H256::zero()),
+                        block.number.unwrap_or(U64::from(0))
+                    );
+                    block
+                }
+                None => {
+                    return Err(Error::MissingBlock);
+                }
+            },
+            Err(err) => return Err(Error::ExecutionLayerError(err)),
+        };
+
+        let receipt_result = try_join_all(
             block_with_txs
                 .transactions
                 .iter()
                 .map(|tx| self.engine.get_transaction_receipt(tx.hash)),
         )
-        .await
-        .unwrap();
+        .await;
 
-        Ok((
-            block_with_txs,
-            receipts.into_iter().map(|x| x.unwrap()).collect(),
-        ))
+        match receipt_result {
+            Ok(receipts) => Ok((
+                block_with_txs,
+                receipts.into_iter().map(|x| x.unwrap()).collect(),
+            )),
+            Err(err) => {
+                error!(
+                    "Error retrieving block txn receipts for block hash: {:x} #: {}",
+                    block_with_txs.hash.unwrap_or(H256::zero()),
+                    block_with_txs.number.unwrap_or(U64::from(0))
+                );
+                Err(Error::ExecutionLayerError(err))
+            }
+        }
     }
 
     //  ____________      __________________      ____________
@@ -1184,6 +1204,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         while let Some(x) = receive_stream.recv().await {
             match x {
                 RPCResponse::BlocksByRange(block) => {
+                    trace!("Received block: {:#?}", block);
                     match self.process_block((*block).clone()).await {
                         Err(Error::ProcessGenesis) | Ok(_) => {
                             // nothing to do

@@ -8,6 +8,7 @@ pub enum Error {
     PayloadIdUnavailable,
     InvalidBlockHash,
     DbReadError,
+    ExecutionLayerError(execution_layer::Error),
     // NOTE: error type not exported by lighthouse
     EngineApiError(String),
     TimeError(SystemTimeError),
@@ -47,5 +48,11 @@ impl From<AuraError> for Error {
 impl From<FederationError> for Error {
     fn from(e: FederationError) -> Self {
         Error::FederationError(e)
+    }
+}
+
+impl From<execution_layer::Error> for Error {
+    fn from(e: execution_layer::Error) -> Self {
+        Error::ExecutionLayerError(e)
     }
 }
