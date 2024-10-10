@@ -20,6 +20,9 @@ services:
     pid: host
     # For Sepolia, replace `--chain mainnet` with `--chain sepolia`
     # For Holesky, replace `--chain mainnet` with `--chain holesky`
+    environment:
+      RUST_LOG: trace
+      RUST_BACKTRACE: full
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -93,6 +96,9 @@ services:
       - ./data/alys/wallet/:/lib/alys/data/wallet
     # extra_hosts:
       # - "host.containers.internal:host-gateway"
+    environment:
+      RUST_LOG: trace
+      RUST_BACKTRACE: full
     command:
       - /bin/alys
       - --dev
@@ -140,64 +146,64 @@ services:
       -rpcpassword=rpcpassword
       -port=18333
       -rpcport=18443
-
-  explorer-api:
-    image: web3labs/epirus-free-api:latest
-    environment:
-      - NODE_ENDPOINT=http://reth:8545
-      - MONGO_CLIENT_URI=mongodb://mongodb:27017
-      - REINDEX_ENDPOINT=http://ingestion/reindex/
-      - MONGO_DB_NAME=epirus
-      - MONGO_CREATE_INDICES=true
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    depends_on:
-      - redis
-      - mongodb
-      - reth
-
-  mongodb:
-    image: mongo:5.0.8
-    environment:
-      - COMPOSE_HTTP_TIMEOUT=900
-      - DOCKER_CLIENT_TIMEOUT=900
-    entrypoint: mongod --bind_ip "0.0.0.0"
-
-  redis:
-    image: redis
-    restart: unless-stopped
-    container_name: redis
-
-  explorer-web:
-    image: web3labs/epirus-free-web:latest
-    environment:
-      - API_URL=/api
-      - WS_API_URL=ws://localhost:8090
-      - DISPLAY_NETWORK_TAB=disabled
-    depends_on:
-      - explorer-api
-
-  ingestion:
-    image: web3labs/epirus-free-ingestion:latest
-    environment:
-      - NODE_ENDPOINT=http://reth:8545
-      - MONGO_CLIENT_URI=mongodb://mongodb:27017
-      - MONGO_DB_NAME=epirus
-      - LIST_OF_METRICS_TO_CALCULATE_PER_MINUTE=hourly,daily,monthly,yearly
-    depends_on:
-      - mongodb
-      - redis
-
-  nginx:
-    image: nginx:latest
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./5xx.html:/www/error_pages/5xx.html
-    ports:
-      - 8080:80
-    depends_on:
-      - explorer-api
-      - explorer-web
+#
+#  explorer-api:
+#    image: web3labs/epirus-free-api:latest
+#    environment:
+#      - NODE_ENDPOINT=http://reth:8545
+#      - MONGO_CLIENT_URI=mongodb://mongodb:27017
+#      - REINDEX_ENDPOINT=http://ingestion/reindex/
+#      - MONGO_DB_NAME=epirus
+#      - MONGO_CREATE_INDICES=true
+#      - REDIS_HOST=redis
+#      - REDIS_PORT=6379
+#    depends_on:
+#      - redis
+#      - mongodb
+#      - reth
+#
+#  mongodb:
+#    image: mongo:5.0.8
+#    environment:
+#      - COMPOSE_HTTP_TIMEOUT=900
+#      - DOCKER_CLIENT_TIMEOUT=900
+#    entrypoint: mongod --bind_ip "0.0.0.0"
+#
+#  redis:
+#    image: redis
+#    restart: unless-stopped
+#    container_name: redis
+#
+#  explorer-web:
+#    image: web3labs/epirus-free-web:latest
+#    environment:
+#      - API_URL=/api
+#      - WS_API_URL=ws://localhost:8090
+#      - DISPLAY_NETWORK_TAB=disabled
+#    depends_on:
+#      - explorer-api
+#
+#  ingestion:
+#    image: web3labs/epirus-free-ingestion:latest
+#    environment:
+#      - NODE_ENDPOINT=http://reth:8545
+#      - MONGO_CLIENT_URI=mongodb://mongodb:27017
+#      - MONGO_DB_NAME=epirus
+#      - LIST_OF_METRICS_TO_CALCULATE_PER_MINUTE=hourly,daily,monthly,yearly
+#    depends_on:
+#      - mongodb
+#      - redis
+#
+#  nginx:
+#    image: nginx:latest
+#    volumes:
+#      - ./nginx.conf:/etc/nginx/nginx.conf
+#      - ./5xx.html:/www/error_pages/5xx.html
+#    ports:
+#      - 8080:80
+#    depends_on:
+#      - explorer-api
+#      - explorer-web
 
 volumes:
   mainnet_data:

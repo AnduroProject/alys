@@ -842,28 +842,58 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Err(err) => return Err(Error::ExecutionLayerError(err)),
         };
 
-        let receipt_result = try_join_all(
-            block_with_txs
-                .transactions
-                .iter()
-                .map(|tx| self.engine.get_transaction_receipt(tx.hash)),
-        )
-        .await;
-
-        match receipt_result {
-            Ok(receipts) => Ok((
-                block_with_txs,
-                receipts.into_iter().map(|x| x.unwrap()).collect(),
-            )),
-            Err(err) => {
-                error!(
-                    "Error retrieving block txn receipts for block hash: {:x} #: {}",
-                    block_with_txs.hash.unwrap_or(H256::zero()),
-                    block_with_txs.number.unwrap_or(U64::from(0))
-                );
-                Err(Error::ExecutionLayerError(err))
+        let mut receipt_result = Vec::new();
+        for tx in block_with_txs.transactions.iter() {
+            let receipt = self.engine.get_transaction_receipt(tx.hash).await;
+            match receipt {
+                Ok(receipt_opt) => {
+                    if let Some(receipt) = receipt_opt {
+                        trace!(
+                            "Receipt found - Hash: {:x} Block Hash: {:x}",
+                            tx.hash,
+                            block_with_txs.hash.unwrap_or(H256::zero())
+                        );
+                        receipt_result.push(receipt);
+                    }
+                }
+                Err(err) => {
+                    trace!(
+                        "Receipt not found - Hash: {:x} Block Hash: {:x}",
+                        tx.hash,
+                        block_with_txs.hash.unwrap_or(H256::zero())
+                    );
+                }
             }
         }
+
+        // let receipt_result = try_join_all(
+        //     block_with_txs
+        //         .transactions
+        //         .iter()
+        //         .map(|tx| self.engine.get_transaction_receipt(tx.hash)),
+        // )
+        // .await;
+        Ok((
+            block_with_txs,
+            receipt_result.into_iter().collect(),
+            // receipts.into_iter().map(|x| x.unwrap()).collect(),
+        ))
+        // match Ok(receipt_result) {
+        //     Ok(receipts) => Ok((
+        //         block_with_txs,
+        //         receipts.into_iter().map(|x| x).collect(),
+        //         // receipts.into_iter().map(|x| x.unwrap()).collect(),
+
+        //     )),
+        //     Err(err) => {
+        //         error!(
+        //             "Error retrieving block txn receipts for block hash: {:x} #: {}",
+        //             block_with_txs.hash.unwrap_or(H256::zero()),
+        //             block_with_txs.number.unwrap_or(U64::from(0))
+        //         );
+        //         Err(Error::ExecutionLayerError(err))
+        //     }
+        // }
     }
 
     //  ____________      __________________      ____________

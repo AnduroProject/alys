@@ -15,6 +15,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::RwLock;
+use tokio::time::sleep;
+use tracing::field::debug;
+use tracing::{debug, trace};
 use types::{
     Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
     Uint256, Withdrawal,
@@ -129,6 +132,7 @@ impl Engine {
             .forkchoice_updated(forkchoice_state, Some(payload_attributes))
             .await
             .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+        trace!("Forkchoice updated: {:?}", response);
         let payload_id = response.payload_id.ok_or(Error::PayloadIdUnavailable)?;
 
         let response = self
@@ -200,6 +204,9 @@ impl Engine {
         execution_layer::Error,
     > {
         let params = json!([block_hash, true]);
+
+        trace!("Querying `eth_getBlockByHash` with params: {:?}", params);
+
         let rpc_result = self
             .api
             .rpc_request::<Option<ethers_core::types::Block<ethers_core::types::Transaction>>>(
@@ -220,15 +227,32 @@ impl Engine {
         transaction_hash: H256,
     ) -> Result<Option<TransactionReceipt>, execution_layer::Error> {
         let params = json!([transaction_hash]);
-        let rpc_result = self
-            .api
-            .rpc_request::<Option<TransactionReceipt>>(
-                "eth_getTransactionReceipt",
-                params,
-                Duration::from_secs(1),
-            )
-            .await;
-        Ok(rpc_result?)
+        for i in 0..50 {
+            debug!("Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}", params, i);
+            let rpc_result = self
+                .api
+                .rpc_request::<Option<TransactionReceipt>>(
+                    "eth_getTransactionReceipt",
+                    params.clone(),
+                    Duration::from_secs(3),
+                )
+                .await;
+            if rpc_result.is_ok() {
+                return Ok(rpc_result?);
+            } else {
+                sleep(Duration::from_millis(1000)).await;
+            }
+        }
+        Err(execution_layer::Error::InvalidPayloadBody("Failed to fetch transaction receipt".to_string()))
+        // let rpc_result = self
+        //     .api
+        //     .rpc_request::<Option<TransactionReceipt>>(
+        //         "eth_getTransactionReceipt",
+        //         params,
+        //         Duration::from_secs(1),
+        //     )
+        //     .await;
+        // Ok(rpc_result?)
     }
 
     // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
@@ -298,5 +322,5 @@ pub fn new_http_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
     let rpc_url =
         SensitiveUrl::parse(&url_override.unwrap_or(DEFAULT_EXECUTION_ENDPOINT.to_string()))
             .unwrap();
-    HttpJsonRpc::new_with_auth(rpc_url, rpc_auth, None).unwrap()
+    HttpJsonRpc::new_with_auth(rpc_url, rpc_auth, Some(3)).unwrap()
 }
