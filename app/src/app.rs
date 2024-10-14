@@ -71,6 +71,9 @@ pub struct App {
     #[arg(long = "geth-url")]
     pub geth_url: Option<String>,
 
+    #[arg(long = "geth-execution-url")]
+    pub geth_execution_url: Option<String>,
+
     #[arg(long = "db-path")]
     pub db_path: Option<String>,
 
@@ -133,8 +136,7 @@ impl App {
         // )
         // .unwrap();
 
-        let filter = EnvFilter::builder()
-            .from_env_lossy();
+        let filter = EnvFilter::builder().from_env_lossy();
 
         let main_layer = tracing_subscriber::fmt::layer().with_target(true);
 
@@ -148,7 +150,9 @@ impl App {
         //     vec![main_layer.with_filter(filter).boxed()]
         // };
 
-        tracing_subscriber::registry().with(vec![main_layer.with_filter(filter).boxed()]).init();
+        tracing_subscriber::registry()
+            .with(vec![main_layer.with_filter(filter).boxed()])
+            .init();
     }
 
     async fn execute(self) -> eyre::Result<()> {
@@ -157,8 +161,9 @@ impl App {
         info!("Head: {:?}", disk_store.get_head());
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
-        let http_json_rpc = new_http_json_rpc(self.geth_url);
-        let engine = Engine::new(http_json_rpc);
+        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url);
+        let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
+        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
 
         let network =
             crate::network::spawn_network_handler(self.p2p_port, self.remote_bootnode).await?;

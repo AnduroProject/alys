@@ -23,6 +23,7 @@ use types::{
     Uint256, Withdrawal,
 };
 
+const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
 const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
 
 #[derive(Debug, Default, Clone)]
@@ -75,13 +76,15 @@ const DEAD_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 
 pub struct Engine {
     pub api: HttpJsonRpc,
+    pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
 }
 
 impl Engine {
-    pub fn new(api: HttpJsonRpc) -> Self {
+    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc) -> Self {
         Self {
             api,
+            execution_api,
             finalized: Default::default(),
         }
     }
@@ -228,9 +231,12 @@ impl Engine {
     ) -> Result<Option<TransactionReceipt>, execution_layer::Error> {
         let params = json!([transaction_hash]);
         for i in 0..50 {
-            debug!("Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}", params, i);
+            debug!(
+                "Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}",
+                params, i
+            );
             let rpc_result = self
-                .api
+                .execution_api
                 .rpc_request::<Option<TransactionReceipt>>(
                     "eth_getTransactionReceipt",
                     params.clone(),
@@ -243,7 +249,9 @@ impl Engine {
                 sleep(Duration::from_millis(1000)).await;
             }
         }
-        Err(execution_layer::Error::InvalidPayloadBody("Failed to fetch transaction receipt".to_string()))
+        Err(execution_layer::Error::InvalidPayloadBody(
+            "Failed to fetch transaction receipt".to_string(),
+        ))
         // let rpc_result = self
         //     .api
         //     .rpc_request::<Option<TransactionReceipt>>(
@@ -317,10 +325,17 @@ impl Engine {
     }
 }
 
-pub fn new_http_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
+pub fn new_http_engine_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
     let rpc_auth = Auth::new(JwtKey::from_slice(&DEFAULT_JWT_SECRET).unwrap(), None, None);
     let rpc_url =
         SensitiveUrl::parse(&url_override.unwrap_or(DEFAULT_EXECUTION_ENDPOINT.to_string()))
             .unwrap();
     HttpJsonRpc::new_with_auth(rpc_url, rpc_auth, Some(3)).unwrap()
+}
+
+pub fn new_http_public_execution_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
+    let rpc_url =
+        SensitiveUrl::parse(&url_override.unwrap_or(DEFAULT_EXECUTION_PUBLIC_ENDPOINT.to_string()))
+            .unwrap();
+    HttpJsonRpc::new(rpc_url, Some(3)).unwrap()
 }
