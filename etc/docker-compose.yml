@@ -20,6 +20,9 @@ services:
     pid: host
     # For Sepolia, replace `--chain mainnet` with `--chain sepolia`
     # For Holesky, replace `--chain mainnet` with `--chain holesky`
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -85,7 +88,10 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:dev
+    image: ghcr.io/anduroproject/alys:27-btc-sync-optimization
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
@@ -103,39 +109,40 @@ services:
       - /lib/alys/data/wallet
 #      - --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --bitcoin-rpc-url
-      - http://bitcoin-core:18443
 #      - http://host.docker.internal:18443
       - --bitcoin-rpc-user
-      - bitcoin
       - --bitcoin-rpc-pass
-      - bitcoin
+      - --bitcoin-network
+      - testnet
+      - --p2p-port
+      - 55444
     depends_on:
       - reth
       - bitcoin-core
     ports:
       - 3000:3000
 
-  bitcoin-core:
-    image: balajimara/bitcoin:25.99
-    container_name: bitcoin_node
-    restart: always
-    ports:
-      - 18333:18333
-      - 18443:18443
-    volumes:
-      - ./data/bitcoin:$PWD/.bitcoin
-    command:
-      -printtoconsole
-      -debug=1
-      -regtest=1
-      -fallbackfee=0.002
-      -rpcallowip=0.0.0.0/0
-      -rpcbind=0.0.0.0
-      -server
-      -rpcuser=bitcoin
-      -rpcpassword=bitcoin
-      -port=18333
-      -rpcport=18443
+#  bitcoin-core:
+#    image: balajimara/bitcoin:25.99
+#    container_name: bitcoin_node
+#    restart: always
+#    ports:
+#      - 18333:18333
+#      - 18443:18443
+#    volumes:
+#      - ./data/bitcoin:$PWD/.bitcoin
+#    command:
+#      -printtoconsole
+#      -debug=1
+#      -regtest=1
+#      -fallbackfee=0.002
+#      -rpcallowip=0.0.0.0/0
+#      -rpcbind=0.0.0.0
+#      -server
+#      -rpcuser=bitcoin
+#      -rpcpassword=bitcoin
+#      -port=18333
+#      -rpcport=18443
 
 
 volumes:

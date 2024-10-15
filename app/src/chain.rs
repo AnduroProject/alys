@@ -1285,21 +1285,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 Arc::new(block.clone()),
                             ));
                             // FIXME: handle result
-                            let _ = self
+                            if let Err(err) = self
                                 .network
                                 .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                                .await;
+                                .await
+                            {
+                                error!("Failed to respond to rpc BlocksByRange request: {err:?}");
+                            }
                         }
 
                         let payload =
                             RPCCodedResponse::StreamTermination(ResponseTermination::BlocksByRange);
                         // FIXME: handle result
-                        let _ = self
+                        if let Err(err) = self
                             .network
                             .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                            .await;
+                            .await
+                        {
+                            error!("Failed to respond to rpc BlocksByRange request to terminate: {err:?}");
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        error!("Received unexpected rpc request: {msg:?}");
+                    }
                 }
             }
         });
@@ -1310,14 +1318,28 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         tokio::spawn(async move {
             let chain = &self;
+
+            let sync_status = self.sync_status.read().await;
+            let is_synced = sync_status.is_synced().clone();
+            drop(sync_status);
+
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
                     for pegin in pegins.into_iter() {
-                        info!(
-                            "Found pegin {} for {} in {}",
-                            pegin.amount, pegin.evm_account, pegin.txid
-                        );
-                        chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                        if is_synced {
+                            info!(
+                                "Found pegin {} for {} in {}",
+                                pegin.amount, pegin.evm_account, pegin.txid
+                            );
+                            chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                        } else {
+                            debug!(
+                                "Not synced, ignoring pegin {} for {} in {}",
+                                pegin.amount, pegin.evm_account, pegin.txid
+                            );
+
+                            break;
+                        }
                     }
                     // if we have queued pegins, start next rescan (after a node restart) at
                     // height of the oldest pegin. If there are no pegins, just start from the
