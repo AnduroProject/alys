@@ -15,6 +15,21 @@ On a high level, the repository consists of three parts:
 - [crates](./crates): Contains the logic for the peg-in and peg-out handling used by the app. It also contains the logic to interact with Bitcoin miners.
 - [docs](./docs/src/README.md): Contains more information on the architecture.
 
+## Connection Info
+
+### Testnet
+- RPC: http://btcalys.xyz:8545
+- Explorer: http://testnet.alyscan.io/
+- Faucet: https://faucet.anduro.io/
+- Chain ID: 212121
+
+
+### Alphanet
+- RPC: http:/54.162.190.202:8545
+- Explorer: http://alyscan.io/
+- Faucet: https://faucet.anduro.io/alpha
+- Chain ID: 212121
+
 ## Prerequisites
 
 - Install Rust `1.75.0` or higher: https://www.rust-lang.org/tools/install
