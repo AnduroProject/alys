@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -235,6 +235,7 @@ impl Bridge {
             if let Some(address) = receipt.to {
                 // only check for pegouts to the bridge contract
                 if address != contract_address {
+                    debug!("Skipping receipt to {}", address);
                     continue;
                 }
             }
