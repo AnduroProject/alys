@@ -1,8 +1,8 @@
-#name: 'reth'
+name: 'testnet_alys_node'
 
 services:
-  reth:
-    container_name: reth
+  execution:
+    container_name: execution
     restart: unless-stopped
     image: ghcr.io/paradigmxyz/reth
     ports:
@@ -18,8 +18,6 @@ services:
       - ./jwttoken:/opt/alys/execution/config/jwt:ro
     # https://paradigmxyz.github.io/reth/run/troubleshooting.html#concurrent-database-access-error-using-containersdocker
     pid: host
-    # For Sepolia, replace `--chain mainnet` with `--chain sepolia`
-    # For Holesky, replace `--chain mainnet` with `--chain holesky`
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -45,7 +43,7 @@ services:
     restart: unless-stopped
     image: prom/prometheus
     depends_on:
-      - reth
+      - execution
     ports:
       - 9090:9090
     volumes:
@@ -60,7 +58,7 @@ services:
     restart: unless-stopped
     image: grafana/grafana:10.3.3
     depends_on:
-      - reth
+      - execution
       - prometheus
     ports:
       - 3003:3000
@@ -90,27 +88,20 @@ services:
       - ./data/alys/wallet/:/lib/alys/data/wallet
     command:
       - /bin/alys
-      - --dev
-#      - --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --geth-url
-      - http://reth:8551/
+      - http://execution:8551/
       - --db-path
       - /lib/alys/data/db
-#      - --rpc-port 3000
-#      - --mine
       - --wallet-path
       - /lib/alys/data/wallet
-#      - --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001
       - --bitcoin-rpc-url
       - http://bitcoin-core:18443
-#      - http://host.docker.internal:18443
       - --bitcoin-rpc-user
       - bitcoin
       - --bitcoin-rpc-pass
       - bitcoin
     depends_on:
-      - reth
-      - bitcoin-core
+      - execution
     ports:
       - 3000:3000
 
@@ -136,14 +127,7 @@ services:
       -port=18333
       -rpcport=18443
 
-
 volumes:
-  mainnet_data:
-    driver: local
-  sepolia_data:
-    driver: local
-  holesky_data:
-    driver: local
   logs:
     driver: local
   prometheusdata:

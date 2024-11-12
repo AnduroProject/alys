@@ -113,8 +113,11 @@ impl Aura {
         self.check_signed_by_author(block)?;
 
         // + 2 makes this equal to `ceil((len*2) / 3.0)`
-        let required_signatures = ((self.authorities.len() * 2) + 2) / 3;
-
+        let required_signatures = if self.authorities.len() > 3 {
+            ((self.authorities.len() * 2) + 2) / 3
+        } else {
+            1
+        };
         if block.num_approvals() < required_signatures {
             return Ok(false);
         }
