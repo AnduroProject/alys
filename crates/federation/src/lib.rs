@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -19,7 +19,7 @@ pub use bitcoin_signing::{
 };
 pub use bitcoin_stream::BitcoinCore;
 
-pub const REQUIRED_CONFIRMATIONS: u8 = 6;
+pub const REQUIRED_CONFIRMATIONS: u8 = 2;
 
 pub fn wei_to_sats(wei: U256) -> u64 {
     // eth has 18 decimals, bitcoin 8 --> div by 10^10
@@ -235,6 +235,7 @@ impl Bridge {
             if let Some(address) = receipt.to {
                 // only check for pegouts to the bridge contract
                 if address != contract_address {
+                    debug!("Skipping receipt to {}", address);
                     continue;
                 }
             }

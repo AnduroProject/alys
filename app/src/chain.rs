@@ -14,7 +14,7 @@ use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
-use ethereum_types::Address;
+use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use futures::future::try_join_all;
 use libp2p::PeerId;
@@ -330,15 +330,35 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         };
         let pegins = self.fill_pegins(&mut add_balances).await;
 
-        let payload = self
+        let payload_result = self
             .engine
             .build_block(
                 timestamp,
                 prev_payload_head,
                 add_balances.into_iter().map(Into::into).collect(),
             )
-            .await
-            .unwrap();
+            .await;
+
+        let payload = match payload_result {
+            Ok(payload) => payload,
+            Err(err) => {
+                match err {
+                    Error::PayloadIdUnavailable => {
+                        warn!(
+                            "PayloadIdUnavailable: Slot {}, Timestamp {:?}",
+                            slot, timestamp
+                        );
+                        self.clone().sync().await;
+                        // we are missing a parent, this is normal if we are syncing
+                        return Ok(());
+                    }
+                    _ => {
+                        warn!("Failed to build block payload: {:?}", err);
+                        return Ok(());
+                    }
+                }
+            }
+        };
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
@@ -393,7 +413,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             x if x.is_empty() => None,
             payments => {
                 info!("⬅️  Creating bitcoin tx for {} peg-outs", payments.len());
-                match self.bitcoin_wallet.write().await.create_payment(payments, fee_rate) {
+                match self
+                    .bitcoin_wallet
+                    .write()
+                    .await
+                    .create_payment(payments, fee_rate)
+                {
                     Ok(unsigned_txn) => Some(unsigned_txn),
                     Err(e) => {
                         error!("Failed to create pegout payment: {e}");
@@ -414,7 +439,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .ok_or(Error::MissingParent)
     }
 
-    #[tracing::instrument(name = "block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
+    // #[tracing::instrument(name = "block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
     async fn process_block(
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
@@ -800,25 +825,75 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         block_hash: &ExecutionBlockHash,
     ) -> Result<(Block<Transaction>, Vec<TransactionReceipt>), Error> {
-        let block_with_txs = self
-            .engine
-            .get_block_with_txs(block_hash)
-            .await
-            .unwrap()
-            .unwrap();
-        let receipts = try_join_all(
-            block_with_txs
-                .transactions
-                .iter()
-                .map(|tx| self.engine.get_transaction_receipt(tx.hash)),
-        )
-        .await
-        .unwrap();
+        let block_with_txs = match self.engine.get_block_with_txs(block_hash).await {
+            Ok(block_option) => match block_option {
+                Some(block) => {
+                    trace!(
+                        "Block found - Hash: {:x} Number: {}",
+                        block.hash.unwrap_or(H256::zero()),
+                        block.number.unwrap_or(U64::from(0))
+                    );
+                    block
+                }
+                None => {
+                    return Err(Error::MissingBlock);
+                }
+            },
+            Err(err) => return Err(Error::ExecutionLayerError(err)),
+        };
 
+        let mut receipt_result = Vec::new();
+        for tx in block_with_txs.transactions.iter() {
+            let receipt = self.engine.get_transaction_receipt(tx.hash).await;
+            match receipt {
+                Ok(receipt_opt) => {
+                    if let Some(receipt) = receipt_opt {
+                        trace!(
+                            "Receipt found - Hash: {:x} Block Hash: {:x}",
+                            tx.hash,
+                            block_with_txs.hash.unwrap_or(H256::zero())
+                        );
+                        receipt_result.push(receipt);
+                    }
+                }
+                Err(err) => {
+                    trace!(
+                        "Receipt not found - Hash: {:x} Block Hash: {:x}",
+                        tx.hash,
+                        block_with_txs.hash.unwrap_or(H256::zero())
+                    );
+                }
+            }
+        }
+
+        // let receipt_result = try_join_all(
+        //     block_with_txs
+        //         .transactions
+        //         .iter()
+        //         .map(|tx| self.engine.get_transaction_receipt(tx.hash)),
+        // )
+        // .await;
         Ok((
             block_with_txs,
-            receipts.into_iter().map(|x| x.unwrap()).collect(),
+            receipt_result.into_iter().collect(),
+            // receipts.into_iter().map(|x| x.unwrap()).collect(),
         ))
+        // match Ok(receipt_result) {
+        //     Ok(receipts) => Ok((
+        //         block_with_txs,
+        //         receipts.into_iter().map(|x| x).collect(),
+        //         // receipts.into_iter().map(|x| x.unwrap()).collect(),
+
+        //     )),
+        //     Err(err) => {
+        //         error!(
+        //             "Error retrieving block txn receipts for block hash: {:x} #: {}",
+        //             block_with_txs.hash.unwrap_or(H256::zero()),
+        //             block_with_txs.number.unwrap_or(U64::from(0))
+        //         );
+        //         Err(Error::ExecutionLayerError(err))
+        //     }
+        // }
     }
 
     //  ____________      __________________      ____________
@@ -1043,7 +1118,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         // sync first then process block so we don't skip and trigger a re-sync
                         if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
                             // TODO: we need to sync before processing (this is triggered by proposal)
-                            info!("Syncing!");
                             self.clone().sync().await;
                         }
 
@@ -1123,6 +1197,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     async fn sync(self: Arc<Self>) {
+        info!("Syncing!");
         *self.sync_status.write().await = SyncStatus::InProgress;
 
         let peer_id = loop {
@@ -1159,6 +1234,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         while let Some(x) = receive_stream.recv().await {
             match x {
                 RPCResponse::BlocksByRange(block) => {
+                    trace!("Received block: {:#?}", block);
                     match self.process_block((*block).clone()).await {
                         Err(Error::ProcessGenesis) | Ok(_) => {
                             // nothing to do
@@ -1209,21 +1285,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 Arc::new(block.clone()),
                             ));
                             // FIXME: handle result
-                            let _ = self
+                            if let Err(err) = self
                                 .network
                                 .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                                .await;
+                                .await
+                            {
+                                error!("Failed to respond to rpc BlocksByRange request: {err:?}");
+                            }
                         }
 
                         let payload =
                             RPCCodedResponse::StreamTermination(ResponseTermination::BlocksByRange);
                         // FIXME: handle result
-                        let _ = self
+                        if let Err(err) = self
                             .network
                             .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                            .await;
+                            .await
+                        {
+                            error!("Failed to respond to rpc BlocksByRange request to terminate: {err:?}");
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        error!("Received unexpected rpc request: {msg:?}");
+                    }
                 }
             }
         });
@@ -1234,14 +1318,28 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         tokio::spawn(async move {
             let chain = &self;
+
+            let sync_status = self.sync_status.read().await;
+            let is_synced = sync_status.is_synced().clone();
+            drop(sync_status);
+
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
                     for pegin in pegins.into_iter() {
-                        info!(
-                            "Found pegin {} for {} in {}",
-                            pegin.amount, pegin.evm_account, pegin.txid
-                        );
-                        chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                        if is_synced {
+                            info!(
+                                "Found pegin {} for {} in {}",
+                                pegin.amount, pegin.evm_account, pegin.txid
+                            );
+                            chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                        } else {
+                            debug!(
+                                "Not synced, ignoring pegin {} for {} in {}",
+                                pegin.amount, pegin.evm_account, pegin.txid
+                            );
+
+                            break;
+                        }
                     }
                     // if we have queued pegins, start next rescan (after a node restart) at
                     // height of the oldest pegin. If there are no pegins, just start from the

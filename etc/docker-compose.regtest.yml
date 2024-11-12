@@ -1,4 +1,4 @@
-#name: 'execution'
+name: 'local_mono_regtest_alys_network'
 
 services:
   execution:
@@ -18,8 +18,10 @@ services:
       - ./jwttoken:/opt/alys/execution/config/jwt:ro
     # https://paradigmxyz.github.io/reth/run/troubleshooting.html#concurrent-database-access-error-using-containersdocker
     pid: host
-    # For Sepolia, replace `--chain mainnet` with `--chain sepolia`
-    # For Holesky, replace `--chain mainnet` with `--chain holesky`
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -85,14 +87,14 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    # image: localhost/alys_podman:latest
     image: ghcr.io/anduroproject/alys:development
-    
+
     volumes:
-      - ./data/consensus/db/:/lib/alys/data/db
-      - ./data/consensus/wallet/:/lib/alys/data/wallet
-    # extra_hosts:
-      # - "host.containers.internal:host-gateway"
+      - ./data/alys/db/:/lib/alys/data/db
+      - ./data/alys/wallet/:/lib/alys/data/wallet
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
     command:
       - /bin/alys
       - --dev
@@ -108,6 +110,8 @@ services:
       - rpcuser
       - --bitcoin-rpc-pass
       - rpcpassword
+      - --geth-execution-url
+      - http://execution:8545
     depends_on:
       - execution
       - bitcoin-core
