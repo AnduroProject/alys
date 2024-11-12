@@ -21,6 +21,7 @@ services:
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
+
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -141,6 +142,8 @@ services:
 
 
 volumes:
+  logs:
+    driver: local
   prometheusdata:
     driver: local
   grafanadata:

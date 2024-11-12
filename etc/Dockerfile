@@ -2,9 +2,9 @@
 FROM rust:bullseye as builder
 #FROM rust:latest
 
-#SHELL ["/bin/bash", "-c"]
+# SHELL ["/bin/bash", "-c"]
 
-#RUN cargo install --git https://github.com/foundry-rs/foundry --profile local --locked forge cast chisel anvil
+# RUN #cargo install --git https://github.com/foundry-rs/foundry --profile local --locked forge cast chisel anvil
 
 # RUN curl -L https://foundry.paradigm.xyz | bash
 # RUN source ~/.bashrc
