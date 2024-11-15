@@ -1,5 +1,3 @@
-name: 'local_mono_regtest_alys_network'
-
 services:
   execution:
     container_name: execution
