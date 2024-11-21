@@ -129,29 +129,29 @@ impl App {
     }
 
     fn init_tracing(&self) {
-        // let rust_log_level = Level::from_str(
-        //     std::env::var("RUST_LOG")
-        //         .unwrap_or("info".to_string())
-        //         .as_str(),
-        // )
-        // .unwrap();
+        let rust_log_level = Level::from_str(
+            std::env::var("RUST_LOG")
+                .unwrap_or("info".to_string())
+                .as_str(),
+        )
+        .unwrap();
 
-        let filter = EnvFilter::builder().from_env_lossy();
+        let filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
 
         let main_layer = tracing_subscriber::fmt::layer().with_target(true);
 
-        // let layers = if rust_log_level == Level::DEBUG || rust_log_level == Level::TRACE {
-        //     vec![main_layer
-        //         .with_file(true)
-        //         .with_line_number(true)
-        //         .with_filter(filter)
-        //         .boxed()]
-        // } else {
-        //     vec![main_layer.with_filter(filter).boxed()]
-        // };
+        let layers = if rust_log_level == Level::DEBUG || rust_log_level == Level::TRACE {
+            vec![main_layer
+                .with_file(true)
+                .with_line_number(true)
+                .with_filter(filter)
+                .boxed()]
+        } else {
+            vec![main_layer.with_filter(filter).boxed()]
+        };
 
         tracing_subscriber::registry()
-            .with(vec![main_layer.with_filter(filter).boxed()])
+            .with(layers)
             .init();
     }
 
