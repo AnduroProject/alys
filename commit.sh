@@ -154,7 +154,7 @@ while true; do
     fi
 done
 
-COMMIT_BODY=$(echo -e "$GIT_COMMIT_TYPE$BREAKING_CHANGE: $GIT_COMMIT_MESSAGE\n\n$BODY\n\nISSUE: $GITHUB_ISSUE\n")
+COMMIT_BODY=$(echo -e "$GIT_COMMIT_TYPE$BREAKING_CHANGE: $GIT_COMMIT_MESSAGE\n\n$BODY\n\nISSUE: #$GITHUB_ISSUE\n")
 
 echo -e "\n============================================================\n"
 
