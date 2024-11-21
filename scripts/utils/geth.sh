@@ -21,6 +21,17 @@ function start_geth() {
     local LOG_FILE=$(get_log_path $NUM)
 
 
+    # Define the file path
+    FILE_PATH="${BASE_DIR}/etc/data/execution/node_${NUM}/bootnode.key"
+
+    # Check if the file exists
+    if [ -f "$FILE_PATH" ]; then
+        # File exists, include the argument
+        ARGUMENT="--nodekey \"${BASE_DIR}/etc/data/execution/node_${NUM}/bootnode.key\""
+    else
+        # File does not exist, do not include the argument
+        ARGUMENT=""
+    fi
     # rm -rf "${BASE_DIR}/etc/data/execution/node_${NUM}"
     # mkdir -p "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/data/logs"
     # touch "$LOG_FILE"
@@ -63,7 +74,7 @@ function start_geth() {
          --metrics.expensive \
          --miner.gasprice 1 \
          --history.state 0 \
-         --nodekey "${BASE_DIR}/etc/data/execution/node_0/bootnode.key"
+          $ARGUMENT &
     GETH_PIDS[$NUM]=$!
 }
 
