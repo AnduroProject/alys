@@ -1,3 +1,13 @@
+function get_log_path() {
+    local node_NUM=$1
+    echo "${BASE_DIR}/etc/data/logs/consensus_${node_NUM}.txt"
+}
+
+function get_data_path() {
+    local node_NUM=$1
+    echo "${BASE_DIR}/etc/data/consensus/node_${node_NUM}"
+}
+
 function stop_all_chains() {
     for pid in ${CHAIN_PIDS[*]}; do
         echo "Killing chain $pid"
@@ -69,7 +79,10 @@ function start_full_node_from_genesis() {
 }
 
 function start_testnet_full_node() {
-    cargo run --bin app -- --chain "${PWD}/etc/config/chain.json" --geth-url http://localhost:8551/ --db-path "${PWD}/etc/data/consensus/node_0/chain_db" --rpc-port 3000 --wallet-path "${PWD}/etc/data/consensus/node_0" --bitcoin-rpc-url $BTC_RPC_URL --bitcoin-rpc-user $BTC_RPC_USER --bitcoin-rpc-pass $BTC_RPC_PASSWORD --bitcoin-network testnet --p2p-port 55444 --remote-bootnode /ip4/54.224.209.248/tcp/55444/ip4/107.22.120.71/tcp/55444/ip4/54.161.100.208/tcp/55444 > "${PWD}/etc/data/logs/alys_0.txt" 2>&1 &
+    local NUM=$1
+    local LOG_FILE=$(get_log_path $NUM)
+
+    cargo run --bin app -- --chain "${PWD}/etc/config/chain.json" --geth-url http://localhost:8551/ --db-path "$(get_data_path $NUM)/chain_db" --rpc-port 3000 --wallet-path "$(get_data_path $NUM)" --bitcoin-rpc-url $BTC_RPC_URL --bitcoin-rpc-user $BTC_RPC_USER --bitcoin-rpc-pass $BTC_RPC_PASSWORD --bitcoin-network testnet --p2p-port 55444 --remote-bootnode /ip4/54.161.100.208/tcp/55444 > "$LOG_FILE" 2>&1 &
     CHAIN_PIDS[$NUM]=$!
 }
 

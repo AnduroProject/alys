@@ -98,9 +98,10 @@ impl Aura {
                 .then_some(())
                 .ok_or(AuraError::BadSignature)?;
 
-            if !block.is_signed_by(expected_authority_index) {
-                return Err(AuraError::InvalidAuthor);
-            }
+            // TODO: Replace with dynamic sourcing for authorities at a given timespan
+            // if !block.is_signed_by(expected_authority_index) {
+            //     return Err(AuraError::InvalidAuthor);
+            // }
 
             Ok(())
         }
@@ -114,7 +115,8 @@ impl Aura {
 
         // + 2 makes this equal to `ceil((len*2) / 3.0)`
         let required_signatures = if self.authorities.len() > 3 {
-            ((self.authorities.len() * 2) + 2) / 3
+            // ((self.authorities.len() * 2) + 2) / 3
+            1
         } else {
             1
         };

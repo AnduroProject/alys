@@ -13,6 +13,7 @@ NUM=${NUM:-0}
 
 # Initialize logs directory
 mkdir -p "${BASE_DIR}/etc/data/logs"
+touch "$(get_log_path $NUM)"
 
 # Start the Geth node(s)
 start_testnet_geth $NUM

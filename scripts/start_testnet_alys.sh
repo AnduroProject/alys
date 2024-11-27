@@ -7,13 +7,18 @@ BASE_DIR=$(realpath "$SCRIPT_DIR/../")
 BTC_RPC_USER=${BTC_RPC_USER:-"rpcuser"}
 BTC_RPC_PASSWORD=${BTC_RPC_PASSWORD:-"rpcpassword"}
 BTC_RPC_URL=${BTC_RPC_URL:-"http://localhost:18332"}
+# Set default number of nodes if not already set
+NUM=${NUM:-0}
 
+echo "${NUM}"
 
-# Initialize logs directory
+# Initialize directories & log path
 mkdir -p "${BASE_DIR}/etc/data/logs"
+mkdir -p "$(get_data_path $NUM)"
+touch "$(get_log_path $NUM)"
 
 # Start the Geth node(s)
-start_testnet_full_node
+start_testnet_full_node $NUM
 
 # Tail the log file to keep the shell open and display logs
-tail -f "${PWD}/etc/data/logs/alys_0.txt"
+tail -f "$(get_log_path $NUM)"
