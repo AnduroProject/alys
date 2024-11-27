@@ -425,7 +425,7 @@ Note the `--mine` flag used above which enables an auto-miner that attempts to f
 
 We also provide an RPC that provides two methods, `createauxblock` and `submitauxblock`, based on the Namecoin implementation. If you are a mining pool operator, use the default RPC port (`3000`, or configure `--rpc-port`) to fetch the target and hash from your authority or full-node and then submit the AuxPow.
 
-Note as per the Marathon specs we currently check the third *or* fourth output of the coinbase transaction to extract the merged mining header, this differs from the original specification [here](https://en.bitcoin.it/wiki/Merged_mining_specification#Merged_mining_coinbase) (and corresponding implementations) which expect this in the `scriptSig` of the first input. It is also assumed that this is the only data in the `scriptPubKey` and there are no other instructions or data pushes. Additionally, Marathon does not yet support the merkle construction so the header always contains the AuxPow hash instead of the merkle root.
+Note we currently check the third *or* fourth output of the coinbase transaction to extract the merged mining header, this differs from the original specification [here](https://en.bitcoin.it/wiki/Merged_mining_specification#Merged_mining_coinbase) (and corresponding implementations) which expect this in the `scriptSig` of the first input. It is also assumed that this is the only data in the `scriptPubKey` and there are no other instructions or data pushes.
 
 For local development we also offer a minimal binary named `miner` that does the same thing as the in-process service but over RPC.
 

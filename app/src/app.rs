@@ -176,7 +176,13 @@ impl App {
             .unwrap()
             .unwrap_or(chain_spec.bitcoin_start_height);
 
+        let og_threshold = ((3 * 2) + 2) / 3;
         let threshold = ((chain_spec.federation_bitcoin_pubkeys.len() * 2) + 2) / 3; // 2rds majority, rounded up
+        let og_bitcoin_federation = Federation::new(
+            chain_spec.federation_bitcoin_pubkeys[0..3].to_vec(),
+            og_threshold,
+            self.bitcoin_network,
+        );
         let bitcoin_federation = Federation::new(
             chain_spec.federation_bitcoin_pubkeys.clone(),
             threshold,
@@ -240,6 +246,7 @@ impl App {
                     self.bitcoin_rpc_user.expect("RPC user is configured"),
                     self.bitcoin_rpc_pass.expect("RPC password is configured"),
                 ),
+                og_bitcoin_federation.taproot_address.clone(),
                 bitcoin_federation.taproot_address.clone(),
             ),
             bitcoin_wallet,
@@ -272,11 +279,10 @@ impl App {
         chain.clone().listen_for_peer_discovery().await;
         chain.clone().listen_for_rpc_requests().await;
 
-        chain
-            .clone()
-            .monitor_bitcoin_blocks(bitcoin_start_height)
-            .await;
-
+        if chain_spec.is_validator {
+            chain.clone().monitor_bitcoin_blocks(bitcoin_start_height).await;
+        }
+        
         AuraSlotWorker::new(
             Duration::from_millis(slot_duration),
             authorities,

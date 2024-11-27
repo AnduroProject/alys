@@ -80,6 +80,7 @@ pub struct PegInInfo {
 }
 
 pub struct Bridge {
+    og_pegin_address: BitcoinAddress,
     pegin_address: BitcoinAddress,
     bitcoin_core: BitcoinCore,
 }
@@ -87,8 +88,9 @@ pub struct Bridge {
 impl Bridge {
     const BRIDGE_CONTRACT_ADDRESS: &'static str = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
 
-    pub fn new(bitcoin_core: BitcoinCore, pegin_address: BitcoinAddress) -> Self {
+    pub fn new(bitcoin_core: BitcoinCore, og_pegin_address: BitcoinAddress, pegin_address: BitcoinAddress) -> Self {
         Self {
+            og_pegin_address,
             pegin_address,
             bitcoin_core,
         }
@@ -135,8 +137,16 @@ impl Bridge {
             .rpc
             .get_raw_transaction(txid, Some(block_hash))?;
 
-        self.pegin_info(&tx, *block_hash, block_info.height as u32)
-            .ok_or(Error::NotAPegin)
+        let pegin_info = self.pegin_info(&tx, *block_hash, block_info.height as u32);
+
+        match pegin_info {
+            None => {
+                Err(Error::NotAPegin)
+            }
+            Some(info) => {
+                Ok(info)
+            }
+        }
     }
 
     pub fn fetch_transaction(&self, txid: &Txid, block_hash: &BlockHash) -> Option<Transaction> {
@@ -199,8 +209,9 @@ impl Bridge {
             .output
             .iter()
             .find(|output| {
-                self.pegin_address
-                    .matches_script_pubkey(&output.script_pubkey)
+                self.og_pegin_address
+                    .matches_script_pubkey(&output.script_pubkey) || self.pegin_address
+                    .matches_script_pubkey(&output.script_pubkey) 
             })
             .map(|x| x.value)?;
 
