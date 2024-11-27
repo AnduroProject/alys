@@ -283,6 +283,9 @@ impl NetworkBackend {
                         info!("Responding to rpc...");
                         self.swarm.behaviour_mut().eth2_rpc.send_response(peer_id, (connection_id, substream_id), payload);
                     }
+                    Some(_) => {
+                        debug!("Unhandled message");
+                    }
                     None => {
                         // channel shut down, nothing to do
                     }
@@ -293,7 +296,7 @@ impl NetworkBackend {
                         message_id: id,
                         message,
                     })) => {
-                        tracing::debug!(
+                        debug!(
                             "Got message: '{}' with id: {id} from peer: {peer_id}",
                             String::from_utf8_lossy(&message.data),
                         );
@@ -345,10 +348,12 @@ impl NetworkBackend {
                             Ok(RPCReceived::EndOfStream(request_id, _)) => {
                                 rpc_response_channels.remove(request_id);
                             }
-                            Err(HandlerErr::Inbound { id: _, proto: _, error: _ }) => {
+                            Err(HandlerErr::Inbound { id: err_stream_id, proto: _, error: stream_error }) => {
                                 // not sure what to do with this, ignore for now
+                                warn!("Inbound error: {:?}", stream_error);
                             }
-                            Err(HandlerErr::Outbound { id: _, proto: _, error: _ }) => {
+                            Err(HandlerErr::Outbound { id: stream_id, proto: _, error: stream_err }) => {
+                                warn!("Outbound error: {:?}", stream_err);
                             }
                         }
 
@@ -450,8 +455,8 @@ fn create_swarm() -> Result<Swarm<MyBehaviour>, Error> {
 
             let network_params = NetworkParams {
                 max_chunk_size: 1024 * 1024_usize,
-                ttfb_timeout: Duration::from_secs(15),
-                resp_timeout: Duration::from_secs(15),
+                ttfb_timeout: Duration::from_secs(180),
+                resp_timeout: Duration::from_secs(180),
             };
 
             let drain = slog::Discard;
