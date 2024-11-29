@@ -15,6 +15,7 @@ use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
+use bitcoin::Address;
 use tracing::log::Level::{Debug, Trace};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -176,13 +177,13 @@ impl App {
             .unwrap()
             .unwrap_or(chain_spec.bitcoin_start_height);
 
-        let og_threshold = ((3 * 2) + 2) / 3;
-        let threshold = ((chain_spec.federation_bitcoin_pubkeys.len() * 2) + 2) / 3; // 2rds majority, rounded up
-        let og_bitcoin_federation = Federation::new(
-            chain_spec.federation_bitcoin_pubkeys[0..3].to_vec(),
-            og_threshold,
-            self.bitcoin_network,
-        );
+        let mut bitcoin_addresses = Vec::new();
+
+        fn calculate_threshold (federation_bitcoin_pubkeys_len: usize) -> usize {
+            (((federation_bitcoin_pubkeys_len * 2) + 2) / 3)
+        };
+
+        let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2rds majority, rounded up
         let bitcoin_federation = Federation::new(
             chain_spec.federation_bitcoin_pubkeys.clone(),
             threshold,
@@ -193,7 +194,23 @@ impl App {
             bitcoin_federation.taproot_address
         );
 
-        let wallet_path = self
+        bitcoin_addresses.push(bitcoin_federation.taproot_address.clone());
+
+        if chain_spec.federation_bitcoin_pubkeys.len() > 3 {
+            {
+                let original_federation_set = chain_spec.federation_bitcoin_pubkeys[0..3].to_vec();
+                let og_threshold = calculate_threshold(original_federation_set.len());
+                let og_bitcoin_federation = Federation::new(
+                    original_federation_set,
+                    og_threshold,
+                    self.bitcoin_network,
+                );
+
+                bitcoin_addresses.push(og_bitcoin_federation.taproot_address.clone());
+            }
+        }
+
+    let wallet_path = self
             .wallet_path
             .unwrap_or(format!("{DEFAULT_ROOT_DIR}/wallet"));
         let bitcoin_wallet = BitcoinWallet::new(&wallet_path, bitcoin_federation.clone())?;
@@ -246,8 +263,7 @@ impl App {
                     self.bitcoin_rpc_user.expect("RPC user is configured"),
                     self.bitcoin_rpc_pass.expect("RPC password is configured"),
                 ),
-                og_bitcoin_federation.taproot_address.clone(),
-                bitcoin_federation.taproot_address.clone(),
+                bitcoin_addresses,
             ),
             bitcoin_wallet,
             bitcoin_signature_collector,
