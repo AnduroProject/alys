@@ -80,18 +80,16 @@ pub struct PegInInfo {
 }
 
 pub struct Bridge {
-    og_pegin_address: BitcoinAddress,
-    pegin_address: BitcoinAddress,
+    pegin_addresses: Vec<BitcoinAddress>,
     bitcoin_core: BitcoinCore,
 }
 
 impl Bridge {
     const BRIDGE_CONTRACT_ADDRESS: &'static str = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
 
-    pub fn new(bitcoin_core: BitcoinCore, og_pegin_address: BitcoinAddress, pegin_address: BitcoinAddress) -> Self {
+    pub fn new(bitcoin_core: BitcoinCore, pegin_addresses: Vec<BitcoinAddress>) -> Self {
         Self {
-            og_pegin_address,
-            pegin_address,
+            pegin_addresses,
             bitcoin_core,
         }
     }
@@ -209,9 +207,10 @@ impl Bridge {
             .output
             .iter()
             .find(|output| {
-                self.og_pegin_address
-                    .matches_script_pubkey(&output.script_pubkey) || self.pegin_address
-                    .matches_script_pubkey(&output.script_pubkey) 
+
+                self.pegin_addresses.iter().any(|pegin_address| {
+                    pegin_address.matches_script_pubkey(&output.script_pubkey)
+                })
             })
             .map(|x| x.value)?;
 
@@ -315,10 +314,10 @@ mod tests {
     async fn test_stream_e2e() {
         let federation = Bridge::new(
             BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
-            "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
+            vec!["bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                 .parse::<BitcoinAddress<NetworkUnchecked>>()
                 .unwrap()
-                .assume_checked(),
+                .assume_checked()],
         );
 
         federation
@@ -333,10 +332,10 @@ mod tests {
 
         let federation = Bridge::new(
             BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
-            "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
+            vec!["bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                 .parse::<BitcoinAddress<NetworkUnchecked>>()
                 .unwrap()
-                .assume_checked(),
+                .assume_checked()],
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)
@@ -352,10 +351,10 @@ mod tests {
 
         let federation = Bridge::new(
             BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
-            "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
+            vec!["bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                 .parse::<BitcoinAddress<NetworkUnchecked>>()
                 .unwrap()
-                .assume_checked(),
+                .assume_checked()],
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)
