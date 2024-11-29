@@ -118,8 +118,9 @@ impl Aura {
             // ((self.authorities.len() * 2) + 2) / 3
             1
         } else {
-            1
+            ((self.authorities.len() * 2) + 2) / 3
         };
+        
         if block.num_approvals() < required_signatures {
             return Ok(false);
         }
