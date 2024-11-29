@@ -7,6 +7,7 @@ BASE_DIR=$(realpath "$SCRIPT_DIR/../")
 BTC_RPC_USER=${BTC_RPC_USER:-"rpcuser"}
 BTC_RPC_PASSWORD=${BTC_RPC_PASSWORD:-"rpcpassword"}
 BTC_RPC_URL=${BTC_RPC_URL:-"http://localhost:18332"}
+GETH_JSON_RPC_URL=${GETH_JSON_RPC_URL:-"http://localhost:8545"}
 # Set default number of nodes if not already set
 NUM=${NUM:-0}
 
