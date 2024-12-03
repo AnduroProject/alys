@@ -190,7 +190,11 @@ impl<Id: ReqId, TSpec: EthSpec> RPC<Id, TSpec> {
             }
         };
 
-        tracing::debug!("Pushing RPC request to swarm request_id: {:?}, request_id: {:?}", request_id, peer_id);
+        tracing::debug!(
+            "Pushing RPC request to swarm request_id: {:?}, request_id: {:?}",
+            request_id,
+            peer_id
+        );
         self.events.push(event);
     }
 
