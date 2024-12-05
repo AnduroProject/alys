@@ -255,9 +255,12 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         let index_last = self.chain.get_last_finalized_block();
 
         let hashes = self.chain.get_aggregate_hashes().await?;
+        trace!("Found {} hashes", hashes.len());
 
         // calculates the "vector commitment" for previous blocks without PoW.
         let hash = AuxPow::aggregate_hash(&hashes);
+
+        trace!("Creating AuxBlock for hash {}", hash);
 
         // store the height for this hash so we can retrieve the
         // same unverified hashes on submit
@@ -293,6 +296,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// * `auxpow` - Serialised auxpow found
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L166
     pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> bool {
+        trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
             start_hash,
@@ -307,8 +311,11 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         };
 
         let index_last = self.chain.get_block_by_hash(&last_hash);
+        trace!("Last block hash: {}", index_last.block_hash());
         let bits = self.get_next_work_required(&index_last);
+        trace!("Next work required: {}", bits.to_consensus());
         let chain_id = index_last.chain_id();
+        trace!("Chain ID: {}", chain_id);
 
         // NOTE: we also check this in `check_pow`
         // process block

@@ -16,7 +16,6 @@ use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
-use futures::future::try_join_all;
 use libp2p::PeerId;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashSet};
@@ -410,7 +409,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let fee_rate = self.bridge.fee_rate();
         match Bridge::filter_pegouts(execution_receipts) {
-            x if x.is_empty() => None,
+            x if x.is_empty() => {
+                info!("Adding 0 pegouts to block");
+                None
+            }
             payments => {
                 info!("⬅️  Creating bitcoin tx for {} peg-outs", payments.len());
                 match self
@@ -527,9 +529,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 }
 
                 let wallet = self.bitcoin_wallet.read().await;
+                trace!("Checking signature for finalized pegout {:?}", tx.txid());
                 wallet.check_transaction_signatures(tx)?;
             }
         } else {
+            trace!("Block does not have PoW");
             // make sure we can only produce a limited number of blocks without PoW
             let latest_finalized_height = self
                 .get_latest_finalized_block_ref()?
@@ -560,6 +564,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             state.add_checked_approval(our_approval.clone())?;
             Some(our_approval)
         } else {
+            trace!("Full node doesn't need to approve");
             // full node doesn't need to approve
             None
         };
@@ -584,11 +589,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let required_outputs = Bridge::filter_pegouts(execution_receipts);
 
+        trace!(
+            "Found {} pegouts in block after filtering",
+            required_outputs.len()
+        );
+
         self.bitcoin_wallet.read().await.check_payment_proposal(
             required_outputs,
             unverified_block.message.pegout_payment_proposal.as_ref(),
         )?;
 
+        trace!("Pegout proposal is valid");
         Ok(())
     }
 
@@ -856,7 +867,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         receipt_result.push(receipt);
                     }
                 }
-                Err(err) => {
+                Err(_err) => {
                     trace!(
                         "Receipt not found - Hash: {:x} Block Hash: {:x}",
                         tx.hash,
@@ -923,9 +934,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Default::default()
         } else {
             // initialize the accumulator to the total at n-1
-            self.storage
+            let accumulated_fees = self
+                .storage
                 .get_accumulated_block_fees(&verified_block.message.parent_hash)?
-                .unwrap_or_default()
+                .unwrap_or_default();
+
+            trace!("Accumulated fees: {}", accumulated_fees);
+            accumulated_fees
         };
 
         // add the fees for block n
@@ -936,6 +951,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(self
             .storage
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
+    }
+
+    pub(crate) async fn get_accumulated_fees(&self, block_hash: Option<&Hash256>) -> Result<U256, Error> {
+        if let Some(block_hash) = block_hash {
+            self.storage
+                .get_accumulated_block_fees(block_hash)?
+                .ok_or(Error::MissingBlock)
+        } else {
+            self.storage.get_accumulated_block_fees(&self.get_latest_finalized_block_ref()?.unwrap().hash)?
+                .ok_or(Error::MissingBlock)
+        }
     }
 
     async fn import_verified_block_no_commit(
@@ -1371,17 +1397,23 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
                 self.head.read().await.as_ref()?.hash,
             )
             .ok()?;
+        trace!("Got {} hashes", hashes.len());
 
         let queued_pow = self.queued_pow.read().await;
         let head = self.head.read().await.as_ref()?.hash;
+        
+        trace!("Head: {:?}", head);
 
         let has_work = queued_pow
             .as_ref()
             .map(|pow| pow.range_end != head)
             .unwrap_or(true);
         if !has_work {
+            trace!("No work to do");
+            // TODO: Change to Result so that we can return this error
             None
         } else {
+            trace!("Returning hashes");
             Some(
                 hashes
                     .into_iter()
@@ -1399,6 +1431,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_block_by_hash(&self, hash: &bitcoin::BlockHash) -> ConsensusBlock<MainnetEthSpec> {
+        trace!("Getting block by hash: {:?}", hash);
         let block = self
             .storage
             .get_block(&hash.to_block_hash())

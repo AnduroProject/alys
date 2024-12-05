@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::str::FromStr;
+use tracing::trace;
 
 pub struct UtxoManager<T: Database> {
     pub(crate) tree: T,
@@ -170,6 +171,10 @@ impl<T: Database> UtxoManager<T> {
         }
 
         // note: we currently don't reject proposal based on fee amount
+        trace!(
+            "Found pegout proposal with {} outputs",
+            actual_outputs.len()
+        );
 
         Ok(())
     }

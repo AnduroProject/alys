@@ -88,8 +88,8 @@ impl Aura {
         if slot > slot_now + 1 {
             Err(AuraError::SlotIsInFuture)
         } else {
-            let (expected_authority_index, _expected_author) =
-                slot_author(slot, &self.authorities[..]).ok_or(AuraError::SlotAuthorNotFound)?;
+            // let (expected_authority_index, _expected_author) =
+            //     slot_author(slot, &self.authorities[..]).ok_or(AuraError::SlotAuthorNotFound)?;
 
             debug!("timestamp: {}, slot {slot}", timestamp);
 

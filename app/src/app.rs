@@ -4,7 +4,6 @@ use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{genesis_value_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
-use bitcoin::Address;
 use bls::{Keypair, SecretKey};
 use bridge::{
     bitcoin::Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
@@ -16,10 +15,8 @@ use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
-use tracing::log::Level::{Debug, Trace};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
-use types::chain_spec;
 
 #[inline]
 pub fn run() -> eyre::Result<()> {
@@ -81,6 +78,12 @@ pub struct App {
     #[arg(long = "mine")]
     pub mine: bool,
 
+    #[arg(long = "no-mine", default_value_t = false)]
+    pub no_mine: bool,
+
+    #[arg(long="full-log-context", default_value_t = false)]
+    pub full_log_context: bool,
+
     #[arg(long, default_value_t = 3000)]
     pub rpc_port: u16,
 
@@ -137,7 +140,13 @@ impl App {
         )
         .unwrap();
 
-        let filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
+        let filter;
+        if self.full_log_context {
+            filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
+        } else {
+            let filter_tag = format!("app={rust_log_level},federation={rust_log_level},miner={rust_log_level}");
+            filter = EnvFilter::builder().parse_lossy(filter_tag.as_str());
+        }
 
         let main_layer = tracing_subscriber::fmt::layer().with_target(true);
 
@@ -178,8 +187,8 @@ impl App {
         let mut bitcoin_addresses = Vec::new();
 
         fn calculate_threshold(federation_bitcoin_pubkeys_len: usize) -> usize {
-            (((federation_bitcoin_pubkeys_len * 2) + 2) / 3)
-        };
+            ((federation_bitcoin_pubkeys_len * 2) + 2) / 3
+        }
 
         let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2rds majority, rounded up
         let bitcoin_federation = Federation::new(
@@ -281,7 +290,7 @@ impl App {
         )
         .await;
 
-        if self.mine || self.dev {
+        if (self.mine || self.dev) && !self.no_mine {
             info!("Spawning miner");
             spawn_background_miner(chain.clone());
         }

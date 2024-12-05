@@ -3,7 +3,6 @@ use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, Chain
 use crate::chain::Chain;
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
-use bitcoin::hashes::Hash;
 use bitcoin::{Address, BlockHash};
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
@@ -13,6 +12,7 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use bitcoin::hashes::Hash;
 use store::ItemStore;
 use tokio::sync::Mutex;
 use types::MainnetEthSpec;
@@ -64,6 +64,20 @@ impl JsonRpcErrorV1 {
         Self {
             code: -32603,
             message: "Internal error".to_string(),
+        }
+    }
+
+    fn block_not_found() -> Self {
+        Self {
+            code: -32604,
+            message: "Block not found".to_string(),
+        }
+    }
+
+    fn debug_error(error_msg: String) -> Self {
+        Self {
+            code: -32605,
+            message: error_msg,
         }
     }
 }
@@ -156,15 +170,30 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
             }
         }
         "submitauxblock" => {
-            let (hash, auxpow) = if let Ok(value) = decode_submitauxblock_args(params.get()) {
-                value
-            } else {
-                return Ok(new_json_rpc_error!(
-                    id,
-                    hyper::StatusCode::BAD_REQUEST,
-                    JsonRpcErrorV1::invalid_params()
-                )?);
-            };
+            // let (hash, auxpow) = if let Ok(value) = decode_submitauxblock_args(params.get()) {
+            let mut hash;
+            let mut auxpow;
+            match decode_submitauxblock_args(params.get()) {
+                Ok(value) => {
+                    hash = value.0;
+                    auxpow = value.1;
+                }
+                Err(e) => {
+                    return Ok(new_json_rpc_error!(
+                        id,
+                        hyper::StatusCode::BAD_REQUEST,
+                        JsonRpcErrorV1::debug_error(e.to_string())
+                    )?)
+                }
+            }
+            //     value
+            // } else {
+            //     return Ok(new_json_rpc_error!(
+            //         id,
+            //         hyper::StatusCode::BAD_REQUEST,
+            //         JsonRpcErrorV1::debug_error()
+            //     )?);
+            // };
 
             let value = miner.submit_aux_block(hash, auxpow).await;
 

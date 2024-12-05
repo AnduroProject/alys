@@ -348,11 +348,11 @@ impl NetworkBackend {
                             Ok(RPCReceived::EndOfStream(request_id, _)) => {
                                 rpc_response_channels.remove(request_id);
                             }
-                            Err(HandlerErr::Inbound { id: err_stream_id, proto: _, error: stream_error }) => {
+                            Err(HandlerErr::Inbound { id: _err_stream_id, proto: _, error: stream_error }) => {
                                 // not sure what to do with this, ignore for now
                                 warn!("Inbound error: {:?}", stream_error);
                             }
-                            Err(HandlerErr::Outbound { id: stream_id, proto: _, error: stream_err }) => {
+                            Err(HandlerErr::Outbound { id: _stream_id, proto: _, error: stream_err }) => {
                                 warn!("Outbound error: {:?}", stream_err);
                             }
                         }
