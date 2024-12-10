@@ -389,6 +389,7 @@ impl AuxPow {
     }
 
     pub async fn mine(sidechain_hash: BlockHash, target: CompactTarget, chain_id: u32) -> Self {
+        trace!("Mining AuxPow with target: {}", target.to_consensus());
         let parent_chainid = 1u32;
 
         let transaction = Transaction {
@@ -439,6 +440,7 @@ impl AuxPow {
             tokio::task::yield_now().await;
 
             aux_pow.parent_block.nonce = nonce;
+            // trace!("Trying nonce: {}", nonce);
             if aux_pow.check_proof_of_work(target) {
                 // This unwrap should always succeed, just a sanity check to catch any bugs asap
                 aux_pow.check(sidechain_hash, chain_id).unwrap();

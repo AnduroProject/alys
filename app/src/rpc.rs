@@ -112,10 +112,12 @@ impl From<JsonRpcResponseV1> for Body {
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, GenericError>;
 
+// async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<MainnetEthSpec>>(
 async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
     req: Request<Body>,
     miner: Arc<Mutex<AuxPowMiner<BI, CM>>>,
     federation_address: Address<NetworkChecked>,
+    // chain: Arc<Chain<DB>>,
 ) -> Result<Response<Body>> {
     let mut miner = miner.lock().await;
 
@@ -214,6 +216,32 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
             }
             .into(),
         ),
+        // "getaccumulatedfees" => {
+        //     let args = params.get();
+        //     let block_hash;
+        //     // if args.is_empty() {
+        //     block_hash = None;
+        //     // } else {
+        //     //     block_hash = Some(args.into())
+        //     // };
+        // 
+        //     Response::builder().status(hyper::StatusCode::OK).body(
+        //         match chain.get_accumulated_fees(block_hash).await {
+        //             Ok(value) => JsonRpcResponseV1 {
+        //                 result: Some(json!(value)),
+        //                 error: None,
+        //                 id,
+        //             }
+        //             .into(),
+        //             Err(_e) => JsonRpcResponseV1 {
+        //                 result: None,
+        //                 error: Some(JsonRpcErrorV1::block_not_found()),
+        //                 id,
+        //             }
+        //             .into(),
+        //         },
+        //     )
+        // }
         _ => new_json_rpc_error!(
             id,
             hyper::StatusCode::NOT_FOUND,
@@ -246,6 +274,7 @@ pub async fn run_server<DB: ItemStore<MainnetEthSpec>>(
     let server = Server::bind(&addr).serve(make_service_fn(move |_conn| {
         let miner = miner.clone();
         let federation_address = federation_address.clone();
+        // let chain = chain.clone();
 
         async move {
             Ok::<_, GenericError>(service_fn(move |req| {

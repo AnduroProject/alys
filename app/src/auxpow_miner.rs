@@ -179,12 +179,15 @@ fn calculate_next_work_required(
     let target = target.saturating_mul(Uint256::from(timespan));
     let target = target / Uint256::from(params.pow_target_timespan);
     let target = target.min(uint256_target_from_compact(params.pow_limit));
+    
+    trace!("First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}", first_block_time, last_block_time, last_bits, timespan, target);
 
     target_to_compact_lossy(target)
 }
 
 fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
     let adjustment_interval = params.difficulty_adjustment_interval() as u32;
+    trace!("Height: {}, interval: {}, is_time: {}", height, adjustment_interval, height % adjustment_interval as u64 == 0);
     height % adjustment_interval as u64 == 0
 }
 
@@ -349,11 +352,15 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
     let task = async move {
         let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
         loop {
+            trace!("Calling create_aux_block");
             // TODO: set miner address
             if let Some(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
+                trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
+                trace!("Calling submit_aux_block");
                 miner.submit_aux_block(aux_block.hash, auxpow).await;
             } else {
+                trace!("No aux block created");
                 sleep(Duration::from_millis(250)).await;
                 continue;
             }

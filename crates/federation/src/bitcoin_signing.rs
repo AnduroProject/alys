@@ -85,6 +85,8 @@ impl<T: Database> UtxoManager<T> {
             self.tree.set_utxo(&utxo).map_err(|_| Error::DbError)?;
         }
 
+        trace!("Registered outputs to the federation");
+
         Ok(())
     }
 
@@ -188,6 +190,8 @@ impl<T: Database> UtxoManager<T> {
         fee_rate: FeeRate,
     ) -> Result<Transaction, Error> {
         let num_pegouts = output.len() as u64;
+
+        trace!("Satisfaction weight: {}", self.federation.satisfaction_weight);
 
         let utxos = self
             .tree
@@ -327,6 +331,15 @@ impl<T: Database> UtxoManager<T> {
         let signing_messages = self.get_signing_inputs(transaction)?;
         for (msg, input) in signing_messages.iter().zip(transaction.input.iter()) {
             let witnesses = input.witness.to_vec();
+            trace!("Number of witnesses: {}", witnesses.len());
+            for w in witnesses.iter()
+            {
+                trace!("witness: {:?}", w);
+            }
+            for w in witnesses.iter().zip(self.federation.pubkeys.iter().rev())
+            {
+                trace!("witness: {:?}, pubkey: {}", w.0, w.1);
+            }
 
             let sigs = witnesses
                 .iter()
@@ -334,6 +347,7 @@ impl<T: Database> UtxoManager<T> {
                 .filter(|(witness, _)| !witness.is_empty())
                 .collect::<Vec<_>>();
 
+            trace!("txn sig checker - threshold: {}, pubkeys: {}, sigs: {}, witnesses: {}", self.federation.threshold, self.federation.pubkeys.len(), sigs.len(), witnesses.len());
             // check that the lengths and number of signatures are as expected
             if witnesses.len() != self.federation.pubkeys.len() + 2
                 || sigs.len() != self.federation.threshold
@@ -362,6 +376,7 @@ impl<T: Database> UtxoManager<T> {
                 return Err(Error::InvalidWitnessScript);
             }
         }
+        trace!("Transaction signatures are correct");
         Ok(())
     }
 
@@ -421,17 +436,23 @@ impl PartiallySignedTaprootTransaction {
             .iter()
             .map(|pubkey| {
                 match self.verified_signatures.get(pubkey) {
-                    None => Ok(vec![]), // missing authority is ok
-                    Some(sigs) => sigs
-                        .get(input_idx)
-                        .ok_or(Error::MissingSignature) // missing input is not ok
-                        .map(|sig| {
-                            SchnorrSig {
-                                sig: *sig,
-                                hash_ty: TapSighashType::Default,
-                            }
-                            .to_vec()
-                        }),
+                    None => {
+                        trace!("Pubkey: {:?} not found in verified signatures", pubkey);
+                        Ok(vec![])
+                    }, // missing authority is ok
+                    Some(sigs) => {
+                        trace!("get_sigs_for_input - input_idx: {}, pubkeys: {}, sigs: {}", input_idx, pubkeys.len(), sigs.len());
+                        sigs
+                            .get(input_idx)
+                            .ok_or(Error::MissingSignature) // missing input is not ok
+                            .map(|sig| {
+                                SchnorrSig {
+                                    sig: *sig,
+                                    hash_ty: TapSighashType::Default,
+                                }
+                                    .to_vec()
+                            })
+                    },
                 }
             })
             .collect::<Result<Vec<_>, _>>()
@@ -449,6 +470,11 @@ impl PartiallySignedTaprootTransaction {
             .enumerate()
             .map(|(input_idx, tx_in)| -> Result<TxIn, Error> {
                 let sigs = self.get_sigs_for_input(input_idx, &federation.pubkeys)?;
+                trace!("Finalizing input with {} signatures", sigs.len());
+                for s in sigs.iter()
+                {
+                    trace!("sig: {:?}", s);
+                }
                 let control = federation.control_block_witness();
                 let redeem_script = federation.redeem_script.to_bytes();
                 let witnesses = sigs
@@ -457,12 +483,19 @@ impl PartiallySignedTaprootTransaction {
                     .chain([redeem_script, control].into_iter())
                     .collect::<Vec<_>>();
 
+                for w in witnesses.iter()
+                {
+                    trace!("witness: {:?}", w);
+                }
+
                 Ok(TxIn {
                     witness: Witness::from_slice(&witnesses),
                     ..tx_in.clone()
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        trace!("Finalized transaction with {} witnesses", signed_inputs.len());
+        trace!("Finalized transaction with {} inputs", signed_inputs.len());
 
         Ok(Transaction {
             input: signed_inputs,
@@ -542,7 +575,9 @@ impl Federation {
         );
 
         let satisfaction_weight = {
+            // let num_omitted_sigs = 1;
             let num_omitted_sigs = pubkeys.len() - required_sigs;
+
 
             let control = spend_info
                 .control_block(&(redeem_script.clone(), LeafVersion::TapScript))
@@ -608,11 +643,13 @@ impl BitcoinSigner {
         wallet: &UtxoManager<T>,
         transaction: &Transaction,
     ) -> Result<SingleMemberTransactionSignatures, Error> {
-        let signatures = wallet
+        let signatures: Vec<_> = wallet
             .get_signing_inputs(transaction)?
             .into_iter()
             .map(|msg| self.secp.sign_schnorr(&msg, &self.keypair))
             .collect();
+
+        trace!("get_input_signatures - pubkeys: {}, signatures: {}", wallet.federation.pubkeys.len(), signatures.iter().len());
 
         Ok(SingleMemberTransactionSignatures(
             self.keypair.public_key(),
@@ -670,6 +707,7 @@ impl BitcoinSignatureCollector {
     pub fn get_finalized(&self, txid: Txid) -> Result<Transaction, Error> {
         let psbt = self.transactions.get(&txid).ok_or(Error::TxidNotFound)?;
         let tx = psbt.finalize_transaction(&self.federation)?;
+        trace!("Finalized transaction {}", tx.txid());
         Ok(tx)
     }
 

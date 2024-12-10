@@ -362,6 +362,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
 
+        if finalized_pegouts.len() > 0 {
+            trace!("Finalized pegouts: {:?}", finalized_pegouts[0].input);
+        }
+
         let block = ConsensusBlock::new(
             slot,
             payload.clone(),
@@ -516,6 +520,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .map(|tx| tx.txid())
                 .collect::<Vec<_>>();
 
+            trace!("{} to finalize", required_finalizations.len());
+
             if required_finalizations.len() != unverified_block.message.finalized_pegouts.len() {
                 return Err(Error::IllegalFinalization);
             }
@@ -635,6 +641,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         from: Hash256, // exclusive
         to: Hash256,   // inclusive
     ) -> Result<Vec<Hash256>, Error> {
+        // trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
         let mut hashes = vec![];
         loop {
@@ -643,6 +650,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
 
             hashes.push(current);
+            // trace!("Pushing hash {:?}", current);
 
             current = self
                 .storage
@@ -740,6 +748,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .map(|sig| (tx.txid(), sig))
             })
             .collect::<Result<HashMap<_, _>, _>>()?;
+
+        trace!("Generated {} signature(s)", signatures.len());
+        for (txid, sig) in signatures.iter() {
+            trace!("Signature for txid {:?}: {:?}", txid, sig);
+        }
 
         drop(wallet);
 
@@ -1005,8 +1018,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .unwrap();
         }
 
+        trace!("Processing {} pegouts", verified_block.message.finalized_pegouts.len());
         // process peg-out proposals:
         if let Some(ref pegout_tx) = verified_block.message.pegout_payment_proposal {
+            trace!("⬅️ Registered peg-out proposal");
             self.bitcoin_wallet
                 .write()
                 .await
@@ -1115,7 +1130,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut collector = self.bitcoin_signature_collector.write().await;
         let wallet = self.bitcoin_wallet.read().await;
         for (txid, sigs) in pegout_sigs {
-            collector.add_signature(&wallet, txid, sigs)?;
+            collector.add_signature(&wallet, txid, sigs.clone())?;
+            trace!("Successfully added signature {:?} for txid {:?}", sigs, txid);
         }
         Ok(())
     }
@@ -1391,6 +1407,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 #[async_trait::async_trait]
 impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>> for Chain<DB> {
     async fn get_aggregate_hashes(&self) -> Option<Vec<bitcoin::BlockHash>> {
+        trace!("Getting aggregate hashes");
         let hashes = self
             .get_hashes(
                 self.get_latest_finalized_block_ref().unwrap()?.hash,
