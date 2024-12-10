@@ -45,10 +45,10 @@ function start_geth() {
     local PORT=$((30303 + $NUM * 10))
 
     # Initialize and start Geth
-    geth init --state.scheme "hash" --datadir "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/config/genesis.json" >"$LOG_FILE" 2>&1
+    geth init --state.scheme "hash" --datadir "${BASE_DIR}/etc/data/execution/node_${NUM}" "${BASE_DIR}/etc/config/dev-genesis.json" >"$LOG_FILE" 2>&1
     geth --datadir "${BASE_DIR}/etc/data/execution/node_${NUM}" \
         --state.scheme "hash" \
-        --networkid 212121 \
+        --networkid 121212 \
         --authrpc.vhosts "*" \
         --authrpc.addr "0.0.0.0" \
         --authrpc.jwtsecret "${BASE_DIR}/etc/config/jwt/jwt" \
