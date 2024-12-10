@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -247,15 +247,21 @@ impl Bridge {
 
             for log in receipt.logs {
                 if let Ok(event) = parse_log::<RequestPegOut>(log) {
-                    if let Some(address) = parse_bitcoin_address(event.bitcoin_address) {
-                        let txout = TxOut {
-                            script_pubkey: address.script_pubkey(),
-                            value: wei_to_sats(event.value),
-                        };
+                    let event_amount_in_sats = wei_to_sats(event.value);
+                    if event_amount_in_sats >= 1000000 {
+                        if let Some(address) = parse_bitcoin_address(event.bitcoin_address) {
+                            let txout = TxOut {
+                                script_pubkey: address.script_pubkey(),
+                                value: event_amount_in_sats,
+                            };
 
-                        if txout.value >= 100000000000000 {
                             pegouts.push(txout);
                         }
+                    } else {
+                        info!(
+                            "Ignoring pegout with for {} sats from {}:{}",
+                            event_amount_in_sats, event.evm_address, event.bitcoin_address
+                        );
                     }
                 }
             }
