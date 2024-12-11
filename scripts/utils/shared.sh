@@ -76,7 +76,7 @@ function pegout() {
         cd $PWD/contracts
 
         # 0.00100000 btc, or 100000 satoshi
-        export SATOSHIS=100000
+        export SATOSHIS="$3"
         export PRIVATE_KEY="$1"
         forge script script/PegOut.s.sol --rpc-url http://localhost:8545 --broadcast --silent
     )

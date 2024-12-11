@@ -51,7 +51,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             "2e80ab37dfb510a64526296fd1f295c42ef19c29".parse().unwrap(),
         ],
         federation_bitcoin_pubkeys: vec![
-            BitcoinPublicKey::from_str("02767b3ebfdee7190772742cbeacf678e21f1aa043b66e8bfd6d07ac9e50b0049a").unwrap()
+            BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
         ],
         bits: 505794034,
         chain_id: 212121,
