@@ -81,7 +81,7 @@ pub struct App {
     #[arg(long = "no-mine", default_value_t = false)]
     pub no_mine: bool,
 
-    #[arg(long="full-log-context", default_value_t = false)]
+    #[arg(long="full-log-context", env = "FULL_LOG_CONTEXT", default_value_t = false)]
     pub full_log_context: bool,
 
     #[arg(long, default_value_t = 3000)]

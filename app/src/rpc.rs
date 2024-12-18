@@ -3,7 +3,8 @@ use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, Chain
 use crate::chain::Chain;
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
-use bitcoin::{Address, BlockHash};
+use bitcoin::hashes::Hash;
+use bitcoin::{Address, BlockHash, CompactTarget};
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
@@ -12,7 +13,6 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use bitcoin::hashes::Hash;
 use store::ItemStore;
 use tokio::sync::Mutex;
 use types::MainnetEthSpec;
@@ -216,6 +216,31 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
             }
             .into(),
         ),
+        "adjust_target" => {
+            let target_override_cons_rep = serde_json::from_str::<u32>(params.get());
+            if let Ok(target) = target_override_cons_rep {
+                miner.set_target_override(CompactTarget::from_consensus(target));
+
+                Response::builder().status(hyper::StatusCode::OK).body(
+                        JsonRpcResponseV1 {
+                            result: None,
+                            error: None,
+                            id,
+                        }
+                        .into()
+                   
+                )
+            } else {
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: None,
+                        error: Some(JsonRpcErrorV1::debug_error("Invalid target".to_string())),
+                        id,
+                    }
+                    .into(),
+                )
+            }
+        }
         // "getaccumulatedfees" => {
         //     let args = params.get();
         //     let block_hash;
@@ -224,7 +249,7 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
         //     // } else {
         //     //     block_hash = Some(args.into())
         //     // };
-        // 
+        //
         //     Response::builder().status(hyper::StatusCode::OK).body(
         //         match chain.get_accumulated_fees(block_hash).await {
         //             Ok(value) => JsonRpcResponseV1 {

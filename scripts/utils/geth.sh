@@ -133,6 +133,7 @@ function start_testnet_geth() {
         --metrics.expensive \
         --miner.gasprice 1 \
         --history.state 0 \
+        --syncmode full \
         --port ${PORT} \
         --gcmode "archive" \
         --maxpeers 20 \

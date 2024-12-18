@@ -229,7 +229,7 @@ impl Engine {
         transaction_hash: H256,
     ) -> Result<Option<TransactionReceipt>, execution_layer::Error> {
         let params = json!([transaction_hash]);
-        for i in 0..50 {
+        for i in 0..1 {
             debug!(
                 "Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}",
                 params, i

@@ -10,7 +10,7 @@ use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::BlockRef;
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
-use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
@@ -600,10 +600,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             required_outputs.len()
         );
 
-        self.bitcoin_wallet.read().await.check_payment_proposal(
-            required_outputs,
-            unverified_block.message.pegout_payment_proposal.as_ref(),
-        )?;
+        if unverified_block.message.execution_payload.block_number > 216000 {
+            self.bitcoin_wallet.read().await.check_payment_proposal(
+                required_outputs,
+                unverified_block.message.pegout_payment_proposal.as_ref(),
+            )?;
+        }
 
         trace!("Pegout proposal is valid");
         Ok(())
@@ -718,6 +720,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             |height| self.get_block_at_height(height),
             &self.get_block_by_hash(&last_pow.to_block_hash()),
             &self.retarget_params,
+            self.storage.get_target_override()?,
         );
 
         // TODO: ignore if genesis
@@ -816,6 +819,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 }
             }
             _ => {
+                debug!("Block {hash} has not reached majority approval");
                 // nothing to do
             }
         }
@@ -966,13 +970,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
     }
 
-    pub(crate) async fn get_accumulated_fees(&self, block_hash: Option<&Hash256>) -> Result<U256, Error> {
+    pub(crate) async fn get_accumulated_fees(
+        &self,
+        block_hash: Option<&Hash256>,
+    ) -> Result<U256, Error> {
         if let Some(block_hash) = block_hash {
             self.storage
                 .get_accumulated_block_fees(block_hash)?
                 .ok_or(Error::MissingBlock)
         } else {
-            self.storage.get_accumulated_block_fees(&self.get_latest_finalized_block_ref()?.unwrap().hash)?
+            self.storage
+                .get_accumulated_block_fees(&self.get_latest_finalized_block_ref()?.unwrap().hash)?
                 .ok_or(Error::MissingBlock)
         }
     }
@@ -1018,7 +1026,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .unwrap();
         }
 
-        trace!("Processing {} pegouts", verified_block.message.finalized_pegouts.len());
+        trace!(
+            "Processing {} pegouts",
+            verified_block.message.finalized_pegouts.len()
+        );
         // process peg-out proposals:
         if let Some(ref pegout_tx) = verified_block.message.pegout_payment_proposal {
             trace!("⬅️ Registered peg-out proposal");
@@ -1131,7 +1142,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let wallet = self.bitcoin_wallet.read().await;
         for (txid, sigs) in pegout_sigs {
             collector.add_signature(&wallet, txid, sigs.clone())?;
-            trace!("Successfully added signature {:?} for txid {:?}", sigs, txid);
+            trace!(
+                "Successfully added signature {:?} for txid {:?}",
+                sigs,
+                txid
+            );
         }
         Ok(())
     }
@@ -1418,7 +1433,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
 
         let queued_pow = self.queued_pow.read().await;
         let head = self.head.read().await.as_ref()?.hash;
-        
+
         trace!("Head: {:?}", head);
 
         let has_work = queued_pow
@@ -1461,6 +1476,14 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
         let block = self.storage.get_block(&block_hash).unwrap().unwrap();
         block.message
+    }
+
+    fn set_target_override(&self, target: CompactTarget) {
+        self.storage.set_target_override(target).unwrap()
+    }
+
+    fn get_target_override(&self) -> Option<CompactTarget> {
+        self.storage.get_target_override().unwrap()
     }
 
     async fn push_auxpow(

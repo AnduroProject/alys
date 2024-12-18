@@ -85,6 +85,8 @@ pub trait ChainManager<BI> {
         auxpow: AuxPow,
         address: EvmAddress,
     ) -> bool;
+    fn set_target_override(&self, target: CompactTarget);
+    fn get_target_override(&self) -> Option<CompactTarget>;
 }
 
 pub trait BlockIndex {
@@ -195,7 +197,11 @@ pub fn get_next_work_required<BI: BlockIndex>(
     get_block_at_height: impl Fn(u64) -> BI,
     index_last: &BI,
     params: &BitcoinConsensusParams,
+    target_override: Option<CompactTarget>,
 ) -> CompactTarget {
+    if let Some(target) = target_override {
+        return target;
+    }
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
         return CompactTarget::from_consensus(index_last.bits());
     }
@@ -249,7 +255,16 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             |height| self.chain.get_block_at_height(height),
             index_last,
             &self.retarget_params,
+            self.get_target_override()
         )
+    }
+
+    pub fn set_target_override(&mut self, target: CompactTarget) {
+        self.chain.set_target_override(target);
+    }
+
+    pub fn get_target_override(&self) -> Option<CompactTarget> {
+        self.chain.get_target_override()
     }
 
     /// Creates a new block and returns information required to merge-mine it.
