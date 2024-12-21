@@ -7,7 +7,7 @@ name: Docker
 
 on:
   push:
-    branches: [ "master", "development" ]
+    branches: [ "master", "development", "60-block-unkown-merge-mine" ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
