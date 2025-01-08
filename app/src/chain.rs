@@ -2,6 +2,8 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{get_next_work_required, BitcoinConsensusParams, ChainManager};
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
 use crate::engine::{ConsensusAmount, Engine};
+use crate::error::AuxPowMiningError::NoWorkToDo;
+use crate::error::BlockErrorBlockTypes;
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
 use crate::network::PubsubMessage;
@@ -16,6 +18,7 @@ use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
+use eyre::Result;
 use libp2p::PeerId;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashSet};
@@ -1377,7 +1380,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let chain = &self;
 
             let sync_status = self.sync_status.read().await;
-            let is_synced = sync_status.is_synced().clone();
+            let is_synced = sync_status.is_synced();
             drop(sync_status);
 
             self.bridge
@@ -1421,20 +1424,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
 #[async_trait::async_trait]
 impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>> for Chain<DB> {
-    async fn get_aggregate_hashes(&self) -> Option<Vec<bitcoin::BlockHash>> {
+    async fn get_aggregate_hashes(&self) -> Result<Vec<bitcoin::BlockHash>> {
+        let head = self
+            .head
+            .read()
+            .await
+            .as_ref()
+            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
+            .hash;
+        trace!("Head: {:?}", head);
+
         trace!("Getting aggregate hashes");
-        let hashes = self
-            .get_hashes(
-                self.get_latest_finalized_block_ref().unwrap()?.hash,
-                self.head.read().await.as_ref()?.hash,
-            )
-            .ok()?;
+        let hashes = self.get_hashes(
+            self.get_latest_finalized_block_ref()?
+                .ok_or(Error::ChainError(
+                    BlockErrorBlockTypes::LastFinalized.into(),
+                ))?
+                .hash,
+            // self.head.read().await.as_ref().ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?.hash,
+            head,
+        )?;
         trace!("Got {} hashes", hashes.len());
 
         let queued_pow = self.queued_pow.read().await;
-        let head = self.head.read().await.as_ref()?.hash;
-
-        trace!("Head: {:?}", head);
 
         let has_work = queued_pow
             .as_ref()
@@ -1443,15 +1455,13 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         if !has_work {
             trace!("No work to do");
             // TODO: Change to Result so that we can return this error
-            None
+            Err(NoWorkToDo.into())
         } else {
             trace!("Returning hashes");
-            Some(
-                hashes
-                    .into_iter()
-                    .map(|hash| hash.to_block_hash())
-                    .collect(),
-            )
+            Ok(hashes
+                .into_iter()
+                .map(|hash| hash.to_block_hash())
+                .collect())
         }
     }
 
@@ -1476,14 +1486,6 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
         let block = self.storage.get_block(&block_hash).unwrap().unwrap();
         block.message
-    }
-
-    fn set_target_override(&self, target: CompactTarget) {
-        self.storage.set_target_override(target).unwrap()
-    }
-
-    fn get_target_override(&self) -> Option<CompactTarget> {
-        self.storage.get_target_override().unwrap()
     }
 
     async fn push_auxpow(
@@ -1511,6 +1513,18 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             return false;
         }
         self.check_pow(&pow).await.is_ok() && self.share_pow(pow).await.is_ok()
+    }
+
+    fn set_target_override(&self, target: CompactTarget) {
+        self.storage.set_target_override(target).unwrap()
+    }
+
+    fn get_target_override(&self) -> Option<CompactTarget> {
+        self.storage.get_target_override().unwrap()
+    }
+
+    async fn is_synced(&self) -> bool {
+        self.sync_status.read().await.is_synced()
     }
 }
 

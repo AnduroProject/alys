@@ -81,7 +81,11 @@ pub struct App {
     #[arg(long = "no-mine", default_value_t = false)]
     pub no_mine: bool,
 
-    #[arg(long="full-log-context", env = "FULL_LOG_CONTEXT", default_value_t = false)]
+    #[arg(
+        long = "full-log-context",
+        env = "FULL_LOG_CONTEXT",
+        default_value_t = false
+    )]
     pub full_log_context: bool,
 
     #[arg(long, default_value_t = 3000)]
@@ -144,7 +148,8 @@ impl App {
         if self.full_log_context {
             filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
         } else {
-            let filter_tag = format!("app={rust_log_level},federation={rust_log_level},miner={rust_log_level}");
+            let filter_tag =
+                format!("app={rust_log_level},federation={rust_log_level},miner={rust_log_level}");
             filter = EnvFilter::builder().parse_lossy(filter_tag.as_str());
         }
 

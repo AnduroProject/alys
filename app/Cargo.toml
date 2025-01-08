@@ -21,7 +21,7 @@ eyre = { workspace = true }
 hex = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-strum = { version = "0.24", features = ["derive"] }
+strum = { version = "0.26", features = ["derive"] }
 thiserror = { workspace = true }
 slog = { version = "2", features = ["max_level_trace", "release_max_level_trace"] }
 snap = "1"

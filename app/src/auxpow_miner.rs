@@ -1,7 +1,9 @@
+use crate::error::{BlockErrorBlockTypes, Error};
 use crate::{auxpow::AuxPow, chain::Chain};
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
+use eyre::{Report, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
 use store::ItemStore;
@@ -9,6 +11,7 @@ use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
 use types::{MainnetEthSpec, Uint256};
+use crate::error::AuxPowMiningError::HashRetrievalError;
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
 where
@@ -70,7 +73,7 @@ pub struct AuxBlock {
 
 #[async_trait::async_trait]
 pub trait ChainManager<BI> {
-    async fn get_aggregate_hashes(&self) -> Option<Vec<BlockHash>>;
+    async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>>;
     fn get_last_finalized_block(&self) -> BI;
     fn get_block_by_hash(&self, hash: &BlockHash) -> BI;
     fn get_block_at_height(&self, height: u64) -> BI;
@@ -87,6 +90,7 @@ pub trait ChainManager<BI> {
     ) -> bool;
     fn set_target_override(&self, target: CompactTarget);
     fn get_target_override(&self) -> Option<CompactTarget>;
+    async fn is_synced(&self) -> bool;
 }
 
 pub trait BlockIndex {
@@ -181,15 +185,27 @@ fn calculate_next_work_required(
     let target = target.saturating_mul(Uint256::from(timespan));
     let target = target / Uint256::from(params.pow_target_timespan);
     let target = target.min(uint256_target_from_compact(params.pow_limit));
-    
-    trace!("First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}", first_block_time, last_block_time, last_bits, timespan, target);
+
+    trace!(
+        "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
+        first_block_time,
+        last_block_time,
+        last_bits,
+        timespan,
+        target
+    );
 
     target_to_compact_lossy(target)
 }
 
 fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
     let adjustment_interval = params.difficulty_adjustment_interval() as u32;
-    trace!("Height: {}, interval: {}, is_time: {}", height, adjustment_interval, height % adjustment_interval as u64 == 0);
+    trace!(
+        "Height: {}, interval: {}, is_time: {}",
+        height,
+        adjustment_interval,
+        height % adjustment_interval as u64 == 0
+    );
     height % adjustment_interval as u64 == 0
 }
 
@@ -255,7 +271,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             |height| self.chain.get_block_at_height(height),
             index_last,
             &self.retarget_params,
-            self.get_target_override()
+            self.get_target_override(),
         )
     }
 
@@ -269,7 +285,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
 
     /// Creates a new block and returns information required to merge-mine it.
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L139
-    pub async fn create_aux_block(&mut self, address: EvmAddress) -> Option<AuxBlock> {
+    pub async fn create_aux_block(&mut self, address: EvmAddress) -> Result<AuxBlock> {
         let index_last = self.chain.get_last_finalized_block();
 
         let hashes = self.chain.get_aggregate_hashes().await?;
@@ -286,8 +302,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             hash,
             AuxInfo {
                 last_hash: index_last.block_hash(),
-                start_hash: *hashes.first()?,
-                end_hash: *hashes.last()?,
+                start_hash: *hashes.first().ok_or(Error::from(HashRetrievalError(BlockErrorBlockTypes::AuxPowFirst)))?,
+                end_hash: *hashes.last().ok_or(Error::from(HashRetrievalError(BlockErrorBlockTypes::AuxPowLast)))?,
                 address,
             },
         );
@@ -295,7 +311,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/node/miner.cpp#L174
         let bits = self.get_next_work_required(&index_last);
 
-        Some(AuxBlock {
+        Ok(AuxBlock {
             hash,
             chain_id: index_last.chain_id(),
             previous_block_hash: index_last.block_hash(),
@@ -369,7 +385,7 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
         loop {
             trace!("Calling create_aux_block");
             // TODO: set miner address
-            if let Some(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
+            if let Ok(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
                 trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
                 trace!("Calling submit_aux_block");

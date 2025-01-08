@@ -44,14 +44,18 @@ async fn try_mine(args: &Args) -> Result<(), Error> {
     let stringified_auxpow = hex::encode(encoded_auxpow);
 
     let mut encoded_auxpow_hash = Vec::new();
-    aux_block.hash.consensus_encode(&mut encoded_auxpow_hash).unwrap();
+    aux_block
+        .hash
+        .consensus_encode(&mut encoded_auxpow_hash)
+        .unwrap();
     let stringified_aux_hash = hex::encode(encoded_auxpow_hash);
 
     let result = call::<bool>(
         &client,
         "submitauxblock",
         &[json!(stringified_aux_hash), json!(stringified_auxpow)],
-    ).unwrap();
+    )
+    .unwrap();
 
     println!("submitauxblock result: {result}");
     Ok(())
