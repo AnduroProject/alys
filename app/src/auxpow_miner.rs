@@ -286,6 +286,10 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// Creates a new block and returns information required to merge-mine it.
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L139
     pub async fn create_aux_block(&mut self, address: EvmAddress) -> Result<AuxBlock> {
+        if !self.chain.is_synced().await {
+            return Err(Error::ChainSyncing.into());
+        }
+
         let index_last = self.chain.get_last_finalized_block();
 
         let hashes = self.chain.get_aggregate_hashes().await?;

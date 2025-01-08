@@ -162,21 +162,29 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
                     )?);
                 };
 
-            if let Some(aux_block) = miner.create_aux_block(script_pub_key).await {
-                Response::builder().status(hyper::StatusCode::OK).body(
+            match miner.create_aux_block(script_pub_key).await {
+                Ok(aux_block) => Response::builder().status(hyper::StatusCode::OK).body(
                     JsonRpcResponseV1 {
                         result: Some(json!(aux_block)),
                         error: None,
                         id,
                     }
                     .into(),
-                )
-            } else {
-                new_json_rpc_error!(
-                    id,
-                    hyper::StatusCode::NOT_FOUND,
-                    JsonRpcErrorV1::internal_error()
-                )
+                ),
+                Err(e) => match e.downcast().unwrap() {
+                    Error::ChainSyncing => new_json_rpc_error!(
+                        id,
+                        hyper::StatusCode::METHOD_NOT_ALLOWED,
+                        JsonRpcErrorV1::chain_syncing_error()
+                    ),
+                    _ => {
+                        new_json_rpc_error!(
+                            id,
+                            hyper::StatusCode::NOT_FOUND,
+                            JsonRpcErrorV1::internal_error()
+                        )
+                    }
+                },
             }
         }
         "submitauxblock" => {
