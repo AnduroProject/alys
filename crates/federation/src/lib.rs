@@ -488,7 +488,7 @@ mod tests {
 
         // Check the tx
         {
-            wallet.check_transaction_signatures(&signed_tx).unwrap();
+            wallet.check_transaction_signatures(&signed_tx, false).unwrap();
         }
 
         // Use bitcoin-core to send the tx, to see if it works

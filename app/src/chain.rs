@@ -544,7 +544,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
                 let wallet = self.bitcoin_wallet.read().await;
                 trace!("Checking signature for finalized pegout {:?}", tx.txid());
-                wallet.check_transaction_signatures(tx)?;
+                // NOTE: same as auxpow_override
+                wallet.check_transaction_signatures(tx, pow_override)?;
             }
         } else {
             trace!("Block does not have PoW");
