@@ -19,7 +19,7 @@ pub use bitcoin_signing::{
 };
 pub use bitcoin_stream::BitcoinCore;
 
-pub const REQUIRED_CONFIRMATIONS: u8 = 2;
+pub const REQUIRED_CONFIRMATIONS: u8 = 12;
 
 pub fn wei_to_sats(wei: U256) -> u64 {
     // eth has 18 decimals, bitcoin 8 --> div by 10^10

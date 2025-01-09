@@ -514,7 +514,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .await?;
 
         if let Some(ref pow) = unverified_block.message.auxpow_header {
-            self.check_pow(pow).await?;
+            // NOTE: Should be removed after chain deprecation
+            let mut pow_override = false;
+            if unverified_block.message.execution_payload.block_number == 214745 {
+                pow_override = true;
+            }
+            self.check_pow(pow, pow_override).await?;
 
             // also check the finalized pegouts
             let required_finalizations = self
@@ -685,7 +690,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
-    async fn check_pow(&self, header: &AuxPowHeader) -> Result<(), Error> {
+    async fn check_pow(&self, header: &AuxPowHeader, pow_overide: bool) -> Result<(), Error> {
         info!(
             "Checking AuxPow: {} -> {}",
             header.range_start, header.range_end,
@@ -728,7 +733,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
-        if auxpow.check_proof_of_work(bits) {
+        // NOTE: We might want to consider lockings these to a struct & predefine the expected values until they are moved into the DB
+        if pow_overide || auxpow.check_proof_of_work(bits) {
             auxpow.check(hash, header.chain_id).unwrap();
             info!("AuxPow valid");
             Ok(())
@@ -1205,7 +1211,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         self.process_approval(approval).await.unwrap();
                     }
                     PubsubMessage::QueuePow(pow) => match self
-                        .check_pow(&pow)
+                        .check_pow(&pow, false)
                         .instrument(tracing::info_span!("queued"))
                         .await
                     {
@@ -1512,7 +1518,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }) {
             return false;
         }
-        self.check_pow(&pow).await.is_ok() && self.share_pow(pow).await.is_ok()
+        self.check_pow(&pow, false).await.is_ok() && self.share_pow(pow).await.is_ok()
     }
 
     fn set_target_override(&self, target: CompactTarget) {
