@@ -127,7 +127,7 @@ function start_testnet_geth() {
         --ws.addr "0.0.0.0" \
         --ws.port ${WS_PORT} \
         --ws.origins "*" \
-        --verbosity 4 \
+        --verbosity 2 \
         --log.file $LOG_FILE \
         --gpo.ignoreprice 1 \
         --metrics \
@@ -138,7 +138,7 @@ function start_testnet_geth() {
         --port ${PORT} \
         --gcmode "archive" \
         --maxpeers 20 \
-        --bootnodes "enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303,enode://6fa3a059cde5853f5702fcba00d7d682dfd8af4140fc088fe19ced7aaf245c238377bfa2c3fbb058593c412cfd20b26192b86ba4266770beff79d9fb8a18bc07@107.22.120.71:30303,enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303" \
+        --bootnodes "enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303" \
         $ARGUMENT &
     GETH_PIDS[$NUM]=$!
 }
