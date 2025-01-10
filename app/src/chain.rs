@@ -608,8 +608,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             "Found {} pegouts in block after filtering",
             required_outputs.len()
         );
+        
+        let block_number = unverified_block.message.execution_payload.block_number;
 
-        if unverified_block.message.execution_payload.block_number > 216000 {
+        if block_number > 285450 {
             self.bitcoin_wallet.read().await.check_payment_proposal(
                 required_outputs,
                 unverified_block.message.pegout_payment_proposal.as_ref(),
