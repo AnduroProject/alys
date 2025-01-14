@@ -362,6 +362,11 @@ impl NetworkBackend {
                         peers.insert(peer_id);
                         let _ = peers_connected_tx.send(peers.clone());
                     }
+                    SwarmEvent::ConnectionClosed { peer_id, connection_id, endpoint, num_established, cause } => {
+                        debug!("Connection closed: peer_id: {peer_id}, connection_id: {connection_id}, endpoint: {endpoint:?}, num_established: {num_established}, cause: {cause:?}");
+                        peers.remove(&peer_id);
+                        let _ = peers_connected_tx.send(peers.clone());
+                    }
                     x => {
                         trace!("Unhandled message {x:?}");
                     }

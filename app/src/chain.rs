@@ -1183,6 +1183,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         let payload_prev_hash = x.message.execution_payload.parent_hash;
 
                         info!("Received payload at height {number} {payload_prev_hash} -> {payload_hash}");
+                        let head_hash = self.head.read().await.as_ref().unwrap().hash;
+                        let head_height = self.head.read().await.as_ref().unwrap().height;
+                        debug!("Local head: {:#?}, height: {}", head_hash, head_height);
 
                         // sync first then process block so we don't skip and trigger a re-sync
                         if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
@@ -1292,7 +1295,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 peer_id,
                 OutboundRequest::BlocksByRange(
                     crate::network::rpc::methods::BlocksByRangeRequest {
-                        start_height: head + 1,
+                        start_height: head,
                         count: 1024,
                     },
                 ),
