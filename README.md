@@ -47,7 +47,7 @@ On a high level, the repository consists of three parts:
 - Clone Alys repo:
 
 ```shell
-git clone git@github.com:AnduroHackathon/Alys.git
+git clone git@github.com:AnduroProject/Alys.git
 cd Alys 
 ```
 
@@ -110,7 +110,7 @@ curl --silent -H "Content-Type: application/json" -d '{"id":"1", "jsonrpc":"2.0"
 This returns the federation deposit address of your local Alys node, e.g.:
 
 ```
-bcrt1p83w7fnutkcyy5zdknkh3kjah47jg2j6etltpa542wjd6chzj7yksyz0zqw
+bcrt1p3srvwkq5kyzlxqls43x97ch2vpcp4j278nk8jjuzcgt8k40ttr9s4vj934
 ```
 
 #### Send BTC to the Deposit Address
