@@ -52,6 +52,8 @@ pub enum BlockErrorBlockTypes {
     LastFinalized,
     #[error("Failed to retrieve the head block")]
     Head,
+    #[error("Failed to retrieve the previous head block")]
+    PreviousHead,
     #[error("Failed to retrieve the block with hash `{0}`")]
     GenericHash(String),
     #[error("Failed to retrieve the genesis block")]

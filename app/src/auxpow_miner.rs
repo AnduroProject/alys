@@ -6,11 +6,13 @@ use ethereum_types::Address as EvmAddress;
 use eyre::{Report, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
+use execution_layer::ExecutionBlock;
 use store::ItemStore;
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
 use types::{MainnetEthSpec, Uint256};
+use crate::block::SignedConsensusBlock;
 use crate::error::AuxPowMiningError::HashRetrievalError;
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
@@ -71,6 +73,7 @@ pub struct AuxBlock {
     _target: Target,
 }
 
+// TODO: Either move this struct out of auxpow__miner or modularize between mining related functionalities, and basic chain functionality
 #[async_trait::async_trait]
 pub trait ChainManager<BI> {
     async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>>;
@@ -91,6 +94,7 @@ pub trait ChainManager<BI> {
     fn set_target_override(&self, target: CompactTarget);
     fn get_target_override(&self) -> Option<CompactTarget>;
     async fn is_synced(&self) -> bool;
+    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error>;
 }
 
 pub trait BlockIndex {
@@ -380,6 +384,10 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
                 address,
             )
             .await
+    }
+    
+    pub fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        self.chain.get_head()
     }
 }
 

@@ -11,7 +11,7 @@ use crate::network::{ApproveBlock, Client as NetworkClient, OutboundRequest};
 use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::BlockRef;
-use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
+use crate::{aura::Aura, block::SignedConsensusBlock, chain, error::Error, store::Storage};
 use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
@@ -31,6 +31,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
+use crate::error::Error::ChainError;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -481,7 +482,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Err(Error::InvalidBlock);
         }
 
+        debug!("consensus block parent hash: {}\nexecution block parent hash: {}\nexecution block hash: {}", unverified_block.message.parent_hash, unverified_block.message.execution_payload.parent_hash, unverified_block.message.execution_payload.block_hash);
+
         let prev = self.get_parent(&unverified_block)?;
+        debug!("parent execution block hash: {}\nparent execution block timestamp: {}\nparent execution block parent hash: {}", prev.message.execution_payload.block_hash, prev.message.execution_payload.timestamp, prev.message.execution_payload.parent_hash);
         let prev_payload_hash_according_to_consensus = prev.message.execution_payload.block_hash;
         let prev_payload_hash = unverified_block.message.execution_payload.parent_hash;
         // unverified_block.prev().payload must match unverified_block.payload.prev()
@@ -608,7 +612,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             "Found {} pegouts in block after filtering",
             required_outputs.len()
         );
-        
+
         let block_number = unverified_block.message.execution_payload.block_number;
 
         if block_number > 285450 {
@@ -1498,6 +1502,10 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
         let block = self.storage.get_block(&block_hash).unwrap().unwrap();
         block.message
+    }
+
+    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        Ok(self.storage.get_block(&self.storage.get_head()?.ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?.hash)?.ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
     }
 
     async fn push_auxpow(

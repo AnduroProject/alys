@@ -1,10 +1,13 @@
-use crate::{block::*, error::Error};
+use crate::{
+    block::*,
+    error::{BlockErrorBlockTypes, Error},
+};
 use bitcoin::CompactTarget;
 use ethers_core::types::U256;
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
-use std::{fs, marker::PhantomData, path::PathBuf};
+use std::{fs, marker::PhantomData, path::PathBuf, thread::current};
 use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
@@ -104,7 +107,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     }
 
     pub fn get_head(&self) -> Result<Option<BlockRef>, Error> {
-        self.get_ref(HEAD_KEY.as_bytes())
+        self.get_ref(HEAD_KEY.as_bytes()).map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
+    }
+
+    fn get_previous_head(&self, head_ref: &BlockRef) -> Result<Option<BlockRef>, Error> {
+        let previous_head = self.get_block(&head_ref.hash)?.unwrap().message.parent_hash;
+        Ok(Some(BlockRef {
+            hash: previous_head,
+            height: head_ref.height - 1,
+        }))
     }
 
     pub fn get_latest_pow_block(&self) -> Result<Option<BlockRef>, Error> {

@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use store::ItemStore;
 use tokio::sync::Mutex;
+use tracing::{error, trace};
 use types::MainnetEthSpec;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -254,6 +255,29 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
                     }
                     .into(),
                 )
+            }
+        }
+        "get_head_block" => {
+            match miner.get_head() {
+                Ok(head) => Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: Some(json!(head)),
+                        error: None,
+                        id,
+                    }
+                    .into(),
+                ),
+                Err(e) => {
+                    error!("{}", e.to_string());
+                    Response::builder().status(hyper::StatusCode::OK).body(
+                        JsonRpcResponseV1 {
+                            result: None,
+                            error: Some(JsonRpcErrorV1::block_not_found()),
+                            id,
+                        }
+                            .into(),
+                    )
+                }
             }
         }
         // "getaccumulatedfees" => {
