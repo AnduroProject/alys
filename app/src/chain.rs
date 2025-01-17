@@ -1299,7 +1299,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 peer_id,
                 OutboundRequest::BlocksByRange(
                     crate::network::rpc::methods::BlocksByRangeRequest {
-                        start_height: head,
+                        start_height: head + 1,
                         count: 1024,
                     },
                 ),
