@@ -56,6 +56,8 @@ pub enum BlockErrorBlockTypes {
     PreviousHead,
     #[error("Failed to retrieve the block with hash `{0}`")]
     GenericHash(String),
+    #[error("Failed to retrieve the block with the height of `{0}`")]
+    Height(u64),
     #[error("Failed to retrieve the genesis block")]
     Genesis,
     #[error("Failed to read first block in the auxPoW capture range")]

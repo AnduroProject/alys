@@ -12,6 +12,7 @@ use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
 use types::{EthSpec, Hash256, MainnetEthSpec};
+use crate::error::BlockErrorBlockTypes::Height;
 
 pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 
@@ -33,6 +34,8 @@ pub enum DbColumn {
     BlockFees,
     #[strum(serialize = "scn")]
     BitcoinScanStartHeight,
+    #[strum(serialize = "bbh")]
+    BlockByHeight,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -44,6 +47,14 @@ pub struct BlockRef {
 pub struct Storage<E: EthSpec, DB> {
     db: DB,
     _phantom: PhantomData<E>,
+}
+
+pub trait BlockByHeight {
+    fn put_block_by_height(&self, block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error>;
+    fn get_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error>;
 }
 
 impl Storage<MainnetEthSpec, MemoryStore<MainnetEthSpec>> {
@@ -72,6 +83,43 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
             db: level_db,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB> {
+    fn put_block_by_height(&self, block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error> {
+        let block_root = block.canonical_root();
+        let height = block.message.execution_payload.block_number;
+        
+        self.commit_ops(vec![KeyValueStoreOp::PutKeyValue(
+            get_key_for_col(DbColumn::BlockByHeight.into(), &height.to_be_bytes()),
+            block_root.as_bytes().to_vec(),
+        )])
+    }
+
+    fn get_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        trace!("Getting block by height {}", height);
+
+        match self
+            .db
+            .get_bytes(DbColumn::BlockByHeight.into(), &height.to_be_bytes())
+            .map_err(|_| Error::DbReadError)? {
+            // Get the block hash from the block by height index
+            Some(block_hash) => {
+                // Use the hash to retrieve the block
+                self.db
+                    .get_bytes(DbColumn::Block.into(), block_hash.as_slice())
+                    .unwrap()
+                    .map(|block_bytes| rmp_serde::from_slice(&block_bytes).map_err(|_| Error::CodecError))
+                    .transpose()
+            }
+            None => Ok(None),
+        }
+
+        
     }
 }
 
@@ -107,7 +155,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     }
 
     pub fn get_head(&self) -> Result<Option<BlockRef>, Error> {
-        self.get_ref(HEAD_KEY.as_bytes()).map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
+        self.get_ref(HEAD_KEY.as_bytes())
+            .map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
     }
 
     fn get_previous_head(&self, head_ref: &BlockRef) -> Result<Option<BlockRef>, Error> {
@@ -178,6 +227,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             get_key_for_col(DbColumn::Block.into(), block_root.as_bytes()),
             rmp_serde::to_vec(&block).unwrap(),
         )];
+
+        ops.push(KeyValueStoreOp::PutKeyValue(
+            get_key_for_col(
+                DbColumn::BlockByHeight.into(),
+                &block.message.execution_payload.block_number.to_be_bytes(),
+            ),
+            Vec::from(block_root.as_bytes()),
+        ));
 
         if let Some(auxpow_header) = block.message.auxpow_header {
             ops.push(KeyValueStoreOp::PutKeyValue(

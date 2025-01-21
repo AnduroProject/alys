@@ -68,7 +68,6 @@ function start_geth() {
         --gcmode "archive" \
         --verbosity 5 \
         --log.file $LOG_FILE \
-        --nodiscover \
         --syncmode full \
         --maxpeers 20 \
         --gpo.ignoreprice 1 \
