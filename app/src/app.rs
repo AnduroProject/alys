@@ -80,6 +80,8 @@ pub struct App {
 
     #[arg(long = "no-mine", default_value_t = false)]
     pub no_mine: bool,
+    #[arg(long = "not-validator", default_value_t = false)]
+    pub not_validator: bool,
 
     #[arg(
         long = "full-log-context",
@@ -227,7 +229,7 @@ impl App {
             BitcoinSignatureCollector::new(bitcoin_federation.clone());
 
         let (maybe_aura_signer, maybe_bitcoin_signer);
-        if chain_spec.is_validator {
+        if chain_spec.is_validator && !self.not_validator {
             (maybe_aura_signer, maybe_bitcoin_signer) =
                 match (self.aura_secret_key, self.bitcoin_secret_key) {
                     (Some(aura_sk), Some(bitcoin_sk)) => {
@@ -304,7 +306,7 @@ impl App {
         chain.clone().listen_for_peer_discovery().await;
         chain.clone().listen_for_rpc_requests().await;
 
-        if chain_spec.is_validator {
+        if chain_spec.is_validator && !self.not_validator {
             chain
                 .clone()
                 .monitor_bitcoin_blocks(bitcoin_start_height)
