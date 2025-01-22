@@ -516,11 +516,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         self.aura.check_signed_by_author(&unverified_block)?;
 
-        self.check_withdrawals(&unverified_block).await?;
+        if self.is_validator {
+            self.check_withdrawals(&unverified_block).await?;
+        }
 
         self.check_pegout_proposal(&unverified_block, prev_payload_hash)
             .await?;
 
+        // TODO: We should set the bitcoin connection to be optional
         if let Some(ref pow) = unverified_block.message.auxpow_header {
             // NOTE: Should be removed after chain deprecation
             let mut pow_override = false;
@@ -619,7 +622,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let block_number = unverified_block.message.execution_payload.block_number;
 
-        if block_number > 285450 {
+        if block_number > 285450 && self.is_validator {
             self.bitcoin_wallet.read().await.check_payment_proposal(
                 required_outputs,
                 unverified_block.message.pegout_payment_proposal.as_ref(),
@@ -1030,51 +1033,51 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let accumulate_fees_ops = self
             .accumulate_fees(&verified_block, execution_block, &execution_receipts)
             .await?;
+        if self.is_validator {
+            // process pegins:
+            for (txid, block_hash) in verified_block.message.pegins.iter() {
+                info!("➡️  Processed peg-in with txid {txid}");
+                self.queued_pegins.write().await.remove(txid);
 
-        // process pegins:
-        for (txid, block_hash) in verified_block.message.pegins.iter() {
-            info!("➡️  Processed peg-in with txid {txid}");
+                // Make the bitcoin utxos available for spending
+                let tx = self.bridge.fetch_transaction(txid, block_hash).unwrap();
+                self.bitcoin_wallet
+                    .write()
+                    .await
+                    .register_pegin(&tx)
+                    .unwrap();
+            }
 
-            self.queued_pegins.write().await.remove(txid);
+            trace!(
+                "Processing {} pegouts",
+                verified_block.message.finalized_pegouts.len()
+            );
+            // process peg-out proposals:
+            if let Some(ref pegout_tx) = verified_block.message.pegout_payment_proposal {
+                trace!("⬅️ Registered peg-out proposal");
+                self.bitcoin_wallet
+                    .write()
+                    .await
+                    .register_pegout(pegout_tx)
+                    .unwrap();
+            }
 
-            // Make the bitcoin utxos available for spending
-            let tx = self.bridge.fetch_transaction(txid, block_hash).unwrap();
-            self.bitcoin_wallet
-                .write()
-                .await
-                .register_pegin(&tx)
-                .unwrap();
-        }
-
-        trace!(
-            "Processing {} pegouts",
-            verified_block.message.finalized_pegouts.len()
-        );
-        // process peg-out proposals:
-        if let Some(ref pegout_tx) = verified_block.message.pegout_payment_proposal {
-            trace!("⬅️ Registered peg-out proposal");
-            self.bitcoin_wallet
-                .write()
-                .await
-                .register_pegout(pegout_tx)
-                .unwrap();
-        }
-
-        // process finalized peg-outs:
-        for tx in verified_block.message.finalized_pegouts.iter() {
-            let txid = tx.txid();
-            match self.bridge.broadcast_signed_tx(tx) {
-                Ok(txid) => {
-                    info!("⬅️  Broadcasted peg-out, txid {txid}");
-                }
-                Err(_) => {
-                    warn!("⬅️  Failed to process peg-out, txid {}", tx.txid());
-                }
-            };
-            self.bitcoin_signature_collector
-                .write()
-                .await
-                .cleanup_signatures_for(&txid);
+            // process finalized peg-outs:
+            for tx in verified_block.message.finalized_pegouts.iter() {
+                let txid = tx.txid();
+                match self.bridge.broadcast_signed_tx(tx) {
+                    Ok(txid) => {
+                        info!("⬅️  Broadcasted peg-out, txid {txid}");
+                    }
+                    Err(_) => {
+                        warn!("⬅️  Failed to process peg-out, txid {}", tx.txid());
+                    }
+                };
+                self.bitcoin_signature_collector
+                    .write()
+                    .await
+                    .cleanup_signatures_for(&txid);
+            }
         }
 
         // store block in DB
