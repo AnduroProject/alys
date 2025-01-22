@@ -244,8 +244,8 @@ impl Engine {
                 .await;
             if rpc_result.is_ok() {
                 return Ok(rpc_result?);
-            } else {
-                sleep(Duration::from_millis(1000)).await;
+            } else if i > 0{
+                sleep(Duration::from_millis(500)).await;
             }
         }
         Err(execution_layer::Error::InvalidPayloadBody(
