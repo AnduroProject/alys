@@ -335,15 +335,15 @@ impl NetworkBackend {
                             Ok(RPCReceived::Response(request_id, received_response)) => {
                                 // propagate response
                                 // todo: make robust
-                                // let propagated_response_result = rpc_response_channels[request_id].send(received_response.clone()).await;
+                                let _res = rpc_response_channels[request_id].send(received_response.clone()).await;
 
-                                if let Err(err) = rpc_response_channels[request_id].send(received_response.clone()).await {
+                                // if let Err(err) = rpc_response_channels[request_id].send(received_response.clone()).await {
                                     // debug!("Failed to propagate response: {}", request_id);
                                     // error!("{}", err.to_string());
                                     // remove the channel
                                     // rpc_response_channels.remove(request_id);
 
-                                }
+                                // }
                             }
                             Ok(RPCReceived::EndOfStream(request_id, _)) => {
                                 rpc_response_channels.remove(request_id);
@@ -482,7 +482,7 @@ fn create_swarm() -> Result<Swarm<MyBehaviour>, Error> {
             })
         })
         .map_err(|_| Error::BehaviorError)?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(180)))
         .build();
     Ok(swarm)
 }

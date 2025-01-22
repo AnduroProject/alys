@@ -4,6 +4,8 @@ use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
 use crate::error::BlockErrorBlockTypes;
+use crate::error::BlockErrorBlockTypes::Head;
+use crate::error::Error::ChainError;
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
 use crate::network::PubsubMessage;
@@ -31,8 +33,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
-use crate::error::BlockErrorBlockTypes::Head;
-use crate::error::Error::ChainError;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -1256,7 +1256,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut block_heights = vec![];
         let original_start_height = start_height;
 
-        let head_ref = self.head.read().await.as_ref().ok_or(Error::ChainError(Head.into()))?.clone();
+        let head_ref = self
+            .head
+            .read()
+            .await
+            .as_ref()
+            .ok_or(Error::ChainError(Head.into()))?
+            .clone();
 
         'outer: for i in 0..requested_count {
             if i > head_ref.height {
@@ -1269,9 +1275,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 Ok(Some(x)) => {
                     debug!("Got block at height {}", current_height);
                     x
-                },
+                }
                 Ok(None) => {
-                    debug!("Block at height {} not found, reverting to previous logic", current_height);
+                    debug!(
+                        "Block at height {} not found, reverting to previous logic",
+                        current_height
+                    );
                     let mut blocks_from_head = vec![];
                     let mut block_heights_from_head = vec![];
                     let mut current = head_ref.hash;
@@ -1281,10 +1290,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             break 'inner;
                         }
 
-                        
                         match self.storage.put_block_by_height(&block) {
                             Ok(_) => {
-                                debug!("Stored block by height {}", block.message.execution_payload.block_number);
+                                debug!(
+                                    "Stored block by height {}",
+                                    block.message.execution_payload.block_number
+                                );
                             }
                             Err(err) => {
                                 error!("Failed to store block by height: {err:?}");
@@ -1292,7 +1303,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             }
                         }
 
-                        debug!("Got block at height {} via old logic", block.message.execution_payload.block_number);
+                        debug!(
+                            "Got block at height {} via old logic",
+                            block.message.execution_payload.block_number
+                        );
                         blocks_from_head.push(block.clone());
                         block_heights_from_head.push(block.message.execution_payload.block_number);
                         if block.message.parent_hash.is_zero() {
@@ -1308,11 +1322,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     blocks.extend(blocks_from_head);
                     block_heights.extend(block_heights_from_head);
                     break 'outer;
-                },
+                }
                 Err(err) => {
                     error!("Error getting block: {err:?}");
                     return Err(err);
-                },
+                }
             };
             debug!("Got block at height {}", current_height);
             block_heights.push(current_height);
@@ -1361,7 +1375,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         while let Some(x) = receive_stream.recv().await {
             match x {
                 RPCResponse::BlocksByRange(block) => {
-                    trace!("Received block: {:#?}", block);
+                    // trace!("Received block: {:#?}", block);
                     match self.process_block((*block).clone()).await {
                         Err(Error::ProcessGenesis) | Ok(_) => {
                             // nothing to do
@@ -1406,13 +1420,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 #[allow(clippy::single_match)]
                 match msg.event {
                     Ok(RPCReceived::Request(substream_id, InboundRequest::BlocksByRange(x))) => {
-                        let blocks = match self.get_blocks(x.start_height, x.count).await {
-                            Ok(x) => x,
-                            Err(err) => {
+                        let blocks = self
+                            .get_blocks(x.start_height, x.count)
+                            .await
+                            .unwrap_or_else(|err| {
                                 error!("Failed to get blocks: {err:?}");
-                                return;
-                            },
-                        };
+                                vec![]
+                            });
                         for block in blocks {
                             let payload = RPCCodedResponse::Success(RPCResponse::BlocksByRange(
                                 Arc::new(block.clone()),
@@ -1424,7 +1438,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 .await
                             {
                                 error!("Failed to respond to rpc BlocksByRange request: {err:?}");
-                                return
+                                return;
                             }
                         }
 
@@ -1437,7 +1451,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .await
                         {
                             error!("Failed to respond to rpc BlocksByRange request to terminate: {err:?}");
-                            return
+                            return;
                         }
                     }
                     _ => {
@@ -1564,7 +1578,16 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
-        Ok(self.storage.get_block(&self.storage.get_head()?.ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?.hash)?.ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
+        Ok(self
+            .storage
+            .get_block(
+                &self
+                    .storage
+                    .get_head()?
+                    .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
+                    .hash,
+            )?
+            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
     }
 
     async fn push_auxpow(
