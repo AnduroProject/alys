@@ -67,6 +67,7 @@ pub struct Chain<DB> {
     bitcoin_signature_collector: RwLock<BitcoinSignatureCollector>,
     maybe_bitcoin_signer: Option<BitcoinSigner>,
     pub retarget_params: BitcoinConsensusParams,
+    pub is_validator: bool,
 }
 
 const MAINNET_MAX_WITHDRAWALS: usize = 16;
@@ -112,6 +113,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         bitcoin_signature_collector: BitcoinSignatureCollector,
         maybe_bitcoin_signer: Option<BitcoinSigner>,
         retarget_params: BitcoinConsensusParams,
+        is_validator: bool,
     ) -> Self {
         let head = storage.get_head().unwrap();
         Self {
@@ -132,6 +134,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             bitcoin_signature_collector: RwLock::new(bitcoin_signature_collector),
             maybe_bitcoin_signer,
             retarget_params,
+            is_validator,
         }
     }
 

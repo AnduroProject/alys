@@ -261,6 +261,7 @@ impl App {
             maybe_aura_signer.clone(),
         );
 
+        // TODO: We probably just want to persist the chain_spec struct
         let chain = Arc::new(Chain::new(
             engine,
             network,
@@ -280,6 +281,7 @@ impl App {
             bitcoin_signature_collector,
             maybe_bitcoin_signer,
             chain_spec.retarget_params.clone(),
+            chain_spec.is_validator && !self.not_validator
         ));
 
         // import genesis block without signatures or verification
