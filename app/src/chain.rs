@@ -310,25 +310,26 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             None => (Hash256::zero(), None),
         };
 
-        let (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
-            None => (None, vec![]),
-            Some(pow) => {
-                let signature_collector = self.bitcoin_signature_collector.read().await;
-                let finalized_txs = self
-                    .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
-                    .into_iter()
-                    .map(|tx| signature_collector.get_finalized(tx.txid()))
-                    .collect::<Result<Vec<_>, _>>();
-
-                match finalized_txs {
-                    Err(err) => {
-                        warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
-                        (None, vec![])
-                    }
-                    Ok(txs) => (Some(pow), txs),
-                }
-            }
-        };
+        let (queued_pow, finalized_pegouts): (Option<AuxPowHeader>, Vec<bitcoin::Transaction>) = (None, vec![]);
+        // let (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
+        //     None => (None, vec![]),
+        //     Some(pow) => {
+        //         let signature_collector = self.bitcoin_signature_collector.read().await;
+        //         let finalized_txs = self
+        //             .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
+        //             .into_iter()
+        //             .map(|tx| signature_collector.get_finalized(tx.txid()))
+        //             .collect::<Result<Vec<_>, _>>();
+        // 
+        //         match finalized_txs {
+        //             Err(err) => {
+        //                 warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
+        //                 (None, vec![])
+        //             }
+        //             Ok(txs) => (Some(pow), txs),
+        //         }
+        //     }
+        // };
 
         let mut add_balances = if let Some(ref header) = queued_pow {
             self.split_fees(self.queued_fees(&prev)?, header.fee_recipient)
@@ -1515,16 +1516,27 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
         let head = self.head.read().await.as_ref().unwrap().clone();
-        // let mut blocks = vec![];
-        let mut block_heights = HashMap::new();
+        let mut pending_pegouts = HashMap::new();
+        let mut finalized_pegouts = HashMap::new();
         let mut current = head.hash;
+        debug!("Getting pegouts");
         loop {
-            let block = self.storage.get_block(&current).unwrap().unwrap();
+            let block = self.storage.get_block(&current)?.unwrap();
+            if block.message.pegout_payment_proposal.is_some() {
+                let proposal = block.message.pegout_payment_proposal.clone().unwrap();
+                info!("Found pegout tx: {:?}", proposal);
+                pending_pegouts.insert(proposal.txid(), proposal);
+            }
             if !block.message.finalized_pegouts.is_empty() {
-                let f = block.message.finalized_pegouts.iter().map(|tx| {
-                    info!("Found pegout tx: {:?}", tx);
-                    block_heights.insert(tx.txid(), tx.clone());
-                });
+                let _: Vec<_> = block
+                    .message
+                    .finalized_pegouts
+                    .into_iter()
+                    .map(|tx| {
+                        info!("Found pegout tx: {:?}", tx);
+                        finalized_pegouts.insert(tx.txid(), tx.clone());
+                    })
+                    .collect();
             }
             if block.message.parent_hash.is_zero() {
                 break;
@@ -1537,7 +1549,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // blocks.reverse();
         // block_heights.reverse();
 
-        debug!("block_heights: {:?}", block_heights);
+        debug!("finalized_pegouts: {:#?}", finalized_pegouts);
+        debug!("pending_pegouts: {:#?}", pending_pegouts);
         Ok(())
     }
 }
