@@ -1514,28 +1514,32 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<Vec<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+    pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
         let head = self.head.read().await.as_ref().unwrap().clone();
-        let mut blocks = vec![];
-        let mut block_heights = vec![];
+        // let mut blocks = vec![];
+        let mut block_heights = HashMap::new();
         let mut current = head.hash;
         loop {
             let block = self.storage.get_block(&current).unwrap().unwrap();
             if !block.message.finalized_pegouts.is_empty() {
-                blocks.push(block.clone());
+                let _ = block.message.finalized_pegouts.iter().map(|tx| {
+                    info!("Found pegout tx: {:?}", tx);
+                    block_heights.insert(tx.txid(), tx.clone());
+                });
             }
             if block.message.parent_hash.is_zero() {
                 break;
             }
-            blocks.push(block.clone());
-            block_heights.push(block.message.execution_payload.block_number);
+            // blocks.push(block.clone());
+            // block_heights.push(block.message.execution_payload.block_number);
 
             current = block.message.parent_hash;
         }
-        blocks.reverse();
-        block_heights.reverse();
-        
+        // blocks.reverse();
+        // block_heights.reverse();
+
         debug!("block_heights: {:?}", block_heights);
-        Ok(blocks)
+        Ok(())
     }
 }
 
