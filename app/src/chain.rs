@@ -1513,7 +1513,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
-    pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<Vec<SignedConsensusBlock<MainnetEthSpec>>, Error> {
     pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
         let head = self.head.read().await.as_ref().unwrap().clone();
         // let mut blocks = vec![];
@@ -1522,7 +1521,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         loop {
             let block = self.storage.get_block(&current).unwrap().unwrap();
             if !block.message.finalized_pegouts.is_empty() {
-                let _ = block.message.finalized_pegouts.iter().map(|tx| {
+                let f = block.message.finalized_pegouts.iter().map(|tx| {
                     info!("Found pegout tx: {:?}", tx);
                     block_heights.insert(tx.txid(), tx.clone());
                 });
