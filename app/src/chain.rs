@@ -292,6 +292,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         if !self.sync_status.read().await.is_synced() {
             return Ok(());
         }
+        let mut prev_height = 0;
 
         // TODO: should we set forkchoice here?
         let (prev, prev_payload_head) = match *(self.head.read().await) {
@@ -304,32 +305,36 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
                 // make sure payload is built on top of the correct block
                 let prev_payload_hash = prev.message.execution_payload.block_hash;
+                prev_height = prev.message.execution_payload.block_number;
 
                 (x.hash, Some(prev_payload_hash))
             }
             None => (Hash256::zero(), None),
         };
 
-        let (queued_pow, finalized_pegouts): (Option<AuxPowHeader>, Vec<bitcoin::Transaction>) = (None, vec![]);
-        // let (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
-        //     None => (None, vec![]),
-        //     Some(pow) => {
-        //         let signature_collector = self.bitcoin_signature_collector.read().await;
-        //         let finalized_txs = self
-        //             .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
-        //             .into_iter()
-        //             .map(|tx| signature_collector.get_finalized(tx.txid()))
-        //             .collect::<Result<Vec<_>, _>>();
-        // 
-        //         match finalized_txs {
-        //             Err(err) => {
-        //                 warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
-        //                 (None, vec![])
-        //             }
-        //             Ok(txs) => (Some(pow), txs),
-        //         }
-        //     }
-        // };
+        let (mut queued_pow, mut finalized_pegouts): (Option<AuxPowHeader>, Vec<bitcoin::Transaction>) = (None, vec![]);
+
+        if prev_height != 359641 {
+            (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
+                None => (None, vec![]),
+                Some(pow) => {
+                    let signature_collector = self.bitcoin_signature_collector.read().await;
+                    let finalized_txs = self
+                        .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
+                        .into_iter()
+                        .map(|tx| signature_collector.get_finalized(tx.txid()))
+                        .collect::<Result<Vec<_>, _>>();
+
+                    match finalized_txs {
+                        Err(err) => {
+                            warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
+                            (None, vec![])
+                        }
+                        Ok(txs) => (Some(pow), txs),
+                    }
+                }
+            };
+        };
 
         let mut add_balances = if let Some(ref header) = queued_pow {
             self.split_fees(self.queued_fees(&prev)?, header.fee_recipient)
