@@ -114,7 +114,7 @@ impl Aura {
         self.check_signed_by_author(block)?;
 
         let required_signatures = if block.message.execution_payload.block_number > 285450 {
-            ((self.authorities.len() * 2) + 2) / 3 
+            ((self.authorities.len() * 2) + 2) / 3
         } else {
             1
         };

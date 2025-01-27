@@ -308,8 +308,6 @@ impl App {
         chain.clone().listen_for_peer_discovery().await;
         chain.clone().listen_for_rpc_requests().await;
 
-        chain.get_blocks_with_pegouts().await?;
-
         if chain_spec.is_validator && !self.not_validator {
             chain
                 .clone()

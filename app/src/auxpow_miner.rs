@@ -12,7 +12,7 @@ use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
 use types::{MainnetEthSpec, Uint256};
-use crate::block::SignedConsensusBlock;
+use crate::block::{AuxPowHeader, SignedConsensusBlock};
 use crate::error::AuxPowMiningError::HashRetrievalError;
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
@@ -79,6 +79,7 @@ pub trait ChainManager<BI> {
     async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>>;
     fn get_last_finalized_block(&self) -> BI;
     fn get_block_by_hash(&self, hash: &BlockHash) -> BI;
+    async fn get_queued_auxpow(&self) -> Option<AuxPowHeader>;
     fn get_block_at_height(&self, height: u64) -> BI;
     #[allow(clippy::too_many_arguments)]
     async fn push_auxpow(
@@ -388,6 +389,10 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     
     pub fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
         self.chain.get_head()
+    }
+    
+    pub async fn get_queued_auxpow(&self) -> Option<AuxPowHeader> {
+        self.chain.get_queued_auxpow().await
     }
 }
 

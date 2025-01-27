@@ -1527,7 +1527,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         debug!("Getting pegouts");
         loop {
             let block = self.storage.get_block(&current)?.unwrap();
-            if block.message.pegout_payment_proposal.is_some() {
+
+            // revert previous checkpoints
+            if block.message.auxpow_header.is_some() {
                 let proposal = block.message.pegout_payment_proposal.clone().unwrap();
                 info!("Found pegout tx: {:?}", proposal);
                 pending_pegouts.insert(proposal.txid(), proposal);
@@ -1639,6 +1641,9 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
     }
 
+    async fn get_queued_auxpow(&self) -> Option<AuxPowHeader> {
+        self.queued_pow.read().await.clone()
+    }
     async fn push_auxpow(
         &self,
         start_hash: bitcoin::BlockHash,

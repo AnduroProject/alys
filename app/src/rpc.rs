@@ -233,53 +233,69 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
             }
             .into(),
         ),
-        "adjust_target" => {
-            let target_override_cons_rep = serde_json::from_str::<u32>(params.get());
-            if let Ok(target) = target_override_cons_rep {
-                miner.set_target_override(CompactTarget::from_consensus(target));
-
-                Response::builder().status(hyper::StatusCode::OK).body(
-                    JsonRpcResponseV1 {
-                        result: None,
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                )
-            } else {
-                Response::builder().status(hyper::StatusCode::OK).body(
-                    JsonRpcResponseV1 {
-                        result: None,
-                        error: Some(JsonRpcErrorV1::debug_error("Invalid target".to_string())),
-                        id,
-                    }
-                    .into(),
-                )
-            }
-        }
-        "get_head_block" => {
-            match miner.get_head() {
-                Ok(head) => Response::builder().status(hyper::StatusCode::OK).body(
-                    JsonRpcResponseV1 {
-                        result: Some(json!(head)),
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                ),
-                Err(e) => {
-                    error!("{}", e.to_string());
-                    Response::builder().status(hyper::StatusCode::OK).body(
-                        JsonRpcResponseV1 {
-                            result: None,
-                            error: Some(JsonRpcErrorV1::block_not_found()),
-                            id,
-                        }
-                            .into(),
-                    )
+        // "adjusttarget" => {
+        //     let target_override_cons_rep = serde_json::from_str::<u32>(params.get());
+        //     if let Ok(target) = target_override_cons_rep {
+        //         miner.set_target_override(CompactTarget::from_consensus(target));
+        // 
+        //         Response::builder().status(hyper::StatusCode::OK).body(
+        //             JsonRpcResponseV1 {
+        //                 result: None,
+        //                 error: None,
+        //                 id,
+        //             }
+        //             .into(),
+        //         )
+        //     } else {
+        //         Response::builder().status(hyper::StatusCode::OK).body(
+        //             JsonRpcResponseV1 {
+        //                 result: None,
+        //                 error: Some(JsonRpcErrorV1::debug_error("Invalid target".to_string())),
+        //                 id,
+        //             }
+        //             .into(),
+        //         )
+        //     }
+        // }
+        "getheadblock" => match miner.get_head() {
+            Ok(head) => Response::builder().status(hyper::StatusCode::OK).body(
+                JsonRpcResponseV1 {
+                    result: Some(json!(head)),
+                    error: None,
+                    id,
                 }
+                .into(),
+            ),
+            Err(e) => {
+                error!("{}", e.to_string());
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: None,
+                        error: Some(JsonRpcErrorV1::block_not_found()),
+                        id,
+                    }
+                    .into(),
+                )
             }
-        }
+        },
+        "getqueuedpow" => match miner.get_queued_auxpow().await {
+            Some(queued_pow) => Response::builder().status(hyper::StatusCode::OK).body(
+                JsonRpcResponseV1 {
+                    result: Some(json!(queued_pow)),
+                    error: None,
+                    id,
+                }
+                .into(),
+            ),
+            None => Response::builder().status(hyper::StatusCode::OK).body(
+                JsonRpcResponseV1 {
+                    result: None,
+                    error: None,
+                    id,
+                }
+                .into(),
+            ),
+        },
         // "getaccumulatedfees" => {
         //     let args = params.get();
         //     let block_hash;
