@@ -44,6 +44,13 @@ jobs:
       - name: Start bitcoind
         run: bitcoind -daemon
 
+      - name: Wait for Bitcoin Core readiness
+        run: |
+          until bitcoin-cli -regtest getblockchaininfo &> /dev/null; do
+            echo "Waiting for Bitcoin Core to initialize..."
+            sleep 1
+          done
+
       - name: Generate initial blocks
         run: |
           bitcoin-cli -regtest createwallet "federation-test"
