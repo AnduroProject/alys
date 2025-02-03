@@ -4,7 +4,6 @@ use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{genesis_value_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
-use bitcoin::Address;
 use bls::{Keypair, SecretKey};
 use bridge::{
     bitcoin::Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
@@ -16,10 +15,8 @@ use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
-use tracing::log::Level::{Debug, Trace};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
-use types::chain_spec;
 
 #[inline]
 pub fn run() -> eyre::Result<()> {
@@ -178,7 +175,7 @@ impl App {
         let mut bitcoin_addresses = Vec::new();
 
         fn calculate_threshold(federation_bitcoin_pubkeys_len: usize) -> usize {
-            (((federation_bitcoin_pubkeys_len * 2) + 2) / 3)
+            ((federation_bitcoin_pubkeys_len * 2) + 2) / 3
         };
 
         let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2rds majority, rounded up

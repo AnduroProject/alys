@@ -61,7 +61,7 @@ impl Aura {
         let authority = if let Some(signer) = maybe_signer {
             let index = authorities
                 .iter()
-                .position(|x| signer.pk.eq(&x))
+                .position(|x| signer.pk.eq(x))
                 .expect("Authority not found in set") as u8;
             Some(Authority { index, signer })
         } else {

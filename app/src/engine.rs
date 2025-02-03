@@ -16,7 +16,6 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::field::debug;
 use tracing::{debug, trace};
 use types::{
     Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,

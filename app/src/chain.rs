@@ -16,7 +16,6 @@ use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
-use futures::future::try_join_all;
 use libp2p::PeerId;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashSet};
@@ -374,7 +373,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         );
 
         let signed_block =
-            block.sign_block(&self.aura.authority.as_ref().expect("Only called by signer"));
+            block.sign_block(self.aura.authority.as_ref().expect("Only called by signer"));
 
         let root_hash = signed_block.canonical_root();
         info!(
@@ -556,7 +555,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // TODO: this is also called on sync which isn't strictly required
         let our_approval = if let Some(authority) = &self.aura.authority {
-            let our_approval = unverified_block.message.sign(&authority);
+            let our_approval = unverified_block.message.sign(authority);
             state.add_checked_approval(our_approval.clone())?;
             Some(our_approval)
         } else {
@@ -1320,7 +1319,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let chain = &self;
 
             let sync_status = self.sync_status.read().await;
-            let is_synced = sync_status.is_synced().clone();
+            let is_synced = sync_status.is_synced();
             drop(sync_status);
 
             self.bridge
