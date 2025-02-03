@@ -11,10 +11,12 @@ contract BridgeTest is Test {
         bridge = new Bridge();
     }
 
-    function testFail_CannotBurn() public {
+    function test_RevertWhen_CannotBurn() public {
+        vm.expectRevert();
         vm.deal(address(this), 1000);
         payable(address(bridge)).transfer(100);
     }
+
 
     function test_PegOut() public {
         address payable recipient = payable(vm.addr(1));

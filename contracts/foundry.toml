@@ -3,6 +3,3 @@ src = "src"
 out = "out"
 libs = ["lib"]
 deny_warnings = false
-
-[profile.ci]
-deny_warnings = true

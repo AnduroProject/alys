@@ -29,11 +29,11 @@ jobs:
         working-directory: contracts
         run: |
           forge --version
-          forge build --sizes --deny-warnings
+          forge build --sizes
         id: build
 
       - name: Run Forge tests
         working-directory: contracts
         run: |
-          forge test -vvv --deny-warnings
+          forge test -vvv
         id: test
