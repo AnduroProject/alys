@@ -133,7 +133,7 @@ The Alys node will automatically bridge the BTC.
 
 #### Check that Funds are Allocated inAlys
 
-Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1 _ 10^18 wei instead of 1 _ 10^8 satoshis.
+Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1x10^18 wei instead of 1x10^8 satoshis.
 
 ```shell
 cast balance 0x09Af4E864b84706fbCFE8679BF696e8c0B472201 --rpc-url "localhost:8545"

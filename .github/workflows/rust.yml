@@ -17,10 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-
       - uses: olix0r/cargo-action-fmt/setup@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint src
+        run: cargo clippy --message-format=json -- -D warnings | cargo-action-fmt
+
+      - name: Lint tests
+        run: cargo clippy --tests --message-format=json -- -D warnings | cargo-action-fmt
 
       - name: Setup Bitcoin Core
         run: |
@@ -81,15 +87,6 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt, clippy
-
-      - name: Check Formatting
-        run: cargo fmt --all -- --check
-
-      - name: Lint src
-        run: cargo clippy --message-format=json -- -D warnings | cargo-action-fmt
-
-      - name: Lint tests
-        run: cargo clippy --tests --message-format=json -- -D warnings | cargo-action-fmt
 
       - name: Build & Test
         run: |

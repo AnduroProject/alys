@@ -282,11 +282,9 @@ mod test {
 
         let authorities = [aura_authority_key];
 
-        {
-            let _index = authorities
-                .iter()
-                .position(|x| aura_signer.pk.eq(x))
-                .expect("Authority not found in set") as u8;
-        };
+        let _index = authorities
+            .iter()
+            .position(|x| aura_signer.pk.eq(x))
+            .expect("Authority not found in set") as u8;
     }
 }
