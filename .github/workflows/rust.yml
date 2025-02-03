@@ -64,7 +64,7 @@ jobs:
           geth version
 
       - name: Start Geth
-        run: ./scripts/start_geth.sh
+        run: ./scripts/start_geth.sh &
 
       - name: Cache Rust dependencies
         uses: actions/cache@v3
