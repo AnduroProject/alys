@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -275,8 +275,7 @@ impl Bridge {
             .rpc
             .estimate_smart_fee(1, None)
             .ok()
-            .map(|x| x.fee_rate)
-            .flatten()
+            .and_then(|x| x.fee_rate)
             .map(|x| FeeRate::from_btc_per_kvb(x.to_btc() as f32))
             .unwrap_or(FeeRate::from_sat_per_vb(2.0))
     }
