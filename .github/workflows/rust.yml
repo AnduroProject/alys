@@ -50,4 +50,4 @@ jobs:
       - name: Build & Test
         run: |
           cargo build --release
-        #   cargo test --release --no-fail-fast --verbose -- --nocapture
+          cargo test --release --no-fail-fast --verbose -- --nocapture --test-threads=1

@@ -313,7 +313,7 @@ mod tests {
     #[ignore]
     async fn test_stream_e2e() {
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -333,7 +333,7 @@ mod tests {
         let tx: Transaction = deserialize(&raw_tx).unwrap();
 
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -354,7 +354,7 @@ mod tests {
         let tx: Transaction = deserialize(&raw_tx).unwrap();
 
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -373,7 +373,7 @@ mod tests {
 
         let walletname = "federation-test";
         let rpc = bitcoincore_rpc::Client::new(
-            &format!("http://localhost:18443/wallet/{walletname}"),
+            &format!("http://127.0.0.1:18443/wallet/{walletname}"),
             Auth::UserPass("rpcuser".into(), "rpcpassword".into()),
         )
         .unwrap();
