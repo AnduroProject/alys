@@ -176,7 +176,7 @@ impl App {
 
         fn calculate_threshold(federation_bitcoin_pubkeys_len: usize) -> usize {
             ((federation_bitcoin_pubkeys_len * 2) + 2) / 3
-        };
+        }
 
         let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2rds majority, rounded up
         let bitcoin_federation = Federation::new(

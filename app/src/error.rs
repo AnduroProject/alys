@@ -2,7 +2,7 @@ use crate::aura::AuraError;
 use bridge::Error as FederationError;
 use std::time::SystemTimeError;
 
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug)]
 pub enum Error {
     PayloadIdUnavailable,

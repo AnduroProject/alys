@@ -37,7 +37,7 @@ pub(crate) enum AuraError {
     SlotIsInFuture,
     SlotAuthorNotFound,
     BadSignature,
-    InvalidAuthor,
+    // InvalidAuthor,
 }
 
 #[derive(Clone)]
@@ -88,7 +88,7 @@ impl Aura {
         if slot > slot_now + 1 {
             Err(AuraError::SlotIsInFuture)
         } else {
-            let (expected_authority_index, _expected_author) =
+            let (_expected_authority_index, _expected_author) =
                 slot_author(slot, &self.authorities[..]).ok_or(AuraError::SlotAuthorNotFound)?;
 
             debug!("timestamp: {}, slot {slot}", timestamp);
@@ -251,16 +251,12 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
 mod test {
     use super::*;
     use bls::SecretKey;
-    use hex;
 
     #[test]
     fn should_find_slot_author() {
         let slot_now = slot_from_timestamp(1703256299459, 5000);
         assert_eq!(slot_now, 340651259);
-        assert_eq!(
-            *slot_author(slot_now, &vec![1, 2, 3, 4, 5, 6]).unwrap().1,
-            6
-        );
+        assert_eq!(*slot_author(slot_now, &[1, 2, 3, 4, 5, 6]).unwrap().1, 6);
     }
 
     #[test]
@@ -284,12 +280,12 @@ mod test {
 
         let aura_authority_key = PublicKey::deserialize(&aura_authority_key_bytes[..]).unwrap();
 
-        let authorities = vec![aura_authority_key];
+        let authorities = [aura_authority_key];
 
-        let authority = {
-            let index = authorities
+        {
+            let _index = authorities
                 .iter()
-                .position(|x| aura_signer.pk.eq(&x))
+                .position(|x| aura_signer.pk.eq(x))
                 .expect("Authority not found in set") as u8;
         };
     }

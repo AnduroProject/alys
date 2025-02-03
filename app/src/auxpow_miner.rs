@@ -430,7 +430,7 @@ mod test {
             let start = Instant::now();
             AuxPow::mine(
                 BlockHash::all_zeros(),
-                CompactTarget::from_consensus(bits).into(),
+                CompactTarget::from_consensus(bits),
                 0,
             )
             .await;

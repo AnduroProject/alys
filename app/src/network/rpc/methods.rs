@@ -42,11 +42,14 @@ impl Deref for ErrorType {
     }
 }
 
-impl ToString for ErrorType {
-    fn to_string(&self) -> String {
-        #[allow(clippy::invalid_regex)]
+impl std::fmt::Display for ErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let re = Regex::new("\\p{C}").expect("Regex is valid");
-        String::from_utf8_lossy(&re.replace_all(self.0.deref(), &b""[..])).to_string()
+        write!(
+            f,
+            "{}",
+            String::from_utf8_lossy(&re.replace_all(self.0.deref(), &b""[..]))
+        )
     }
 }
 
@@ -361,7 +364,7 @@ impl<T: EthSpec> std::fmt::Display for RPCCodedResponse<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RPCCodedResponse::Success(res) => write!(f, "{}", res),
-            RPCCodedResponse::Error(code, err) => write!(f, "{}: {}", code, err.to_string()),
+            RPCCodedResponse::Error(code, err) => write!(f, "{}: {}", code, err),
             RPCCodedResponse::StreamTermination(_) => write!(f, "Stream Termination"),
         }
     }

@@ -389,7 +389,7 @@ mod tests {
         rpc.generate_to_address(101, &funding_address).unwrap(); // fund the wallet
         let input_txid = rpc
             .send_to_address(
-                &address,
+                address,
                 bitcoin::Amount::from_sat(amount),
                 None,
                 None,
@@ -464,7 +464,7 @@ mod tests {
 
         // sign with 1nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1].clone());
+            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -473,7 +473,7 @@ mod tests {
 
         // sign with 2nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2].clone());
+            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -615,7 +615,7 @@ mod tests {
                     hash_ty: TapSighashType::Default,
                 };
                 TxIn {
-                    witness: Witness::from_slice(&vec![sig.to_vec()]),
+                    witness: Witness::from_slice(&[sig.to_vec()]),
                     ..txin.clone()
                 }
             })
