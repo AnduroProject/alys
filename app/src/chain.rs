@@ -1447,7 +1447,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 .await
                             {
                                 error!("Failed to respond to rpc BlocksByRange request: {err:?}");
-                                return;
                             }
                         }
 
@@ -1460,7 +1459,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .await
                         {
                             error!("Failed to respond to rpc BlocksByRange request to terminate: {err:?}");
-                            return;
                         }
                     }
                     _ => {
