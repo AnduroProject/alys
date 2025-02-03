@@ -33,6 +33,7 @@ jobs:
         run: |
           mkdir -p ~/.bitcoin
           echo "regtest=1
+          [regtest]
           server=1
           rpcuser=rpcuser
           rpcpassword=rpcpassword
