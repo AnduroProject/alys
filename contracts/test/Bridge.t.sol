@@ -17,7 +17,6 @@ contract BridgeTest is Test {
         payable(address(bridge)).transfer(100);
     }
 
-
     function test_PegOut() public {
         address payable recipient = payable(vm.addr(1));
         assertEq(recipient.balance, 0);
