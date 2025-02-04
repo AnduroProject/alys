@@ -13,13 +13,13 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 
-num = "0.2"
+num = "0.4"
 num-traits = "0.2"
-num-derive = "0.3"
+num-derive = "0.4"
 
 # bitcoin
 bitcoincore-rpc = { workspace = true }
-bdk = { version = "0.29.0", features = ["key-value-db"]}
+bdk = { version = "0.29.0", features = ["key-value-db"] }
 
 # ethereum
 ethers = { workspace = true }

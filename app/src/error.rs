@@ -4,7 +4,7 @@ use std::time::SystemTimeError;
 use strum::Display;
 use thiserror::Error;
 
-#[allow(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, Error, Display)]
 pub enum Error {
     PayloadIdUnavailable,

@@ -38,11 +38,11 @@ pub enum BitcoinRpcError {
     RpcInWarmup = -28,
     RpcMethodDeprecated = -32,
 
-    /// Aliases for backward compatibility
+    // Aliases for backward compatibility
     // RpcTransactionError           = RpcVerifyError,
     // RpcTransactionRejected        = RpcVerifyRejected,
     // RpcTransactionAlreadyInChain  = RpcVerifyAlreadyInChain,
-
+    //
     /// P2P client errors
     RpcClientNotConnected = -9,
     RpcClientInInitialDownload = -10,
@@ -68,10 +68,10 @@ pub enum BitcoinRpcError {
     RpcWalletNotFound = -18,
     RpcWalletNotSpecified = -19,
 
-    /// Backwards compatible aliases
+    // Backwards compatible aliases
     // RpcWalletInvalidAccountName = RpcWalletInvalidLabelName,
-
-    /// Unused reserved codes.
+    //
+    // Unused reserved codes.
     RpcForbiddenBySafeMode = -2,
 
     /// Unknown error code (not in spec).

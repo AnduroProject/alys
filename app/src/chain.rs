@@ -75,6 +75,7 @@ const MAINNET_MAX_WITHDRAWALS: usize = 16;
 trait TxFees {
     fn gas_tip_cap(&self) -> U256;
     fn gas_fee_cap(&self) -> U256;
+    #[allow(dead_code)]
     fn gas_price(&self) -> U256;
     fn effective_gas_tip(&self, base_fee: U256) -> U256;
 }
@@ -205,7 +206,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         for pegin in self.queued_pegins.read().await.values() {
             if withdrawals.len() < MAINNET_MAX_WITHDRAWALS
-                || withdrawals.get(&pegin.evm_account).is_some()
+                || withdrawals.contains_key(&pegin.evm_account)
             {
                 withdrawals.insert(
                     pegin.evm_account,
@@ -391,7 +392,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         );
 
         let signed_block =
-            block.sign_block(&self.aura.authority.as_ref().expect("Only called by signer"));
+            block.sign_block(self.aura.authority.as_ref().expect("Only called by signer"));
 
         let root_hash = signed_block.canonical_root();
         info!(
@@ -592,7 +593,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // TODO: this is also called on sync which isn't strictly required
         let our_approval = if let Some(authority) = &self.aura.authority {
-            let our_approval = unverified_block.message.sign(&authority);
+            let our_approval = unverified_block.message.sign(authority);
             state.add_checked_approval(our_approval.clone())?;
             Some(our_approval)
         } else {
@@ -915,9 +916,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 }
                 Err(_err) => {
                     trace!(
-                        "Receipt not found - Hash: {:x} Block Hash: {:x}",
+                        "Receipt not found - Hash: {:x} Block Hash: {:x} - Error: {:?}",
                         tx.hash,
-                        block_with_txs.hash.unwrap_or(H256::zero())
+                        block_with_txs.hash.unwrap_or(H256::zero()),
+                        err
                     );
                 }
             }

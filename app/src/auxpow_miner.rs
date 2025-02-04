@@ -49,7 +49,7 @@ where
 {
     let blockhash_str: &str = Deserialize::deserialize(deserializer)?;
     // Note: BlockHash::from_slice results in opposite endianness from BlockHash::from_str
-    let blockhash_bytes = hex::decode(&blockhash_str).map_err(D::Error::custom)?;
+    let blockhash_bytes = hex::decode(blockhash_str).map_err(D::Error::custom)?;
     BlockHash::consensus_decode(&mut blockhash_bytes.as_slice()).map_err(D::Error::custom)
 }
 
@@ -492,7 +492,7 @@ mod test {
             let start = Instant::now();
             AuxPow::mine(
                 BlockHash::all_zeros(),
-                CompactTarget::from_consensus(bits).into(),
+                CompactTarget::from_consensus(bits),
                 0,
             )
             .await;

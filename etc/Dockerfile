@@ -1,5 +1,5 @@
 # Start from the latest Rust base image
-FROM rust:bullseye as builder
+FROM rust:bullseye AS builder
 #FROM rust:latest
 
 # SHELL ["/bin/bash", "-c"]

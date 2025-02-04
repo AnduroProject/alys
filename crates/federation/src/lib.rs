@@ -10,7 +10,7 @@ use bitcoincore_rpc::{Error as RpcError, RpcApi};
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 
 pub use bitcoin_signing::{
     BitcoinSignatureCollector, BitcoinSigner, Federation, FeeRate,
@@ -275,8 +275,7 @@ impl Bridge {
             .rpc
             .estimate_smart_fee(1, None)
             .ok()
-            .map(|x| x.fee_rate)
-            .flatten()
+            .and_then(|x| x.fee_rate)
             .map(|x| FeeRate::from_btc_per_kvb(x.to_btc() as f32))
             .unwrap_or(FeeRate::from_sat_per_vb(2.0))
     }
@@ -314,7 +313,7 @@ mod tests {
     #[ignore]
     async fn test_stream_e2e() {
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -334,7 +333,7 @@ mod tests {
         let tx: Transaction = deserialize(&raw_tx).unwrap();
 
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -355,7 +354,7 @@ mod tests {
         let tx: Transaction = deserialize(&raw_tx).unwrap();
 
         let federation = Bridge::new(
-            BitcoinCore::new("http://localhost:18443", "rpcuser", "rpcpassword"),
+            BitcoinCore::new("http://127.0.0.1:18443", "rpcuser", "rpcpassword"),
             vec![
                 "bcrt1pnv0qv2q86ny0my4tycezez7e72jnjns2ays3l4w98v6l383k2h7q0lwmyh"
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
@@ -374,7 +373,7 @@ mod tests {
 
         let walletname = "federation-test";
         let rpc = bitcoincore_rpc::Client::new(
-            &format!("http://localhost:18443/wallet/{walletname}"),
+            &format!("http://127.0.0.1:18443/wallet/{walletname}"),
             Auth::UserPass("rpcuser".into(), "rpcpassword".into()),
         )
         .unwrap();
@@ -390,7 +389,7 @@ mod tests {
         rpc.generate_to_address(101, &funding_address).unwrap(); // fund the wallet
         let input_txid = rpc
             .send_to_address(
-                &address,
+                address,
                 bitcoin::Amount::from_sat(amount),
                 None,
                 None,
@@ -465,7 +464,7 @@ mod tests {
 
         // sign with 1nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1].clone());
+            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -474,7 +473,7 @@ mod tests {
 
         // sign with 2nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2].clone());
+            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -616,7 +615,7 @@ mod tests {
                     hash_ty: TapSighashType::Default,
                 };
                 TxIn {
-                    witness: Witness::from_slice(&vec![sig.to_vec()]),
+                    witness: Witness::from_slice(&[sig.to_vec()]),
                     ..txin.clone()
                 }
             })

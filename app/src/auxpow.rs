@@ -117,6 +117,7 @@ struct MergedMiningHeader {
 }
 
 impl MergedMiningHeader {
+    #[allow(dead_code)]
     fn from_script_sig(script_sig: &ScriptBuf) -> Result<Self, AuxPowError> {
         let mut header = None;
         let mut instructions = script_sig.instructions();
@@ -202,9 +203,9 @@ trait CoinbaseParser {
     ) -> Result<MergedMiningHeader, AuxPowError>;
 }
 
-enum CoinbaseVin {}
+pub enum CoinbaseVin {}
 
-enum CoinbaseVout {}
+pub enum CoinbaseVout {}
 
 impl CoinbaseParser for CoinbaseVin {
     fn parse_coinbase(

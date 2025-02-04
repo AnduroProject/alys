@@ -283,9 +283,6 @@ impl NetworkBackend {
                         info!("Responding to rpc...");
                         self.swarm.behaviour_mut().eth2_rpc.send_response(peer_id, (connection_id, substream_id), payload);
                     }
-                    Some(_) => {
-                        debug!("Unhandled message");
-                    }
                     None => {
                         // channel shut down, nothing to do
                     }
@@ -350,10 +347,10 @@ impl NetworkBackend {
                             }
                             Err(HandlerErr::Inbound { id: _err_stream_id, proto: _, error: stream_error }) => {
                                 // not sure what to do with this, ignore for now
-                                warn!("Inbound error: {:?}", stream_error);
+                                warn!("Inbound error: {:?} - Id: {:?}", stream_error, err_stream_id);
                             }
-                            Err(HandlerErr::Outbound { id: _stream_id, proto: _, error: stream_err }) => {
-                                warn!("Outbound error: {:?}", stream_err);
+                            Err(HandlerErr::Outbound { id: stream_id, proto: _, error: stream_err }) => {
+                                warn!("Outbound error: {:?} - Id: {:?}", stream_err, stream_id);
                             }
                         }
 
