@@ -237,7 +237,7 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
         //     let target_override_cons_rep = serde_json::from_str::<u32>(params.get());
         //     if let Ok(target) = target_override_cons_rep {
         //         miner.set_target_override(CompactTarget::from_consensus(target));
-        // 
+        //
         //         Response::builder().status(hyper::StatusCode::OK).body(
         //             JsonRpcResponseV1 {
         //                 result: None,

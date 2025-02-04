@@ -1,3 +1,4 @@
+use crate::error::BlockErrorBlockTypes::Height;
 use crate::{
     block::*,
     error::{BlockErrorBlockTypes, Error},
@@ -12,7 +13,6 @@ use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
 use types::{EthSpec, Hash256, MainnetEthSpec};
-use crate::error::BlockErrorBlockTypes::Height;
 
 pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 
@@ -50,7 +50,10 @@ pub struct Storage<E: EthSpec, DB> {
 }
 
 pub trait BlockByHeight {
-    fn put_block_by_height(&self, block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error>;
+    fn put_block_by_height(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<(), Error>;
     fn get_block_by_height(
         &self,
         height: u64,
@@ -87,10 +90,13 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
 }
 
 impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB> {
-    fn put_block_by_height(&self, block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error> {
+    fn put_block_by_height(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<(), Error> {
         let block_root = block.canonical_root();
         let height = block.message.execution_payload.block_number;
-        
+
         self.commit_ops(vec![KeyValueStoreOp::PutKeyValue(
             get_key_for_col(DbColumn::BlockByHeight.into(), &height.to_be_bytes()),
             block_root.as_bytes().to_vec(),
@@ -106,20 +112,21 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
         match self
             .db
             .get_bytes(DbColumn::BlockByHeight.into(), &height.to_be_bytes())
-            .map_err(|_| Error::DbReadError)? {
+            .map_err(|_| Error::DbReadError)?
+        {
             // Get the block hash from the block by height index
             Some(block_hash) => {
                 // Use the hash to retrieve the block
                 self.db
                     .get_bytes(DbColumn::Block.into(), block_hash.as_slice())
                     .unwrap()
-                    .map(|block_bytes| rmp_serde::from_slice(&block_bytes).map_err(|_| Error::CodecError))
+                    .map(|block_bytes| {
+                        rmp_serde::from_slice(&block_bytes).map_err(|_| Error::CodecError)
+                    })
                     .transpose()
             }
             None => Ok(None),
         }
-
-        
     }
 }
 

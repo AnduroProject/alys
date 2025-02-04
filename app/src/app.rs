@@ -281,7 +281,7 @@ impl App {
             bitcoin_signature_collector,
             maybe_bitcoin_signer,
             chain_spec.retarget_params.clone(),
-            chain_spec.is_validator && !self.not_validator
+            chain_spec.is_validator && !self.not_validator,
         ));
 
         // import genesis block without signatures or verification

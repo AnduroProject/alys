@@ -1,19 +1,19 @@
+use crate::block::{AuxPowHeader, SignedConsensusBlock};
+use crate::error::AuxPowMiningError::HashRetrievalError;
 use crate::error::{BlockErrorBlockTypes, Error};
 use crate::{auxpow::AuxPow, chain::Chain};
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
+use execution_layer::ExecutionBlock;
 use eyre::{Report, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
-use execution_layer::ExecutionBlock;
 use store::ItemStore;
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
 use types::{MainnetEthSpec, Uint256};
-use crate::block::{AuxPowHeader, SignedConsensusBlock};
-use crate::error::AuxPowMiningError::HashRetrievalError;
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
 where
@@ -311,8 +311,12 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             hash,
             AuxInfo {
                 last_hash: index_last.block_hash(),
-                start_hash: *hashes.first().ok_or(Error::from(HashRetrievalError(BlockErrorBlockTypes::AuxPowFirst)))?,
-                end_hash: *hashes.last().ok_or(Error::from(HashRetrievalError(BlockErrorBlockTypes::AuxPowLast)))?,
+                start_hash: *hashes.first().ok_or(Error::from(HashRetrievalError(
+                    BlockErrorBlockTypes::AuxPowFirst,
+                )))?,
+                end_hash: *hashes.last().ok_or(Error::from(HashRetrievalError(
+                    BlockErrorBlockTypes::AuxPowLast,
+                )))?,
                 address,
             },
         );
@@ -386,11 +390,11 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             )
             .await
     }
-    
+
     pub fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
         self.chain.get_head()
     }
-    
+
     pub async fn get_queued_auxpow(&self) -> Option<AuxPowHeader> {
         self.chain.get_queued_auxpow().await
     }

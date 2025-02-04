@@ -329,7 +329,11 @@ impl<T: Database> UtxoManager<T> {
         Ok(messages)
     }
 
-    pub fn check_transaction_signatures(&self, transaction: &Transaction, witness_len_override: bool) -> Result<(), Error> {
+    pub fn check_transaction_signatures(
+        &self,
+        transaction: &Transaction,
+        witness_len_override: bool,
+    ) -> Result<(), Error> {
         if witness_len_override {
             return Ok(());
         }

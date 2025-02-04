@@ -244,7 +244,7 @@ impl Engine {
                 .await;
             if rpc_result.is_ok() {
                 return Ok(rpc_result?);
-            } else if i > 0{
+            } else if i > 0 {
                 sleep(Duration::from_millis(500)).await;
             }
         }

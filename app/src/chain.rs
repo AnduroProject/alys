@@ -313,7 +313,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             None => (Hash256::zero(), None),
         };
 
-        let (mut queued_pow, mut finalized_pegouts): (Option<AuxPowHeader>, Vec<bitcoin::Transaction>) = (None, vec![]);
+        let (mut queued_pow, mut finalized_pegouts): (
+            Option<AuxPowHeader>,
+            Vec<bitcoin::Transaction>,
+        ) = (None, vec![]);
 
         if prev_height != 359641 {
             (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {

@@ -118,7 +118,7 @@ impl Aura {
         } else {
             1
         };
-        
+
         if block.num_approvals() < required_signatures {
             return Ok(false);
         }
