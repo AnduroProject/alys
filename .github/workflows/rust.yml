@@ -92,3 +92,8 @@ jobs:
         run: |
           cargo build --release
           cargo test --release --no-fail-fast --verbose -- --nocapture --test-threads=1
+
+      - name: Generate Coverage Report
+        run: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --out Xml
