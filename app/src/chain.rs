@@ -917,7 +917,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         receipt_result.push(receipt);
                     }
                 }
-                Err(_err) => {
+                Err(err) => {
                     trace!(
                         "Receipt not found - Hash: {:x} Block Hash: {:x} - Error: {:?}",
                         tx.hash,
