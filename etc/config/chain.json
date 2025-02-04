@@ -38,5 +38,5 @@
         "powTargetTimespan": 12000,
         "powTargetSpacing": 1000
     },
-    "isValidator": true
+    "isValidator": false
 }
