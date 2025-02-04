@@ -33,3 +33,7 @@ docs/book/
 # IDE files
 .idea/
 .vscode/
+
+# Code coverage
+cobertura.xml
+tarpaulin-report.html
