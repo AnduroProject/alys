@@ -44,7 +44,7 @@ where
 {
     let blockhash_str: &str = Deserialize::deserialize(deserializer)?;
     // Note: BlockHash::from_slice results in opposite endianness from BlockHash::from_str
-    let blockhash_bytes = hex::decode(&blockhash_str).map_err(D::Error::custom)?;
+    let blockhash_bytes = hex::decode(blockhash_str).map_err(D::Error::custom)?;
     BlockHash::consensus_decode(&mut blockhash_bytes.as_slice()).map_err(D::Error::custom)
 }
 
@@ -193,7 +193,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
     index_last: &BI,
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
-    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
+    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
         return CompactTarget::from_consensus(index_last.bits());
     }
 
@@ -430,7 +430,7 @@ mod test {
             let start = Instant::now();
             AuxPow::mine(
                 BlockHash::all_zeros(),
-                CompactTarget::from_consensus(bits).into(),
+                CompactTarget::from_consensus(bits),
                 0,
             )
             .await;

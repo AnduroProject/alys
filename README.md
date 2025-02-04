@@ -18,13 +18,14 @@ On a high level, the repository consists of three parts:
 ## Connection Info
 
 ### Testnet
+
 - RPC: http://btcalys.xyz:8545
 - Explorer: http://testnet.alyscan.io/
 - Faucet: https://faucet.anduro.io/
 - Chain ID: 212121
 
-
 ### Alphanet
+
 - RPC: http:/54.162.190.202:8545
 - Explorer: http://alyscan.io/
 - Faucet: https://faucet.anduro.io/alpha
@@ -35,12 +36,12 @@ On a high level, the repository consists of three parts:
 - Install Rust `1.75.0` or higher: https://www.rust-lang.org/tools/install
 - Install Geth `<=1.14.10`: https://geth.ethereum.org/docs/getting-started/installing-geth
 - Install Bitcoin Core `25.0` or higher so that you have access to the `bitcoind` and `bitcoin-cli` commands:
-    - MacOS: `brew install bitcoin`
-    - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
-    - Arch: `yay bitcoin-core`
-    - Download a binary: https://bitcoin.org/en/download
-- Install clang 
-- Install pkg-config 
+  - MacOS: `brew install bitcoin`
+  - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
+  - Arch: `yay bitcoin-core`
+  - Download a binary: https://bitcoin.org/en/download
+- Install clang
+- Install pkg-config
 - Install libssl-dev
 - Install build-essential
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
@@ -48,7 +49,7 @@ On a high level, the repository consists of three parts:
 
 ```shell
 git clone git@github.com:AnduroProject/Alys.git
-cd Alys 
+cd Alys
 ```
 
 ## Getting Started
@@ -66,7 +67,7 @@ We will start a single geth node and a Bitcoin regtest node.
 
 ```shell
 # in a new terminal start bitcoin
-bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
+bitcoind -regtest -server -rest -rpcport=18443 -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002 -rpcallowip=127.0.0.1 -debug=rpc
 ```
 
 ### Alys node
@@ -130,9 +131,9 @@ EVM_ADDRESS="09Af4E864b84706fbCFE8679BF696e8c0B472201"
 
 The Alys node will automatically bridge the BTC.
 
-#### Check that Funds are Allocated inAlys 
+#### Check that Funds are Allocated inAlys
 
-Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1 * 10^18 wei instead of 1 * 10^8 satoshis.
+Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1x10^18 wei instead of 1x10^8 satoshis.
 
 ```shell
 cast balance 0x09Af4E864b84706fbCFE8679BF696e8c0B472201 --rpc-url "localhost:8545"
@@ -196,6 +197,7 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
     "bip125-replaceable": "no"
   },
 ```
+
 </details>
 
 ## Running an Alys Network
@@ -449,7 +451,7 @@ Running a full node is similar to running a federation node. The main difference
 
 ```shell
 cargo run --bin app -- \
-  --chain etc/config/chain.json \ 
+  --chain etc/config/chain.json \
   --geth-url http://localhost:8551/ \
   --db-path etc/data/consensus/node_0/chain_db/ \
   --rpc-port 3000 \
@@ -463,8 +465,8 @@ cargo run --bin app -- \
 
 - `BOOTNODE_IP`: To select a bootnode, get its public or private IP address.
 - `BOOTNODE_LIBP2P_PORT`: There are two ways to get the p2p port.
-    - You can find the listening port by running `lsof -Pn -i4` on the server running the bootnode.
-    - Set the P2P port explicitly: You can set a dedicated p2p port on the federation node/bootnode by adding the argument `--p2p-port 55444` to set this to port `55444`. Make sure to pick a free port.
+  - You can find the listening port by running `lsof -Pn -i4` on the server running the bootnode.
+  - Set the P2P port explicitly: You can set a dedicated p2p port on the federation node/bootnode by adding the argument `--p2p-port 55444` to set this to port `55444`. Make sure to pick a free port.
 
 ## Development
 
@@ -544,7 +546,6 @@ This should result in something like:
 {"deployer":"0x09Af4E864b84706fbCFE8679BF696e8c0B472201","deployedTo":"0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146","transactionHash":"0x8478bbed6ba658eecb8e36c143969cf6c11c4517f5f32acf75af5a9c41ac69dd"}
 ```
 
-
 Other useful scripts:
 
 ```shell
@@ -576,7 +577,7 @@ Since we use Geth without modification, it is already possible to use most exist
 
 ### Blockscout
 
-To setup [Blockscout](https://github.com/blockscout/blockscout) follow the deployment guides [here](https://docs.blockscout.com/for-developers/deployment). We recommend using [Docker Compose](https://github.com/docker/compose) for simplicity. 
+To setup [Blockscout](https://github.com/blockscout/blockscout) follow the deployment guides [here](https://docs.blockscout.com/for-developers/deployment). We recommend using [Docker Compose](https://github.com/docker/compose) for simplicity.
 
 ```shell
 git clone git@github.com:blockscout/blockscout.git
@@ -590,7 +591,7 @@ Change the environment variables:
 SUBNETWORK=Merged ALYS
 CHAIN_ID=263634
 # /docker-compose/envs/common-frontend.yml
-NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha	
+NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha
 NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
 ```
 
@@ -628,32 +629,32 @@ When you start the Alys sidechain it will use a chain spec to configure it's own
 
 ```json
 {
-    // the block duration in milliseconds
-    "slotDuration": 2000,
-    // public keys for bls signing
-    "authorities": [],
-    // evm addresses for each authority (to receive fees)
-    "federation": [],
-    // public keys for secp256k1 signing
-    "federationBitcoinPubkeys": [],
-    // initial PoW mining difficulty
-    "bits": 553713663,
-    // should be the same as the geth `genesis.json`
-    "chainId": 263634,
-    // stall block production if no AuxPow is received
-    "maxBlocksWithoutPow": 10,
-    // set the scanning height, use latest height for testnet or mainnet
-    "bitcoinStartHeight": 0,
-    "retargetParams": {
-        // disable retargeting so we always keep the same target
-        "powNoRetargeting": false,
-        // the maximum target allowed
-        "powLimit": 553713663,
-        // expected difficulty adjustment period (in seconds)
-        "powTargetTimespan": 12000,
-        // expected block time (in seconds)
-        "powTargetSpacing": 1000
-    }
+  // the block duration in milliseconds
+  "slotDuration": 2000,
+  // public keys for bls signing
+  "authorities": [],
+  // evm addresses for each authority (to receive fees)
+  "federation": [],
+  // public keys for secp256k1 signing
+  "federationBitcoinPubkeys": [],
+  // initial PoW mining difficulty
+  "bits": 553713663,
+  // should be the same as the geth `genesis.json`
+  "chainId": 263634,
+  // stall block production if no AuxPow is received
+  "maxBlocksWithoutPow": 10,
+  // set the scanning height, use latest height for testnet or mainnet
+  "bitcoinStartHeight": 0,
+  "retargetParams": {
+    // disable retargeting so we always keep the same target
+    "powNoRetargeting": false,
+    // the maximum target allowed
+    "powLimit": 553713663,
+    // expected difficulty adjustment period (in seconds)
+    "powTargetTimespan": 12000,
+    // expected block time (in seconds)
+    "powTargetSpacing": 1000
+  }
 }
 ```
 

@@ -197,6 +197,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
         self.signature.verify(public_keys, message)
     }
 
+    #[allow(dead_code)]
     pub fn is_signed_by(&self, authority_index: u8) -> bool {
         self.signature.is_signed_by(authority_index)
     }

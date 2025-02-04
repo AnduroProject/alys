@@ -239,8 +239,7 @@ impl<T: Database> UtxoManager<T> {
         // deduct fees from the pegout outputs
         let total_weight = tx.weight();
         let total_fee = fee_rate.fee_wu(total_weight);
-        // note: adding `num_pegouts - 1` to get a rounded up division
-        let fee_per_output = (total_fee + num_pegouts - 1) / num_pegouts;
+        let fee_per_output = total_fee.div_ceil(num_pegouts);
         for output in tx.output.iter_mut().take(num_pegouts as usize) {
             if output.value <= fee_per_output {
                 return Err(Error::FeesExceedPegoutValue);

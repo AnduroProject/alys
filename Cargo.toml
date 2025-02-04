@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "app",
-    "crates/federation",
-    "crates/miner"
-]
+members = ["app", "crates/federation", "crates/miner"]
 
 resolver = "2"
 
@@ -17,6 +13,7 @@ serde_derive = "1.0.116"
 eyre = "0.6"
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4.3"
+num-derive = "0.4"
 
 # bitcoin
 bitcoin = "0.30.0"

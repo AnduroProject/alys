@@ -1,0 +1,94 @@
+name: Rust
+on:
+  pull_request:
+    # No branches specified, will trigger on all pull request events
+
+permissions:
+  contents: write
+  deployments: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C target-cpu=native"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: olix0r/cargo-action-fmt/setup@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint src
+        run: cargo clippy --message-format=json -- -D warnings | cargo-action-fmt
+
+      - name: Lint tests
+        run: cargo clippy --tests --message-format=json -- -D warnings | cargo-action-fmt
+
+      - name: Setup Bitcoin Core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+          curl -sL https://bitcoincore.org/bin/bitcoin-core-26.2/bitcoin-26.2-x86_64-linux-gnu.tar.gz | tar xz -C /tmp
+          sudo mv /tmp/bitcoin-26.2/bin/* /usr/local/bin/
+
+      - name: Configure regtest
+        run: |
+          mkdir -p ~/.bitcoin
+          echo "regtest=1
+          [regtest]
+          server=1
+          rpcuser=rpcuser
+          rpcpassword=rpcpassword
+          rpcport=18443
+          rpcallowip=0.0.0.0/0
+          fallbackfee=0.0002" > ~/.bitcoin/bitcoin.conf
+
+      - name: Start bitcoind
+        run: bitcoind -daemon
+
+      - name: Wait for Bitcoin Core readiness
+        run: |
+          until bitcoin-cli -regtest getblockchaininfo &> /dev/null; do
+            echo "Waiting for Bitcoin Core to initialize..."
+            sleep 1
+          done
+
+      - name: Generate initial blocks
+        run: |
+          bitcoin-cli -regtest createwallet "federation-test"
+          bitcoin-cli -regtest generatetoaddress 101 $(bitcoin-cli -regtest getnewaddress)
+          bitcoin-cli -regtest getbalance
+
+      - name: Install Geth
+        run: |
+          curl -sL https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.14.13-eb00f169.tar.gz | tar xz
+          sudo mv geth-linux-amd64-1.14.13-eb00f169/geth /usr/local/bin/
+          geth version
+
+      - name: Start Geth
+        run: ./scripts/start_geth.sh &
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - name: Build & Test
+        run: |
+          cargo build --release
+          cargo test --release --no-fail-fast --verbose -- --nocapture --test-threads=1

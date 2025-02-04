@@ -16,7 +16,6 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::field::debug;
 use tracing::{debug, trace};
 use types::{
     Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
@@ -264,9 +263,9 @@ impl Engine {
     }
 
     // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/execution_layer/src/lib.rs#L1634
-    pub async fn get_payload_by_tag_from_engine<'a>(
+    pub async fn get_payload_by_tag_from_engine(
         &self,
-        query: BlockByNumberQuery<'a>,
+        query: BlockByNumberQuery<'_>,
     ) -> Result<ExecutionPayloadCapella<MainnetEthSpec>, Error> {
         // TODO: handle errors
         let execution_block = self.api.get_block_by_number(query).await.unwrap().unwrap();
