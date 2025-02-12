@@ -116,6 +116,29 @@ services:
     ports:
       - 3000:3000
 
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    container_name: bitcoin_node
+    restart: always
+    ports:
+      - 18333:18333
+      - 18443:18443
+    volumes:
+      - ./data/bitcoin:$PWD/.bitcoin
+    command:
+      -printtoconsole
+      -debug=1
+      -regtest=1
+      -fallbackfee=0.002
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0
+      -server
+      -rpcuser=rpcuser
+      -rpcpassword=rpcpassword
+      -port=18333
+      -rpcport=18443
+
+
 volumes:
   logs:
     driver: local
