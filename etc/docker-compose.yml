@@ -112,7 +112,6 @@ services:
       - http://execution:8545
     depends_on:
       - execution
-      - bitcoin-core
     ports:
       - 3000:3000
 
