@@ -88,6 +88,7 @@ services:
     image: ghcr.io/anduroproject/alys:60-block-unkown-merge-mine
 
     volumes:
+      - ./config:/lib/alys/config
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
     environment:
@@ -96,6 +97,8 @@ services:
     command:
       - /bin/alys
       - --dev
+      - --chain
+      - /lib/alys/config/chain.json
       - --geth-url
       - http://execution:8551/
       - --db-path
@@ -103,7 +106,7 @@ services:
       - --wallet-path
       - /lib/alys/data/wallet
       - --bitcoin-rpc-url
-      - http://bitcoin-core:18443
+      - http://{{ BTC_NODE_IP }}:18332
       - --bitcoin-rpc-user
       - rpcuser
       - --bitcoin-rpc-pass
