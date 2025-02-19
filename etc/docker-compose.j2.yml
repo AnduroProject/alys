@@ -113,6 +113,8 @@ services:
       - rpcpassword
       - --geth-execution-url
       - http://execution:8545
+      - --remote-bootnode
+      - /ip4/{{ BOOTNODE_IP_1 }}/tcp/55444/ip4/{{ BOOTNODE_IP_2 }}/tcp/55444/ip4/{{ BOOTNODE_IP_3 }}/tcp/55444
     depends_on:
       - execution
     ports:
