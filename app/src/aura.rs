@@ -113,11 +113,7 @@ impl Aura {
     ) -> Result<bool, AuraError> {
         self.check_signed_by_author(block)?;
 
-        let required_signatures = if block.message.execution_payload.block_number > 285450 {
-            ((self.authorities.len() * 2) + 2) / 3
-        } else {
-            1
-        };
+        let required_signatures = ((self.authorities.len() * 2) + 2) / 3;
 
         if block.num_approvals() < required_signatures {
             return Ok(false);
