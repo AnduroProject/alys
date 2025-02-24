@@ -31,9 +31,9 @@ services:
         --authrpc.port 8551
         --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
         --http --http.addr 0.0.0.0 --http.port 8545
-        --http.api "debug,net,eth,web3,txpool"
+        --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
         --http.corsdomain "*"
-        --ws.api "eth,net,web3,debug,txpool"
+        --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
         --ws
         --ws.addr "0.0.0.0"
         --ws.port 8456
