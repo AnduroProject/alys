@@ -96,6 +96,9 @@ pub struct App {
     #[arg(long, default_value_t = 0)]
     pub p2p_port: u16,
 
+    #[arg(long, default_value = "0.0.0.0")]
+    pub p2p_listen_addr: String,
+
     #[arg(long)]
     pub remote_bootnode: Option<String>,
 
@@ -181,7 +184,7 @@ impl App {
         let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
 
         let network =
-            crate::network::spawn_network_handler(self.p2p_port, self.remote_bootnode).await?;
+            crate::network::spawn_network_handler(self.p2p_listen_addr, self.p2p_port, self.remote_bootnode).await?;
 
         let chain_spec = self.chain_spec.expect("Chain spec is configured");
         let authorities = chain_spec.authorities.clone();

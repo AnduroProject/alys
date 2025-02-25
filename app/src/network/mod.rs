@@ -374,6 +374,7 @@ impl NetworkBackend {
 }
 
 pub async fn spawn_network_handler(
+    addr: String,
     port: u16,
     remote_bootnode: Option<String>,
 ) -> Result<Client, Error> {
@@ -402,8 +403,8 @@ pub async fn spawn_network_handler(
         .subscribe(&GossipKind::PegoutSignatures.topic())?;
 
     // Listen on all interfaces and whatever port the OS assigns
-    swarm.listen_on(format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse()?)?;
-    swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{port}").parse()?)?;
+    swarm.listen_on(format!("/ip4/{addr}/udp/{port}/quic-v1").parse()?)?;
+    swarm.listen_on(format!("/ip4/{addr}/tcp/{port}").parse()?)?;
     let backend = NetworkBackend {
         front_to_back_rx: rx,
         swarm,
@@ -414,6 +415,7 @@ pub async fn spawn_network_handler(
     });
 
     if let Some(bootnode) = remote_bootnode {
+        trace!("Dialing bootnode: {}", bootnode);
         let address = Multiaddr::from_str(&bootnode)?;
         client.dial(address).await?;
     }
