@@ -632,12 +632,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let block_number = unverified_block.message.execution_payload.block_number;
 
-        if block_number > 285450 && self.is_validator {
-            self.bitcoin_wallet.read().await.check_payment_proposal(
-                required_outputs,
-                unverified_block.message.pegout_payment_proposal.as_ref(),
-            )?;
-        }
+        self.bitcoin_wallet.read().await.check_payment_proposal(
+            required_outputs,
+            unverified_block.message.pegout_payment_proposal.as_ref(),
+        )?;
 
         trace!("Pegout proposal is valid");
         Ok(())

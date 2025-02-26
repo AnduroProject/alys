@@ -17,7 +17,7 @@
 
     ],
     "bits": 486604799,
-    "chainId": 212121,
+    "chainId": 727272,
     "maxBlocksWithoutPow": 500000000000,
     "bitcoinStartHeight": 0,
     "retargetParams": {

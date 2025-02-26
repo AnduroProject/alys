@@ -213,17 +213,6 @@ impl App {
 
         bitcoin_addresses.push(bitcoin_federation.taproot_address.clone());
 
-        if chain_spec.federation_bitcoin_pubkeys.len() > 3 {
-            {
-                let original_federation_set = chain_spec.federation_bitcoin_pubkeys[0..3].to_vec();
-                let og_threshold = calculate_threshold(original_federation_set.len());
-                let og_bitcoin_federation =
-                    Federation::new(original_federation_set, og_threshold, self.bitcoin_network);
-
-                bitcoin_addresses.push(og_bitcoin_federation.taproot_address.clone());
-            }
-        }
-
         let wallet_path = self
             .wallet_path
             .unwrap_or(format!("{DEFAULT_ROOT_DIR}/wallet"));
