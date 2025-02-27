@@ -14,7 +14,6 @@ services:
       - ./data/execution/node:/opt/alys/execution/data
       - ./config:/opt/alys/execution/config
       - ./jwttoken:/opt/alys/execution/config/jwt:ro
-    # https://paradigmxyz.github.io/reth/run/troubleshooting.html#concurrent-database-access-error-using-containersdocker
     pid: host
     environment:
       RUST_LOG: info
@@ -22,10 +21,10 @@ services:
 
     command: > 
         node
-        --chain "opt/alys/execution/config/genesis.json"
+        --chain "/opt/alys/execution/config/genesis.json"
         --log.file.directory /opt/alys/execution/logs
         --datadir "/opt/alys/execution/data"
-        --config "opt/alys/execution/config/eth-config.toml"
+        --config "/opt/alys/execution/config/eth-config.toml"
         --metrics 0.0.0.0:9001
         --authrpc.addr 0.0.0.0
         --authrpc.port 8551
@@ -85,8 +84,10 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:60-block-unkown-merge-mine
-
+    image: ghcr.io/anduroproject/alys:72-testnet-4
+    ports:
+      - 3000:3000
+      - 55444:55444
     volumes:
       - ./config:/lib/alys/config
       - ./data/alys/db/:/lib/alys/data/db
@@ -96,7 +97,6 @@ services:
       RUST_BACKTRACE: full
     command:
       - /bin/alys
-      - --dev
       - --chain
       - /lib/alys/config/chain.json
       - --geth-url
@@ -111,14 +111,23 @@ services:
       - rpcuser
       - --bitcoin-rpc-pass
       - rpcpassword
+      - --bitcoin-network
+      - testnet
       - --geth-execution-url
       - http://execution:8545
       - --remote-bootnode
-      - /ip4/{{ BOOTNODE_IP_1 }}/tcp/55444/ip4/{{ BOOTNODE_IP_2 }}/tcp/55444/ip4/{{ BOOTNODE_IP_3 }}/tcp/55444
+      - {{ bootnode_arg }}
+      - --aura-secret-key
+      - {{aura_secret_key}}
+      - --bitcoin-secret-key
+      - {{btc_secret_key}}
+      - --no-mine
+      - --p2p-port
+      - "55444"
+#      - --p2p-listen-address
+#      - {{hostvars[inventory_hostname].ansible_host}}
     depends_on:
       - execution
-    ports:
-      - 3000:3000
 
 volumes:
   logs:
