@@ -116,11 +116,11 @@ services:
       - --geth-execution-url
       - http://execution:8545
       - --remote-bootnode
-      - {{ bootnode_arg }}
+      - {{ BOOTNODE_ARG }}
       - --aura-secret-key
-      - {{aura_secret_key}}
+      - {{AURA_SECRET_KEY}}
       - --bitcoin-secret-key
-      - {{btc_secret_key}}
+      - {{BTC_SECRET_KEY}}
       - --no-mine
       - --p2p-port
       - "55444"
