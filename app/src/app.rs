@@ -15,6 +15,7 @@ use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
+use execution_layer::auth::JwtKey;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -182,9 +183,10 @@ impl App {
         info!("Head: {:?}", disk_store.get_head());
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
-        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url);
+        // TODO: Combine instantiation of engine & execution apis into Engine::new
+        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(self.jwt_secret.as_slice()).unwrap());
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
+        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc, self.jwt_secret.as_slice());
 
         let network =
             crate::network::spawn_network_handler(self.p2p_listen_addr, self.p2p_port, self.remote_bootnode).await?;
