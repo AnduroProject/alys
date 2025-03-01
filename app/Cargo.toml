@@ -72,3 +72,6 @@ version = "0.52"
 default-features = false
 features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
 
+[dev-dependencies]
+tempfile = "3.8.1"
+

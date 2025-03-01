@@ -77,14 +77,17 @@ pub struct Engine {
     pub api: HttpJsonRpc,
     pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
+    jwt_key: JwtKey,
+
 }
 
 impl Engine {
-    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc) -> Self {
+    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc, jwt_key_bytes: &[u8]) -> Self {
         Self {
             api,
             execution_api,
             finalized: Default::default(),
+            jwt_key: JwtKey::from_slice(jwt_key_bytes).unwrap(),
         }
     }
 
@@ -324,8 +327,8 @@ impl Engine {
     }
 }
 
-pub fn new_http_engine_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
-    let rpc_auth = Auth::new(JwtKey::from_slice(&DEFAULT_JWT_SECRET).unwrap(), None, None);
+pub fn new_http_engine_json_rpc(url_override: Option<String>, jwt_key: JwtKey) -> HttpJsonRpc {
+    let rpc_auth = Auth::new(jwt_key, None, None);
     let rpc_url =
         SensitiveUrl::parse(&url_override.unwrap_or(DEFAULT_EXECUTION_ENDPOINT.to_string()))
             .unwrap();

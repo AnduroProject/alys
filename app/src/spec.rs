@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
 
 use crate::auxpow_miner::BitcoinConsensusParams;
+use crate::error::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -73,6 +74,7 @@ impl Default for ChainSpec {
         DEV.clone()
     }
 }
+
 pub fn genesis_value_parser(s: &str) -> eyre::Result<ChainSpec, eyre::Error> {
     Ok(match s {
         "dev" => DEV.clone(),
@@ -81,4 +83,37 @@ pub fn genesis_value_parser(s: &str) -> eyre::Result<ChainSpec, eyre::Error> {
             serde_json::from_str(&raw)?
         }
     })
+}
+
+pub fn hex_file_parser(path: &str) -> eyre::Result<Vec<u8>, eyre::Error> {
+    Ok(hex::decode(&std::fs::read_to_string(PathBuf::from(path))?)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+    use super::*;
+    use tempfile::{tempdir, NamedTempFile};
+    use std::io::Write;
+
+    #[test]
+    fn should_successfully_decode_hex_file() {
+        const HEX_STRING: &str = "Fingers crossed";
+        let start_hex_bytes = HEX_STRING.as_bytes();
+        let dir = tempdir().unwrap();
+        
+        let file_path = dir.path().join("test_hex.hex");
+        let mut file = File::create(file_path.clone()).unwrap();
+        write!(file, "{}",hex::encode(HEX_STRING)).unwrap();
+
+        let hex_bytes = hex_file_parser(file_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(start_hex_bytes.len(), hex_bytes.len());
+        for i in 0..start_hex_bytes.len() {
+            assert_eq!(start_hex_bytes[i], hex_bytes[i]);
+        }
+
+        drop(file);
+        dir.close().unwrap();
+    }
 }

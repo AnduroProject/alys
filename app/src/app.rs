@@ -2,7 +2,7 @@ use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
-use crate::spec::{genesis_value_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
+use crate::spec::{genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bls::{Keypair, SecretKey};
 use bridge::{
@@ -131,6 +131,9 @@ pub struct App {
 
     #[clap(long, default_value("regtest"))]
     pub bitcoin_network: Network,
+
+    #[clap(long, required = true, value_parser = hex_file_parser)]
+    pub jwt_secret: Vec<u8>,
 }
 
 impl App {
