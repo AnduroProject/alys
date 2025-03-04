@@ -124,8 +124,6 @@ services:
       - --no-mine
       - --p2p-port
       - "55444"
-#      - --p2p-listen-address
-#      - {{hostvars[inventory_hostname].ansible_host}}
     depends_on:
       - execution
 
