@@ -92,6 +92,7 @@ services:
       - ./config:/lib/alys/config
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
+    pull_policy: always
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
@@ -118,9 +119,9 @@ services:
       - --remote-bootnode
       - {{ BOOTNODE_ARG }}
       - --aura-secret-key
-      - {{AURA_SECRET_KEY}}
+      - {{ AURA_SECRET_KEY }}
       - --bitcoin-secret-key
-      - {{BTC_SECRET_KEY}}
+      - {{ BTC_SECRET_KEY }}
       - --no-mine
       - --p2p-port
       - "55444"
