@@ -10,10 +10,12 @@ services:
       - '8456:8456' # ws
       - '8551:8551' # engine
     volumes:
-      - ./data/execution/logs:/opt/alys/execution/logs
-      - ./data/execution/node:/opt/alys/execution/data
-      - ./config:/opt/alys/execution/config
-      - ./jwttoken:/opt/alys/execution/config/jwt:ro
+      - /opt/alys/lib/etc/data/execution/logs:/opt/alys/execution/logs
+      - /opt/alys/lib/etc/data/execution/node:/opt/alys/execution/data
+      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml:ro
+      - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
+      - /opt/alys/lib/etc/config/genesis.json:/opt/alys/execution/config/genesis.json:ro
+      - /opt/alys/lib/etc/jwttoken:/opt/alys/execution/config/jwt:ro
     pid: host
     environment:
       RUST_LOG: info
@@ -28,7 +30,7 @@ services:
         --metrics 0.0.0.0:9001
         --authrpc.addr 0.0.0.0
         --authrpc.port 8551
-        --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
+        --authrpc.jwtsecret /opt/alys/execution/config/jwtsecret.hex
         --http --http.addr 0.0.0.0 --http.port 8545
         --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
         --http.corsdomain "*"
@@ -38,7 +40,7 @@ services:
         --ws.port 8456
         --ws.origins "*"
         --port 30303
-        
+
 
   prometheus:
     container_name: prometheus
@@ -89,13 +91,14 @@ services:
       - 3000:3000
       - 55444:55444
     volumes:
-      - ./config/:/lib/alys/config
-      - ./data/alys/db/:/lib/alys/data/db
-      - ./data/alys/wallet/:/lib/alys/data/wallet
+      - /opt/alys/lib/etc/config/chain.json:/lib/alys/config/chain.json
+      - /opt/alys/lib/etc/data/alys/db/:/lib/alys/data/db
+      - /opt/alys/lib/etc/data/alys/wallet/:/lib/alys/data/wallet
       - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
+
     pull_policy: always
     environment:
-      RUST_LOG: info
+      RUST_LOG: debug
       RUST_BACKTRACE: full
     command:
       - /bin/alys
@@ -128,6 +131,8 @@ services:
       - "55444"
       - --jwt-secret
       - /opt/alys/execution/config/jwtsecret.hex
+#      - --p2p-listen-address
+#      - {{hostvars[inventory_hostname].ansible_host}}
     depends_on:
       - execution
 
@@ -138,4 +143,3 @@ volumes:
     driver: local
   grafanadata:
     driver: local
- 
