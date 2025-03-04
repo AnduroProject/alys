@@ -134,7 +134,7 @@ pub struct App {
     pub bitcoin_network: Network,
 
     #[clap(long, required = true, value_parser = hex_file_parser)]
-    pub jwt_secret: Vec<u8>,
+    pub jwt_secret: [u8;32],
 }
 
 impl App {
@@ -184,9 +184,9 @@ impl App {
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
         // TODO: Combine instantiation of engine & execution apis into Engine::new
-        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(self.jwt_secret.as_slice()).unwrap());
+        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(&self.jwt_secret).unwrap());
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc, self.jwt_secret.as_slice());
+        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc, self.jwt_secret);
 
         let network =
             crate::network::spawn_network_handler(self.p2p_listen_addr, self.p2p_port, self.remote_bootnode).await?;

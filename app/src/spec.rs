@@ -85,8 +85,8 @@ pub fn genesis_value_parser(s: &str) -> eyre::Result<ChainSpec, eyre::Error> {
     })
 }
 
-pub fn hex_file_parser(path: &str) -> eyre::Result<Vec<u8>, eyre::Error> {
-    Ok(hex::decode(&std::fs::read_to_string(PathBuf::from(path))?)?)
+pub fn hex_file_parser(path: &str) -> eyre::Result<[u8; 32], eyre::Error> {
+    Ok(hex::decode(&std::fs::read_to_string(PathBuf::from(path))?)?.try_into().expect("Expected 32 bytes"))
 }
 
 #[cfg(test)]
