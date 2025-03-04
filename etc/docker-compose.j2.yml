@@ -89,9 +89,10 @@ services:
       - 3000:3000
       - 55444:55444
     volumes:
-      - ./config:/lib/alys/config
+      - ./config/:/lib/alys/config
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
+      - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
     pull_policy: always
     environment:
       RUST_LOG: info
@@ -125,6 +126,8 @@ services:
       - --no-mine
       - --p2p-port
       - "55444"
+      - --jwt-secret
+      - /opt/alys/execution/config/jwtsecret.hex
     depends_on:
       - execution
 
