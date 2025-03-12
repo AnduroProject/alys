@@ -1,0 +1,141 @@
+services:
+  execution:
+    container_name: execution
+    restart: unless-stopped
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    ports:
+      - '9001:9001' # metrics
+      - '30303:30303' # eth/66 peering
+      - '8545:8545' # rpc
+      - '8456:8456' # ws
+      - '8551:8551' # engine
+    volumes:
+      - /opt/alys/lib/etc/data/execution/logs:/opt/alys/execution/logs
+      - /opt/alys/lib/etc/data/execution/node:/opt/alys/execution/data
+      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml:ro
+      - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
+      - /opt/alys/lib/etc/config/genesis.json:/opt/alys/execution/config/genesis.json:ro
+      - /opt/alys/lib/etc/jwttoken:/opt/alys/execution/config/jwt:ro
+    pid: host
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+
+    command: > 
+        node
+        --chain "/opt/alys/execution/config/genesis.json"
+        --log.file.directory /opt/alys/execution/logs
+        --datadir "/opt/alys/execution/data"
+        --config "/opt/alys/execution/config/eth-config.toml"
+        --metrics 0.0.0.0:9001
+        --authrpc.addr 0.0.0.0
+        --authrpc.port 8551
+        --authrpc.jwtsecret /opt/alys/execution/config/jwtsecret.hex
+        --http --http.addr 0.0.0.0 --http.port 8545
+        --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+        --http.corsdomain "*"
+        --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+        --ws
+        --ws.addr "0.0.0.0"
+        --ws.port 8456
+        --ws.origins "*"
+        --port 30303
+
+
+  prometheus:
+    container_name: prometheus
+    restart: unless-stopped
+    image: prom/prometheus
+    depends_on:
+      - execution
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - prometheusdata:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+
+  grafana:
+    container_name: grafana
+    restart: unless-stopped
+    image: grafana/grafana:10.3.3
+    depends_on:
+      - execution
+      - prometheus
+    ports:
+      - 3003:3000
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning_temp/dashboards
+    # 1. Copy dashboards from temp directory to prevent modifying original host files
+    # 2. Replace Prometheus datasource placeholder with the actual name
+    # 3. Run Grafana
+    entrypoint: >
+      sh -c "cp -r /etc/grafana/provisioning_temp/dashboards/. /etc/grafana/provisioning/dashboards &&
+             find /etc/grafana/provisioning/dashboards/ -name '*.json' -exec sed -i 's/$${DS_PROMETHEUS}/Prometheus/g' {} \+ &&
+             /run.sh"
+
+  consensus:
+    container_name: consensus
+    restart: unless-stopped
+#    build:
+#      context: ../
+#      dockerfile: Dockerfile
+    image: ghcr.io/anduroproject/alys:72-testnet-4
+    ports:
+      - 3000:3000
+      - 55444:55444
+    volumes:
+      - /opt/alys/lib/etc/config/chain-full.json:/lib/alys/config/chain.json
+      - /opt/alys/lib/etc/data/alys/db/:/lib/alys/data/db
+      - /opt/alys/lib/etc/data/alys/wallet/:/lib/alys/data/wallet
+      - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
+
+    pull_policy: always
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+    command:
+      - /bin/alys
+      - --chain
+      - /lib/alys/config/chain.json
+      - --geth-url
+      - http://execution:8551/
+      - --db-path
+      - /lib/alys/data/db
+      - --wallet-path
+      - /lib/alys/data/wallet
+      - --geth-execution-url
+      - http://execution:8545
+      - --remote-bootnode
+      - {{ BOOTNODE_ARG }}
+      - --no-mine
+      - --p2p-port
+      - "55444"
+      - --jwt-secret
+      - /opt/alys/execution/config/jwtsecret.hex
+#      - --bitcoin-rpc-url
+#      - http://{{ BTC_NODE_IP }}:18332
+#      - --bitcoin-rpc-user
+#      - rpcuser
+#      - --bitcoin-rpc-pass
+#      - rpcpassword
+#      - --bitcoin-network
+#      - testnet
+#      - --p2p-listen-address
+#      - {{hostvars[inventory_hostname].ansible_host}}
+    depends_on:
+      - execution
+
+volumes:
+  logs:
+    driver: local
+  prometheusdata:
+    driver: local
+  grafanadata:
+    driver: local
