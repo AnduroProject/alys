@@ -1212,26 +1212,28 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
                             // TODO: we need to sync before processing (this is triggered by proposal)
                             // TODO: additional case needed where head height is not behind
+                            // self.clone().sync(Some((number - head_height) as u32)).await;
+                            self.clone().sync().await;
                         }
 
                         match chain.process_block(x.clone()).await {
-                            Err(x) => {
-                                error!("Got error while processing: {x:?}");
-                            }
-                            Ok(Some(our_approval)) => {
-                                // broadcast our approval
-                                let block_hash = x.canonical_root();
-                                info!("✅ Sending approval for {block_hash}");
-                                let _ = self
-                                    .network
-                                    .send(PubsubMessage::ApproveBlock(ApproveBlock {
-                                        block_hash,
-                                        signature: our_approval.into(),
-                                    }))
-                                    .await;
-                            }
-                            Ok(None) => {}
-                        }
+                        //     Err(x) => {
+                        //         error!("Got error while processing: {x:?}");
+                        //     }
+                        //     Ok(Some(our_approval)) => {
+                        //         // broadcast our approval
+                        //         let block_hash = x.canonical_root();
+                        //         info!("✅ Sending approval for {block_hash}");
+                        //         let _ = self
+                        //             .network
+                        //             .send(PubsubMessage::ApproveBlock(ApproveBlock {
+                        //                 block_hash,
+                        //                 signature: our_approval.into(),
+                        //             }))
+                        //             .await;
+                        //     }
+                        //     Ok(None) => {}
+                        // }
                     }
                     PubsubMessage::ApproveBlock(approval) => {
                         info!("✅ Received approval for block {}", approval.block_hash);
