@@ -110,7 +110,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_URL",
         default_value_if("dev", ArgPredicate::IsPresent, Some("http://0.0.0.0:18443")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_url: Option<String>,
 
@@ -118,7 +118,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_USER",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcuser")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_user: Option<String>,
 
@@ -126,7 +126,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_PASS",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcpassword")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_pass: Option<String>,
 
