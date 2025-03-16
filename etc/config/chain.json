@@ -1,5 +1,5 @@
 {
-    "slotDuration": 3000,
+    "slotDuration": 5000,
     "authorities": [
         "0x8dd89bf44ae1b76f5e105dddb56ca27da51ae04120869c794a66dbd755f2102881b0eabac42c3f72e59a78e9feaec64d",
         "0xad1b7a31e6176e48a89336786ae8b9950da04fee6fa901b0bc23ce15136b6afff9f42a513b25fe6ccdec19e5a3fddb66",

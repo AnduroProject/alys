@@ -1345,7 +1345,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             block_heights.push(current_height);
             blocks.push(current);
         }
-        trace!("block_heights: {:?}", block_heights);
+        // trace!("block_heights: {:?}", block_heights);
 
         let mut block_counter = HashMap::new();
 
@@ -1358,7 +1358,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
         });
 
-        debug!("block_counter: {:#?}", block_counter);
+        // debug!("block_counter: {:#?}", block_counter);
 
         Ok(blocks)
     }
@@ -1463,7 +1463,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
                                 .await
                             {
-                                error!("Failed to respond to rpc BlocksByRange request: {err:?}");
+                                // error!("Failed to respond to rpc BlocksByRange request: {err:?}");
                             }
                         }
 
