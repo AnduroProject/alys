@@ -1286,7 +1286,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             start_height = current_height;
             let current = match self.storage.get_block_by_height(current_height) {
                 Ok(Some(x)) => {
-                    debug!("Got block at height {}", current_height);
+                    // debug!("Got block at height {}", current_height);
                     x
                 }
                 Ok(None) => {
@@ -1441,7 +1441,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         tokio::spawn(async move {
             loop {
                 let msg = listener.recv().await.unwrap();
-                info!("Got rpc request {msg:?}");
+                // info!("Got rpc request {msg:?}");
 
                 #[allow(clippy::single_match)]
                 match msg.event {
