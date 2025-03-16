@@ -463,7 +463,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .ok_or(Error::MissingParent)
     }
 
-    // #[tracing::instrument(name = "block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
+    #[tracing::instrument(name = "process_block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
     async fn process_block(
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
@@ -489,6 +489,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .as_ref()
             .is_some_and(|x| x.height >= unverified_block.message.execution_payload.block_number)
         {
+            // TODO: Better handling for this specific case considering it could be considered a soft error
             // ignore proposals at old heights, this can happen when a new
             // node joins the network but has not yet synced the chain
             // also when another node proposes at the same height
@@ -1210,7 +1211,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         // sync first then process block so we don't skip and trigger a re-sync
                         if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
                             // TODO: we need to sync before processing (this is triggered by proposal)
-                            self.clone().sync().await;
+                            // TODO: additional case needed where head height is not behind
                         }
 
                         match chain.process_block(x.clone()).await {
@@ -1340,11 +1341,24 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     return Err(err);
                 }
             };
-            debug!("Got block at height {}", current_height);
+            // debug!("Got block at height {}", current_height);
             block_heights.push(current_height);
             blocks.push(current);
         }
         trace!("block_heights: {:?}", block_heights);
+
+        let mut block_counter = HashMap::new();
+
+        blocks.iter().for_each(|block| {
+            let block_height = block.message.execution_payload.block_number;
+            if let Some(count) = block_counter.get_mut(&block_height) {
+                *count += 1;
+            } else {
+                block_counter.insert(block_height, 1);
+            }
+        });
+
+        debug!("block_counter: {:#?}", block_counter);
 
         Ok(blocks)
     }
