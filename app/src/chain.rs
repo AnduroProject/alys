@@ -1217,23 +1217,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         }
 
                         match chain.process_block(x.clone()).await {
-                        //     Err(x) => {
-                        //         error!("Got error while processing: {x:?}");
-                        //     }
-                        //     Ok(Some(our_approval)) => {
-                        //         // broadcast our approval
-                        //         let block_hash = x.canonical_root();
-                        //         info!("✅ Sending approval for {block_hash}");
-                        //         let _ = self
-                        //             .network
-                        //             .send(PubsubMessage::ApproveBlock(ApproveBlock {
-                        //                 block_hash,
-                        //                 signature: our_approval.into(),
-                        //             }))
-                        //             .await;
-                        //     }
-                        //     Ok(None) => {}
-                        // }
+                            Err(x) => {
+                                error!("Got error while processing: {x:?}");
+                            }
+                            Ok(Some(our_approval)) => {
+                                // broadcast our approval
+                                let block_hash = x.canonical_root();
+                                info!("✅ Sending approval for {block_hash}");
+                                let _ = self
+                                    .network
+                                    .send(PubsubMessage::ApproveBlock(ApproveBlock {
+                                        block_hash,
+                                        signature: our_approval.into(),
+                                    }))
+                                    .await;
+                            }
+                            Ok(None) => {}
+                        }
                     }
                     PubsubMessage::ApproveBlock(approval) => {
                         info!("✅ Received approval for block {}", approval.block_hash);
