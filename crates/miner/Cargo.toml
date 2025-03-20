@@ -11,4 +11,5 @@ eyre = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 hex = { workspace = true }
+prometheus = { workspace = true }
 app = {  path = "../../app" }

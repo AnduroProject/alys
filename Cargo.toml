@@ -13,7 +13,6 @@ serde_derive = "1.0.116"
 eyre = "0.6"
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4.3"
-num-derive = "0.4"
 
 # bitcoin
 bitcoin = "0.30.0"
@@ -23,6 +22,8 @@ bitcoincore-rpc = "0.17"
 ethereum-types = "0.14.1"
 ethers-core = "2.0.11"
 ethers = "2.0.11"
+
+prometheus = "0.13.4"
 
 [profile.dev]
 panic = "abort"
