@@ -12,6 +12,7 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
+prometheus = { workspace = true }
 
 num = "0.4"
 num-traits = "0.2"
