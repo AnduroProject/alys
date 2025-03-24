@@ -1,58 +1,36 @@
 # Start from the latest Rust base image
-FROM rust:bullseye AS builder
-#FROM rust:latest
+FROM rust:bullseye AS chef
+RUN cargo install cargo-chef
 
-# SHELL ["/bin/bash", "-c"]
+FROM chef AS planner
+WORKDIR /opt/alys
 
-# RUN #cargo install --git https://github.com/foundry-rs/foundry --profile local --locked forge cast chisel anvil
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# RUN curl -L https://foundry.paradigm.xyz | bash
-# RUN source ~/.bashrc
-# ENV PATH="~/.foundry/bin:${PATH}"
-# RUN foundryup
+#------------------------------------------------------------------------------------------
+FROM planner AS system-pkg-cache
 
 RUN apt-get update && \
     apt-get install -y cmake && \
     rm -rf /var/lib/apt/lists/*
 
-# Create a new empty shell project
-#WORKDIR /opt
-#RUN USER=root cargo new --bin alys
-WORKDIR /opt/alys
-#
-#RUN mkdir app
-#RUN mv src app
-#
-## Copy over your Manifest files
-#COPY ./Cargo.lock ./Cargo.lock
-#COPY ./Cargo.toml ./Cargo.toml
-#
-#COPY ./app/Cargo.toml ./app/Cargo.toml
-#
-#WORKDIR /opt/alys/crates
-#
-#RUN USER=root cargo new --lib federation
-#COPY ./crates/federation/Cargo.toml ./federation/Cargo.toml
-#
-#RUN USER=root cargo new --bin miner
-#COPY ./crates/miner/Cargo.toml ./miner/Cargo.toml
-#
-#WORKDIR /opt/alys
-#
-## This build step will cache your dependencies
-#RUN cargo build --release
-#RUN rm -r app crates
+#------------------------------------------------------------------------------------------
 
-# Copy your source files
+FROM system-pkg-cache AS builder
+WORKDIR /opt/alys
+COPY --from=planner /opt/alys/recipe.json recipe.json
+
+RUN cargo chef cook --release --recipe-path recipe.json
+
 COPY . .
 
-# Build for release.
-# This will be much slower, but the resulting artifact will be faster.
-#RUN rm ./target/release/deps/app*
 RUN cargo build --release --bin app
-#
+
+#------------------------------------------------------------------------------------------
+
 ## Our second stage will use Debian
-FROM debian:bullseye-slim
+FROM debian:bullseye-slim AS runtime
 #
 ## Copy the build artifact from the builder stage and set the startup command
 COPY --from=builder /opt/alys/target/release/app /bin/alys

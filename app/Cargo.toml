@@ -6,11 +6,17 @@ edition = "2021"
 [dependencies]
 
 # lighthouse
-execution_layer = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
-types = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
-store = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
-bls = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+#execution_layer = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+#sensitive_url = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+#types = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+#store = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+#bls = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+
 
 # workspace
 bridge = { package = "federation", path = "../crates/federation" }
@@ -75,4 +81,3 @@ features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "to
 
 [dev-dependencies]
 tempfile = "3.8.1"
-
