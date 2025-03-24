@@ -87,7 +87,7 @@ pub struct Bridge {
 impl Bridge {
     const BRIDGE_CONTRACT_ADDRESS: &'static str = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
 
-    pub fn new(bitcoin_core: BitcoinCore, pegin_addresses: Vec<BitcoinAddress>) -> Self {
+    pub fn new(bitcoin_core: BitcoinCore, pegin_addresses: Vec<BitcoinAddress>, required_confirmations: u16) -> Self {
         Self {
             pegin_addresses,
             bitcoin_core,
@@ -320,6 +320,7 @@ mod tests {
                     .unwrap()
                     .assume_checked(),
             ],
+            2,
         );
 
         federation
@@ -339,7 +340,8 @@ mod tests {
                     .parse::<BitcoinAddress<NetworkUnchecked>>()
                     .unwrap()
                     .assume_checked(),
-            ],
+            ],  
+            2,
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)
@@ -361,6 +363,7 @@ mod tests {
                     .unwrap()
                     .assume_checked(),
             ],
+            2,
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)

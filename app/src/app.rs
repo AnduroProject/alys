@@ -273,6 +273,7 @@ impl App {
                     self.bitcoin_rpc_pass.expect("RPC password is configured"),
                 ),
                 bitcoin_addresses,
+                chain_spec.required_btc_txn_confirmations,
             ),
             bitcoin_wallet,
             bitcoin_signature_collector,
