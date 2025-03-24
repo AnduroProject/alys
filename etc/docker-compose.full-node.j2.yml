@@ -12,7 +12,7 @@ services:
     volumes:
       - /opt/alys/lib/etc/data/execution/logs:/opt/alys/execution/logs
       - /opt/alys/lib/etc/data/execution/node:/opt/alys/execution/data
-      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml:ro
+      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml
       - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
       - /opt/alys/lib/etc/config/genesis.json:/opt/alys/execution/config/genesis.json:ro
       - /opt/alys/lib/etc/jwttoken:/opt/alys/execution/config/jwt:ro
