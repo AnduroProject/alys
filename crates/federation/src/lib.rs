@@ -19,8 +19,6 @@ pub use bitcoin_signing::{
 };
 pub use bitcoin_stream::BitcoinCore;
 
-pub const REQUIRED_CONFIRMATIONS: u8 = 12;
-
 pub fn wei_to_sats(wei: U256) -> u64 {
     // eth has 18 decimals, bitcoin 8 --> div by 10^10
     (wei / U256::from(10_000_000_000u64)).as_u64()
@@ -82,6 +80,7 @@ pub struct PegInInfo {
 pub struct Bridge {
     pegin_addresses: Vec<BitcoinAddress>,
     bitcoin_core: BitcoinCore,
+    required_confirmations: u16,
 }
 
 impl Bridge {
@@ -91,6 +90,7 @@ impl Bridge {
         Self {
             pegin_addresses,
             bitcoin_core,
+            required_confirmations,
         }
     }
 
@@ -104,7 +104,7 @@ impl Bridge {
         let mut stream = stream_blocks(
             self.bitcoin_core.clone(),
             start_height,
-            REQUIRED_CONFIRMATIONS.into(),
+            self.required_confirmations.into(),
         )
         .await;
         while let Some(x) = stream.next().await {
@@ -126,7 +126,7 @@ impl Bridge {
         block_hash: &BlockHash,
     ) -> Result<PegInInfo, Error> {
         let block_info = self.bitcoin_core.rpc.get_block_header_info(block_hash)?;
-        if block_info.confirmations < REQUIRED_CONFIRMATIONS.into() {
+        if block_info.confirmations < self.required_confirmations.into() {
             return Err(Error::InsufficientConfirmations(block_info.confirmations));
         }
 
