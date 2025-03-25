@@ -1,5 +1,6 @@
 # Start from the latest Rust base image
 FROM rust:bullseye AS chef
+ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 RUN cargo install cargo-chef
 
 FROM chef AS planner
@@ -12,20 +13,29 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM planner AS system-pkg-cache
 
 RUN apt-get update && \
-    apt-get install -y cmake && \
-    rm -rf /var/lib/apt/lists/*
-
+    apt-get install -y --no-install-recommends cmake ninja-build && \
+        apt-get clean && \
+        rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
 
 FROM system-pkg-cache AS builder
 WORKDIR /opt/alys
+
+# Create mount points for cargo cache
+RUN mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
+
 COPY --from=planner /opt/alys/recipe.json recipe.json
 
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/usr/local/cargo/git \
+  cargo chef cook --recipe-path recipe.json
 
 COPY . .
 
-RUN cargo build --release --bin app
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/usr/local/cargo/git \
+  cargo build --bin app
+#  cargo build --release --bin app
 
 #------------------------------------------------------------------------------------------
 
@@ -33,7 +43,8 @@ RUN cargo build --release --bin app
 FROM debian:bullseye-slim AS runtime
 #
 ## Copy the build artifact from the builder stage and set the startup command
-COPY --from=builder /opt/alys/target/release/app /bin/alys
+#COPY --from=builder /opt/alys/target/release/app /bin/alys
+COPY --from=builder /opt/alys/target/debug/app /bin/alys
 #
 ## Set the startup command to run your binary
 CMD ["alys --dev"]
