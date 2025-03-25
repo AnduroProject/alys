@@ -221,7 +221,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
     target_override: Option<CompactTarget>,
 ) -> Result<CompactTarget> {
     if let Some(target) = target_override {
-       return Ok(target);
+        return Ok(target);
     }
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
         return Ok(CompactTarget::from_consensus(index_last.bits()));

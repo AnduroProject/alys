@@ -1355,9 +1355,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let current_height = original_start_height + i;
             start_height = current_height;
             let current = match self.storage.get_block_by_height(current_height) {
-                Ok(Some(block)) => {
-                    block
-                }
+                Ok(Some(block)) => block,
                 Ok(None) => {
                     debug!(
                         "Block at height {} not found, reverting to previous logic",

@@ -2,6 +2,7 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
 use crate::chain::Chain;
 use crate::error::Error;
+use crate::store::BlockByHeight;
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
 use bitcoin::hashes::Hash;
@@ -18,7 +19,6 @@ use store::ItemStore;
 use tokio::sync::Mutex;
 use tracing::{error, trace};
 use types::MainnetEthSpec;
-use crate::store::BlockByHeight;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {
@@ -279,27 +279,16 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                 )
             }
         },
-        "getblockbyheight" => {
-            match params.get().parse::<u64>() {
-                Ok(target_height) => {
-                    match chain.get_block(target_height) {
-                        Ok(block) => Response::builder().status(hyper::StatusCode::OK).body(
-                            JsonRpcResponseV1 {
-                                result: Some(json!(block)),
-                                error: None,
-                                id,
-                            }
-                            .into(),
-                        ),
-                        Err(e) => {
-                            return Ok(new_json_rpc_error!(
-                                id,
-                                hyper::StatusCode::BAD_REQUEST,
-                                JsonRpcErrorV1::debug_error(e.to_string())
-                            )?)
-                        }
+        "getblockbyheight" => match params.get().parse::<u64>() {
+            Ok(target_height) => match chain.get_block(target_height) {
+                Ok(block) => Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: Some(json!(block)),
+                        error: None,
+                        id,
                     }
-                }
+                    .into(),
+                ),
                 Err(e) => {
                     return Ok(new_json_rpc_error!(
                         id,
@@ -307,8 +296,15 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                         JsonRpcErrorV1::debug_error(e.to_string())
                     )?)
                 }
+            },
+            Err(e) => {
+                return Ok(new_json_rpc_error!(
+                    id,
+                    hyper::StatusCode::BAD_REQUEST,
+                    JsonRpcErrorV1::debug_error(e.to_string())
+                )?)
             }
-        }
+        },
         "getqueuedpow" => match miner.get_queued_auxpow().await {
             Some(queued_pow) => Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {
@@ -381,7 +377,6 @@ pub async fn run_server<DB: ItemStore<MainnetEthSpec>>(
     let addr = SocketAddr::from(([0, 0, 0, 0], rpc_port));
     let miner = Arc::new(Mutex::new(AuxPowMiner::new(chain.clone(), retarget_params)));
 
-
     tracing::info!("Starting RPC server on {}", addr);
     let server = Server::bind(&addr).serve(make_service_fn(move |_conn| {
         let miner = miner.clone();
@@ -422,7 +417,7 @@ mod tests {
     use hyper::{Body, Request};
     use serde_json::json;
     use std::sync::Once;
-    use tracing::{info, debug};
+    use tracing::{debug, info};
 
     // Initialize the logger only once for all tests
     static INIT: Once = Once::new();
@@ -435,11 +430,11 @@ mod tests {
                 .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
                 .with_test_writer() // Use test writer which works well with cargo test
                 .finish();
-            
+
             // Set the subscriber as the default
             tracing::subscriber::set_global_default(subscriber)
                 .expect("Failed to set tracing subscriber");
-            
+
             info!("Test logging initialized");
         });
     }
@@ -449,60 +444,60 @@ mod tests {
         // Setup logger
         setup_logger();
         debug!("Running getblockbyheight RPC parsing test");
-        
+
         // Test the JSON-RPC parsing logic for getblockbyheight
         let json_request = r#"{"method":"getblockbyheight","params":1,"id":1}"#;
-        
+
         // Parse the JSON-RPC request
         let json_req: JsonRpcRequestV1 = serde_json::from_str(json_request).unwrap();
-        
+
         // Verify the method
         assert_eq!(json_req.method, "getblockbyheight");
-        
+
         // Verify the params
         let params = json_req.params.unwrap();
         assert_eq!(params.get().parse::<u64>().unwrap(), 1);
-        
+
         // Verify the ID
         assert_eq!(json_req.id, json!(1));
-        
+
         // Parse the height
         let height: u64 = params.get().parse().unwrap();
         assert_eq!(height, 1);
-        
+
         info!("getblockbyheight RPC parsing test successful");
     }
-    
+
     #[test]
     fn test_getblockbyheight_invalid_params() {
         // Setup logger
         setup_logger();
         debug!("Running getblockbyheight invalid params test");
-        
+
         // Test invalid parameter in the request
         let json_request = r#"{"method":"getblockbyheight","params":"invalid","id":1}"#;
-        
+
         // Parse the JSON-RPC request
         let json_req: JsonRpcRequestV1 = serde_json::from_str(json_request).unwrap();
-       
+
         // Verify the method
         assert_eq!(json_req.method, "getblockbyheight");
-        
+
         // Parse the height (should fail)
         let params = json_req.params.unwrap();
         let height_result = params.get().parse::<u64>();
         assert!(height_result.is_err());
-        
+
         info!("getblockbyheight invalid params test successful");
     }
-    
+
     // Note: This test is a placeholder and will only pass when run with a live node
     #[tokio::test]
     async fn test_getblockbyheight_height_one() {
         // Setup logger
         setup_logger();
         debug!("Running getblockbyheight height one test");
-        
+
         // This test requires a running node with a valid chain that has at least block #1
         // Create the JSON-RPC request for block height 1
         let json_request = r#"{"method":"getblockbyheight","params":"1","id":1}"#;
@@ -510,14 +505,14 @@ mod tests {
             .method("POST")
             .body(Body::from(json_request))
             .unwrap();
-            
+
         // In a real test environment, we would:
         // 1. Have access to a running node with blocks
         // 2. Call http_req_json_rpc with the request and node components
         // 3. Assert on the response structure
 
         trace!("GetBlockByHeight request: {:#?}", req);
-        
+
         info!("getblockbyheight height one test completed");
     }
 }

@@ -116,9 +116,8 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
         {
             // Get the block hash from the block by height index
             Some(block_hash) => {
-                
                 // Use the hash to retrieve the block
-                self.get_block(&Hash256::from_slice(&block_hash))// return the block
+                self.get_block(&Hash256::from_slice(&block_hash)) // return the block
             }
             None => Ok(None),
         }
