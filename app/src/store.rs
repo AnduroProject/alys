@@ -116,14 +116,9 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
         {
             // Get the block hash from the block by height index
             Some(block_hash) => {
+                
                 // Use the hash to retrieve the block
-                self.db
-                    .get_bytes(DbColumn::Block.into(), block_hash.as_slice())
-                    .unwrap()
-                    .map(|block_bytes| {
-                        rmp_serde::from_slice(&block_bytes).map_err(|_| Error::CodecError)
-                    })
-                    .transpose()
+                self.get_block(&Hash256::from_slice(&block_hash))// return the block
             }
             None => Ok(None),
         }

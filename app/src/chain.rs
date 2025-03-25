@@ -20,6 +20,7 @@ use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
+use execution_layer::Error::MissingLatestValidHash;
 use eyre::Result;
 use libp2p::PeerId;
 use std::collections::hash_map::Entry;
@@ -294,6 +295,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Ok(());
         }
         let mut prev_height = 0;
+        let mut rollback_head = false;
 
         // TODO: should we set forkchoice here?
         let (prev, prev_payload_head) = match *(self.head.read().await) {
@@ -308,37 +310,62 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 let prev_payload_hash = prev.message.execution_payload.block_hash;
                 prev_height = prev.message.execution_payload.block_number;
 
-                (x.hash, Some(prev_payload_hash))
+                // make sure that the execution payload is available
+                let prev_payload_body = self
+                    .engine
+                    .api
+                    .get_payload_bodies_by_hash_v1::<MainnetEthSpec>(vec![prev_payload_hash])
+                    .await
+                    .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?;
+
+                debug!(
+                    "Payload body for block {}: {:?}",
+                    prev_payload_hash, prev_payload_body
+                );
+
+                if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
+                    rollback_head = true;
+                    (Hash256::zero(), None)
+                } else {
+                    (x.hash, Some(prev_payload_hash))
+                }
             }
             None => (Hash256::zero(), None),
         };
+        debug!("Previous block: {:?}", prev);
+
+        if rollback_head {
+            warn!("No payload head found");
+            self.rollback_head(prev_height - 1).await?;
+            return Ok(());
+        }
 
         let (mut queued_pow, mut finalized_pegouts): (
             Option<AuxPowHeader>,
             Vec<bitcoin::Transaction>,
         ) = (None, vec![]);
 
-        if prev_height != 359641 {
-            (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
-                None => (None, vec![]),
-                Some(pow) => {
-                    let signature_collector = self.bitcoin_signature_collector.read().await;
-                    let finalized_txs = self
-                        .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
-                        .into_iter()
-                        .map(|tx| signature_collector.get_finalized(tx.txid()))
-                        .collect::<Result<Vec<_>, _>>();
+        (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
+            None => (None, vec![]),
+            Some(pow) => {
+                let signature_collector = self.bitcoin_signature_collector.read().await;
+                let finalized_txs = self
+                    .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
+                    .into_iter()
+                    .map(|tx| signature_collector.get_finalized(tx.txid()))
+                    .collect::<Result<Vec<_>, _>>();
 
-                    match finalized_txs {
-                        Err(err) => {
-                            warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
-                            (None, vec![])
-                        }
-                        Ok(txs) => (Some(pow), txs),
+                match finalized_txs {
+                    Err(err) => {
+                        warn!("Failed to use queued PoW - it finalizes blocks with pegouts that have insufficient signatures ({err:?})");
+                        (None, vec![])
                     }
+                    Ok(txs) => (Some(pow), txs),
                 }
-            };
+            }
         };
+
+        debug!("Made it past pow read");
 
         let mut add_balances = if let Some(ref header) = queued_pow {
             self.split_fees(self.queued_fees(&prev)?, header.fee_recipient)
@@ -422,6 +449,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
+    async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
+        let prev_block_parent = self
+            .storage
+            .get_block_by_height(target_height)?
+            .ok_or(Error::MissingParent)?;
+
+        let update_head_ref_ops = self
+            .update_head_ref_ops(
+                prev_block_parent.canonical_root(),
+                prev_block_parent.message.height(),
+                true,
+            )
+            .await;
+
+        trace!(
+            "Rolling back head to {:?}",
+            prev_block_parent.message.height()
+        );
+
+        self.storage.commit_ops(update_head_ref_ops)?;
+        Ok(())
+    }
+
     async fn create_pegout_payments(
         &self,
         payload_hash: Option<ExecutionBlockHash>,
@@ -497,12 +547,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Err(Error::InvalidBlock);
         }
 
-        debug!("consensus block parent hash: {}\nexecution block parent hash: {}\nexecution block hash: {}", unverified_block.message.parent_hash, unverified_block.message.execution_payload.parent_hash, unverified_block.message.execution_payload.block_hash);
-
         let prev = self.get_parent(&unverified_block)?;
-        debug!("parent execution block hash: {}\nparent execution block timestamp: {}\nparent execution block parent hash: {}", prev.message.execution_payload.block_hash, prev.message.execution_payload.timestamp, prev.message.execution_payload.parent_hash);
         let prev_payload_hash_according_to_consensus = prev.message.execution_payload.block_hash;
         let prev_payload_hash = unverified_block.message.execution_payload.parent_hash;
+
         // unverified_block.prev().payload must match unverified_block.payload.prev()
         if prev_payload_hash != prev_payload_hash_according_to_consensus {
             error!("EL chain not contiguous");
@@ -1018,6 +1066,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         }
     }
 
+    async fn update_head_ref_ops(
+        self: &Arc<Self>,
+        new_head_canonical_root: H256,
+        new_head_height: u64,
+        rollback_override: bool,
+    ) -> Vec<KeyValueStoreOp> {
+        match self.head.write().await.deref_mut() {
+            Some(x) if x.height > new_head_height && !rollback_override => {
+                trace!("Rollback not allowed");
+                // don't update - no db ops
+                vec![]
+            }
+            x => {
+                let new_head = BlockRef {
+                    hash: new_head_canonical_root,
+                    height: new_head_height,
+                };
+                *x = Some(new_head.clone());
+                self.storage.set_head(&new_head)
+            }
+        }
+    }
+
     async fn import_verified_block_no_commit(
         self: &Arc<Self>,
         verified_block: SignedConsensusBlock<MainnetEthSpec>,
@@ -1093,20 +1164,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // store block in DB
         let put_block_ops = self.storage.put_block(&block_root, verified_block.clone());
 
-        let set_head_ops = match self.head.write().await.deref_mut() {
-            Some(x) if x.height > verified_block.message.execution_payload.block_number => {
-                // don't update - no db ops
-                vec![]
-            }
-            x => {
-                let new_head = BlockRef {
-                    hash: block_root,
-                    height: verified_block.message.execution_payload.block_number,
-                };
-                *x = Some(new_head.clone());
-                self.storage.set_head(&new_head)
-            }
-        };
+        let set_head_ops: Vec<KeyValueStoreOp> = self
+            .update_head_ref_ops(
+                block_root,
+                verified_block.message.execution_payload.block_number,
+                false,
+            )
+            .await;
 
         let finalization_ops = if let Some(ref pow) = verified_block.message.auxpow_header {
             self.finalize(&verified_block, block_root, pow).await?
@@ -1268,7 +1332,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Result<Vec<SignedConsensusBlock<MainnetEthSpec>>, Error> {
         // start at head, iterate backwards. We'll be able to have a more efficient implementation once we have finalization.
         let mut blocks: Vec<SignedConsensusBlock<MainnetEthSpec>> = vec![];
-        let mut block_heights = vec![];
         let original_start_height = start_height;
 
         let head_ref = self
@@ -1686,6 +1749,19 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
 
     async fn is_synced(&self) -> bool {
         self.sync_status.read().await.is_synced()
+    }
+
+    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        Ok(self
+            .storage
+            .get_block(
+                &self
+                    .storage
+                    .get_head()?
+                    .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
+                    .hash,
+            )?
+            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
     }
 }
 

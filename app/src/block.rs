@@ -99,10 +99,7 @@ impl BlockIndex for ConsensusBlock<MainnetEthSpec> {
     }
 
     fn height(&self) -> u64 {
-        self.auxpow_header
-            .as_ref()
-            .map(|header| header.height)
-            .expect("Should contain AuxPow")
+        self.execution_payload.block_number
     }
 }
 
