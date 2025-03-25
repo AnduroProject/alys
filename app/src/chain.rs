@@ -577,10 +577,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if self.is_validator {
             self.check_withdrawals(&unverified_block).await?;
-        }
 
-        self.check_pegout_proposal(&unverified_block, prev_payload_hash)
-            .await?;
+            self.check_pegout_proposal(&unverified_block, prev_payload_hash)
+                .await?;
+        }
 
         // TODO: We should set the bitcoin connection to be optional
         if let Some(ref pow) = unverified_block.message.auxpow_header {
