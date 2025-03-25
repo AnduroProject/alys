@@ -83,9 +83,11 @@ impl Aura {
             Duration::from_secs(block.message.execution_payload.timestamp).as_millis() as u64;
         let slot = block.message.slot;
         let slot_now = slot_from_timestamp(timestamp, self.slot_duration);
+        let slot_with_3000_duration = slot_from_timestamp(timestamp, 3000);
+        trace!("slot_now: {slot_now}, slot: {slot}");
 
         // add drift same as in substrate
-        if slot > slot_now + 1 {
+        if slot > slot_now + 1 && slot > slot_with_3000_duration + 1 {
             Err(AuraError::SlotIsInFuture)
         } else {
             let (_expected_authority_index, _expected_author) =
