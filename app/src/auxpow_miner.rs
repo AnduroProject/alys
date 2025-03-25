@@ -6,7 +6,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use execution_layer::ExecutionBlock;
-use eyre::{Report, Result};
+use eyre::{eyre, Report, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
 use store::ItemStore;
@@ -78,9 +78,9 @@ pub struct AuxBlock {
 pub trait ChainManager<BI> {
     async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>>;
     fn get_last_finalized_block(&self) -> BI;
-    fn get_block_by_hash(&self, hash: &BlockHash) -> BI;
+    fn get_block_by_hash(&self, hash: &BlockHash) -> Result<BI>;
     async fn get_queued_auxpow(&self) -> Option<AuxPowHeader>;
-    fn get_block_at_height(&self, height: u64) -> BI;
+    fn get_block_at_height(&self, height: u64) -> Result<BI>;
     #[allow(clippy::too_many_arguments)]
     async fn push_auxpow(
         &self,
@@ -215,21 +215,21 @@ fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
-    get_block_at_height: impl Fn(u64) -> BI,
+    get_block_at_height: impl Fn(u64) -> Result<BI>,
     index_last: &BI,
     params: &BitcoinConsensusParams,
     target_override: Option<CompactTarget>,
-) -> CompactTarget {
+) -> Result<CompactTarget> {
     if let Some(target) = target_override {
-        return target;
+       return Ok(target);
     }
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
-        return CompactTarget::from_consensus(index_last.bits());
+        return Ok(CompactTarget::from_consensus(index_last.bits()));
     }
 
     let blocks_back = params.difficulty_adjustment_interval() - 1;
     let height_first = index_last.height() - blocks_back;
-    let index_first = get_block_at_height(height_first);
+    let index_first = get_block_at_height(height_first)?;
 
     let next_work = calculate_next_work_required(
         index_first.block_time(),
@@ -244,7 +244,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
         next_work.to_consensus()
     );
 
-    next_work
+    Ok(next_work)
 }
 
 struct AuxInfo {
@@ -271,7 +271,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         }
     }
 
-    fn get_next_work_required(&self, index_last: &BI) -> CompactTarget {
+    fn get_next_work_required(&self, index_last: &BI) -> Result<CompactTarget> {
         get_next_work_required(
             |height| self.chain.get_block_at_height(height),
             index_last,
@@ -322,7 +322,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         );
 
         // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/node/miner.cpp#L174
-        let bits = self.get_next_work_required(&index_last);
+        let bits = self.get_next_work_required(&index_last)?;
 
         Ok(AuxBlock {
             hash,
@@ -342,7 +342,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// * `hash` - Hash of the block to submit
     /// * `auxpow` - Serialised auxpow found
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L166
-    pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> bool {
+    pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> Result<()> {
         trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
@@ -354,12 +354,18 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             aux_info
         } else {
             error!("Submitted AuxPow for unknown block");
-            return false;
+            return Err(eyre!("Submitted AuxPow for unknown block"));
         };
 
-        let index_last = self.chain.get_block_by_hash(&last_hash);
+        let index_last = if let Ok(block) = self.chain.get_block_by_hash(&last_hash) {
+            block
+        } else {
+            error!("Last block not found");
+            return Err(eyre!("Last block not found"));
+        };
+
         trace!("Last block hash: {}", index_last.block_hash());
-        let bits = self.get_next_work_required(&index_last);
+        let bits = self.get_next_work_required(&index_last)?;
         trace!("Next work required: {}", bits.to_consensus());
         let chain_id = index_last.chain_id();
         trace!("Chain ID: {}", chain_id);
@@ -369,12 +375,12 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         if !auxpow.check_proof_of_work(bits) {
             // AUX proof of work failed
             error!("POW is not valid");
-            return false;
+            return Err(eyre!("POW is not valid"));
         }
         if auxpow.check(hash, chain_id).is_err() {
             // AUX POW is not valid
             error!("AuxPow is not valid");
-            return false;
+            return Err(eyre!("AuxPow is not valid"));
         }
 
         // should check if newer block is finalized
@@ -388,7 +394,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
                 auxpow,
                 address,
             )
-            .await
+            .await;
+        Ok(())
     }
 
     pub fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {

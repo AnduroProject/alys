@@ -749,10 +749,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let bits = get_next_work_required(
             |height| self.get_block_at_height(height),
-            &self.get_block_by_hash(&last_pow.to_block_hash()),
+            &self.get_block_by_hash(&last_pow.to_block_hash()).map_err(|_| Error::MissingBlock)?,
             &self.retarget_params,
             self.storage.get_target_override()?,
-        );
+        ).map_err(|_| Error::InvalidPow)?;
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
@@ -1629,38 +1629,26 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }
     }
 
-    fn get_block_by_hash(&self, hash: &bitcoin::BlockHash) -> ConsensusBlock<MainnetEthSpec> {
+    fn get_block_by_hash(&self, hash: &bitcoin::BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
         trace!("Getting block by hash: {:?}", hash);
         let block = self
             .storage
             .get_block(&hash.to_block_hash())
             .unwrap()
             .unwrap();
-        block.message
-    }
-
-    fn get_block_at_height(&self, height: u64) -> ConsensusBlock<MainnetEthSpec> {
-        let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
-        let block = self.storage.get_block(&block_hash).unwrap().unwrap();
-        block.message
-    }
-
-    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
-        Ok(self
-            .storage
-            .get_block(
-                &self
-                    .storage
-                    .get_head()?
-                    .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
-                    .hash,
-            )?
-            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
+        Ok(block.message)
     }
 
     async fn get_queued_auxpow(&self) -> Option<AuxPowHeader> {
         self.queued_pow.read().await.clone()
     }
+
+    fn get_block_at_height(&self, height: u64) -> Result<ConsensusBlock<MainnetEthSpec>> {
+        let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
+        let block = self.storage.get_block(&block_hash).unwrap().unwrap();
+        Ok(block.message)
+    }
+
     async fn push_auxpow(
         &self,
         start_hash: bitcoin::BlockHash,
