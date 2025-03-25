@@ -15,7 +15,7 @@ use crate::network::{ApproveBlock, Client as NetworkClient, OutboundRequest};
 use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
-use crate::{aura::Aura, block::SignedConsensusBlock, chain, error::Error, store::Storage};
+use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
@@ -367,8 +367,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
         };
 
-        debug!("Made it past pow read");
-
         let mut add_balances = if let Some(ref header) = queued_pow {
             self.split_fees(self.queued_fees(&prev)?, header.fee_recipient)
         } else {
@@ -680,8 +678,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             "Found {} pegouts in block after filtering",
             required_outputs.len()
         );
-
-        let block_number = unverified_block.message.execution_payload.block_number;
 
         self.bitcoin_wallet.read().await.check_payment_proposal(
             required_outputs,
@@ -1508,7 +1504,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 Arc::new(block.clone()),
                             ));
                             // FIXME: handle result
-                            if let Err(err) = self
+                            if let Err(_err) = self
                                 .network
                                 .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
                                 .await

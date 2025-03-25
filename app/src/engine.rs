@@ -23,7 +23,6 @@ use types::{
 };
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
-const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
 
 #[derive(Debug, Default, Clone)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9

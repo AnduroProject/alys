@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
 
 use crate::auxpow_miner::BitcoinConsensusParams;
-use crate::error::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]

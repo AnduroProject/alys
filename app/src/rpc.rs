@@ -2,11 +2,10 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
 use crate::chain::Chain;
 use crate::error::Error;
-use crate::store::BlockByHeight;
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
 use bitcoin::hashes::Hash;
-use bitcoin::{Address, BlockHash, CompactTarget};
+use bitcoin::{Address, BlockHash};
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
@@ -17,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use store::ItemStore;
 use tokio::sync::Mutex;
-use tracing::{error, trace};
+use tracing::error;
 use types::MainnetEthSpec;
 
 #[derive(Debug, Clone, Deserialize)]
