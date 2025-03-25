@@ -1,5 +1,7 @@
 use crate::auxpow::AuxPow;
-use crate::auxpow_miner::{get_next_work_required, BitcoinConsensusParams, ChainManager};
+use crate::auxpow_miner::{
+    get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
+};
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
@@ -797,10 +799,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let bits = get_next_work_required(
             |height| self.get_block_at_height(height),
-            &self.get_block_by_hash(&last_pow.to_block_hash()).map_err(|_| Error::MissingBlock)?,
+            &self
+                .get_block_by_hash(&last_pow.to_block_hash())
+                .map_err(|_| Error::MissingBlock)?,
             &self.retarget_params,
             self.storage.get_target_override()?,
-        ).map_err(|_| Error::InvalidPow)?;
+        )
+        .map_err(|_| Error::InvalidPow)?;
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
@@ -1339,20 +1344,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .read()
             .await
             .as_ref()
-            .ok_or(Error::ChainError(Head.into()))?
+            .ok_or(ChainError(Head.into()))?
             .clone();
 
-        'outer: for i in 0..requested_count {
+        for i in 0..requested_count {
             if i > head_ref.height {
-                break 'outer;
+                break;
             }
 
             let current_height = original_start_height + i;
             start_height = current_height;
             let current = match self.storage.get_block_by_height(current_height) {
-                Ok(Some(x)) => {
-                    // debug!("Got block at height {}", current_height);
-                    x
+                Ok(Some(block)) => {
+                    block
                 }
                 Ok(None) => {
                     debug!(
@@ -1360,58 +1364,42 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         current_height
                     );
                     let mut blocks_from_head = vec![];
-                    let mut block_heights_from_head = vec![];
                     let mut current = head_ref.hash;
-                    'inner: loop {
-                        let block = self.storage.get_block(&current).unwrap().unwrap();
+                    while let Some(block) = self.storage.get_block(&current).unwrap() {
                         if block.message.execution_payload.block_number < start_height {
-                            break 'inner;
+                            break;
                         }
 
-                        match self.storage.put_block_by_height(&block) {
-                            Ok(_) => {
-                                debug!(
-                                    "Stored block by height {}",
-                                    block.message.execution_payload.block_number
-                                );
-                            }
-                            Err(err) => {
+                        self.storage
+                            .put_block_by_height(&block)
+                            .unwrap_or_else(|err| {
                                 error!("Failed to store block by height: {err:?}");
-                                return Err(err);
-                            }
-                        }
+                            });
 
                         debug!(
                             "Got block at height {} via old logic",
                             block.message.execution_payload.block_number
                         );
                         blocks_from_head.push(block.clone());
-                        block_heights_from_head.push(block.message.execution_payload.block_number);
                         if block.message.parent_hash.is_zero() {
-                            break 'inner; // start of chain
+                            break;
                         }
                         current = block.message.parent_hash;
                     }
 
                     blocks_from_head.reverse();
-                    block_heights_from_head.reverse();
 
-                    trace!("block_heights_from_head: {:?}", block_heights_from_head);
                     blocks.extend(blocks_from_head);
-                    block_heights.extend(block_heights_from_head);
-                    break 'outer;
+                    break;
                 }
                 Err(err) => {
                     error!("Error getting block: {err:?}");
                     return Err(err);
                 }
             };
-            // debug!("Got block at height {}", current_height);
-            block_heights.push(current_height);
+
             blocks.push(current);
         }
-        // trace!("block_heights: {:?}", block_heights);
-
         let mut block_counter = HashMap::new();
 
         blocks.iter().for_each(|block| {
@@ -1422,8 +1410,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 block_counter.insert(block_height, 1);
             }
         });
-
-        // debug!("block_counter: {:#?}", block_counter);
 
         Ok(blocks)
     }
@@ -1511,6 +1497,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 #[allow(clippy::single_match)]
                 match msg.event {
                     Ok(RPCReceived::Request(substream_id, InboundRequest::BlocksByRange(x))) => {
+                        trace!("Got BlocksByRange request {x:?}");
                         let blocks = self
                             .get_blocks(x.start_height, x.count)
                             .await
@@ -1640,6 +1627,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         debug!("pending_pegouts: {:#?}", pending_pegouts);
         Ok(())
     }
+
+    pub fn get_block(
+        self: &Arc<Self>,
+        block_height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>> {
+        let block = self.storage.get_block_by_height(block_height)?;
+        if let Some(block) = block {
+            Ok(Some(block))
+        } else {
+            warn!("Block: {:#?} not found", block_height);
+            Ok(None)
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1692,7 +1692,10 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }
     }
 
-    fn get_block_by_hash(&self, hash: &bitcoin::BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
+    fn get_block_by_hash(
+        &self,
+        hash: &bitcoin::BlockHash,
+    ) -> Result<ConsensusBlock<MainnetEthSpec>> {
         trace!("Getting block by hash: {:?}", hash);
         let block = self
             .storage
@@ -1738,7 +1741,6 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }
         self.check_pow(&pow, false).await.is_ok() && self.share_pow(pow).await.is_ok()
     }
-
     fn set_target_override(&self, target: CompactTarget) {
         self.storage.set_target_override(target).unwrap()
     }
