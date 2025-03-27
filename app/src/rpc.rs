@@ -310,6 +310,21 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                 )?)
             }
         },
+        "getblockbyhash" => {
+            let block_hash = if let Ok(value) = serde_json::from_str::<String>(params.get()) {
+                // Note: BlockHash::from_slice results in opposite endianness from BlockHash::from_str
+                let block_hash_bytes = hex::decode(&value)?;
+                Hash256::from_slice(block_hash_bytes.as_slice())
+            } else {
+                return Ok(new_json_rpc_error!(
+                    id,
+                    hyper::StatusCode::BAD_REQUEST,
+                    JsonRpcErrorV1::invalid_params()
+                )?);
+            };
+
+            block_response_helper(id, chain.get_block(&block_hash))
+        }
         "getqueuedpow" => match miner.get_queued_auxpow().await {
             Some(queued_pow) => Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {

@@ -1740,16 +1740,9 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }
     }
 
-    fn get_block_by_hash(
-        &self,
-        hash: &bitcoin::BlockHash,
-    ) -> Result<ConsensusBlock<MainnetEthSpec>> {
-        trace!("Getting block by hash: {:?}", hash);
-        let block = self
-            .storage
-            .get_block(&hash.to_block_hash())
-            .unwrap()
-            .unwrap();
+    fn get_block_by_hash(&self, hash: &BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
+        // trace!("Getting block by hash: {:?}", hash);
+        let block = self.storage.get_block(&hash.to_block_hash())?.unwrap();
         Ok(block.message)
     }
 
