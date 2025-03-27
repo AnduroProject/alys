@@ -1,5 +1,6 @@
 use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
+use crate::block::SignedConsensusBlock;
 use crate::chain::Chain;
 use crate::error::Error;
 use bitcoin::address::NetworkChecked;
@@ -10,20 +11,20 @@ use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
 use serde_derive::{Deserialize, Serialize};
-use serde_json::json;
 use serde_json::value::RawValue;
+use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use store::ItemStore;
 use tokio::sync::Mutex;
 use tracing::error;
-use types::MainnetEthSpec;
+use types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {
     pub method: &'a str,
     pub params: Option<&'a RawValue>,
-    pub id: serde_json::Value,
+    pub id: Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -148,6 +149,25 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
             hyper::StatusCode::OK,
             JsonRpcErrorV1::invalid_request()
         )?);
+    };
+
+    let block_response_helper = |id: Value,
+                                 block_result: eyre::Result<
+        Option<SignedConsensusBlock<MainnetEthSpec>>,
+    >| match block_result {
+        Ok(block) => Response::builder().status(hyper::StatusCode::OK).body(
+            JsonRpcResponseV1 {
+                result: Some(json!(block)),
+                error: None,
+                id,
+            }
+            .into(),
+        ),
+        Err(e) => Ok(new_json_rpc_error!(
+            id,
+            hyper::StatusCode::BAD_REQUEST,
+            JsonRpcErrorV1::debug_error(e.to_string())
+        )?),
     };
 
     Ok(match json_req.method {
@@ -279,23 +299,9 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
             }
         },
         "getblockbyheight" => match params.get().parse::<u64>() {
-            Ok(target_height) => match chain.get_block(target_height) {
-                Ok(block) => Response::builder().status(hyper::StatusCode::OK).body(
-                    JsonRpcResponseV1 {
-                        result: Some(json!(block)),
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                ),
-                Err(e) => {
-                    return Ok(new_json_rpc_error!(
-                        id,
-                        hyper::StatusCode::BAD_REQUEST,
-                        JsonRpcErrorV1::debug_error(e.to_string())
-                    )?)
-                }
-            },
+            Ok(target_height) => {
+                block_response_helper(id, chain.get_block_by_height(target_height))
+            }
             Err(e) => {
                 return Ok(new_json_rpc_error!(
                     id,

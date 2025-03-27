@@ -1193,6 +1193,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         .flatten();
         self.storage.commit_ops(all_ops.collect())?;
 
+        // Ignore if genesis block
+        if verified_block.message.height() != 0 {
+            if let Some(block_hash_cache) = self.block_hash_cache.as_ref() {
+                // Check to see if we have a PoW block
+                if let Some(ref aux_header) = verified_block.message.auxpow_header {
+                    // Since we are using a PoW block, we need to flush the block hash cache
+                    // and store the latest block hash
+                    let mut block_hash_cache = block_hash_cache.write().await;
+
+                    // Reset the block hash cache to the hash after the range end
+                    block_hash_cache
+                        .reset_with(aux_header.range_end.to_block_hash())
+                        .map_err(|err| Error::GenericError(err))?;
+                    block_hash_cache.add(verified_block.canonical_root().to_block_hash());
+                } else {
+                    // Insert the block hash to the block hash cache
+                    block_hash_cache
+                        .write()
+                        .await
+                        .add(verified_block.canonical_root().to_block_hash());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1626,7 +1649,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
-    pub fn get_block(
+    pub fn get_block_by_height(
         self: &Arc<Self>,
         block_height: u64,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>> {
@@ -1638,31 +1661,57 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Ok(None)
         }
     }
-}
 
-#[async_trait::async_trait]
-impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>> for Chain<DB> {
-    async fn get_aggregate_hashes(&self) -> Result<Vec<bitcoin::BlockHash>> {
+    pub fn get_block(
+        self: &Arc<Self>,
+        block_hash: &Hash256,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>> {
+        let block = self.storage.get_block(block_hash)?;
+        if let Some(block) = block {
+            Ok(Some(block))
+        } else {
+            warn!("Block: {:#?} not found", block_hash);
+            Ok(None)
+        }
+    }
+
+    pub async fn aggregate_hashes(self: &Arc<Self>) -> Result<Vec<BlockHash>> {
         let head = self
             .head
             .read()
             .await
             .as_ref()
-            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
+            .ok_or(ChainError(Head.into()))?
             .hash;
         trace!("Head: {:?}", head);
 
         trace!("Getting aggregate hashes");
         let hashes = self.get_hashes(
             self.get_latest_finalized_block_ref()?
-                .ok_or(Error::ChainError(
-                    BlockErrorBlockTypes::LastFinalized.into(),
-                ))?
+                .ok_or(ChainError(BlockErrorBlockTypes::LastFinalized.into()))?
                 .hash,
             // self.head.read().await.as_ref().ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?.hash,
             head,
         )?;
         trace!("Got {} hashes", hashes.len());
+        Ok(hashes
+            .into_iter()
+            .map(|hash| hash.to_block_hash())
+            .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>> for Chain<DB> {
+    async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>> {
+        let head = self
+            .head
+            .read()
+            .await
+            .as_ref()
+            .ok_or(ChainError(Head.into()))?
+            .hash;
+        // trace!("Head: {:?}", head);
 
         let queued_pow = self.queued_pow.read().await;
 
@@ -1671,15 +1720,16 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .map(|pow| pow.range_end != head)
             .unwrap_or(true);
         if !has_work {
-            trace!("No work to do");
+            // trace!("No work to do");
             // TODO: Change to Result so that we can return this error
             Err(NoWorkToDo.into())
         } else {
-            trace!("Returning hashes");
-            Ok(hashes
-                .into_iter()
-                .map(|hash| hash.to_block_hash())
-                .collect())
+            if let Some(ref block_hash_cache) = self.block_hash_cache {
+                // trace!("Returning cached hashes");
+                Ok(block_hash_cache.read().await.get())
+            } else {
+                Err(eyre!("Block hash cache not initialized"))
+            }
         }
     }
 
@@ -1708,15 +1758,17 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_block_at_height(&self, height: u64) -> Result<ConsensusBlock<MainnetEthSpec>> {
-        let block_hash = self.storage.get_auxpow_block_hash(height).unwrap().unwrap();
-        let block = self.storage.get_block(&block_hash).unwrap().unwrap();
-        Ok(block.message)
+        match self.storage.get_block_by_height(height) {
+            Ok(Some(block)) => Ok(block.message),
+            Ok(None) => Err(eyre!("Block not found")),
+            Err(err) => Err(eyre!(err)),
+        }
     }
 
     async fn push_auxpow(
         &self,
-        start_hash: bitcoin::BlockHash,
-        end_hash: bitcoin::BlockHash,
+        start_hash: BlockHash,
+        end_hash: BlockHash,
         bits: u32,
         chain_id: u32,
         height: u64,
@@ -1758,10 +1810,22 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
                 &self
                     .storage
                     .get_head()?
-                    .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?
+                    .ok_or(ChainError(Head.into()))?
                     .hash,
             )?
-            .ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?)
+            .ok_or(ChainError(Head.into()))?)
+    }
+}
+
+#[async_trait]
+impl<DB: ItemStore<MainnetEthSpec>> BlockHashCacheInit for Chain<DB> {
+    async fn init_block_hash_cache(self: &Arc<Self>) -> Result<()> {
+        if let Some(ref block_hash_cache) = self.block_hash_cache {
+            let mut block_hash_cache = block_hash_cache.write().await;
+            block_hash_cache.init(self.aggregate_hashes().await?)
+        } else {
+            Ok(())
+        }
     }
 }
 
