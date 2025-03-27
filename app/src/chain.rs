@@ -6,6 +6,10 @@ use crate::error::AuxPowMiningError::NoWorkToDo;
 use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
+use crate::metrics::{
+    CHAIN_BLOCKS_REJECTED, CHAIN_PEGINS_ADDED, CHAIN_PEGINS_PROCESSED, CHAIN_PEGINS_REMOVED,
+    CHAIN_PROCESS_BLOCK_ATTEMPTS, CHAIN_TOTAL_PEGIN_AMOUNT,
+};
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
 use crate::network::PubsubMessage;
@@ -175,6 +179,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Vec<(Txid, BlockHash)> {
         let mut withdrawals = BTreeMap::<_, u64>::new();
         let mut processed_pegins = Vec::new();
+        let mut total_pegin_amount = 0u64;
 
         {
             // Remove pegins that we already processed. In the happy path, this code
@@ -201,6 +206,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .write()
                     .await
                     .remove(&already_processed_txid);
+                CHAIN_PEGINS_REMOVED.inc();
             }
         }
 
@@ -217,6 +223,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .add(pegin.amount),
                 );
                 processed_pegins.push((pegin.txid, pegin.block_hash));
+                CHAIN_PEGINS_ADDED.inc();
+                total_pegin_amount += pegin.amount;
             }
         }
         let withdrawals: Vec<(Address, u64)> = withdrawals.into_iter().collect();
@@ -228,6 +236,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .iter()
                 .map(|(address, amount)| (*address, ConsensusAmount::from_satoshi(*amount))),
         );
+
+        CHAIN_PEGINS_PROCESSED.inc_by(processed_pegins.len() as u64);
+        CHAIN_TOTAL_PEGIN_AMOUNT.set(total_pegin_amount as i64);
 
         processed_pegins
     }
@@ -468,6 +479,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<CheckedIndividualApproval>, Error> {
+        CHAIN_PROCESS_BLOCK_ATTEMPTS.inc();
         let root_hash = unverified_block.canonical_root();
         info!(
             "Processing block at height {}",
@@ -479,6 +491,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if unverified_block.message.parent_hash.is_zero() {
             // no need to process genesis
+            CHAIN_BLOCKS_REJECTED
+                .with_label_values(&["genesis_not_needed"])
+                .inc();
             return Err(Error::ProcessGenesis);
         }
 
@@ -494,6 +509,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             // node joins the network but has not yet synced the chain
             // also when another node proposes at the same height
             warn!("Rejecting old block");
+            CHAIN_BLOCKS_REJECTED
+                .with_label_values(&["old_height"])
+                .inc();
             return Err(Error::InvalidBlock);
         }
 
@@ -521,6 +539,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 prev.message.execution_payload.block_hash,
                 prev.message.execution_payload.block_number
             );
+            CHAIN_BLOCKS_REJECTED
+                .with_label_values(&["chain_incontiguous"])
+                .inc();
 
             return Err(Error::ExecutionHashChainIncontiguous);
         }
@@ -561,6 +582,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .zip(unverified_block.message.finalized_pegouts.iter())
             {
                 if tx.txid() != expected_txid {
+                    CHAIN_BLOCKS_REJECTED
+                        .with_label_values(&["invalid_finalization"])
+                        .inc();
                     return Err(Error::IllegalFinalization);
                 }
 
@@ -580,10 +604,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let block_height = unverified_block.message.execution_payload.block_number;
 
             if block_height.saturating_sub(latest_finalized_height) > self.max_blocks_without_pow {
+                CHAIN_BLOCKS_REJECTED
+                    .with_label_values(&["missing_pow"])
+                    .inc();
                 return Err(Error::MissingRequiredPow);
             }
 
             if !unverified_block.message.finalized_pegouts.is_empty() {
+                CHAIN_BLOCKS_REJECTED
+                    .with_label_values(&["invalid_finalization"])
+                    .inc();
                 return Err(Error::IllegalFinalization);
             }
         }

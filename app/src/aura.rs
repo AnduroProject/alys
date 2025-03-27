@@ -1,6 +1,10 @@
 use crate::block::SignedConsensusBlock;
 use crate::chain::Chain;
 use crate::error::Error;
+use crate::metrics::{
+    AURA_CLAIM_SLOT_CALLS, AURA_CURRENT_SLOT, AURA_PRODUCED_BLOCKS,
+    AURA_SUCCESSFUL_SLOT_AUTHOR_RETRIEVALS, AURA_SUCCESSFUL_SLOT_CLAIMS,
+};
 use bls::{Keypair, PublicKey};
 use futures_timer::Delay;
 use std::sync::Arc;
@@ -28,6 +32,9 @@ fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u
     let current_author = authorities.get(idx as usize).expect(
         "authorities not empty; index constrained to list length; this is a valid index; qed",
     );
+    AURA_SUCCESSFUL_SLOT_AUTHOR_RETRIEVALS
+        .with_label_values(&[&idx.to_string()])
+        .inc();
 
     Some((idx as u8, current_author))
 }
@@ -176,6 +183,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
     }
 
     fn claim_slot(&self, slot: u64, authorities: &[PublicKey]) -> Option<PublicKey> {
+        AURA_CLAIM_SLOT_CALLS.inc();
         let expected_author = slot_author(slot, authorities);
         expected_author.and_then(|(_, p)| {
             if self
@@ -185,6 +193,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
                 .pk
                 .eq(p)
             {
+                AURA_SUCCESSFUL_SLOT_CLAIMS.inc();
                 Some(p.clone())
             } else {
                 None
@@ -193,14 +202,22 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
     }
 
     async fn on_slot(&self, slot: u64) -> Option<Result<(), Error>> {
+        AURA_CURRENT_SLOT.set(slot as f64);
+
         let _ = self.claim_slot(slot, &self.authorities[..])?;
         debug!("My turn");
 
-        self.chain
-            .produce_block(slot, duration_now())
-            .await
-            .expect("Should produce block");
-        Some(Ok(()))
+        let res = self.chain.produce_block(slot, duration_now()).await;
+        match res {
+            Ok(_) => {
+                AURA_PRODUCED_BLOCKS.inc();
+                Some(Ok(()))
+            }
+            Err(e) => {
+                error!("Failed to produce block: {:?}", e);
+                Some(Err(e))
+            }
+        }
     }
 
     async fn next_slot(&mut self) -> u64 {

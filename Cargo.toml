@@ -24,6 +24,7 @@ ethers-core = "2.0.11"
 ethers = "2.0.11"
 
 prometheus = "0.13.4"
+lazy_static = "1.5.0"
 
 [profile.dev]
 panic = "abort"

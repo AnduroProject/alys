@@ -86,25 +86,27 @@ pub fn genesis_value_parser(s: &str) -> eyre::Result<ChainSpec, eyre::Error> {
 }
 
 pub fn hex_file_parser(path: &str) -> eyre::Result<[u8; 32], eyre::Error> {
-    Ok(hex::decode(&std::fs::read_to_string(PathBuf::from(path))?)?.try_into().expect("Expected 32 bytes"))
+    Ok(hex::decode(&std::fs::read_to_string(PathBuf::from(path))?)?
+        .try_into()
+        .expect("Expected 32 bytes"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use super::*;
-    use tempfile::{tempdir, NamedTempFile};
+    use std::fs::File;
     use std::io::Write;
+    use tempfile::{tempdir, NamedTempFile};
 
     #[test]
     fn should_successfully_decode_hex_file() {
         const HEX_STRING: &str = "Fingers crossed";
         let start_hex_bytes = HEX_STRING.as_bytes();
         let dir = tempdir().unwrap();
-        
+
         let file_path = dir.path().join("test_hex.hex");
         let mut file = File::create(file_path.clone()).unwrap();
-        write!(file, "{}",hex::encode(HEX_STRING)).unwrap();
+        write!(file, "{}", hex::encode(HEX_STRING)).unwrap();
 
         let hex_bytes = hex_file_parser(file_path.to_str().unwrap()).unwrap();
 

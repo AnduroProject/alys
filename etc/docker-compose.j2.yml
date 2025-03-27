@@ -90,6 +90,7 @@ services:
     ports:
       - 3000:3000
       - 55444:55444
+      - '9001:9001' # metrics
     volumes:
       - /opt/alys/lib/etc/config/chain.json:/lib/alys/config/chain.json
       - /opt/alys/lib/etc/data/alys/db/:/lib/alys/data/db

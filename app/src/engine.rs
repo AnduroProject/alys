@@ -78,11 +78,10 @@ pub struct Engine {
     pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
     jwt_key: [u8; 32],
-
 }
 
 impl Engine {
-    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc, jwt_key_bytes: [u8;32]) -> Self {
+    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc, jwt_key_bytes: [u8; 32]) -> Self {
         Self {
             api,
             execution_api,

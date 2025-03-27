@@ -2,6 +2,7 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
 use crate::chain::Chain;
 use crate::error::Error;
+use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
 use bitcoin::hashes::Hash;
@@ -126,11 +127,13 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
     req: Request<Body>,
     miner: Arc<Mutex<AuxPowMiner<BI, CM>>>,
     federation_address: Address<NetworkChecked>,
-    // chain: Arc<Chain<DB>>,
 ) -> Result<Response<Body>> {
     let mut miner = miner.lock().await;
 
     if req.method() != Method::POST {
+        RPC_REQUESTS
+            .with_label_values(&["unknown", "method_not_allowed"])
+            .inc();
         return Ok(Response::builder()
             .status(hyper::StatusCode::METHOD_NOT_ALLOWED)
             .body("JSONRPC server handles only POST requests".into())?);
@@ -143,6 +146,9 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
     let params = if let Some(raw_value) = json_req.params {
         raw_value
     } else {
+        RPC_REQUESTS
+            .with_label_values(&[json_req.method, "invalid_request"])
+            .inc();
         return Ok(new_json_rpc_error!(
             id,
             hyper::StatusCode::OK,
@@ -150,12 +156,20 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
         )?);
     };
 
-    Ok(match json_req.method {
+    // Start a timer for the request processing duration
+    let timer = RPC_REQUEST_DURATION
+        .with_label_values(&[json_req.method])
+        .start_timer();
+
+    let response = match json_req.method {
         "createauxblock" => {
             let [script_pub_key] =
                 if let Ok(value) = serde_json::from_str::<[EvmAddress; 1]>(params.get()) {
                     value
                 } else {
+                    RPC_REQUESTS
+                        .with_label_values(&["createauxblock", "invalid_params"])
+                        .inc();
                     return Ok(new_json_rpc_error!(
                         id,
                         hyper::StatusCode::BAD_REQUEST,
@@ -164,32 +178,36 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
                 };
 
             match miner.create_aux_block(script_pub_key).await {
-                Ok(aux_block) => Response::builder().status(hyper::StatusCode::OK).body(
-                    JsonRpcResponseV1 {
-                        result: Some(json!(aux_block)),
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                ),
-                Err(e) => match e.downcast().unwrap() {
-                    Error::ChainSyncing => new_json_rpc_error!(
+                Ok(aux_block) => {
+                    RPC_REQUESTS
+                        .with_label_values(&["createauxblock", "success"])
+                        .inc();
+                    Response::builder().status(hyper::StatusCode::OK).body(
+                        JsonRpcResponseV1 {
+                            result: Some(json!(aux_block)),
+                            error: None,
+                            id,
+                        }
+                        .into(),
+                    )
+                }
+                Err(e) => {
+                    let status = match e.downcast().unwrap() {
+                        Error::ChainSyncing => "chain_syncing",
+                        _ => "internal_error",
+                    };
+                    RPC_REQUESTS
+                        .with_label_values(&["createauxblock", status])
+                        .inc();
+                    new_json_rpc_error!(
                         id,
                         hyper::StatusCode::METHOD_NOT_ALLOWED,
                         JsonRpcErrorV1::chain_syncing_error()
-                    ),
-                    _ => {
-                        new_json_rpc_error!(
-                            id,
-                            hyper::StatusCode::NOT_FOUND,
-                            JsonRpcErrorV1::internal_error()
-                        )
-                    }
-                },
+                    )
+                }
             }
         }
         "submitauxblock" => {
-            // let (hash, auxpow) = if let Ok(value) = decode_submitauxblock_args(params.get()) {
             let mut hash;
             let mut auxpow;
             match decode_submitauxblock_args(params.get()) {
@@ -198,24 +216,21 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
                     auxpow = value.1;
                 }
                 Err(e) => {
+                    RPC_REQUESTS
+                        .with_label_values(&["submitauxblock", "invalid_params"])
+                        .inc();
                     return Ok(new_json_rpc_error!(
                         id,
                         hyper::StatusCode::BAD_REQUEST,
                         JsonRpcErrorV1::debug_error(e.to_string())
-                    )?)
+                    )?);
                 }
             }
-            //     value
-            // } else {
-            //     return Ok(new_json_rpc_error!(
-            //         id,
-            //         hyper::StatusCode::BAD_REQUEST,
-            //         JsonRpcErrorV1::debug_error()
-            //     )?);
-            // };
 
             let value = miner.submit_aux_block(hash, auxpow).await;
-
+            RPC_REQUESTS
+                .with_label_values(&["submitauxblock", "success"])
+                .inc();
             Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {
                     result: Some(json!(value)),
@@ -225,49 +240,38 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
                 .into(),
             )
         }
-        "getdepositaddress" => Response::builder().status(hyper::StatusCode::OK).body(
-            JsonRpcResponseV1 {
-                result: Some(json!(federation_address.to_string())),
-                error: None,
-                id,
-            }
-            .into(),
-        ),
-        // "adjusttarget" => {
-        //     let target_override_cons_rep = serde_json::from_str::<u32>(params.get());
-        //     if let Ok(target) = target_override_cons_rep {
-        //         miner.set_target_override(CompactTarget::from_consensus(target));
-        //
-        //         Response::builder().status(hyper::StatusCode::OK).body(
-        //             JsonRpcResponseV1 {
-        //                 result: None,
-        //                 error: None,
-        //                 id,
-        //             }
-        //             .into(),
-        //         )
-        //     } else {
-        //         Response::builder().status(hyper::StatusCode::OK).body(
-        //             JsonRpcResponseV1 {
-        //                 result: None,
-        //                 error: Some(JsonRpcErrorV1::debug_error("Invalid target".to_string())),
-        //                 id,
-        //             }
-        //             .into(),
-        //         )
-        //     }
-        // }
-        "getheadblock" => match miner.get_head() {
-            Ok(head) => Response::builder().status(hyper::StatusCode::OK).body(
+        "getdepositaddress" => {
+            RPC_REQUESTS
+                .with_label_values(&["getdepositaddress", "success"])
+                .inc();
+            Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {
-                    result: Some(json!(head)),
+                    result: Some(json!(federation_address.to_string())),
                     error: None,
                     id,
                 }
                 .into(),
-            ),
+            )
+        }
+        "getheadblock" => match miner.get_head() {
+            Ok(head) => {
+                RPC_REQUESTS
+                    .with_label_values(&["getheadblock", "success"])
+                    .inc();
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: Some(json!(head)),
+                        error: None,
+                        id,
+                    }
+                    .into(),
+                )
+            }
             Err(e) => {
                 error!("{}", e.to_string());
+                RPC_REQUESTS
+                    .with_label_values(&["getheadblock", "block_not_found"])
+                    .inc();
                 Response::builder().status(hyper::StatusCode::OK).body(
                     JsonRpcResponseV1 {
                         result: None,
@@ -279,55 +283,49 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>>(
             }
         },
         "getqueuedpow" => match miner.get_queued_auxpow().await {
-            Some(queued_pow) => Response::builder().status(hyper::StatusCode::OK).body(
-                JsonRpcResponseV1 {
-                    result: Some(json!(queued_pow)),
-                    error: None,
-                    id,
-                }
-                .into(),
-            ),
-            None => Response::builder().status(hyper::StatusCode::OK).body(
-                JsonRpcResponseV1 {
-                    result: None,
-                    error: None,
-                    id,
-                }
-                .into(),
-            ),
+            Some(queued_pow) => {
+                RPC_REQUESTS
+                    .with_label_values(&["getqueuedpow", "success"])
+                    .inc();
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: Some(json!(queued_pow)),
+                        error: None,
+                        id,
+                    }
+                    .into(),
+                )
+            }
+            None => {
+                RPC_REQUESTS
+                    .with_label_values(&["getqueuedpow", "no_data"])
+                    .inc();
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: None,
+                        error: None,
+                        id,
+                    }
+                    .into(),
+                )
+            }
         },
-        // "getaccumulatedfees" => {
-        //     let args = params.get();
-        //     let block_hash;
-        //     // if args.is_empty() {
-        //     block_hash = None;
-        //     // } else {
-        //     //     block_hash = Some(args.into())
-        //     // };
-        //
-        //     Response::builder().status(hyper::StatusCode::OK).body(
-        //         match chain.get_accumulated_fees(block_hash).await {
-        //             Ok(value) => JsonRpcResponseV1 {
-        //                 result: Some(json!(value)),
-        //                 error: None,
-        //                 id,
-        //             }
-        //             .into(),
-        //             Err(_e) => JsonRpcResponseV1 {
-        //                 result: None,
-        //                 error: Some(JsonRpcErrorV1::block_not_found()),
-        //                 id,
-        //             }
-        //             .into(),
-        //         },
-        //     )
-        // }
-        _ => new_json_rpc_error!(
-            id,
-            hyper::StatusCode::NOT_FOUND,
-            JsonRpcErrorV1::method_not_found()
-        ),
-    }?)
+        _ => {
+            RPC_REQUESTS
+                .with_label_values(&["unknown", "method_not_found"])
+                .inc();
+            new_json_rpc_error!(
+                id,
+                hyper::StatusCode::NOT_FOUND,
+                JsonRpcErrorV1::method_not_found()
+            )
+        }
+    };
+
+    // Stop the timer and record the duration
+    timer.observe_duration();
+
+    Ok(response?)
 }
 
 fn decode_submitauxblock_args(encoded: &str) -> Result<(BlockHash, AuxPow)> {

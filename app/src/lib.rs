@@ -6,6 +6,7 @@ mod block;
 mod chain;
 mod engine;
 mod error;
+mod metrics;
 mod network;
 mod rpc;
 mod signatures;
