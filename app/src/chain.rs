@@ -122,7 +122,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         retarget_params: BitcoinConsensusParams,
         is_validator: bool,
     ) -> Self {
-        let head = storage.get_head().unwrap();
+        let head = storage.get_head().expect("Failed to get head from storage");
         Self {
             engine,
             network,
@@ -324,11 +324,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .await
                     .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?;
 
-                debug!(
-                    "Payload body for block {}: {:?}",
-                    prev_payload_hash, prev_payload_body
-                );
-
                 if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
                     rollback_head = true;
                     (Hash256::zero(), None)
@@ -517,7 +512,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .ok_or(Error::MissingParent)
     }
 
-    #[tracing::instrument(name = "process_block", skip_all, fields(height = unverified_block.message.execution_payload.block_number))]
+    #[tracing::instrument(name = "process_block", skip_all, fields(height = unverified_block.message.execution_payload.block_number
+	))]
     async fn process_block(
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
@@ -590,9 +586,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         if let Some(ref pow) = unverified_block.message.auxpow_header {
             // NOTE: Should be removed after chain deprecation
             let mut pow_override = false;
-            if unverified_block.message.execution_payload.block_number == 214745 {
-                pow_override = true;
-            }
             self.check_pow(pow, pow_override).await?;
 
             // also check the finalized pegouts
@@ -671,10 +664,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         unverified_block: &SignedConsensusBlock<MainnetEthSpec>,
         prev_payload_hash: ExecutionBlockHash,
     ) -> Result<(), Error> {
-        let (_execution_block, execution_receipts) = self
-            .get_block_and_receipts(&prev_payload_hash)
-            .await
-            .unwrap();
+        let (_execution_block, execution_receipts) =
+            self.get_block_and_receipts(&prev_payload_hash).await?;
 
         let required_outputs = Bridge::filter_pegouts(execution_receipts);
 
@@ -778,13 +769,26 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             "Last finalized {} (height {}) in block {}",
             last_finalized.hash, last_finalized.height, last_pow,
         );
-        let range_start_block = self
-            .storage
-            .get_block(&header.range_start)?
-            .ok_or(Error::MissingBlock)?;
+        let range_start_block =
+            self.storage
+                .get_block(&header.range_start)?
+                .ok_or(Error::GenericError(eyre!(
+                    "Failed to get block: {}",
+                    &header.range_start
+                )))?;
+        
         if range_start_block.message.parent_hash != last_finalized.hash {
+            debug!(
+                "last_finalized.hash: {:?}\n{}",
+                last_finalized.hash, last_finalized.height
+            );
+            debug!(
+                "range_start_block.message.parent_hash: {:?}\n{}",
+                range_start_block.message.parent_hash,
+                range_start_block.message.height()
+            );
             warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
-                last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
+		        last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
             return Err(Error::InvalidPowRange);
         }
 
@@ -801,11 +805,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             |height| self.get_block_at_height(height),
             &self
                 .get_block_by_hash(&last_pow.to_block_hash())
-                .map_err(|_| Error::MissingBlock)?,
+                .map_err(|err| Error::GenericError(err))?,
             &self.retarget_params,
             self.storage.get_target_override()?,
         )
-        .map_err(|_| Error::InvalidPow)?;
+        .map_err(|err| Error::GenericError(err))?;
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
@@ -1225,8 +1229,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Result<(), Error> {
         self.engine
             .commit_block(verified_block.message.execution_payload.clone().into())
-            .await
-            .unwrap();
+            .await?;
 
         self.import_verified_block_no_commit(verified_block).await
     }
@@ -1333,7 +1336,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     }
                     PubsubMessage::QueuePow(pow) => match self
                         .check_pow(&pow, false)
-                        .instrument(tracing::info_span!("queued"))
+                        .instrument(info_span!("queued"))
                         .await
                     {
                         Err(err) => {

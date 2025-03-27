@@ -19,13 +19,13 @@ pub trait ConvertBlockHash<H> {
     fn to_block_hash(&self) -> H;
 }
 
-impl ConvertBlockHash<bitcoin::BlockHash> for Hash256 {
-    fn to_block_hash(&self) -> bitcoin::BlockHash {
-        bitcoin::BlockHash::from_slice(self.as_bytes()).expect("Should have same length hash")
+impl ConvertBlockHash<BlockHash> for Hash256 {
+    fn to_block_hash(&self) -> BlockHash {
+        BlockHash::from_slice(self.as_bytes()).expect("Should have same length hash")
     }
 }
 
-impl ConvertBlockHash<Hash256> for bitcoin::BlockHash {
+impl ConvertBlockHash<Hash256> for BlockHash {
     fn to_block_hash(&self) -> Hash256 {
         Hash256::from_slice(self.as_byte_array())
     }
@@ -76,7 +76,7 @@ pub struct ConsensusBlock<T: EthSpec> {
 // NOTE: implementation assumes ConsensusBlock contains auxpow_header
 // i.e. it is only called for those blocks retrieved from storage
 impl BlockIndex for ConsensusBlock<MainnetEthSpec> {
-    fn block_hash(&self) -> bitcoin::BlockHash {
+    fn block_hash(&self) -> BlockHash {
         self.signing_root().to_block_hash()
     }
 

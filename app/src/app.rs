@@ -24,11 +24,11 @@ use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[inline]
-pub fn run() -> eyre::Result<()> {
+pub fn run() -> Result<()> {
     App::parse().run()
 }
 
-pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
+pub fn parse_secret_key(s: &str) -> Result<SecretKey, eyre::Error> {
     let secret_key = SecretKey::deserialize(&hex::decode(s)?[..])
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -36,7 +36,7 @@ pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
 
 pub fn parse_bitcoin_secret_key(
     s: &str,
-) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
+) -> Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
     let secret_key = bitcoin::key::secp256k1::SecretKey::from_str(s)
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -142,7 +142,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn run(self) -> eyre::Result<()> {
+    pub fn run(self) -> Result<()> {
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
         tokio_runtime.block_on(run_until_ctrl_c(self.execute()))?;
@@ -181,7 +181,7 @@ impl App {
         tracing_subscriber::registry().with(layers).init();
     }
 
-    async fn execute(self) -> eyre::Result<()> {
+    async fn execute(self) -> Result<()> {
         let disk_store = Storage::new_disk(self.db_path);
 
         info!("Head: {:?}", disk_store.get_head());

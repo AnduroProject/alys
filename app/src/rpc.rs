@@ -108,9 +108,9 @@ macro_rules! new_json_rpc_error {
 // https://www.jsonrpc.org/specification_v1#a1.2Response
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JsonRpcResponseV1 {
-    pub result: Option<serde_json::Value>,
+    pub result: Option<Value>,
     pub error: Option<JsonRpcErrorV1>,
-    pub id: serde_json::Value,
+    pub id: Value,
 }
 
 impl From<JsonRpcResponseV1> for Body {

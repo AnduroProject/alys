@@ -39,7 +39,7 @@ pub type EnrSyncCommitteeBitfield<T> = BitVector<<T as EthSpec>::SyncCommitteeSu
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     /// The Eth2 RPC specified in the wire-0 protocol.
-    eth2_rpc: rpc::RPC<RequestId, MainnetEthSpec>,
+    eth2_rpc: RPC<RequestId, MainnetEthSpec>,
     mdns: mdns::tokio::Behaviour,
 }
 

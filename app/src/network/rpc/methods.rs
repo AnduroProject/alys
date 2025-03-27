@@ -404,6 +404,6 @@ impl slog::KV for StatusMessage {
     ) -> slog::Result {
         serializer.emit_arguments("finalized_hash", &format_args!("{}", self.finalized_hash))?;
         serializer.emit_arguments("head_hash", &format_args!("{}", self.head_hash))?;
-        slog::Result::Ok(())
+        Ok(())
     }
 }

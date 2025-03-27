@@ -438,7 +438,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // generate the taproot info
-        let federation = bitcoin_signing::Federation::new(pubkeys.clone(), 2, Network::Regtest);
+        let federation = Federation::new(pubkeys.clone(), 2, Network::Regtest);
 
         // use bitcoin-core to spend to our new address s.t. we have an utxo to spend
         let funding_tx = send_to_address(&federation.taproot_address, 10000000);
@@ -471,7 +471,7 @@ mod tests {
 
         // sign with 1nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1]);
+            let signer = BitcoinSigner::new(secret_keys[1]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -480,7 +480,7 @@ mod tests {
 
         // sign with 2nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2]);
+            let signer = BitcoinSigner::new(secret_keys[2]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -576,7 +576,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // generate the taproot info
-        let federation = bitcoin_signing::Federation::new_with_internal_pubkey(
+        let federation = Federation::new_with_internal_pubkey(
             internal_keypair.public_key().into(),
             pubkeys.clone(),
             2,

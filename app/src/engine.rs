@@ -38,7 +38,7 @@ impl ConsensusAmount {
     }
 }
 
-impl std::cmp::PartialEq<u64> for ConsensusAmount {
+impl PartialEq<u64> for ConsensusAmount {
     fn eq(&self, other: &u64) -> bool {
         self.0 == *other
     }
