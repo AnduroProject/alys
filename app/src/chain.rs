@@ -3,6 +3,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
+use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
 use crate::error::BlockErrorBlockTypes;
@@ -16,6 +17,7 @@ use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
+use async_trait::async_trait;
 use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
 use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
@@ -23,7 +25,7 @@ use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, 
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use execution_layer::Error::MissingLatestValidHash;
-use eyre::Result;
+use eyre::{eyre, Result};
 use libp2p::PeerId;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashSet};
@@ -71,6 +73,7 @@ pub struct Chain<DB> {
     maybe_bitcoin_signer: Option<BitcoinSigner>,
     pub retarget_params: BitcoinConsensusParams,
     pub is_validator: bool,
+    pub block_hash_cache: Option<RwLock<BlockHashCache>>,
 }
 
 const MAINNET_MAX_WITHDRAWALS: usize = 16;
@@ -139,6 +142,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             maybe_bitcoin_signer,
             retarget_params,
             is_validator,
+            block_hash_cache: Some(RwLock::new(BlockHashCache::new(None))),
         }
     }
 

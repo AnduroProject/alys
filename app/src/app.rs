@@ -1,7 +1,9 @@
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
+use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
+use eyre::Result;
 use crate::spec::{
     genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
 };
@@ -14,7 +16,7 @@ use bridge::{
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use execution_layer::auth::JwtKey;
-use futures::pin_mut;
+use futures::{pin_mut};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
@@ -298,6 +300,9 @@ impl App {
             .store_genesis(chain_spec.clone())
             .await
             .expect("Should store genesis");
+
+        // Initialize the block hash cache
+        chain.init_block_hash_cache().await?;
 
         // start json-rpc v1 server
         crate::rpc::run_server(

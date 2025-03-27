@@ -35,6 +35,7 @@ pub enum Error {
     InvalidPow,
     ChainSyncing,
     ChainError(ChainError),
+    GenericError(eyre::Report),
 }
 
 #[derive(Debug, Error)]
