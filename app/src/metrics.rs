@@ -95,6 +95,18 @@ lazy_static! {
         &["reason"]
     ).unwrap();
 
+    pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
+        "engine_build_block_calls_total",
+        "Number of times build_block is invoked",
+        &["status"]
+    ).unwrap();
+
+    pub static ref ENGINE_COMMIT_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
+        "engine_commit_block_calls_total",
+        "Number of times commit_block is invoked",
+        &["status"]
+    ).unwrap();
+
     /// Counter for the number of JSON-RPC requests, labeled by method and status.
     pub static ref RPC_REQUESTS: IntCounterVec = register_int_counter_vec!(
         "rpc_requests_total",
@@ -138,9 +150,9 @@ pub async fn start_server() {
 
     let server = Server::bind(&addr).serve(make_svc);
 
-    println!("Listening on http://{}", addr);
+    tracing::info!("Starting Metrics server on {}", addr);
 
     if let Err(e) = server.await {
-        eprintln!("Server error: {}", e);
+        tracing::error!("Metrics server error: {}", e);
     }
 }
