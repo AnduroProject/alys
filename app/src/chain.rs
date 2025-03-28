@@ -777,20 +777,20 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     &header.range_start
                 )))?;
         
-        if range_start_block.message.parent_hash != last_finalized.hash {
-            debug!(
-                "last_finalized.hash: {:?}\n{}",
-                last_finalized.hash, last_finalized.height
-            );
-            debug!(
-                "range_start_block.message.parent_hash: {:?}\n{}",
-                range_start_block.message.parent_hash,
-                range_start_block.message.height()
-            );
-            warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
-		        last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
-            return Err(Error::InvalidPowRange);
-        }
+        // if range_start_block.message.parent_hash != last_finalized.hash {
+        //     debug!(
+        //         "last_finalized.hash: {:?}\n{}",
+        //         last_finalized.hash, last_finalized.height
+        //     );
+        //     debug!(
+        //         "range_start_block.message.parent_hash: {:?}\n{}",
+        //         range_start_block.message.parent_hash,
+        //         range_start_block.message.height()
+        //     );
+        //     warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
+		//         last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
+        //     return Err(Error::InvalidPowRange);
+        // }
 
         let hashes = self.get_hashes(range_start_block.message.parent_hash, header.range_end)?;
 
