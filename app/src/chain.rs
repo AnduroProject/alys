@@ -3,6 +3,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
+use crate::block_candidate_cache::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
@@ -19,7 +20,6 @@ use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use async_trait::async_trait;
 use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
-use bls::PublicKey;
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
@@ -27,7 +27,6 @@ use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use execution_layer::Error::MissingLatestValidHash;
 use eyre::{eyre, Result};
 use libp2p::PeerId;
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
@@ -62,7 +61,7 @@ pub struct Chain<DB> {
     head: RwLock<Option<BlockRef>>,
     sync_status: RwLock<SyncStatus>,
     peers: RwLock<HashSet<PeerId>>,
-    block_candidates: RwLock<HashMap<Hash256, CandidateState>>,
+    block_candidates: BlockCandidates,
     queued_pow: RwLock<Option<AuxPowHeader>>,
     max_blocks_without_pow: u64,
     federation: Vec<Address>,
@@ -131,7 +130,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             head: RwLock::new(head),
             sync_status: RwLock::new(SyncStatus::Synced), // assume synced, we'll find out if not
             peers: RwLock::new(HashSet::new()),
-            block_candidates: RwLock::new(HashMap::new()),
+            block_candidates: BlockCandidates::new(),
             queued_pow: RwLock::new(None),
             max_blocks_without_pow,
             federation,
@@ -634,25 +633,33 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         }
 
         // store the candidate
-        let mut block_proposals = self.block_candidates.write().await;
-        let state = match block_proposals.entry(root_hash) {
-            Entry::Vacant(entry) => entry.insert(Default::default()),
-            Entry::Occupied(entry) => entry.into_mut(),
-        };
-
         // TODO: this is also called on sync which isn't strictly required
         let our_approval = if let Some(authority) = &self.aura.authority {
             let our_approval = unverified_block.message.sign(authority);
-            state.add_checked_approval(our_approval.clone())?;
+
+            // First insert the block
+            self.block_candidates
+                .insert(unverified_block.clone())
+                .await?;
+
+            // Then add our approval
+            let approval = ApproveBlock {
+                block_hash: root_hash,
+                signature: our_approval.clone().into(),
+            };
+            self.block_candidates
+                .add_approval(approval, &self.aura.authorities)
+                .await?;
+
             Some(our_approval)
         } else {
             trace!("Full node doesn't need to approve");
             // full node doesn't need to approve
+            self.block_candidates
+                .insert(unverified_block.clone())
+                .await?;
             None
         };
-
-        state.add_checked_block(unverified_block)?;
-        drop(block_proposals);
 
         self.maybe_accept_block(root_hash).await?;
 
@@ -776,7 +783,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     "Failed to get block: {}",
                     &header.range_start
                 )))?;
-        
+
         if range_start_block.message.parent_hash != last_finalized.hash {
             debug!(
                 "last_finalized.hash: {:?}\n{}",
@@ -877,40 +884,36 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     async fn process_approval(self: &Arc<Self>, approval: ApproveBlock) -> Result<(), Error> {
         let hash = approval.block_hash;
 
-        let mut block_proposals = self.block_candidates.write().await;
-        let state = match block_proposals.entry(hash) {
-            Entry::Vacant(entry) => entry.insert(Default::default()),
-            Entry::Occupied(entry) => entry.into_mut(),
-        };
-        state.add_unchecked_approval(approval, &self.aura.authorities)?;
-        drop(block_proposals); // don't hang on to lock
+        // Add the approval to the cache
+        self.block_candidates
+            .add_approval(approval, &self.aura.authorities)
+            .await?;
 
+        // Process the block if it has reached majority approval
         self.maybe_accept_block(hash).await
     }
 
     async fn maybe_accept_block(self: &Arc<Self>, hash: Hash256) -> Result<(), Error> {
-        let mut block_proposals = self.block_candidates.write().await;
+        // Get the block from the cache
+        let block_opt = self.block_candidates.get_block(&hash).await;
 
-        let proposal = block_proposals
-            .get(&hash)
-            .ok_or(Error::CandidateCacheError)?;
+        if let Some(block) = block_opt {
+            // Check if the block has reached majority approval
+            if self.aura.majority_approved(&block)? {
+                info!("🤝 Block {hash} has reached majority approval");
 
-        match proposal {
-            CandidateState::CheckedBlock(b) => {
-                if self.aura.majority_approved(b)? {
-                    info!("🤝 Block {hash} has reached majority approval");
-                    let block = b.clone();
+                // Clear the cache to free up memory
+                self.block_candidates.clear().await;
 
-                    block_proposals.clear(); // free up memory
-                    drop(block_proposals); // minimize lock time
-
-                    self.import_verified_block(block).await?;
-                }
-            }
-            _ => {
+                // Import the verified block
+                self.import_verified_block(block).await?;
+            } else {
                 debug!("Block {hash} has not reached majority approval");
                 // nothing to do
             }
+        } else {
+            debug!("Block {hash} not found in cache");
+            return Err(Error::CandidateCacheError);
         }
 
         Ok(())
@@ -1822,63 +1825,5 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockHashCacheInit for Chain<DB> {
         } else {
             Ok(())
         }
-    }
-}
-
-#[allow(clippy::large_enum_variant)]
-enum CandidateState {
-    // we received the block and approved of it
-    CheckedBlock(SignedConsensusBlock<MainnetEthSpec>),
-    // we received approvals before we received the block - store them until we receive the block
-    QueuedApprovals(Vec<CheckedIndividualApproval>),
-}
-
-impl CandidateState {
-    fn add_unchecked_approval(
-        &mut self,
-        approval: ApproveBlock,
-        authorities: &[PublicKey],
-    ) -> Result<(), Error> {
-        // first, check the signature.
-        let checked_approval = approval.signature.check(approval.block_hash, authorities)?;
-        self.add_checked_approval(checked_approval)
-    }
-
-    fn add_checked_approval(&mut self, approval: CheckedIndividualApproval) -> Result<(), Error> {
-        match self {
-            CandidateState::CheckedBlock(x) => {
-                x.add_approval(approval)?;
-            }
-            CandidateState::QueuedApprovals(v) => {
-                v.push(approval);
-            }
-        }
-        Ok(())
-    }
-
-    fn add_checked_block(
-        &mut self,
-        block: SignedConsensusBlock<MainnetEthSpec>,
-    ) -> Result<(), Error> {
-        match self {
-            CandidateState::QueuedApprovals(queued_approvals) => {
-                let mut new_state = CandidateState::CheckedBlock(block);
-                for approval in queued_approvals.drain(..) {
-                    new_state.add_checked_approval(approval)?;
-                }
-
-                *self = new_state;
-            }
-            CandidateState::CheckedBlock(_) => {
-                // nothing to do
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Default for CandidateState {
-    fn default() -> Self {
-        Self::QueuedApprovals(vec![])
     }
 }
