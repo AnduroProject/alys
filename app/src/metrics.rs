@@ -1,3 +1,4 @@
+use ethers_core::k256::pkcs8::der::asn1::Int;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
@@ -14,9 +15,10 @@ use prometheus::{
 
 lazy_static! {
     /// This counter tracks the total number of times we've produced an Aura block.
-    pub static ref AURA_PRODUCED_BLOCKS: IntCounter = register_int_counter!(
+    pub static ref AURA_PRODUCED_BLOCKS: IntCounterVec = register_int_counter_vec!(
         "aura_produced_blocks_total",
-        "Total number of blocks produced by the node via the Aura consensus"
+        "Total number of blocks produced by the node via the Aura consensus",
+        &["status"]
     ).unwrap();
 
     /// This gauge tracks the current slot for Aura.
@@ -25,23 +27,29 @@ lazy_static! {
         "Tracks the current slot number processed by the node"
     ).unwrap();
 
-    /// Counter for the number of times `claim_slot` is called.
-    pub static ref AURA_CLAIM_SLOT_CALLS: IntCounter = register_int_counter!(
-        "aura_claim_slot_calls_total",
-        "Total number of times the claim_slot method is called"
+    /// Gauge for the number of successful author retrievals, labeled by authority index.
+    pub static ref AURA_SLOT_AUTHOR_RETRIEVALS: IntCounterVec = register_int_counter_vec!(
+        "aura_slot_author_retrievals",
+        "Number of slot author retrievals",
+        &["status", "authority_index"]
     ).unwrap();
 
-    /// Gauge for the number of successful author retrievals, labeled by authority index.
-    pub static ref AURA_SUCCESSFUL_SLOT_AUTHOR_RETRIEVALS: GaugeVec = register_gauge_vec!(
-        "aura_successful_author_retrievals",
-        "Number of successful author retrievals",
-        &["authority_index"]
+    pub static ref AURA_LATEST_SLOT_AUTHOR: Gauge = register_gauge!(
+        "aura_latest_slot_author",
+        "The index of the latest slot author"
+    ).unwrap();
+
+    pub static ref AURA_VERIFY_SIGNED_BLOCK: IntCounterVec = register_int_counter_vec!(
+        "aura_verify_signed_block_total",
+        "Number of times the proposed block is verified",
+        &["status"]
     ).unwrap();
 
     /// Gauge for the number of successful slot claims.
-    pub static ref AURA_SUCCESSFUL_SLOT_CLAIMS: Gauge = register_gauge!(
-        "aura_successful_slot_claims",
-        "Number of successful slot claims"
+    pub static ref AURA_SLOT_CLAIM_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "aura_slot_claim_totals",
+        "Number of slot claims",
+        &["status"]
     ).unwrap();
 
     /// Counter for the number of times `create_aux_block` is called.
