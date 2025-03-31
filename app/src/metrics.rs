@@ -72,19 +72,10 @@ lazy_static! {
         "Histogram of the number of hashes processed during aux block creation"
     ).unwrap();
 
-    pub static ref CHAIN_PEGINS_PROCESSED: IntCounter = register_int_counter!(
-        "chain_pegins_processed_total",
-        "Total number of peg-ins processed"
-    ).unwrap();
-
-    pub static ref CHAIN_PEGINS_REMOVED: IntCounter = register_int_counter!(
-        "chain_pegins_removed_total",
-        "Total number of peg-ins removed because they were already processed"
-    ).unwrap();
-
-    pub static ref CHAIN_PEGINS_ADDED: IntCounter = register_int_counter!(
-        "chain_pegins_added_total",
-        "Total number of peg-ins added to the processed list"
+    pub static ref CHAIN_PEGIN_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_pegin_totals",
+        "Total number of peg-in operations labeled by operation type (add, remove, process)",
+        &["status"]
     ).unwrap();
 
     pub static ref CHAIN_TOTAL_PEGIN_AMOUNT: IntGauge = register_int_gauge!(
@@ -101,6 +92,12 @@ lazy_static! {
         "chain_blocks_rejected_total",
         "Number of blocks rejected, labeled by reason",
         &["reason"]
+    ).unwrap();
+    
+    pub static ref CHAIN_PROCESS_BLOCK_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_process_block_totals",
+        "Total number of blocks processed, labeled by status",
+        &["status", "reason"]
     ).unwrap();
 
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
