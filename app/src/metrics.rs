@@ -93,11 +93,17 @@ lazy_static! {
         "Number of blocks rejected, labeled by reason",
         &["reason"]
     ).unwrap();
-    
+
     pub static ref CHAIN_PROCESS_BLOCK_TOTALS: IntCounterVec = register_int_counter_vec!(
         "chain_process_block_totals",
         "Total number of blocks processed, labeled by status",
         &["status", "reason"]
+    ).unwrap();
+
+    pub static ref CHAIN_NETWORK_GOSSIP_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_network_gossip_totals",
+        "Total number of network gossip messages, labeled by message type",
+        &["message_type", "status"]
     ).unwrap();
 
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
