@@ -349,11 +349,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             None => (None, vec![]),
             Some(pow) => {
                 let signature_collector = self.bitcoin_signature_collector.read().await;
+                // TODO: BTC txn caching
                 let finalized_txs = self
                     .get_bitcoin_payment_proposals_in_range(pow.range_start, pow.range_end)?
                     .into_iter()
-                    .map(|tx| signature_collector.get_finalized(tx.txid()))
-                    .collect::<Result<Vec<_>, _>>();
+                    .filter_map(|tx| match signature_collector.get_finalized(tx.txid()) {
+                        Ok(finalized_tx) => Some(finalized_tx),
+                        Err(err) => {
+                            warn!("Skipping transaction with txid {}: {}", tx.txid(), err);
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let finalized_txs: Result<
+                    Vec<bitcoin::blockdata::transaction::Transaction>,
+                    Error,
+                > = Ok(finalized_txs);
 
                 match finalized_txs {
                     Err(err) => {
@@ -390,7 +402,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             "PayloadIdUnavailable: Slot {}, Timestamp {:?}",
                             slot, timestamp
                         );
+                        // self.clone().sync(None).await;
                         self.clone().sync().await;
+
                         // we are missing a parent, this is normal if we are syncing
                         return Ok(());
                     }
@@ -585,6 +599,24 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         if let Some(ref pow) = unverified_block.message.auxpow_header {
             // NOTE: Should be removed after chain deprecation
             let mut pow_override = false;
+
+            // TODO: Historical Context
+            if unverified_block.message.execution_payload.block_number == 39171 ||
+                unverified_block.message.execution_payload.block_number == 39264 ||
+                unverified_block.message.execution_payload.block_number == 39266 ||
+                unverified_block.message.execution_payload.block_number == 41369 ||
+                unverified_block.message.execution_payload.block_number == 42338 ||
+                unverified_block.message.execution_payload.block_number == 45989 ||
+                unverified_block.message.execution_payload.block_number == 48055 ||
+                unverified_block.message.execution_payload.block_number == 48263 ||
+                unverified_block.message.execution_payload.block_number == 48288 ||
+                unverified_block.message.execution_payload.block_number == 48765 ||
+                unverified_block.message.execution_payload.block_number == 50260 ||
+                unverified_block.message.execution_payload.block_number == 50544 ||
+                unverified_block.message.execution_payload.block_number == 53143 {
+
+                pow_override = true;
+            }
             self.check_pow(pow, pow_override).await?;
 
             // also check the finalized pegouts
@@ -784,19 +816,22 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     &header.range_start
                 )))?;
 
-        if range_start_block.message.parent_hash != last_finalized.hash {
-            debug!(
-                "last_finalized.hash: {:?}\n{}",
-                last_finalized.hash, last_finalized.height
-            );
-            debug!(
-                "range_start_block.message.parent_hash: {:?}\n{}",
-                range_start_block.message.parent_hash,
-                range_start_block.message.height()
-            );
-            warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
-		        last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
-            return Err(Error::InvalidPowRange);
+        // TODO: Historical Context
+        if range_start_block.message.height() > 53143 {
+            if range_start_block.message.parent_hash != last_finalized.hash {
+                debug!(
+                    "last_finalized.hash: {:?}\n{}",
+                    last_finalized.hash, last_finalized.height
+                );
+                debug!(
+                    "range_start_block.message.parent_hash: {:?}\n{}",
+                    range_start_block.message.parent_hash,
+                    range_start_block.message.height()
+                );
+                warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
+                    last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
+                return Err(Error::InvalidPowRange);
+            }
         }
 
         let hashes = self.get_hashes(range_start_block.message.parent_hash, header.range_end)?;
@@ -1315,9 +1350,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         }
 
                         match chain.process_block(x.clone()).await {
-                            Err(x) => {
-                                error!("Got error while processing: {x:?}");
-                            }
+                            Err(x) => match x {
+                                Error::MissingParent => {
+                                    // self.clone().sync(Some((number - head_height) as u32)).await;
+                                    self.clone().sync().await;
+                                }
+                                _ => {
+                                    error!("Got error while processing: {x:?}");
+                                }
+                            },
                             Ok(Some(our_approval)) => {
                                 // broadcast our approval
                                 let block_hash = x.canonical_root();
@@ -1334,8 +1375,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         }
                     }
                     PubsubMessage::ApproveBlock(approval) => {
-                        info!("✅ Received approval for block {}", approval.block_hash);
-                        self.process_approval(approval).await.unwrap();
+                        if self.sync_status.read().await.is_synced() {
+                            info!("✅ Received approval for block {}", approval.block_hash);
+                            match self.process_approval(approval).await {
+                                Err(err) => {
+                                    warn!("Error processing approval: {err:?}");
+                                }
+                                Ok(()) => {
+                                    // nothing to do
+                                }
+                            };
+                        }
                     }
                     PubsubMessage::QueuePow(pow) => match self
                         .check_pow(&pow, false)
