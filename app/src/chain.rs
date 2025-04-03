@@ -7,8 +7,7 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCKS_REJECTED, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS,
-    CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_BLOCKS_REJECTED, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -1450,6 +1449,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .map(|x| x.height)
             .unwrap_or_default();
         info!("Starting sync from {}", head);
+        CHAIN_SYNCING_OPERATION_TOTALS.with_label_values(&[head.to_string().as_str()]).inc();
 
         let mut receive_stream = self
             .network
@@ -1488,6 +1488,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         *self.sync_status.write().await = SyncStatus::Synced;
 
         info!("Finished syncing...");
+        CHAIN_SYNCING_OPERATION_TOTALS
+            .with_label_values(&[head.to_string().as_str(), "success"])
+            .inc();
     }
 
     pub async fn listen_for_peer_discovery(self: Arc<Self>) {
@@ -1496,6 +1499,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             loop {
                 let peer_ids = listener.recv().await.unwrap();
                 debug!("Got peers {peer_ids:?}");
+                CHAIN_DISCOVERED_PEERS.set(peer_ids.len() as f64);
 
                 let mut peers = self.peers.write().await;
                 *peers = peer_ids;
@@ -1555,6 +1559,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
         info!("Monitoring bitcoin blocks from height {start_height}");
+        CHAIN_BTC_BLOCK_MONITOR_TOTALS.with_label_values(&[start_height.to_string().as_str(), "called"]).inc();
 
         tokio::spawn(async move {
             let chain = &self;
@@ -1572,6 +1577,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                            CHAIN_BTC_BLOCK_MONITOR_TOTALS.with_label_values(&[start_height.to_string().as_str(), "queued__pegins"]).inc();
                         } else {
                             debug!(
                                 "Not synced, ignoring pegin {} for {} in {}",

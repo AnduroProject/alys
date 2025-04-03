@@ -106,6 +106,23 @@ lazy_static! {
         &["message_type", "status"]
     ).unwrap();
 
+    pub static ref CHAIN_BTC_BLOCK_MONITOR_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_btc_block_monitor_totals",
+        "Total number of BTC block monitor messages, labeled by message type",
+        &["block_height", "status"]
+    ).unwrap();
+
+    pub static ref CHAIN_DISCOVERED_PEERS: Gauge = register_gauge!(
+        "chain_discovered_peers",
+        "Number of discovered peers"
+    ).unwrap();
+
+    pub static ref CHAIN_SYNCING_OPERATION_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_syncing_operation_totals",
+        "Total number of syncing operations, labeled by operation type (add, remove)",
+        &["start_height", "status"]
+    ).unwrap();
+
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
         "engine_build_block_calls_total",
         "Number of times build_block is invoked",
