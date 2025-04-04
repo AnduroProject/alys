@@ -7,7 +7,9 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCKS_REJECTED, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT
+    CHAIN_BLOCKS_REJECTED, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
+    CHAIN_DISCOVERED_PEERS, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS,
+    CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -302,7 +304,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         slot: u64,
         timestamp: Duration,
     ) -> Result<(), Error> {
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["attempted"])
+            .inc();
         if !self.sync_status.read().await.is_synced() {
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["attempted", "not_synced"])
+                .inc();
             return Ok(());
         }
         let mut prev_height = 0;
@@ -369,7 +377,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .await;
 
         let payload = match payload_result {
-            Ok(payload) => payload,
+            Ok(payload) => {
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["blocks_built", "success"])
+                    .inc();
+                payload
+            }
             Err(err) => {
                 match err {
                     Error::PayloadIdUnavailable => {
@@ -377,12 +390,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             "PayloadIdUnavailable: Slot {}, Timestamp {:?}",
                             slot, timestamp
                         );
+                        CHAIN_BLOCK_PRODUCTION_TOTALS
+                            .with_label_values(&["blocks_built", "failed"])
+                            .inc();
                         self.clone().sync().await;
                         // we are missing a parent, this is normal if we are syncing
                         return Ok(());
                     }
                     _ => {
                         warn!("Failed to build block payload: {:?}", err);
+                        CHAIN_BLOCK_PRODUCTION_TOTALS
+                            .with_label_values(&["blocks_built", "failed"])
+                            .inc();
                         return Ok(());
                     }
                 }
@@ -391,6 +410,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
+        if !pegouts.is_none() {
+            // Increment the pegouts created counter
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["pegouts_created", "success"])
+                .inc();
+        }
 
         if finalized_pegouts.len() > 0 {
             trace!("Finalized pegouts: {:?}", finalized_pegouts[0].input);
@@ -409,6 +434,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let signed_block =
             block.sign_block(self.aura.authority.as_ref().expect("Only called by signer"));
 
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["blocks_signed", "success"])
+            .inc();
+
         let root_hash = signed_block.canonical_root();
         info!(
             "⛏️  Proposed block on slot {slot} (block {}) {prev} -> {root_hash}",
@@ -418,11 +447,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         match self.process_block(signed_block.clone()).await {
             Err(Error::MissingRequiredPow) => {
                 warn!("Could not produce block - need PoW");
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["process_block", "failed"])
+                    .inc();
                 // don't consider this fatal
                 return Ok(());
             }
             Err(e) => {
                 error!("Failed to process block we created ourselves... {e:?}");
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["process_block", "failed"])
+                    .inc();
                 return Ok(());
             }
             Ok(_) => {}
@@ -430,7 +465,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if let Err(x) = self.network.publish_block(signed_block.clone()).await {
             info!("Failed to publish block: {x}");
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["blocks_published", "failed"])
+                .inc();
+        } else {
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["blocks_published", "success"])
+                .inc();
         }
+
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["success"])
+            .inc();
         Ok(())
     }
 
@@ -1449,7 +1495,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .map(|x| x.height)
             .unwrap_or_default();
         info!("Starting sync from {}", head);
-        CHAIN_SYNCING_OPERATION_TOTALS.with_label_values(&[head.to_string().as_str()]).inc();
+        CHAIN_SYNCING_OPERATION_TOTALS
+            .with_label_values(&[head.to_string().as_str()])
+            .inc();
 
         let mut receive_stream = self
             .network
@@ -1559,7 +1607,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
         info!("Monitoring bitcoin blocks from height {start_height}");
-        CHAIN_BTC_BLOCK_MONITOR_TOTALS.with_label_values(&[start_height.to_string().as_str(), "called"]).inc();
+        CHAIN_BTC_BLOCK_MONITOR_TOTALS
+            .with_label_values(&[start_height.to_string().as_str(), "called"])
+            .inc();
 
         tokio::spawn(async move {
             let chain = &self;
@@ -1577,7 +1627,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
-                            CHAIN_BTC_BLOCK_MONITOR_TOTALS.with_label_values(&[start_height.to_string().as_str(), "queued__pegins"]).inc();
+                            CHAIN_BTC_BLOCK_MONITOR_TOTALS
+                                .with_label_values(&[
+                                    start_height.to_string().as_str(),
+                                    "queued__pegins",
+                                ])
+                                .inc();
                         } else {
                             debug!(
                                 "Not synced, ignoring pegin {} for {} in {}",

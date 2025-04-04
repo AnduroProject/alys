@@ -123,6 +123,12 @@ lazy_static! {
         &["start_height", "status"]
     ).unwrap();
 
+    pub static ref CHAIN_BLOCK_PRODUCTION_TOTALS: IntCounterVec = register_int_counter_vec!(
+        "chain_block_production_totals",
+        "Total number of blocks produced, labeled by status",
+        &["message_type", "status"]
+    ).unwrap();
+
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
         "engine_build_block_calls_total",
         "Number of times build_block is invoked",
