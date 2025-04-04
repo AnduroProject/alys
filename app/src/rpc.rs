@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use store::ItemStore;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, trace};
 use types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]

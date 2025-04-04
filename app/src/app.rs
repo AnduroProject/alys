@@ -3,7 +3,6 @@ use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
-use eyre::Result;
 use crate::spec::{
     genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
 };
@@ -16,7 +15,8 @@ use bridge::{
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use execution_layer::auth::JwtKey;
-use futures::{pin_mut};
+use eyre::Result;
+use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
