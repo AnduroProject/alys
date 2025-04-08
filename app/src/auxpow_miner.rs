@@ -8,8 +8,7 @@ use crate::{auxpow::AuxPow, chain::Chain};
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
-use execution_layer::ExecutionBlock;
-use eyre::{Report, Result};
+use eyre::{eyre, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
 use store::ItemStore;
@@ -81,14 +80,14 @@ pub struct AuxBlock {
 pub trait ChainManager<BI> {
     async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>>;
     fn get_last_finalized_block(&self) -> BI;
-    fn get_block_by_hash(&self, hash: &BlockHash) -> BI;
+    fn get_block_by_hash(&self, hash: &BlockHash) -> Result<BI>;
     async fn get_queued_auxpow(&self) -> Option<AuxPowHeader>;
-    fn get_block_at_height(&self, height: u64) -> BI;
+    fn get_block_at_height(&self, height: u64) -> Result<BI>;
     #[allow(clippy::too_many_arguments)]
     async fn push_auxpow(
         &self,
-        start_hash: bitcoin::BlockHash,
-        end_hash: bitcoin::BlockHash,
+        start_hash: BlockHash,
+        end_hash: BlockHash,
         bits: u32,
         chain_id: u32,
         height: u64,
@@ -218,21 +217,21 @@ fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
-    get_block_at_height: impl Fn(u64) -> BI,
+    get_block_at_height: impl Fn(u64) -> Result<BI>,
     index_last: &BI,
     params: &BitcoinConsensusParams,
     target_override: Option<CompactTarget>,
-) -> CompactTarget {
+) -> Result<CompactTarget> {
     if let Some(target) = target_override {
-        return target;
+        return Ok(target);
     }
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
-        return CompactTarget::from_consensus(index_last.bits());
+        return Ok(CompactTarget::from_consensus(index_last.bits()));
     }
 
     let blocks_back = params.difficulty_adjustment_interval() - 1;
     let height_first = index_last.height() - blocks_back;
-    let index_first = get_block_at_height(height_first);
+    let index_first = get_block_at_height(height_first)?;
 
     let next_work = calculate_next_work_required(
         index_first.block_time(),
@@ -247,7 +246,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
         next_work.to_consensus()
     );
 
-    next_work
+    Ok(next_work)
 }
 
 struct AuxInfo {
@@ -274,7 +273,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         }
     }
 
-    fn get_next_work_required(&self, index_last: &BI) -> CompactTarget {
+    fn get_next_work_required(&self, index_last: &BI) -> Result<CompactTarget> {
         get_next_work_required(
             |height| self.chain.get_block_at_height(height),
             index_last,
@@ -308,14 +307,14 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         let index_last = self.chain.get_last_finalized_block();
 
         let hashes = self.chain.get_aggregate_hashes().await?;
-        trace!("Found {} hashes", hashes.len());
+        // trace!("Found {} hashes", hashes.len());
 
         AUXPOW_HASHES_PROCESSED.observe(hashes.len() as f64);
 
         // calculates the "vector commitment" for previous blocks without PoW.
         let hash = AuxPow::aggregate_hash(&hashes);
 
-        trace!("Creating AuxBlock for hash {}", hash);
+        // trace!("Creating AuxBlock for hash {}", hash);
 
         // store the height for this hash so we can retrieve the
         // same unverified hashes on submit
@@ -334,7 +333,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         );
 
         // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/node/miner.cpp#L174
-        let bits = self.get_next_work_required(&index_last);
+        let bits = self.get_next_work_required(&index_last)?;
 
         AUXPOW_CREATE_BLOCK_CALLS
             .with_label_values(&["success"])
@@ -358,12 +357,12 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// * `hash` - Hash of the block to submit
     /// * `auxpow` - Serialised auxpow found
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L166
-    pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> bool {
+    pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> Result<()> {
         AUXPOW_SUBMIT_BLOCK_CALLS
             .with_label_values(&["called"])
             .inc();
 
-        trace!("Submitting AuxPow for hash {}", hash);
+        // trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
             start_hash,
@@ -377,15 +376,21 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             AUXPOW_SUBMIT_BLOCK_CALLS
                 .with_label_values(&["unknown_block"])
                 .inc();
-            return false;
+            return Err(eyre!("Submitted AuxPow for unknown block"));
         };
 
-        let index_last = self.chain.get_block_by_hash(&last_hash);
-        trace!("Last block hash: {}", index_last.block_hash());
-        let bits = self.get_next_work_required(&index_last);
-        trace!("Next work required: {}", bits.to_consensus());
+        let index_last = if let Ok(block) = self.chain.get_block_by_hash(&last_hash) {
+            block
+        } else {
+            error!("Last block not found");
+            return Err(eyre!("Last block not found"));
+        };
+
+        // trace!("Last block hash: {}", index_last.block_hash());
+        let bits = self.get_next_work_required(&index_last)?;
+        // trace!("Next work required: {}", bits.to_consensus());
         let chain_id = index_last.chain_id();
-        trace!("Chain ID: {}", chain_id);
+        // trace!("Chain ID: {}", chain_id);
 
         // NOTE: we also check this in `check_pow`
         // process block
@@ -395,7 +400,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             AUXPOW_SUBMIT_BLOCK_CALLS
                 .with_label_values(&["invalid_pow"])
                 .inc();
-            return false;
+            return Err(eyre!("POW is not valid"));
         }
         if auxpow.check(hash, chain_id).is_err() {
             // AUX POW is not valid
@@ -403,7 +408,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             AUXPOW_SUBMIT_BLOCK_CALLS
                 .with_label_values(&["invalid_auxpow"])
                 .inc();
-            return false;
+            return Err(eyre!("AuxPow is not valid"));
         }
 
         // should check if newer block is finalized
@@ -417,7 +422,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
                 auxpow,
                 address,
             )
-            .await
+            .await;
+        Ok(())
     }
 
     pub fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
@@ -433,13 +439,16 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
     let task = async move {
         let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
         loop {
-            trace!("Calling create_aux_block");
+            // trace!("Calling create_aux_block");
             // TODO: set miner address
             if let Ok(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
-                trace!("Created AuxBlock for hash {}", aux_block.hash);
+                // trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
-                trace!("Calling submit_aux_block");
-                miner.submit_aux_block(aux_block.hash, auxpow).await;
+                // trace!("Calling submit_aux_block");
+                miner
+                    .submit_aux_block(aux_block.hash, auxpow)
+                    .await
+                    .unwrap();
             } else {
                 trace!("No aux block created");
                 sleep(Duration::from_millis(250)).await;

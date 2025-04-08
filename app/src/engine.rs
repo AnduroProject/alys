@@ -24,7 +24,6 @@ use types::{
 };
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
-const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
 
 #[derive(Debug, Default, Clone)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9
@@ -40,7 +39,7 @@ impl ConsensusAmount {
     }
 }
 
-impl std::cmp::PartialEq<u64> for ConsensusAmount {
+impl PartialEq<u64> for ConsensusAmount {
     fn eq(&self, other: &u64) -> bool {
         self.0 == *other
     }

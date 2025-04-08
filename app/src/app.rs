@@ -1,5 +1,6 @@
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
+use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{
@@ -14,6 +15,7 @@ use bridge::{
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use execution_layer::auth::JwtKey;
+use eyre::Result;
 use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
@@ -22,11 +24,11 @@ use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[inline]
-pub fn run() -> eyre::Result<()> {
+pub fn run() -> Result<()> {
     App::parse().run()
 }
 
-pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
+pub fn parse_secret_key(s: &str) -> Result<SecretKey, eyre::Error> {
     let secret_key = SecretKey::deserialize(&hex::decode(s)?[..])
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -34,7 +36,7 @@ pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
 
 pub fn parse_bitcoin_secret_key(
     s: &str,
-) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
+) -> Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
     let secret_key = bitcoin::key::secp256k1::SecretKey::from_str(s)
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -140,7 +142,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn run(self) -> eyre::Result<()> {
+    pub fn run(self) -> Result<()> {
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
         tokio_runtime.block_on(run_until_ctrl_c(self.execute()))?;
@@ -179,7 +181,7 @@ impl App {
         tracing_subscriber::registry().with(layers).init();
     }
 
-    async fn execute(self) -> eyre::Result<()> {
+    async fn execute(self) -> Result<()> {
         let disk_store = Storage::new_disk(self.db_path);
 
         info!("Head: {:?}", disk_store.get_head());
@@ -284,6 +286,7 @@ impl App {
                     self.bitcoin_rpc_pass.expect("RPC password is configured"),
                 ),
                 bitcoin_addresses,
+                chain_spec.required_btc_txn_confirmations,
             ),
             bitcoin_wallet,
             bitcoin_signature_collector,
@@ -297,6 +300,9 @@ impl App {
             .store_genesis(chain_spec.clone())
             .await
             .expect("Should store genesis");
+
+        // Initialize the block hash cache
+        chain.init_block_hash_cache().await?;
 
         // start json-rpc v1 server
         crate::rpc::run_server(

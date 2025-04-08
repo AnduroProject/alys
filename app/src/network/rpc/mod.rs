@@ -235,7 +235,7 @@ where
         );
         // NOTE: this is needed because PeerIds have interior mutability.
         let peer_repr = peer_id.to_string();
-        let log = self.log.new(slog::o!("peer_id" => peer_repr));
+        let log = self.log.new(o!("peer_id" => peer_repr));
         let handler = RPCHandler::new(protocol, &log, self.network_params.resp_timeout);
 
         Ok(handler)
@@ -259,7 +259,7 @@ where
 
         // NOTE: this is needed because PeerIds have interior mutability.
         let peer_repr = peer_id.to_string();
-        let log = self.log.new(slog::o!("peer_id" => peer_repr));
+        let log = self.log.new(o!("peer_id" => peer_repr));
         let handler = RPCHandler::new(protocol, &log, self.network_params.resp_timeout);
 
         Ok(handler)
@@ -409,6 +409,6 @@ where
         serializer.emit_str("msg_kind", msg_kind)?;
         serializer.emit_arguments("protocol", &format_args!("{}", protocol))?;
 
-        slog::Result::Ok(())
+        Ok(())
     }
 }

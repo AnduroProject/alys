@@ -19,8 +19,6 @@ pub use bitcoin_signing::{
 };
 pub use bitcoin_stream::BitcoinCore;
 
-pub const REQUIRED_CONFIRMATIONS: u8 = 12;
-
 pub fn wei_to_sats(wei: U256) -> u64 {
     // eth has 18 decimals, bitcoin 8 --> div by 10^10
     (wei / U256::from(10_000_000_000u64)).as_u64()
@@ -82,15 +80,21 @@ pub struct PegInInfo {
 pub struct Bridge {
     pegin_addresses: Vec<BitcoinAddress>,
     bitcoin_core: BitcoinCore,
+    required_confirmations: u16,
 }
 
 impl Bridge {
     const BRIDGE_CONTRACT_ADDRESS: &'static str = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
 
-    pub fn new(bitcoin_core: BitcoinCore, pegin_addresses: Vec<BitcoinAddress>) -> Self {
+    pub fn new(
+        bitcoin_core: BitcoinCore,
+        pegin_addresses: Vec<BitcoinAddress>,
+        required_confirmations: u16,
+    ) -> Self {
         Self {
             pegin_addresses,
             bitcoin_core,
+            required_confirmations,
         }
     }
 
@@ -104,7 +108,7 @@ impl Bridge {
         let mut stream = stream_blocks(
             self.bitcoin_core.clone(),
             start_height,
-            REQUIRED_CONFIRMATIONS.into(),
+            self.required_confirmations.into(),
         )
         .await;
         while let Some(x) = stream.next().await {
@@ -126,7 +130,7 @@ impl Bridge {
         block_hash: &BlockHash,
     ) -> Result<PegInInfo, Error> {
         let block_info = self.bitcoin_core.rpc.get_block_header_info(block_hash)?;
-        if block_info.confirmations < REQUIRED_CONFIRMATIONS.into() {
+        if block_info.confirmations < self.required_confirmations.into() {
             return Err(Error::InsufficientConfirmations(block_info.confirmations));
         }
 
@@ -248,6 +252,7 @@ impl Bridge {
             for log in receipt.logs {
                 if let Ok(event) = parse_log::<RequestPegOut>(log) {
                     let event_amount_in_sats = wei_to_sats(event.value);
+                    // TODO: Historical Context
                     if event_amount_in_sats >= 1000000 {
                         if let Some(address) = parse_bitcoin_address(event.bitcoin_address) {
                             let txout = TxOut {
@@ -320,6 +325,7 @@ mod tests {
                     .unwrap()
                     .assume_checked(),
             ],
+            2,
         );
 
         federation
@@ -340,6 +346,7 @@ mod tests {
                     .unwrap()
                     .assume_checked(),
             ],
+            2,
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)
@@ -361,6 +368,7 @@ mod tests {
                     .unwrap()
                     .assume_checked(),
             ],
+            2,
         );
         let info = federation
             .pegin_info(&tx, BlockHash::all_zeros(), 0)
@@ -431,7 +439,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // generate the taproot info
-        let federation = bitcoin_signing::Federation::new(pubkeys.clone(), 2, Network::Regtest);
+        let federation = Federation::new(pubkeys.clone(), 2, Network::Regtest);
 
         // use bitcoin-core to spend to our new address s.t. we have an utxo to spend
         let funding_tx = send_to_address(&federation.taproot_address, 10000000);
@@ -464,7 +472,7 @@ mod tests {
 
         // sign with 1nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[1]);
+            let signer = BitcoinSigner::new(secret_keys[1]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -473,7 +481,7 @@ mod tests {
 
         // sign with 2nd authority
         {
-            let signer = bitcoin_signing::BitcoinSigner::new(secret_keys[2]);
+            let signer = BitcoinSigner::new(secret_keys[2]);
             let sigs = signer.get_input_signatures(&wallet, &unsigned_tx).unwrap();
             signature_collector
                 .add_signature(&wallet, unsigned_tx.txid(), sigs)
@@ -569,7 +577,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // generate the taproot info
-        let federation = bitcoin_signing::Federation::new_with_internal_pubkey(
+        let federation = Federation::new_with_internal_pubkey(
             internal_keypair.public_key().into(),
             pubkeys.clone(),
             2,

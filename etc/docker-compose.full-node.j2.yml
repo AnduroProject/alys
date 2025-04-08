@@ -12,34 +12,35 @@ services:
     volumes:
       - /opt/alys/lib/etc/data/execution/logs:/opt/alys/execution/logs
       - /opt/alys/lib/etc/data/execution/node:/opt/alys/execution/data
-      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml:ro
+      - /opt/alys/lib/etc/config/eth-config.toml:/opt/alys/execution/config/eth-config.toml
       - /opt/alys/lib/etc/config/jwtsecret.hex:/opt/alys/execution/config/jwtsecret.hex:ro
       - /opt/alys/lib/etc/config/genesis.json:/opt/alys/execution/config/genesis.json:ro
-      - /opt/alys/lib/etc/jwttoken:/opt/alys/execution/config/jwt:ro
     pid: host
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
 
     command: > 
-        node
-        --chain "/opt/alys/execution/config/genesis.json"
-        --log.file.directory /opt/alys/execution/logs
-        --datadir "/opt/alys/execution/data"
-        --config "/opt/alys/execution/config/eth-config.toml"
-        --metrics 0.0.0.0:9001
-        --authrpc.addr 0.0.0.0
-        --authrpc.port 8551
-        --authrpc.jwtsecret /opt/alys/execution/config/jwtsecret.hex
-        --http --http.addr 0.0.0.0 --http.port 8545
-        --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
-        --http.corsdomain "*"
-        --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
-        --ws
-        --ws.addr "0.0.0.0"
-        --ws.port 8456
-        --ws.origins "*"
-        --port 30303
+      node
+      --chain "/opt/alys/execution/config/genesis.json"
+      --log.file.directory /opt/alys/execution/logs
+      --datadir "/opt/alys/execution/data"
+      --config "/opt/alys/execution/config/eth-config.toml"
+      --metrics 0.0.0.0:9001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwtsecret.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --http.corsdomain "*"
+      --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --ws
+      --ws.addr "0.0.0.0"
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+      --engine.persistence-threshold 0
+      --engine.memory-block-buffer-target 0
 
 
   prometheus:

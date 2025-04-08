@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
 
 use crate::auxpow_miner::BitcoinConsensusParams;
-use crate::error::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -33,6 +32,8 @@ pub struct ChainSpec {
     pub is_validator: bool,
     /// The multiplier that determines how long the consensus engine will wait on the execution layer
     pub execution_timeout_length: u16,
+    /// Number of confirmations required for a transaction to be considered final
+    pub required_btc_txn_confirmations: u16,
 }
 
 pub const DEV_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -57,6 +58,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
         bits: 505794034,
         chain_id: 121212,
         max_blocks_without_pow: 20,
+        required_btc_txn_confirmations: 4,
         bitcoin_start_height: 0,
         retarget_params: BitcoinConsensusParams {
             pow_limit: 553713663,

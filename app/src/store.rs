@@ -1,4 +1,3 @@
-use crate::error::BlockErrorBlockTypes::Height;
 use crate::{
     block::*,
     error::{BlockErrorBlockTypes, Error},
@@ -8,7 +7,7 @@ use ethers_core::types::U256;
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
-use std::{fs, marker::PhantomData, path::PathBuf, thread::current};
+use std::{fs, marker::PhantomData, path::PathBuf};
 use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
@@ -117,13 +116,7 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
             // Get the block hash from the block by height index
             Some(block_hash) => {
                 // Use the hash to retrieve the block
-                self.db
-                    .get_bytes(DbColumn::Block.into(), block_hash.as_slice())
-                    .unwrap()
-                    .map(|block_bytes| {
-                        rmp_serde::from_slice(&block_bytes).map_err(|_| Error::CodecError)
-                    })
-                    .transpose()
+                self.get_block(&Hash256::from_slice(&block_hash)) // return the block
             }
             None => Ok(None),
         }

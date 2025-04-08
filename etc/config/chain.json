@@ -25,5 +25,6 @@
         "powTargetTimespan": 12000,
         "powTargetSpacing": 1000
     },
-    "isValidator": true
+    "isValidator": true,
+    "requiredBtcTxnConfirmations": 144
 }

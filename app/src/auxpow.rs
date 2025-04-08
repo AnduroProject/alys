@@ -386,7 +386,11 @@ impl AuxPow {
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/validation.cpp#L1744
     pub fn check_proof_of_work(&self, bits: CompactTarget) -> bool {
         let diff_target = Target::from_compact(bits);
-        diff_target.is_met_by(self.parent_block.block_hash())
+
+        // trace!("Checking PoW target with diff of: {}", diff_target.difficulty());
+        let result = diff_target.is_met_by(self.parent_block.block_hash());
+        // trace!("PoW target check result: {}", result);
+        result
     }
 
     pub async fn mine(sidechain_hash: BlockHash, target: CompactTarget, chain_id: u32) -> Self {
