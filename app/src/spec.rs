@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use tempfile::{tempdir, NamedTempFile};
+    use tempfile::tempdir;
 
     #[test]
     fn should_successfully_decode_hex_file() {

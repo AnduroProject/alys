@@ -352,8 +352,10 @@ mod tests {
 
     fn create_test_block(height: u64, slot: u64) -> SignedConsensusBlock<MainnetEthSpec> {
         // Create a simple consensus block with only the fields we need for testing
-        let mut block = ConsensusBlock::default();
-        block.slot = slot;
+        let mut block = ConsensusBlock::<types::MainnetEthSpec> {
+            slot: slot,
+            ..Default::default()
+        };
 
         // Manually set the block_number in execution_payload
         block.execution_payload.block_number = height;

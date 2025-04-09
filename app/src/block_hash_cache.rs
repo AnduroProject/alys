@@ -92,7 +92,7 @@ impl BlockHashCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::hashes::{sha256d, Hash}; // For BlockHash creation
+    use bitcoin::hashes::Hash; // For BlockHash creation
 
     #[test]
     fn test_new_cache_is_empty() {
