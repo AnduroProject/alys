@@ -1,3 +1,5 @@
+#![allow(clippy::manual_div_ceil)]
+
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;

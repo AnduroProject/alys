@@ -160,6 +160,7 @@ fn uint256_target_from_compact(bits: u32) -> Uint256 {
 // TODO: remove once this is merged
 // https://github.com/rust-bitcoin/rust-bitcoin/pull/2180
 pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
+    #[allow(clippy::manual_div_ceil)]
     let mut size = (target.bits() + 7) / 8;
     let mut compact = if size <= 3 {
         (target.low_u64() << (8 * (3 - size))) as u32

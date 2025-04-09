@@ -138,6 +138,7 @@ impl Aura {
     ) -> Result<bool, AuraError> {
         self.check_signed_by_author(block)?;
 
+        #[allow(clippy::manual_div_ceil)]
         let required_signatures = ((self.authorities.len() * 2) + 2) / 3;
 
         if block.num_approvals() < required_signatures {
