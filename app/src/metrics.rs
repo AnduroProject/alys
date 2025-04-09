@@ -1,4 +1,3 @@
-use ethers_core::k256::pkcs8::der::asn1::Int;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
@@ -8,9 +7,9 @@ use std::net::SocketAddr;
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_gauge, register_gauge_vec, register_histogram, register_histogram_vec,
-    register_int_counter, register_int_counter_vec, register_int_gauge, Encoder, Gauge, GaugeVec,
-    Histogram, HistogramVec, IntCounter, IntCounterVec, IntGauge, TextEncoder,
+    register_gauge, register_histogram, register_histogram_vec, register_int_counter,
+    register_int_counter_vec, register_int_gauge, Encoder, Gauge, Histogram, HistogramVec,
+    IntCounter, IntCounterVec, IntGauge, TextEncoder,
 };
 
 lazy_static! {

@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use store::ItemStore;
 use tokio::sync::Mutex;
-use tracing::{error, trace};
+use tracing::error;
 use types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +64,7 @@ impl JsonRpcErrorV1 {
         }
     }
 
+    #[allow(dead_code)]
     fn internal_error() -> Self {
         Self {
             code: -32603,
@@ -229,7 +230,9 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
             }
         }
         "submitauxblock" => {
+            #[allow(unused_mut)]
             let mut hash;
+            #[allow(unused_mut)]
             let mut auxpow;
             match decode_submitauxblock_args(params.get()) {
                 Ok(value) => {
@@ -248,13 +251,15 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                 }
             }
 
-            let value = miner.submit_aux_block(hash, auxpow).await?;
+            miner.submit_aux_block(hash, auxpow).await?;
+
             RPC_REQUESTS
                 .with_label_values(&["submitauxblock", "success"])
                 .inc();
+
             Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {
-                    result: Some(json!(value)),
+                    result: Some(json!(())),
                     error: None,
                     id,
                 }
@@ -530,7 +535,7 @@ mod tests {
         // 2. Call http_req_json_rpc with the request and node components
         // 3. Assert on the response structure
 
-        trace!("GetBlockByHeight request: {:#?}", req);
+        info!("GetBlockByHeight request: {:#?}", req);
 
         info!("getblockbyheight height one test completed");
     }

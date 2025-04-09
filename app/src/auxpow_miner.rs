@@ -94,6 +94,7 @@ pub trait ChainManager<BI> {
         auxpow: AuxPow,
         address: EvmAddress,
     ) -> bool;
+    #[allow(dead_code)]
     fn set_target_override(&self, target: CompactTarget);
     fn get_target_override(&self) -> Option<CompactTarget>;
     async fn is_synced(&self) -> bool;
@@ -225,7 +226,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
     if let Some(target) = target_override {
         return Ok(target);
     }
-    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
+    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
         return Ok(CompactTarget::from_consensus(index_last.bits()));
     }
 
@@ -282,6 +283,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         )
     }
 
+    #[allow(dead_code)]
     pub fn set_target_override(&mut self, target: CompactTarget) {
         self.chain.set_target_override(target);
     }

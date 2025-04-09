@@ -21,7 +21,7 @@ fn slot_from_timestamp(timestamp: u64, slot_duration: u64) -> u64 {
 fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u8, &AuthorityId)> {
     if authorities.is_empty() {
         AURA_SLOT_AUTHOR_RETRIEVALS
-            .with_label_values(&[&"failure"])
+            .with_label_values(&["failure"])
             .inc();
         return None;
     }
@@ -36,7 +36,7 @@ fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u
         "authorities not empty; index constrained to list length; this is a valid index; qed",
     );
     AURA_SLOT_AUTHOR_RETRIEVALS
-        .with_label_values(&[&"success", &idx.to_string()])
+        .with_label_values(&["success", &idx.to_string()])
         .inc();
     AURA_LATEST_SLOT_AUTHOR.set(idx as f64);
 

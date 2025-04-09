@@ -1,3 +1,5 @@
+#![allow(clippy::needless_question_mark)]
+
 use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
@@ -11,9 +13,9 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCKS_REJECTED, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
-    CHAIN_DISCOVERED_PEERS, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS,
-    CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS,
+    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -360,12 +362,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Ok(());
         }
 
-        let (mut queued_pow, mut finalized_pegouts): (
-            Option<AuxPowHeader>,
-            Vec<bitcoin::Transaction>,
-        ) = (None, vec![]);
-
-        (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
+        let (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
             None => (None, vec![]),
             Some(pow) => {
                 let signature_collector = self.bitcoin_signature_collector.read().await;
@@ -449,14 +446,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
-        if !pegouts.is_none() {
+        if pegouts.is_some() {
             // Increment the pegouts created counter
             CHAIN_BLOCK_PRODUCTION_TOTALS
                 .with_label_values(&["pegouts_created", "success"])
                 .inc();
         }
 
-        if finalized_pegouts.len() > 0 {
+        if !finalized_pegouts.is_empty() {
             trace!("Finalized pegouts: {:?}", finalized_pegouts[0].input);
         }
 
@@ -900,21 +897,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 )))?;
 
         // TODO: Historical Context
-        if range_start_block.message.height() > 53143 {
-            if range_start_block.message.parent_hash != last_finalized.hash {
-                debug!(
-                    "last_finalized.hash: {:?}\n{}",
-                    last_finalized.hash, last_finalized.height
-                );
-                debug!(
-                    "range_start_block.message.parent_hash: {:?}\n{}",
-                    range_start_block.message.parent_hash,
-                    range_start_block.message.height()
-                );
-                warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
+        if range_start_block.message.height() > 53143
+            && range_start_block.message.parent_hash != last_finalized.hash
+        {
+            debug!(
+                "last_finalized.hash: {:?}\n{}",
+                last_finalized.hash, last_finalized.height
+            );
+            debug!(
+                "range_start_block.message.parent_hash: {:?}\n{}",
+                range_start_block.message.parent_hash,
+                range_start_block.message.height()
+            );
+            warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
                     last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
-                return Err(Error::InvalidPowRange);
-            }
+            return Err(Error::InvalidPowRange);
         }
 
         let hashes = self.get_hashes(range_start_block.message.parent_hash, header.range_end)?;
@@ -930,11 +927,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             |height| self.get_block_at_height(height),
             &self
                 .get_block_by_hash(&last_pow.to_block_hash())
-                .map_err(|err| Error::GenericError(err))?,
+                .map_err(Error::GenericError)?,
             &self.retarget_params,
             self.storage.get_target_override()?,
         )
-        .map_err(|err| Error::GenericError(err))?;
+        .map_err(Error::GenericError)?;
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
@@ -1181,6 +1178,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn get_accumulated_fees(
         &self,
         block_hash: Option<&Hash256>,
@@ -1330,7 +1328,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     // Reset the block hash cache to the hash after the range end
                     block_hash_cache
                         .reset_with(aux_header.range_end.to_block_hash())
-                        .map_err(|err| Error::GenericError(err))?;
+                        .map_err(Error::GenericError)?;
                     block_hash_cache.add(verified_block.canonical_root().to_block_hash());
                 } else {
                     // Insert the block hash to the block hash cache
@@ -1410,7 +1408,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         warn!("Missed {x} network messages");
                         CHAIN_NETWORK_GOSSIP_TOTALS
                             .with_label_values(&["msg_received", "error"])
-                            .inc_by(x as u64);
+                            .inc_by(x);
                         continue;
                     }
                     Err(_) => panic!("failed to read network stream"),
@@ -1507,7 +1505,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         CHAIN_NETWORK_GOSSIP_TOTALS
                             .with_label_values(&["pegout_sigs", "success"])
                             .inc();
-                        if self.is_validator {}
+
                         if let Err(err) = self.store_signatures(pegout_sigs).await {
                             warn!("Failed to add signature: {err:?}");
                             CHAIN_NETWORK_GOSSIP_TOTALS
@@ -1790,6 +1788,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
+    #[allow(dead_code)]
     pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
         let head = self.head.read().await.as_ref().unwrap().clone();
         let mut pending_pegouts = HashMap::new();
@@ -1902,13 +1901,12 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .as_ref()
             .map(|pow| pow.range_end != head)
             .unwrap_or(true);
+
+        #[allow(clippy::collapsible_else_if)]
         if !has_work {
-            // trace!("No work to do");
-            // TODO: Change to Result so that we can return this error
             Err(NoWorkToDo.into())
         } else {
             if let Some(ref block_hash_cache) = self.block_hash_cache {
-                // trace!("Returning cached hashes");
                 Ok(block_hash_cache.read().await.get())
             } else {
                 Err(eyre!("Block hash cache not initialized"))
@@ -1980,6 +1978,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        #[allow(clippy::needless_question_mark)]
         Ok(self
             .storage
             .get_block(

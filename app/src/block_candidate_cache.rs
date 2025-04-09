@@ -92,6 +92,7 @@ pub struct BlockCandidateCache {
     hash_to_height: HashMap<Hash256, u64>,
 }
 
+#[allow(dead_code)]
 #[async_trait]
 pub trait BlockCandidateCacheInit {
     /// Initializes the cache with existing block candidates.
@@ -211,6 +212,7 @@ impl BlockCandidateCache {
     }
 
     /// Gets a block candidate by hash.
+    #[allow(dead_code)]
     pub fn get(&self, hash: &Hash256) -> Option<&CandidateState> {
         self.hash_to_height
             .get(hash)
@@ -218,6 +220,7 @@ impl BlockCandidateCache {
     }
 
     /// Gets a mutable reference to a block candidate by hash.
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, hash: &Hash256) -> Option<&mut CandidateState> {
         if let Some(&height) = self.hash_to_height.get(hash) {
             self.candidates_by_height.get_mut(&height)
@@ -227,6 +230,7 @@ impl BlockCandidateCache {
     }
 
     /// Removes and returns the candidate state for a specific hash.
+    #[allow(dead_code)]
     pub fn remove(&mut self, hash: &Hash256) -> Option<CandidateState> {
         if let Some(&height) = self.hash_to_height.get(hash) {
             self.hash_to_height.remove(hash);
@@ -243,11 +247,13 @@ impl BlockCandidateCache {
     }
 
     /// Returns the number of candidates in the cache.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.candidates_by_height.len()
     }
 
     /// Returns true if the cache is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.candidates_by_height.is_empty()
     }
@@ -282,6 +288,7 @@ impl BlockCandidates {
     }
 
     /// Checks if a block hash exists in the cache
+    #[allow(dead_code)]
     pub async fn exists(&self, hash: &Hash256) -> bool {
         self.cache.read().await.hash_to_height.contains_key(hash)
     }
@@ -302,6 +309,7 @@ impl BlockCandidates {
     }
 
     /// Gets the highest slot block at a specific height, if it exists
+    #[allow(dead_code)]
     pub async fn get_by_height(&self, height: u64) -> Option<SignedConsensusBlock<MainnetEthSpec>> {
         let guard = self.cache.read().await;
         if let Some(state) = guard.candidates_by_height.get(&height) {
@@ -313,6 +321,7 @@ impl BlockCandidates {
     }
 
     /// Removes and returns the candidate state for a specific hash.
+    #[allow(dead_code)]
     pub async fn remove(&self, hash: &Hash256) -> Option<CandidateState> {
         self.cache.write().await.remove(hash)
     }
@@ -323,11 +332,13 @@ impl BlockCandidates {
     }
 
     /// Returns the number of candidates in the cache.
+    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         self.cache.read().await.len()
     }
 
     /// Returns true if the cache is empty.
+    #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
         self.cache.read().await.is_empty()
     }

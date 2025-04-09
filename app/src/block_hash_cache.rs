@@ -29,7 +29,7 @@ impl BlockHashCache {
     pub fn new(aggregate_hashes: Option<Vec<BlockHash>>) -> Self {
         // Initialize with the provided hashes or an empty vector
         Self {
-            hashes: aggregate_hashes.unwrap_or_else(Vec::new),
+            hashes: aggregate_hashes.unwrap_or_default(),
         }
     }
 
@@ -71,16 +71,19 @@ impl BlockHashCache {
     }
 
     /// Clears the cache and returns all stored hashes.
+    #[allow(dead_code)]
     pub fn flush(&mut self) -> Vec<BlockHash> {
         std::mem::take(&mut self.hashes)
     }
 
     /// Returns the number of hashes in the cache.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.hashes.len()
     }
 
     /// Returns true if the cache is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.hashes.is_empty()
     }
