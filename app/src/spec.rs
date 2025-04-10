@@ -102,8 +102,13 @@ mod tests {
 
     #[test]
     fn should_successfully_decode_hex_file() {
-        const HEX_STRING: &str = "Fingers crossed";
+        const HEX_STRING: &str = "This is a 32-byte long string!!!";
         let start_hex_bytes = HEX_STRING.as_bytes();
+
+        println!("*****A) {:?}", start_hex_bytes.len());
+        // debug!(start_hex_bytes.len());
+
+
         let dir = tempdir().unwrap();
 
         let file_path = dir.path().join("test_hex.hex");
@@ -111,6 +116,8 @@ mod tests {
         write!(file, "{}", hex::encode(HEX_STRING)).unwrap();
 
         let hex_bytes = hex_file_parser(file_path.to_str().unwrap()).unwrap();
+
+
 
         assert_eq!(start_hex_bytes.len(), hex_bytes.len());
         for i in 0..start_hex_bytes.len() {
