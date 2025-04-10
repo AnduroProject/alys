@@ -353,7 +353,7 @@ mod tests {
     fn create_test_block(height: u64, slot: u64) -> SignedConsensusBlock<MainnetEthSpec> {
         // Create a simple consensus block with only the fields we need for testing
         let mut block = ConsensusBlock::<types::MainnetEthSpec> {
-            slot: slot,
+            slot,
             ..Default::default()
         };
 
