@@ -273,11 +273,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
         &self,
         block_root: &Hash256,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
-        let block = self.get_block_with(block_root, |bytes| {
+        self.get_block_with(block_root, |bytes| {
             rmp_serde::from_slice(bytes).map_err(|_| Error::CodecError)
-        });
-        // trace!("Found block {:?}", block_root);
-        block
+        })
     }
 
     pub fn get_block_with(

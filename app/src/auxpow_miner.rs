@@ -1,6 +1,9 @@
 use crate::block::{AuxPowHeader, SignedConsensusBlock};
 use crate::error::AuxPowMiningError::HashRetrievalError;
 use crate::error::{BlockErrorBlockTypes, Error};
+use crate::metrics::{
+    AUXPOW_CREATE_BLOCK_CALLS, AUXPOW_HASHES_PROCESSED, AUXPOW_SUBMIT_BLOCK_CALLS,
+};
 use crate::{auxpow::AuxPow, chain::Chain};
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
@@ -156,6 +159,7 @@ fn uint256_target_from_compact(bits: u32) -> Uint256 {
 // TODO: remove once this is merged
 // https://github.com/rust-bitcoin/rust-bitcoin/pull/2180
 pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
+    #[allow(clippy::manual_div_ceil)]
     let mut size = (target.bits() + 7) / 8;
     let mut compact = if size <= 3 {
         (target.low_u64() << (8 * (3 - size))) as u32
@@ -222,7 +226,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
     if let Some(target) = target_override {
         return Ok(target);
     }
-    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, &params) {
+    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
         return Ok(CompactTarget::from_consensus(index_last.bits()));
     }
 
@@ -290,7 +294,14 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// Creates a new block and returns information required to merge-mine it.
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L139
     pub async fn create_aux_block(&mut self, address: EvmAddress) -> Result<AuxBlock> {
+        AUXPOW_CREATE_BLOCK_CALLS
+            .with_label_values(&["called"])
+            .inc();
+
         if !self.chain.is_synced().await {
+            AUXPOW_CREATE_BLOCK_CALLS
+                .with_label_values(&["chain_syncing"])
+                .inc();
             return Err(Error::ChainSyncing.into());
         }
 
@@ -298,6 +309,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
 
         let hashes = self.chain.get_aggregate_hashes().await?;
         // trace!("Found {} hashes", hashes.len());
+
+        AUXPOW_HASHES_PROCESSED.observe(hashes.len() as f64);
 
         // calculates the "vector commitment" for previous blocks without PoW.
         let hash = AuxPow::aggregate_hash(&hashes);
@@ -323,6 +336,10 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/node/miner.cpp#L174
         let bits = self.get_next_work_required(&index_last)?;
 
+        AUXPOW_CREATE_BLOCK_CALLS
+            .with_label_values(&["success"])
+            .inc();
+
         Ok(AuxBlock {
             hash,
             chain_id: index_last.chain_id(),
@@ -342,6 +359,10 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     /// * `auxpow` - Serialised auxpow found
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/rpc/auxpow_miner.cpp#L166
     pub async fn submit_aux_block(&mut self, hash: BlockHash, auxpow: AuxPow) -> Result<()> {
+        AUXPOW_SUBMIT_BLOCK_CALLS
+            .with_label_values(&["called"])
+            .inc();
+
         // trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
@@ -353,6 +374,9 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             aux_info
         } else {
             error!("Submitted AuxPow for unknown block");
+            AUXPOW_SUBMIT_BLOCK_CALLS
+                .with_label_values(&["unknown_block"])
+                .inc();
             return Err(eyre!("Submitted AuxPow for unknown block"));
         };
 
@@ -374,11 +398,17 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         if !auxpow.check_proof_of_work(bits) {
             // AUX proof of work failed
             error!("POW is not valid");
+            AUXPOW_SUBMIT_BLOCK_CALLS
+                .with_label_values(&["invalid_pow"])
+                .inc();
             return Err(eyre!("POW is not valid"));
         }
         if auxpow.check(hash, chain_id).is_err() {
             // AUX POW is not valid
             error!("AuxPow is not valid");
+            AUXPOW_SUBMIT_BLOCK_CALLS
+                .with_label_values(&["invalid_auxpow"])
+                .inc();
             return Err(eyre!("AuxPow is not valid"));
         }
 

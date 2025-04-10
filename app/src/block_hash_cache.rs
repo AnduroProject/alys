@@ -29,7 +29,7 @@ impl BlockHashCache {
     pub fn new(aggregate_hashes: Option<Vec<BlockHash>>) -> Self {
         // Initialize with the provided hashes or an empty vector
         Self {
-            hashes: aggregate_hashes.unwrap_or_else(Vec::new),
+            hashes: aggregate_hashes.unwrap_or_default(),
         }
     }
 
@@ -89,7 +89,7 @@ impl BlockHashCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::hashes::{sha256d, Hash}; // For BlockHash creation
+    use bitcoin::hashes::Hash; // For BlockHash creation
 
     #[test]
     fn test_new_cache_is_empty() {

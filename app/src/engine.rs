@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::metrics::{ENGINE_BUILD_BLOCK_CALLS, ENGINE_COMMIT_BLOCK_CALLS};
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
 use execution_layer::{
@@ -99,6 +100,10 @@ impl Engine {
         payload_head: Option<ExecutionBlockHash>,
         add_balances: Vec<AddBalance>,
     ) -> Result<ExecutionPayload<MainnetEthSpec>, Error> {
+        ENGINE_BUILD_BLOCK_CALLS
+            .with_label_values(&["called"])
+            .inc();
+
         // FIXME: geth is not accepting >4 withdrawals
         let payload_attributes = PayloadAttributes::new(
             timestamp.as_secs(),
@@ -134,7 +139,12 @@ impl Engine {
             .api
             .forkchoice_updated(forkchoice_state, Some(payload_attributes))
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+            .map_err(|err| {
+                ENGINE_BUILD_BLOCK_CALLS
+                    .with_label_values(&["engine_api_forkchoice_updated_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
         trace!("Forkchoice updated: {:?}", response);
         let payload_id = response.payload_id.ok_or(Error::PayloadIdUnavailable)?;
 
@@ -142,12 +152,21 @@ impl Engine {
             .api
             .get_payload::<MainnetEthSpec>(types::ForkName::Capella, payload_id)
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+            .map_err(|err| {
+                ENGINE_BUILD_BLOCK_CALLS
+                    .with_label_values(&["engine_api_get_payload_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
 
         tracing::info!("Expected block value is {}", response.block_value());
 
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/miner/payload_building.go#L178
         let execution_payload = response.execution_payload_ref().clone_from_ref();
+
+        ENGINE_BUILD_BLOCK_CALLS
+            .with_label_values(&["success"])
+            .inc();
 
         Ok(execution_payload)
     }
@@ -156,6 +175,10 @@ impl Engine {
         &self,
         execution_payload: ExecutionPayload<MainnetEthSpec>,
     ) -> Result<ExecutionBlockHash, Error> {
+        ENGINE_COMMIT_BLOCK_CALLS
+            .with_label_values(&["called"])
+            .inc();
+
         let finalized = self.finalized.read().await.unwrap_or_default();
 
         self.api
@@ -176,8 +199,18 @@ impl Engine {
             .api
             .new_payload::<MainnetEthSpec>(execution_payload)
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
-        let head = response.latest_valid_hash.ok_or(Error::InvalidBlockHash)?;
+            .map_err(|err| {
+                ENGINE_COMMIT_BLOCK_CALLS
+                    .with_label_values(&["engine_api_new_payload_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
+        let head = response.latest_valid_hash.ok_or_else(|| {
+            ENGINE_COMMIT_BLOCK_CALLS
+                .with_label_values(&["engine_api_invalid_block_hash_error"])
+                .inc();
+            Error::InvalidBlockHash
+        })?;
 
         // update now to the new head so we can fetch the txs and
         // receipts from the ethereum rpc

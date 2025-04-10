@@ -33,3 +33,4 @@ docs/book/
 # IDE files
 .idea/
 .vscode/
+.qodo

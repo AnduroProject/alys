@@ -1,3 +1,5 @@
+#![allow(clippy::needless_question_mark)]
+
 use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
@@ -10,6 +12,11 @@ use crate::error::AuxPowMiningError::NoWorkToDo;
 use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
+use crate::metrics::{
+    CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS,
+    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+};
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
 use crate::network::PubsubMessage;
@@ -181,6 +188,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Vec<(Txid, BlockHash)> {
         let mut withdrawals = BTreeMap::<_, u64>::new();
         let mut processed_pegins = Vec::new();
+        let mut total_pegin_amount = 0u64;
 
         {
             // Remove pegins that we already processed. In the happy path, this code
@@ -207,6 +215,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .write()
                     .await
                     .remove(&already_processed_txid);
+                CHAIN_PEGIN_TOTALS.with_label_values(&["removed"]).inc();
             }
         }
 
@@ -223,6 +232,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .add(pegin.amount),
                 );
                 processed_pegins.push((pegin.txid, pegin.block_hash));
+                CHAIN_PEGIN_TOTALS.with_label_values(&["added"]).inc();
+                total_pegin_amount += pegin.amount;
             }
         }
         let withdrawals: Vec<(Address, u64)> = withdrawals.into_iter().collect();
@@ -234,6 +245,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .iter()
                 .map(|(address, amount)| (*address, ConsensusAmount::from_satoshi(*amount))),
         );
+
+        CHAIN_PEGIN_TOTALS
+            .with_label_values(&["processed"])
+            .inc_by(processed_pegins.len() as u64);
+        CHAIN_TOTAL_PEGIN_AMOUNT.set(total_pegin_amount as i64);
 
         processed_pegins
     }
@@ -296,7 +312,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         slot: u64,
         timestamp: Duration,
     ) -> Result<(), Error> {
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["attempted"])
+            .inc();
         if !self.sync_status.read().await.is_synced() {
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["attempted", "not_synced"])
+                .inc();
             return Ok(());
         }
         let mut prev_height = 0;
@@ -340,12 +362,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Ok(());
         }
 
-        let (mut queued_pow, mut finalized_pegouts): (
-            Option<AuxPowHeader>,
-            Vec<bitcoin::Transaction>,
-        ) = (None, vec![]);
-
-        (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
+        let (queued_pow, finalized_pegouts) = match self.queued_pow.read().await.clone() {
             None => (None, vec![]),
             Some(pow) => {
                 let signature_collector = self.bitcoin_signature_collector.read().await;
@@ -394,7 +411,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .await;
 
         let payload = match payload_result {
-            Ok(payload) => payload,
+            Ok(payload) => {
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["blocks_built", "success"])
+                    .inc();
+                payload
+            }
             Err(err) => {
                 match err {
                     Error::PayloadIdUnavailable => {
@@ -402,6 +424,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             "PayloadIdUnavailable: Slot {}, Timestamp {:?}",
                             slot, timestamp
                         );
+                        CHAIN_BLOCK_PRODUCTION_TOTALS
+                            .with_label_values(&["blocks_built", "failed"])
+                            .inc();
                         // self.clone().sync(None).await;
                         self.clone().sync().await;
 
@@ -410,6 +435,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     }
                     _ => {
                         warn!("Failed to build block payload: {:?}", err);
+                        CHAIN_BLOCK_PRODUCTION_TOTALS
+                            .with_label_values(&["blocks_built", "failed"])
+                            .inc();
                         return Ok(());
                     }
                 }
@@ -418,8 +446,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // generate a unsigned bitcoin tx for pegout requests made in the previous block, if any
         let pegouts = self.create_pegout_payments(prev_payload_head).await;
+        if pegouts.is_some() {
+            // Increment the pegouts created counter
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["pegouts_created", "success"])
+                .inc();
+        }
 
-        if finalized_pegouts.len() > 0 {
+        if !finalized_pegouts.is_empty() {
             trace!("Finalized pegouts: {:?}", finalized_pegouts[0].input);
         }
 
@@ -436,6 +470,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let signed_block =
             block.sign_block(self.aura.authority.as_ref().expect("Only called by signer"));
 
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["blocks_signed", "success"])
+            .inc();
+
         let root_hash = signed_block.canonical_root();
         info!(
             "⛏️  Proposed block on slot {slot} (block {}) {prev} -> {root_hash}",
@@ -445,11 +483,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         match self.process_block(signed_block.clone()).await {
             Err(Error::MissingRequiredPow) => {
                 warn!("Could not produce block - need PoW");
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["process_block", "failed"])
+                    .inc();
                 // don't consider this fatal
                 return Ok(());
             }
             Err(e) => {
                 error!("Failed to process block we created ourselves... {e:?}");
+                CHAIN_BLOCK_PRODUCTION_TOTALS
+                    .with_label_values(&["process_block", "failed"])
+                    .inc();
                 return Ok(());
             }
             Ok(_) => {}
@@ -457,7 +501,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if let Err(x) = self.network.publish_block(signed_block.clone()).await {
             info!("Failed to publish block: {x}");
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["blocks_published", "failed"])
+                .inc();
+        } else {
+            CHAIN_BLOCK_PRODUCTION_TOTALS
+                .with_label_values(&["blocks_published", "success"])
+                .inc();
         }
+
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["success"])
+            .inc();
         Ok(())
     }
 
@@ -531,6 +586,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self: &Arc<Self>,
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<CheckedIndividualApproval>, Error> {
+        CHAIN_PROCESS_BLOCK_TOTALS
+            .with_label_values(&["attempted"])
+            .inc();
         let root_hash = unverified_block.canonical_root();
         info!(
             "Processing block at height {}",
@@ -542,6 +600,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if unverified_block.message.parent_hash.is_zero() {
             // no need to process genesis
+            CHAIN_PROCESS_BLOCK_TOTALS
+                .with_label_values(&["rejected", "genesis_not_needed"])
+                .inc();
             return Err(Error::ProcessGenesis);
         }
 
@@ -557,6 +618,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             // node joins the network but has not yet synced the chain
             // also when another node proposes at the same height
             warn!("Rejecting old block");
+            CHAIN_PROCESS_BLOCK_TOTALS
+                .with_label_values(&["rejected", "old_height"])
+                .inc();
             return Err(Error::InvalidBlock);
         }
 
@@ -582,6 +646,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 prev.message.execution_payload.block_hash,
                 prev.message.execution_payload.block_number
             );
+            CHAIN_PROCESS_BLOCK_TOTALS
+                .with_label_values(&["rejected", "chain_incontiguous"])
+                .inc();
 
             return Err(Error::ExecutionHashChainIncontiguous);
         }
@@ -637,6 +704,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .zip(unverified_block.message.finalized_pegouts.iter())
             {
                 if tx.txid() != expected_txid {
+                    CHAIN_PROCESS_BLOCK_TOTALS
+                        .with_label_values(&["rejected", "invalid_finalization"])
+                        .inc();
                     return Err(Error::IllegalFinalization);
                 }
 
@@ -656,10 +726,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let block_height = unverified_block.message.execution_payload.block_number;
 
             if block_height.saturating_sub(latest_finalized_height) > self.max_blocks_without_pow {
+                CHAIN_PROCESS_BLOCK_TOTALS
+                    .with_label_values(&["rejected", "missing_pow"])
+                    .inc();
                 return Err(Error::MissingRequiredPow);
             }
 
             if !unverified_block.message.finalized_pegouts.is_empty() {
+                CHAIN_PROCESS_BLOCK_TOTALS
+                    .with_label_values(&["rejected", "invalid_finalization"])
+                    .inc();
                 return Err(Error::IllegalFinalization);
             }
         }
@@ -694,6 +770,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         };
 
         self.maybe_accept_block(root_hash).await?;
+
+        CHAIN_PROCESS_BLOCK_TOTALS
+            .with_label_values(&["success"])
+            .inc();
 
         Ok(our_approval)
     }
@@ -817,21 +897,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 )))?;
 
         // TODO: Historical Context
-        if range_start_block.message.height() > 53143 {
-            if range_start_block.message.parent_hash != last_finalized.hash {
-                debug!(
-                    "last_finalized.hash: {:?}\n{}",
-                    last_finalized.hash, last_finalized.height
-                );
-                debug!(
-                    "range_start_block.message.parent_hash: {:?}\n{}",
-                    range_start_block.message.parent_hash,
-                    range_start_block.message.height()
-                );
-                warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
+        if range_start_block.message.height() > 53143
+            && range_start_block.message.parent_hash != last_finalized.hash
+        {
+            debug!(
+                "last_finalized.hash: {:?}\n{}",
+                last_finalized.hash, last_finalized.height
+            );
+            debug!(
+                "range_start_block.message.parent_hash: {:?}\n{}",
+                range_start_block.message.parent_hash,
+                range_start_block.message.height()
+            );
+            warn!("AuxPow check failed - last finalized = {}, attempted to finalize {} while its parent is {}",
                     last_finalized.hash, header.range_start, range_start_block.message.parent_hash);
-                return Err(Error::InvalidPowRange);
-            }
+            return Err(Error::InvalidPowRange);
         }
 
         let hashes = self.get_hashes(range_start_block.message.parent_hash, header.range_end)?;
@@ -847,11 +927,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             |height| self.get_block_at_height(height),
             &self
                 .get_block_by_hash(&last_pow.to_block_hash())
-                .map_err(|err| Error::GenericError(err))?,
+                .map_err(Error::GenericError)?,
             &self.retarget_params,
             self.storage.get_target_override()?,
         )
-        .map_err(|err| Error::GenericError(err))?;
+        .map_err(Error::GenericError)?;
 
         // TODO: ignore if genesis
         let auxpow = header.auxpow.as_ref().unwrap();
@@ -1247,7 +1327,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     // Reset the block hash cache to the hash after the range end
                     block_hash_cache
                         .reset_with(aux_header.range_end.to_block_hash())
-                        .map_err(|err| Error::GenericError(err))?;
+                        .map_err(Error::GenericError)?;
                     block_hash_cache.add(verified_block.canonical_root().to_block_hash());
                 } else {
                     // Insert the block hash to the block hash cache
@@ -1325,13 +1405,25 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 let msg = match listener.recv().await {
                     Err(RecvError::Lagged(x)) => {
                         warn!("Missed {x} network messages");
+                        CHAIN_NETWORK_GOSSIP_TOTALS
+                            .with_label_values(&["msg_received", "error"])
+                            .inc_by(x);
                         continue;
                     }
                     Err(_) => panic!("failed to read network stream"),
-                    Ok(x) => x,
+                    Ok(x) => {
+                        CHAIN_NETWORK_GOSSIP_TOTALS
+                            .with_label_values(&["msg_received", "success"])
+                            .inc();
+                        x
+                    }
                 };
                 match msg {
                     PubsubMessage::ConsensusBlock(x) => {
+                        CHAIN_NETWORK_GOSSIP_TOTALS
+                            .with_label_values(&["consensus_block", "received"])
+                            .inc();
+
                         let number = x.message.execution_payload.block_number;
                         let payload_hash = x.message.execution_payload.block_hash;
                         let payload_prev_hash = x.message.execution_payload.parent_hash;
@@ -1377,6 +1469,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     PubsubMessage::ApproveBlock(approval) => {
                         if self.sync_status.read().await.is_synced() {
                             info!("✅ Received approval for block {}", approval.block_hash);
+                            CHAIN_NETWORK_GOSSIP_TOTALS
+                                .with_label_values(&["approve_block", "received"])
+                                .inc();
                             match self.process_approval(approval).await {
                                 Err(err) => {
                                     warn!("Error processing approval: {err:?}");
@@ -1394,15 +1489,27 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     {
                         Err(err) => {
                             warn!("Received invalid pow: {err:?}");
+                            CHAIN_NETWORK_GOSSIP_TOTALS
+                                .with_label_values(&["queue_pow", "error"])
+                                .inc();
                         }
                         Ok(()) => {
                             self.queue_pow(pow.clone()).await;
+                            CHAIN_NETWORK_GOSSIP_TOTALS
+                                .with_label_values(&["queue_pow", "success"])
+                                .inc();
                         }
                     },
                     PubsubMessage::PegoutSignatures(pegout_sigs) => {
-                        if self.is_validator {}
+                        CHAIN_NETWORK_GOSSIP_TOTALS
+                            .with_label_values(&["pegout_sigs", "success"])
+                            .inc();
+
                         if let Err(err) = self.store_signatures(pegout_sigs).await {
                             warn!("Failed to add signature: {err:?}");
+                            CHAIN_NETWORK_GOSSIP_TOTALS
+                                .with_label_values(&["pegout_sigs", "error"])
+                                .inc();
                         }
                     }
                 }
@@ -1512,6 +1619,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .map(|x| x.height)
             .unwrap_or_default();
         info!("Starting sync from {}", head);
+        CHAIN_SYNCING_OPERATION_TOTALS
+            .with_label_values(&[head.to_string().as_str()])
+            .inc();
 
         let mut receive_stream = self
             .network
@@ -1550,6 +1660,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         *self.sync_status.write().await = SyncStatus::Synced;
 
         info!("Finished syncing...");
+        CHAIN_SYNCING_OPERATION_TOTALS
+            .with_label_values(&[head.to_string().as_str(), "success"])
+            .inc();
     }
 
     pub async fn listen_for_peer_discovery(self: Arc<Self>) {
@@ -1558,6 +1671,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             loop {
                 let peer_ids = listener.recv().await.unwrap();
                 debug!("Got peers {peer_ids:?}");
+                CHAIN_DISCOVERED_PEERS.set(peer_ids.len() as f64);
 
                 let mut peers = self.peers.write().await;
                 *peers = peer_ids;
@@ -1618,6 +1732,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
         info!("Monitoring bitcoin blocks from height {start_height}");
+        CHAIN_BTC_BLOCK_MONITOR_TOTALS
+            .with_label_values(&[start_height.to_string().as_str(), "called"])
+            .inc();
 
         tokio::spawn(async move {
             let chain = &self;
@@ -1635,6 +1752,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
+                            CHAIN_BTC_BLOCK_MONITOR_TOTALS
+                                .with_label_values(&[
+                                    start_height.to_string().as_str(),
+                                    "queued__pegins",
+                                ])
+                                .inc();
                         } else {
                             debug!(
                                 "Not synced, ignoring pegin {} for {} in {}",
@@ -1776,13 +1899,12 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .as_ref()
             .map(|pow| pow.range_end != head)
             .unwrap_or(true);
+
+        #[allow(clippy::collapsible_else_if)]
         if !has_work {
-            // trace!("No work to do");
-            // TODO: Change to Result so that we can return this error
             Err(NoWorkToDo.into())
         } else {
             if let Some(ref block_hash_cache) = self.block_hash_cache {
-                // trace!("Returning cached hashes");
                 Ok(block_hash_cache.read().await.get())
             } else {
                 Err(eyre!("Block hash cache not initialized"))
@@ -1854,6 +1976,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        #[allow(clippy::needless_question_mark)]
         Ok(self
             .storage
             .get_block(

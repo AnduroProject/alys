@@ -1,3 +1,5 @@
+#![allow(clippy::manual_div_ceil)]
+
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
@@ -157,14 +159,13 @@ impl App {
         )
         .unwrap();
 
-        let filter;
-        if self.full_log_context {
-            filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
+        let filter = if self.full_log_context {
+            EnvFilter::builder().parse_lossy(rust_log_level.as_str())
         } else {
             let filter_tag =
                 format!("app={rust_log_level},federation={rust_log_level},miner={rust_log_level}");
-            filter = EnvFilter::builder().parse_lossy(filter_tag.as_str());
-        }
+            EnvFilter::builder().parse_lossy(filter_tag.as_str())
+        };
 
         let main_layer = tracing_subscriber::fmt::layer().with_target(true);
 
@@ -312,6 +313,8 @@ impl App {
             self.rpc_port,
         )
         .await;
+
+        crate::metrics::start_server().await;
 
         if (self.mine || self.dev) && !self.no_mine {
             info!("Spawning miner");

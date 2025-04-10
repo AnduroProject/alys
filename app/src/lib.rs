@@ -8,6 +8,7 @@ mod block_hash_cache;
 mod chain;
 mod engine;
 mod error;
+mod metrics;
 mod network;
 mod rpc;
 mod signatures;

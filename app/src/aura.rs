@@ -1,6 +1,10 @@
 use crate::block::SignedConsensusBlock;
 use crate::chain::Chain;
 use crate::error::Error;
+use crate::metrics::{
+    AURA_CURRENT_SLOT, AURA_LATEST_SLOT_AUTHOR, AURA_PRODUCED_BLOCKS, AURA_SLOT_AUTHOR_RETRIEVALS,
+    AURA_SLOT_CLAIM_TOTALS, AURA_VERIFY_SIGNED_BLOCK,
+};
 use bls::{Keypair, PublicKey};
 use futures_timer::Delay;
 use std::sync::Arc;
@@ -16,6 +20,9 @@ fn slot_from_timestamp(timestamp: u64, slot_duration: u64) -> u64 {
 // https://github.com/paritytech/substrate/blob/2704ab3d348f18f9db03e87a725e4807b91660d8/client/consensus/aura/src/lib.rs#L127
 fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u8, &AuthorityId)> {
     if authorities.is_empty() {
+        AURA_SLOT_AUTHOR_RETRIEVALS
+            .with_label_values(&["failure"])
+            .inc();
         return None;
     }
 
@@ -28,6 +35,10 @@ fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u
     let current_author = authorities.get(idx as usize).expect(
         "authorities not empty; index constrained to list length; this is a valid index; qed",
     );
+    AURA_SLOT_AUTHOR_RETRIEVALS
+        .with_label_values(&["success", &idx.to_string()])
+        .inc();
+    AURA_LATEST_SLOT_AUTHOR.set(idx as f64);
 
     Some((idx as u8, current_author))
 }
@@ -79,6 +90,10 @@ impl Aura {
         &self,
         block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<(), AuraError> {
+        AURA_VERIFY_SIGNED_BLOCK
+            .with_label_values(&["called"])
+            .inc();
+
         let timestamp =
             Duration::from_secs(block.message.execution_payload.timestamp).as_millis() as u64;
         let slot = block.message.slot;
@@ -88,6 +103,7 @@ impl Aura {
 
         // add drift same as in substrate
         if slot > slot_now + 1 && slot > slot_with_3000_duration + 1 {
+            AURA_VERIFY_SIGNED_BLOCK.with_label_values(&["error"]).inc();
             Err(AuraError::SlotIsInFuture)
         } else {
             let (_expected_authority_index, _expected_author) =
@@ -98,7 +114,14 @@ impl Aura {
             block
                 .verify_signature(&self.authorities[..])
                 .then_some(())
-                .ok_or(AuraError::BadSignature)?;
+                .ok_or_else(|| {
+                    AURA_VERIFY_SIGNED_BLOCK.with_label_values(&["error"]).inc();
+                    AuraError::BadSignature
+                })?;
+
+            AURA_VERIFY_SIGNED_BLOCK
+                .with_label_values(&["success"])
+                .inc();
 
             // TODO: Replace with dynamic sourcing for authorities at a given timespan
             // if !block.is_signed_by(expected_authority_index) {
@@ -115,6 +138,7 @@ impl Aura {
     ) -> Result<bool, AuraError> {
         self.check_signed_by_author(block)?;
 
+        #[allow(clippy::manual_div_ceil)]
         let required_signatures = ((self.authorities.len() * 2) + 2) / 3;
 
         if block.num_approvals() < required_signatures {
@@ -178,6 +202,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
     }
 
     fn claim_slot(&self, slot: u64, authorities: &[PublicKey]) -> Option<PublicKey> {
+        AURA_SLOT_CLAIM_TOTALS.with_label_values(&["called"]).inc();
         let expected_author = slot_author(slot, authorities);
         expected_author.and_then(|(_, p)| {
             if self
@@ -187,22 +212,33 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
                 .pk
                 .eq(p)
             {
+                AURA_SLOT_CLAIM_TOTALS.with_label_values(&["success"]).inc();
                 Some(p.clone())
             } else {
+                AURA_SLOT_CLAIM_TOTALS.with_label_values(&["failure"]).inc();
                 None
             }
         })
     }
 
     async fn on_slot(&self, slot: u64) -> Option<Result<(), Error>> {
+        AURA_CURRENT_SLOT.set(slot as f64);
+
         let _ = self.claim_slot(slot, &self.authorities[..])?;
         debug!("My turn");
 
-        self.chain
-            .produce_block(slot, duration_now())
-            .await
-            .expect("Should produce block");
-        Some(Ok(()))
+        let res = self.chain.produce_block(slot, duration_now()).await;
+        match res {
+            Ok(_) => {
+                AURA_PRODUCED_BLOCKS.with_label_values(&["success"]).inc();
+                Some(Ok(()))
+            }
+            Err(e) => {
+                error!("Failed to produce block: {:?}", e);
+                AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
+                Some(Err(e))
+            }
+        }
     }
 
     async fn next_slot(&mut self) -> u64 {

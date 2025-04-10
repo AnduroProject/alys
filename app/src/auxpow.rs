@@ -388,9 +388,7 @@ impl AuxPow {
         let diff_target = Target::from_compact(bits);
 
         // trace!("Checking PoW target with diff of: {}", diff_target.difficulty());
-        let result = diff_target.is_met_by(self.parent_block.block_hash());
-        // trace!("PoW target check result: {}", result);
-        result
+        diff_target.is_met_by(self.parent_block.block_hash())
     }
 
     pub async fn mine(sidechain_hash: BlockHash, target: CompactTarget, chain_id: u32) -> Self {

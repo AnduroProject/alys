@@ -997,7 +997,7 @@ where
             StreamUpgradeError::Timeout => {
                 tracing::trace!("At on_dial_upgrade_error - timeout REQ: {:#?}", req);
                 RPCError::NegotiationTimeout
-            },
+            }
             StreamUpgradeError::Apply(RPCError::IoError(e)) => {
                 self.outbound_io_error_retries += 1;
                 if self.outbound_io_error_retries < IO_ERROR_RETRIES {
