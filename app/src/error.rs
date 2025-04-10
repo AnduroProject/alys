@@ -47,7 +47,6 @@ pub enum ChainError {
     BlockRetrievalError(BlockErrorBlockTypes),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum BlockErrorBlockTypes {
     #[error("Failed to retrieve the last finalized block")]
@@ -76,7 +75,6 @@ impl From<BlockErrorBlockTypes> for ChainError {
 
 #[derive(Debug, Error)]
 pub enum AuxPowMiningError {
-    #[allow(dead_code)]
     #[error("`{0}`")]
     UnknownError(String),
     #[error("`{0}`")]

@@ -159,7 +159,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             .map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
     }
 
-    #[allow(dead_code)]
     fn get_previous_head(&self, head_ref: &BlockRef) -> Result<Option<BlockRef>, Error> {
         let previous_head = self.get_block(&head_ref.hash)?.unwrap().message.parent_hash;
         Ok(Some(BlockRef {
@@ -262,7 +261,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     }
 
     /// Fetch the hash of the auxpow block at this height
-    #[allow(dead_code)]
     pub fn get_auxpow_block_hash(&self, height: u64) -> Result<Option<Hash256>, Error> {
         Ok(self
             .db

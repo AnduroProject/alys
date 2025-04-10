@@ -77,7 +77,6 @@ pub struct Engine {
     pub api: HttpJsonRpc,
     pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
-    #[allow(dead_code)]
     jwt_key: [u8; 32],
 }
 

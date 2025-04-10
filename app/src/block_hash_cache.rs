@@ -71,19 +71,16 @@ impl BlockHashCache {
     }
 
     /// Clears the cache and returns all stored hashes.
-    #[allow(dead_code)]
     pub fn flush(&mut self) -> Vec<BlockHash> {
         std::mem::take(&mut self.hashes)
     }
 
     /// Returns the number of hashes in the cache.
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.hashes.len()
     }
 
     /// Returns true if the cache is empty.
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.hashes.is_empty()
     }

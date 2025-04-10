@@ -1178,7 +1178,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn get_accumulated_fees(
         &self,
         block_hash: Option<&Hash256>,
@@ -1788,7 +1787,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
-    #[allow(dead_code)]
     pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
         let head = self.head.read().await.as_ref().unwrap().clone();
         let mut pending_pegouts = HashMap::new();

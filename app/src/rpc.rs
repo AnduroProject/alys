@@ -64,7 +64,6 @@ impl JsonRpcErrorV1 {
         }
     }
 
-    #[allow(dead_code)]
     fn internal_error() -> Self {
         Self {
             code: -32603,

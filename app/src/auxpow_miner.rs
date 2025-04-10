@@ -94,7 +94,6 @@ pub trait ChainManager<BI> {
         auxpow: AuxPow,
         address: EvmAddress,
     ) -> bool;
-    #[allow(dead_code)]
     fn set_target_override(&self, target: CompactTarget);
     fn get_target_override(&self) -> Option<CompactTarget>;
     async fn is_synced(&self) -> bool;
@@ -284,7 +283,6 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         )
     }
 
-    #[allow(dead_code)]
     pub fn set_target_override(&mut self, target: CompactTarget) {
         self.chain.set_target_override(target);
     }
