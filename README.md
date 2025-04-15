@@ -15,21 +15,6 @@ On a high level, the repository consists of three parts:
 - [crates](./crates): Contains the logic for the peg-in and peg-out handling used by the app. It also contains the logic to interact with Bitcoin miners.
 - [docs](./docs/src/README.md): Contains more information on the architecture.
 
-## Connection Info
-
-### Testnet
-
-- RPC: http://btcalys.xyz:8545
-- Explorer: http://testnet.alyscan.io/
-- Faucet: https://faucet.anduro.io/
-- Chain ID: 212121
-
-### Alphanet
-
-- RPC: http:/54.162.190.202:8545
-- Explorer: http://alyscan.io/
-- Faucet: https://faucet.anduro.io/alpha
-- Chain ID: 212121
 
 ## Prerequisites
 
@@ -45,14 +30,62 @@ On a high level, the repository consists of three parts:
 - Install libssl-dev
 - Install build-essential
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
-- Clone Alys repo:
+
+# Getting Started: Run an Alys Node
+
+Clone Alys repo:
 
 ```shell
 git clone git@github.com:AnduroProject/Alys.git
-cd Alys
 ```
 
-## Getting Started
+> **NOTE**: If you intend on running Alys using **docker-compose**, we recommend cloning the repo to `/opt/alys/lib` on unix-based systems to be able to use the docker-compose files we provide without changes.
+
+## Using Docker-compose (recommended)
+
+You can conveniently find multiple docker-compose files in the `etc` folder:
+- `docker-compose.j2.yml` - Runs Alys sidechain with a single node and a federation with a single member.
+- `docker-compose.full-node.j2.yml` - Runs an Alys full node which is similar to running a federation node, but does **NOT** require an Aura or Bitcoin key since full nodes are not signing blocks or Bitcoin transactions.
+- `docker-compose.local.yml` - Runs a single Alys node + single-member federation + Bitcoin node + Reth node. (This is the recommended setup for local development.)
+
+**IMPORTANT**: Any of the `docker-compose` files that contain `*.j2.yml` are Jinja2 template files which contains placeholders for several configuration arguments. You must replace these placeholders with the actual values before running the docker-compose command. The placeholders are:
+- `BTC_NODE_IP`: The IP address of a Bitcoin node
+- `BOOTNODE_ARG`: The argument to be passed to the Alys node for the bootnode. This is used to connect to other nodes in the network.
+- `AURA_SECRET_KEY`: The secret key used for the Aura consensus algorithm. This is used to sign blocks and transactions.
+- `BTC_SECRET_KEY`: The secret key used for the Bitcoin node. This is used to sign Bitcoin transactions.
+
+```sh
+# Step 1. 
+# To have your Alys node connect with other nodes, update the `BOOTNODE_ARG` in the docker-compose file.
+# For example, if you want your Alys node to connect to `Alys Testnet4` use the following value(s):
+# BOOTNODE_ARG=/ip4/209.160.175.123/tcp/55444
+#
+# Provide valid values for the remaining placeholders in the docker-compose file.
+
+# Step 2.
+# Edit `etc/config/eth-config.toml` to set `[peers].trusted_nodes`
+# For example, to connect to `Alys Testnet4` set to the following:
+# [peers]
+# ...
+# trusted_nodes = [
+#   "enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303"
+# ]
+# ...
+
+
+# Step 3. 
+# Run Alys node + single-member federation
+$ docker compose -f etc/docker-compose.j2.yml up -d
+
+# Step 4.
+# Check the logs to see if everything is running smoothly
+$ docker compose -f etc/docker-compose.j2.yml logs -f
+```
+
+> Reference the section [Connecting to an Alys Network](#connecting-to-an-alys-network) for the list of available networks and their respective connection details.
+
+
+## Manual Setup of Alys Node (without Docker)
 
 We will describe how to run an Alys sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
 
@@ -131,7 +164,7 @@ EVM_ADDRESS="09Af4E864b84706fbCFE8679BF696e8c0B472201"
 
 The Alys node will automatically bridge the BTC.
 
-#### Check that Funds are Allocated inAlys
+#### Check that Funds are Allocated in Alys
 
 Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1x10^18 wei instead of 1x10^8 satoshis.
 
@@ -200,246 +233,14 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 
 </details>
 
-## Running an Alys Network
+## Connecting to an Alys Network
 
-Above, we show how to run Alys with a single node and a single federation member. The dev setup is meant for ease of testing without having to set various parameters. For operating an Alys network with multiple federation members, we need to take more steps.
+### Testnet
 
-We will now run an Alys network with three federation members where each member will run a geth and Alys consensus client and share a Bitcoin node.
-
-In practice, each federation member will run their own Bitcoin node.
-
-### Keys
-
-Each Alys node will require two keys:
-
-- A Bitcoin key to participate in generating a deposit address on peg-in and to sign peg-out transactions.
-- An Aura key to sign blocks.
-
-An EVM account is also needed to receive fees, but the private key does not need to be supplied.
-
-#### Generate Secure Keys
-
-There are multiple ways to generate secure keys. We will not cover the different options here and trust operators to have an understanding of how to generate and protect secret keys.
-
-Note: if you are choosing to create keys, the chain configuration file needs to be adjusted as described here: [Chain spec](#chain-spec).
-
-#### Developer Keys
-
-For development purposes on private test deployments, we recommend using dummy keys:
-
-##### Testing Keys (Aura/EVM)
-
-```
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000001
-Public Key: 97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb
-Address: 7e5f4552091a69125d5dfcb7b8c2659029395bdf
-
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000002
-Public Key: a572cbea904d67468808c8eb50a9450c9721db309128012543902d0ac358a62ae28f75bb8f1c7c42c39a8c5529bf0f4e
-Address: 2b5ad5c4795c026514f8317c7a215e218dccd6cf
-
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000003
-Public Key: 89ece308f9d1f0131765212deca99697b112d61f9be9a5f1f3780a51335b3ff981747a0b2ca2179b96d2c0c9024e5224
-Address: 6813eb9362372eef6200f3b1dbc3f819671cba69
-```
-
-##### Testing Keys (Bitcoin)
-
-```
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000001
-Public Key: 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
-
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000002
-Public Key: 02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5
-
-Secret Key: 0000000000000000000000000000000000000000000000000000000000000003
-Public Key: 02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
-```
-
-### Start Bitcoin
-
-#### Regtest
-
-```shell
-bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword createwallet alys
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword loadwallet alys
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword generatetoaddress 101 $(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -rpcwallet=alys getnewaddress)
-```
-
-#### Testnet
-
-Note: this will sync the entire Bitcoin test network.
-
-```shell
-bitcoind -testnet -rpcuser=rpcuser -rpcpassword=rpcpassword
-```
-
-#### Mainnet
-
-Note: this will sync the entire Bitcoin main network.
-
-```shell
-bitcoind -rpcuser=rpcuser -rpcpassword=rpcpassword
-```
-
-### Run Three Nodes
-
-Each Alys node takes several arguments:
-
-- `chain`: A chain configuration like [chain.json](./etc/config/chain.json)
-- `aura-secret-key`: The secret key used to sign blocks by the federation member.
-- `geth-url`: The URL to the geth node for the Alys node.
-- `db-path`: The path where the Alys blocks are stored.
-- `wallet-path`: The Bitcoin wallet path.
-- `bitcoin-secret-key`: The Bitcoin secret key generates the shared deposit address and processes peg-outs.
-- `bitcoin-rpc-url`: The URL of the Bitcoin RPC.
-- `bitcoin-rpc-user`: The Bitcoin RPC user.
-- `bitcoin-rpc-pass`: The Bitcoin RPC password.
-- `mine` (optional): Activates the in-built dummy miner. Don't set this if using with an actual miner. See [Mining](#mining) on how to connect a miner.
-
-In our example, we are going to use dev keys. These can be replaced by generating custom keys as described above.
-
-We need six terminals, two for each node.
-
-#### All Networks
-
-Three geth nodes:
-
-```shell
-NUM=0 ./scripts/start_geth.sh
-NUM=1 ./scripts/start_geth.sh
-NUM=2 ./scripts/start_geth.sh
-```
-
-#### Regtest
-
-Node 1
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
-  --geth-url http://localhost:8551/ \
-  --db-path etc/data/consensus/node_0/chain_db/ \
-  --rpc-port 3000 \
-  --mine \
-  --wallet-path etc/data/consensus/node_0/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
-  --bitcoin-rpc-url localhost:18443 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword
-```
-
-Node 2
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
-  --geth-url http://localhost:8561/ \
-  --db-path etc/data/consensus/node_1/chain_db/ \
-  --rpc-port 3001 \
-  --mine \
-  --wallet-path etc/data/consensus/node_1/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
-  --bitcoin-rpc-url localhost:18443 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword
-```
-
-Node 3
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
-  --geth-url http://localhost:8571/ \
-  --db-path etc/data/consensus/node_2/chain_db/ \
-  --rpc-port 3002 \
-  --mine \
-  --wallet-path etc/data/consensus/node_2/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
-  --bitcoin-rpc-url localhost:18443 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword
-```
-
-#### Testnet (with the dummy miner)
-
-Node 1
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
-  --geth-url http://localhost:8551/ \
-  --db-path etc/data/consensus/node_0/chain_db/ \
-  --rpc-port 3000 \
-  --mine \
-  --wallet-path etc/data/consensus/node_0/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000001 \
-  --bitcoin-rpc-url localhost:18332 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword \
-  --bitcoin-network testnet
-```
-
-Node 2
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
-  --geth-url http://localhost:8561/ \
-  --db-path etc/data/consensus/node_1/chain_db/ \
-  --rpc-port 3001 \
-  --mine \
-  --wallet-path etc/data/consensus/node_1/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000002 \
-  --bitcoin-rpc-url localhost:18332 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword \
-  --bitcoin-network testnet
-```
-
-Node 3
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --aura-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
-  --geth-url http://localhost:8571/ \
-  --db-path etc/data/consensus/node_2/chain_db/ \
-  --rpc-port 3002 \
-  --mine \
-  --wallet-path etc/data/consensus/node_2/wallet \
-  --bitcoin-secret-key 0000000000000000000000000000000000000000000000000000000000000003 \
-  --bitcoin-rpc-url localhost:18332 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword \
-  --bitcoin-network testnet
-```
-
-### Mining
-
-Note the `--mine` flag used above which enables an auto-miner that attempts to find and submit a solution for the PoW.
-
-We also provide an RPC that provides two methods, `createauxblock` and `submitauxblock`, based on the Namecoin implementation. If you are a mining pool operator, use the default RPC port (`3000`, or configure `--rpc-port`) to fetch the target and hash from your authority or full-node and then submit the AuxPow.
-
-Note we currently check the third *or* fourth output of the coinbase transaction to extract the merged mining header, this differs from the original specification [here](https://en.bitcoin.it/wiki/Merged_mining_specification#Merged_mining_coinbase) (and corresponding implementations) which expect this in the `scriptSig` of the first input. It is also assumed that this is the only data in the `scriptPubKey` and there are no other instructions or data pushes.
-
-For local development we also offer a minimal binary named `miner` that does the same thing as the in-process service but over RPC.
-
-```shell
-cargo run --bin miner -- --url "127.0.0.1:3000"
-```
-
-### Peg in and Peg out
-
-The peg in and out procedures are the same as in the Getting Started guide above.
-
-The main difference will be the changed federation deposit address, which is `bcrt1pyjrtzxpj7vzpjz6kvps5c2ajhkupt8qk22ncdpdz23wdl5j7dp8qexkr43` if using the dev keys.
+- RPC: http://209.160.175.123:8545
+- Explorer: http://testnet.alyscan.io/
+- Faucet: https://faucet.anduro.io/
+- Chain ID: 212121
 
 ## Full Node
 
@@ -488,7 +289,7 @@ cargo run --bin app -- --dev
 #### Testnet
 
 ```shell
-Node IP: 107.20.115.193
+Node IP: 209.160.175.123
 Node Port: 8545
 ```
 
@@ -627,7 +428,7 @@ The Alys sidechain expects the bridge contract to be pre-deployed at `0xbBbBBBBb
 
 When you start the Alys sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./etc/config/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
 
-```json
+```javascript
 {
   // the block duration in milliseconds
   "slotDuration": 2000,
