@@ -31,103 +31,38 @@ On a high level, the repository consists of three parts:
 - Install build-essential
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
 
-# Getting Started: Run an Alys Node
+## Getting Started Guides:
 
-Clone Alys repo:
+* ### [Running Alys with Docker Compose](./docs/guides/getting_started_docker_setup.md)
+* ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md)
 
+## Alys Testnet4
+
+Anduro operates a public testnet for Alys used for development & testing. Anyone wishing to interact with the Alys testnet, whether it be to query the chain, send transactions, or connect your own node to the
+network, can find connection info below.
+
+### Alys Node #1:
 ```shell
-git clone git@github.com:AnduroProject/Alys.git
+IP: 209.160.175.123
+Enode: enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303
 ```
 
-> **NOTE**: If you intend on running Alys using **docker-compose**, we recommend cloning the repo to `/opt/alys/lib` on unix-based systems to be able to use the docker-compose files we provide without changes.
-
-## Using Docker-compose (recommended)
-
-You can conveniently find multiple docker-compose files in the `etc` folder:
-- `docker-compose.j2.yml` - Runs Alys sidechain with a single node and a federation with a single member.
-- `docker-compose.full-node.j2.yml` - Runs an Alys full node which is similar to running a federation node, but does **NOT** require an Aura or Bitcoin key since full nodes are not signing blocks or Bitcoin transactions.
-- `docker-compose.local.yml` - Runs a single Alys node + single-member federation + Bitcoin node + Reth node. (This is the recommended setup for local development.)
-
-**IMPORTANT**: Any of the `docker-compose` files that contain `*.j2.yml` are Jinja2 template files which contains placeholders for several configuration arguments. You must replace these placeholders with the actual values before running the docker-compose command. The placeholders are:
-- `BTC_NODE_IP`: The IP address of a Bitcoin node
-- `BOOTNODE_ARG`: The argument to be passed to the Alys node for the bootnode. This is used to connect to other nodes in the network.
-- `AURA_SECRET_KEY`: The secret key used for the Aura consensus algorithm. This is used to sign blocks and transactions.
-- `BTC_SECRET_KEY`: The secret key used for the Bitcoin node. This is used to sign Bitcoin transactions.
-
-```sh
-# Step 1. 
-# To have your Alys node connect with other nodes, update the `BOOTNODE_ARG` in the docker-compose file.
-# For example, if you want your Alys node to connect to `Alys Testnet4` use the following value(s):
-# BOOTNODE_ARG=/ip4/209.160.175.123/tcp/55444
-#
-# Provide valid values for the remaining placeholders in the docker-compose file.
-
-# Step 2.
-# Edit `etc/config/eth-config.toml` to set `[peers].trusted_nodes`
-# For example, to connect to `Alys Testnet4` set to the following:
-# [peers]
-# ...
-# trusted_nodes = [
-#   "enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303"
-# ]
-# ...
-
-
-# Step 3. 
-# Run Alys node + single-member federation
-$ docker compose -f etc/docker-compose.j2.yml up -d
-
-# Step 4.
-# Check the logs to see if everything is running smoothly
-$ docker compose -f etc/docker-compose.j2.yml logs -f
-```
-
-> Reference the section [Connecting to an Alys Network](#connecting-to-an-alys-network) for the list of available networks and their respective connection details.
-
-
-## Manual Setup of Alys Node (without Docker)
-
-We will describe how to run an Alys sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
-
-### Geth and Bitcoin
-
-We will start a single geth node and a Bitcoin regtest node.
-
+### Alys Node #2:
 ```shell
-# cleanup, init and run geth
-./scripts/start_geth.sh
+IP: 209.160.175.124
+Enode: enode://15d60f94195b361bf20acfd8b025b8f332b79f5752637e225e7c73aca7b17dd978ca94ab825d0f5221210e69ffcd96e910a257e25ff936c918335c44cc7041ba@209.160.175.124:30303
 ```
 
+### Alys Node #3:
 ```shell
-# in a new terminal start bitcoin
-bitcoind -regtest -server -rest -rpcport=18443 -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002 -rpcallowip=127.0.0.1 -debug=rpc
+IP: 209.160.175.125
+Enode: enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303
 ```
 
-### Alys node
+## Faucet
 
-Next, we start a single Alys node with the federation having exactly one member.
+https://faucet.anduro.io/
 
-```shell
-# dev (single node)
-
-# From the Alys root directory
-cargo run --bin app -- --dev
-```
-
-You will see that the node is producing blocks continuously.
-
-<details>
-<summary>Further details on AuxPoW submission</summary>
-
-According to the target time of merged mining, eventually, a merged mining block bundle is added to the chain, finalizing the previously created blocks together with the federation's validation and signing of the AuxPoW.
-
-In dev mode, we use an embedded miner to get the AuxPoW.
-
-When the AuxPoW is not submitted, the node will stop producing blocks.
-
-Block production will resume once the next valid AuxPoW is submitted.
-
-</details>
 
 ### Peg-In
 
@@ -286,16 +221,6 @@ bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
 cargo run --bin app -- --dev
 ```
 
-#### Testnet
-
-```shell
-Node IP: 209.160.175.123
-Node Port: 8545
-```
-
-#### Faucet
-
-https://faucet.anduro.io/
 
 #### Unit tests
 
