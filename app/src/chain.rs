@@ -313,7 +313,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         timestamp: Duration,
     ) -> Result<(), Error> {
         CHAIN_BLOCK_PRODUCTION_TOTALS
-            .with_label_values(&["attempted"])
+            .with_label_values(&["attempted", "default"])
             .inc();
         if !self.sync_status.read().await.is_synced() {
             CHAIN_BLOCK_PRODUCTION_TOTALS
@@ -511,7 +511,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         }
 
         CHAIN_BLOCK_PRODUCTION_TOTALS
-            .with_label_values(&["success"])
+            .with_label_values(&["success", "default"])
             .inc();
         Ok(())
     }
@@ -587,7 +587,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         unverified_block: SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<CheckedIndividualApproval>, Error> {
         CHAIN_PROCESS_BLOCK_TOTALS
-            .with_label_values(&["attempted"])
+            .with_label_values(&["attempted", "default"])
             .inc();
         let root_hash = unverified_block.canonical_root();
         info!(
@@ -772,7 +772,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self.maybe_accept_block(root_hash).await?;
 
         CHAIN_PROCESS_BLOCK_TOTALS
-            .with_label_values(&["success"])
+            .with_label_values(&["success", "default"])
             .inc();
 
         Ok(our_approval)
@@ -1620,7 +1620,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .unwrap_or_default();
         info!("Starting sync from {}", head);
         CHAIN_SYNCING_OPERATION_TOTALS
-            .with_label_values(&[head.to_string().as_str()])
+            .with_label_values(&[head.to_string().as_str(), "called"])
             .inc();
 
         let mut receive_stream = self
@@ -1755,7 +1755,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             CHAIN_BTC_BLOCK_MONITOR_TOTALS
                                 .with_label_values(&[
                                     start_height.to_string().as_str(),
-                                    "queued__pegins",
+                                    "queued_pegins",
                                 ])
                                 .inc();
                         } else {

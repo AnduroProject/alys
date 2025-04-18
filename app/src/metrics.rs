@@ -62,7 +62,7 @@ lazy_static! {
     pub static ref AUXPOW_SUBMIT_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
         "auxpow_submit_block_calls_total",
         "Total number of times the submit_aux_block method is called",
-        &["status", "chain_id", "block_height"]
+        &["status"]
     ).unwrap();
 
     /// Histogram for the number of hashes processed during aux block creation.
@@ -85,12 +85,6 @@ lazy_static! {
     pub static ref CHAIN_PROCESS_BLOCK_ATTEMPTS: IntCounter = register_int_counter!(
         "chain_process_block_attempts_total",
         "Number of times process_block is invoked"
-    ).unwrap();
-
-    pub static ref CHAIN_BLOCKS_REJECTED: IntCounterVec = register_int_counter_vec!(
-        "chain_blocks_rejected_total",
-        "Number of blocks rejected, labeled by reason",
-        &["reason"]
     ).unwrap();
 
     pub static ref CHAIN_PROCESS_BLOCK_TOTALS: IntCounterVec = register_int_counter_vec!(
@@ -131,7 +125,7 @@ lazy_static! {
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(
         "engine_build_block_calls_total",
         "Number of times build_block is invoked",
-        &["status"]
+        &["status", "reason"]
     ).unwrap();
 
     pub static ref ENGINE_COMMIT_BLOCK_CALLS: IntCounterVec = register_int_counter_vec!(

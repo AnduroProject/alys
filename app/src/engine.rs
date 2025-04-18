@@ -101,7 +101,7 @@ impl Engine {
         add_balances: Vec<AddBalance>,
     ) -> Result<ExecutionPayload<MainnetEthSpec>, Error> {
         ENGINE_BUILD_BLOCK_CALLS
-            .with_label_values(&["called"])
+            .with_label_values(&["called", "default"])
             .inc();
 
         // FIXME: geth is not accepting >4 withdrawals
@@ -141,7 +141,7 @@ impl Engine {
             .await
             .map_err(|err| {
                 ENGINE_BUILD_BLOCK_CALLS
-                    .with_label_values(&["engine_api_forkchoice_updated_error"])
+                    .with_label_values(&["failed", "engine_api_forkchoice_updated_error"])
                     .inc();
                 Error::EngineApiError(format!("{:?}", err))
             })?;
@@ -154,7 +154,7 @@ impl Engine {
             .await
             .map_err(|err| {
                 ENGINE_BUILD_BLOCK_CALLS
-                    .with_label_values(&["engine_api_get_payload_error"])
+                    .with_label_values(&["failed", "engine_api_get_payload_error"])
                     .inc();
                 Error::EngineApiError(format!("{:?}", err))
             })?;
@@ -165,7 +165,7 @@ impl Engine {
         let execution_payload = response.execution_payload_ref().clone_from_ref();
 
         ENGINE_BUILD_BLOCK_CALLS
-            .with_label_values(&["success"])
+            .with_label_values(&["success", "default"])
             .inc();
 
         Ok(execution_payload)

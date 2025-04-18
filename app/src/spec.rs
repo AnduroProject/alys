@@ -108,7 +108,6 @@ mod tests {
         println!("*****A) {:?}", start_hex_bytes.len());
         // debug!(start_hex_bytes.len());
 
-
         let dir = tempdir().unwrap();
 
         let file_path = dir.path().join("test_hex.hex");
@@ -116,8 +115,6 @@ mod tests {
         write!(file, "{}", hex::encode(HEX_STRING)).unwrap();
 
         let hex_bytes = hex_file_parser(file_path.to_str().unwrap()).unwrap();
-
-
 
         assert_eq!(start_hex_bytes.len(), hex_bytes.len());
         for i in 0..start_hex_bytes.len() {
