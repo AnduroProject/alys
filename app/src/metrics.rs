@@ -171,15 +171,18 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
 
 pub async fn start_server() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 9001));
-
+ 
     let make_svc =
         make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle_request)) });
-
+ 
     let server = Server::bind(&addr).serve(make_svc);
-
-    tracing::info!("Starting Metrics server on {}", addr);
-
-    if let Err(e) = server.await {
-        tracing::error!("Metrics server error: {}", e);
-    }
+ 
+    // TODO: handle graceful shutdown
+    tokio::spawn(async move {
+        tracing::info!("Starting Metrics server on {}", addr);
+ 
+        if let Err(e) = server.await {
+            tracing::error!("Metrics server error: {}", e);
+        }
+    });
 }
