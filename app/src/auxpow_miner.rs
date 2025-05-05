@@ -308,14 +308,14 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         let index_last = self.chain.get_last_finalized_block();
 
         let hashes = self.chain.get_aggregate_hashes().await?;
-        // trace!("Found {} hashes", hashes.len());
+        trace!("Found {} hashes", hashes.len());
 
         AUXPOW_HASHES_PROCESSED.observe(hashes.len() as f64);
 
         // calculates the "vector commitment" for previous blocks without PoW.
         let hash = AuxPow::aggregate_hash(&hashes);
 
-        // trace!("Creating AuxBlock for hash {}", hash);
+        trace!("Creating AuxBlock for hash {}", hash);
 
         // store the height for this hash so we can retrieve the
         // same unverified hashes on submit
@@ -363,7 +363,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             .with_label_values(&["called"])
             .inc();
 
-        // trace!("Submitting AuxPow for hash {}", hash);
+        trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
             start_hash,
@@ -387,11 +387,11 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             return Err(eyre!("Last block not found"));
         };
 
-        // trace!("Last block hash: {}", index_last.block_hash());
+        trace!("Last block hash: {}", index_last.block_hash());
         let bits = self.get_next_work_required(&index_last)?;
-        // trace!("Next work required: {}", bits.to_consensus());
+        trace!("Next work required: {}", bits.to_consensus());
         let chain_id = index_last.chain_id();
-        // trace!("Chain ID: {}", chain_id);
+        trace!("Chain ID: {}", chain_id);
 
         // NOTE: we also check this in `check_pow`
         // process block
@@ -440,12 +440,12 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
     let task = async move {
         let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
         loop {
-            // trace!("Calling create_aux_block");
+            trace!("Calling create_aux_block");
             // TODO: set miner address
             if let Ok(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
-                // trace!("Created AuxBlock for hash {}", aux_block.hash);
+                trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
-                // trace!("Calling submit_aux_block");
+                trace!("Calling submit_aux_block");
                 miner
                     .submit_aux_block(aux_block.hash, auxpow)
                     .await

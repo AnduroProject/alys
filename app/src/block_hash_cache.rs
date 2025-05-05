@@ -36,7 +36,7 @@ impl BlockHashCache {
     /// Initializes the cache with a given vector of hashes.
     pub fn init(&mut self, hashes: Vec<BlockHash>) -> eyre::Result<()> {
         trace!("BlockHashCache::init");
-        // trace!("BlockHashCache::init: hashes: {:#?}", hashes);
+        trace!("BlockHashCache::init: hashes: {:#?}", hashes);
         self.hashes = hashes;
         Ok(())
     }
@@ -50,7 +50,7 @@ impl BlockHashCache {
     /// Returns a reference to all stored hashes.
     pub fn get(&self) -> Vec<BlockHash> {
         trace!("BlockHashCache::get");
-        // trace!("{:#?}", self.hashes);
+        trace!("{:#?}", self.hashes);
         self.hashes.clone()
     }
 

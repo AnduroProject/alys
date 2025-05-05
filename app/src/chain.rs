@@ -834,7 +834,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         from: Hash256, // exclusive
         to: Hash256,   // inclusive
     ) -> Result<Vec<Hash256>, Error> {
-        // trace!("Getting hashes from {:?} to {:?}", from, to);
+        trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
         let mut hashes = vec![];
         loop {
@@ -843,7 +843,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
 
             hashes.push(current);
-            // trace!("Pushing hash {:?}", current);
+            trace!("Pushing hash {:?}", current);
 
             current = self
                 .storage
@@ -1640,7 +1640,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         while let Some(x) = receive_stream.recv().await {
             match x {
                 RPCResponse::BlocksByRange(block) => {
-                    // trace!("Received block: {:#?}", block);
+                    trace!("Received block: {:#?}", block);
                     match self.process_block((*block).clone()).await {
                         Err(Error::ProcessGenesis) | Ok(_) => {
                             // nothing to do
@@ -1891,7 +1891,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .as_ref()
             .ok_or(ChainError(Head.into()))?
             .hash;
-        // trace!("Head: {:?}", head);
+        trace!("Head: {:?}", head);
 
         let queued_pow = self.queued_pow.read().await;
 
@@ -1920,7 +1920,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_block_by_hash(&self, hash: &BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
-        // trace!("Getting block by hash: {:?}", hash);
+        trace!("Getting block by hash: {:?}", hash);
         let block = self.storage.get_block(&hash.to_block_hash())?.unwrap();
         Ok(block.message)
     }
