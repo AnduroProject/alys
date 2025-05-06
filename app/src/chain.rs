@@ -1912,8 +1912,14 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     }
 
     fn get_last_finalized_block(&self) -> ConsensusBlock<MainnetEthSpec> {
+        trace!("Getting last finalized block");
         match self.storage.get_latest_pow_block() {
-            Ok(Some(x)) => self.storage.get_block(&x.hash).unwrap().unwrap().message,
+            Ok(Some(x)) => {
+                let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
+                trace!("Found last finalized block: {:?}", last_block);
+                
+                last_block
+            },
             _ => unreachable!("Should always have AuxPow"),
         }
     }
