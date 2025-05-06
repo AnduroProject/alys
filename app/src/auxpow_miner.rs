@@ -222,16 +222,17 @@ pub fn get_next_work_required<BI: BlockIndex>(
     index_last: &BI,
     params: &BitcoinConsensusParams,
     target_override: Option<CompactTarget>,
+    chain_head_height: u64,
 ) -> Result<CompactTarget> {
     if let Some(target) = target_override {
         return Ok(target);
     }
-    if is_retarget_height(index_last.height() + 1, params) {
-        info!("Retargeting, using new bits at height {}", index_last.height() + 1);
+    if is_retarget_height(chain_head_height + 1, params) {
+        info!("Retargeting, using new bits at height {}", chain_head_height + 1);
         info!("Last bits: {:?}", index_last.bits());
     }
 
-    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
+    if params.pow_no_retargeting || !is_retarget_height(chain_head_height + 1, params) {
         info!("No retargeting, using last bits: {:?}", params.pow_no_retargeting);
         info!("Last bits: {:?}", index_last.bits());
         return Ok(CompactTarget::from_consensus(index_last.bits()));
@@ -282,6 +283,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     }
 
     fn get_next_work_required(&self, index_last: &BI) -> Result<CompactTarget> {
+        let head_height = self.chain.get_head()?.message.height();
         get_next_work_required(
             |height| self.chain.get_block_at_height(height),
             index_last,
