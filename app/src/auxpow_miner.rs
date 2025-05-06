@@ -226,6 +226,11 @@ pub fn get_next_work_required<BI: BlockIndex>(
     if let Some(target) = target_override {
         return Ok(target);
     }
+    if is_retarget_height(index_last.height() + 1, params) {
+        info!("Retargeting, using new bits at height {}", index_last.height() + 1);
+        info!("Last bits: {:?}", index_last.bits());
+    }
+
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
         info!("No retargeting, using last bits: {:?}", params.pow_no_retargeting);
         info!("Last bits: {:?}", index_last.bits());
