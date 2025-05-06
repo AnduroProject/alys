@@ -246,7 +246,7 @@ impl NetworkBackend {
                         let _ = response.send(result);
                     }
                     Some(FrontToBackCommand::Dial(address, response)) => {
-                        error!("Dialing..");
+                        info!("Dialing...");
                         let result = self.swarm.dial(address);
                         // if sending the response fails, there is nothing we can do, so ignore
                         let _ = response.send(result);
