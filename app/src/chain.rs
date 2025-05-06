@@ -922,6 +922,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .collect::<Vec<_>>(),
         );
 
+        let head_height = self.get_head()?.message.height();
         let bits = get_next_work_required(
             |height| self.get_block_at_height(height),
             &self
@@ -929,6 +930,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .map_err(Error::GenericError)?,
             &self.retarget_params,
             self.storage.get_target_override()?,
+            head_height,
         )
         .map_err(Error::GenericError)?;
 
@@ -1917,9 +1919,9 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             Ok(Some(x)) => {
                 let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
                 trace!("Found last finalized block: {:?}", last_block);
-                
+
                 last_block
-            },
+            }
             _ => unreachable!("Should always have AuxPow"),
         }
     }

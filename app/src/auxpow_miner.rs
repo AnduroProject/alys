@@ -289,6 +289,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             index_last,
             &self.retarget_params,
             self.get_target_override(),
+            head_height
         )
     }
 
@@ -315,6 +316,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         }
 
         let index_last = self.chain.get_last_finalized_block();
+
+        trace!("Index last hash={} height={}", index_last.block_hash(), index_last.height());
 
         let hashes = self.chain.get_aggregate_hashes().await?;
         trace!("Found {} hashes", hashes.len());
