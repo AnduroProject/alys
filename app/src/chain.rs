@@ -843,7 +843,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
 
             hashes.push(current);
-            trace!("Pushing hash {:?}", current);
 
             current = self
                 .storage
