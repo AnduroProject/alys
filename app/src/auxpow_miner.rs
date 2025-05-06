@@ -227,15 +227,18 @@ pub fn get_next_work_required<BI: BlockIndex>(
     if let Some(target) = target_override {
         return Ok(target);
     }
+    
+    let chain_head = get_block_at_height(chain_head_height)?;
+    
     if is_retarget_height(chain_head_height + 1, params) {
         info!("Retargeting, using new bits at height {}", chain_head_height + 1);
-        info!("Last bits: {:?}", index_last.bits());
+        info!("Last bits: {:?}", chain_head.bits());
     }
 
     if params.pow_no_retargeting || !is_retarget_height(chain_head_height + 1, params) {
         info!("No retargeting, using last bits: {:?}", params.pow_no_retargeting);
-        info!("Last bits: {:?}", index_last.bits());
-        return Ok(CompactTarget::from_consensus(index_last.bits()));
+        info!("Last bits: {:?}", chain_head.bits());
+        return Ok(CompactTarget::from_consensus(chain_head.bits()));
     }
 
     let blocks_back = params.difficulty_adjustment_interval() - 1;
