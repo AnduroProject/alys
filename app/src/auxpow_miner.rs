@@ -227,6 +227,8 @@ pub fn get_next_work_required<BI: BlockIndex>(
         return Ok(target);
     }
     if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
+        info!("No retargeting, using last bits: {:?}", params.pow_no_retargeting);
+        info!("Last bits: {:?}", index_last.bits());
         return Ok(CompactTarget::from_consensus(index_last.bits()));
     }
 
