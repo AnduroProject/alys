@@ -228,15 +228,19 @@ pub fn get_next_work_required<BI: BlockIndex>(
         return Ok(target);
     }
 
-    if is_retarget_height(chain_head_height + 1, params) {
-        info!("Retargeting, using new bits at height {}", chain_head_height + 1);
-        info!("Last bits: {:?}", index_last.bits());
-    }
-
     if params.pow_no_retargeting || !is_retarget_height(chain_head_height + 1, params) {
-        info!("No retargeting, using last bits: {:?}", params.pow_no_retargeting);
+        info!(
+            "No retargeting, using last bits: {:?}",
+            params.pow_no_retargeting
+        );
         info!("Last bits: {:?}", index_last.bits());
         return Ok(CompactTarget::from_consensus(index_last.bits()));
+    } else {
+        info!(
+            "Retargeting, using new bits at height {}",
+            chain_head_height + 1
+        );
+        info!("Last bits: {:?}", index_last.bits());
     }
 
     let blocks_back = chain_head_height - index_last.height();
@@ -290,7 +294,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             index_last,
             &self.retarget_params,
             self.get_target_override(),
-            head_height
+            head_height,
         )
     }
 
@@ -318,10 +322,14 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
 
         let index_last = self.chain.get_last_finalized_block();
 
-        trace!("Index last hash={} height={}", index_last.block_hash(), index_last.height());
+        trace!(
+            "Index last hash={} height={}",
+            index_last.block_hash(),
+            index_last.height()
+        );
 
         let hashes = self.chain.get_aggregate_hashes().await?;
-        trace!("Found {} hashes", hashes.len());
+        // trace!("Found {} hashes", hashes.len());
 
         AUXPOW_HASHES_PROCESSED.observe(hashes.len() as f64);
 
