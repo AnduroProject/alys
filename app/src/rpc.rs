@@ -184,6 +184,10 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
 
     let response = match json_req.method {
         "createauxblock" => {
+            RPC_REQUESTS
+            .with_label_values(&["createauxblock", "called"])
+            .inc();
+
             let [script_pub_key] =
                 if let Ok(value) = serde_json::from_str::<[EvmAddress; 1]>(params.get()) {
                     value
@@ -229,6 +233,10 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
             }
         }
         "submitauxblock" => {
+            RPC_REQUESTS
+                .with_label_values(&["submitauxblock", "called"])
+                .inc();
+
             #[allow(unused_mut)]
             let mut hash;
             #[allow(unused_mut)]
@@ -267,7 +275,7 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
         }
         "getdepositaddress" => {
             RPC_REQUESTS
-                .with_label_values(&["getdepositaddress", "success"])
+                .with_label_values(&["getdepositaddress", "called"])
                 .inc();
             Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {

@@ -120,6 +120,18 @@ lazy_static! {
             ALYS_REGISTRY
         )
         .unwrap();
+    pub static ref CHAIN_LAST_APPROVED_BLOCK: IntGauge = register_int_gauge_with_registry!(
+        "last_approved_block",
+        "The last block that was approved by node",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    pub static ref CHAIN_BLOCK_HEIGHT: IntGauge = register_int_gauge_with_registry!(
+        "chain_block_height",
+        "The current block height of the node",
+        ALYS_REGISTRY
+    )
+    .unwrap();
     pub static ref CHAIN_BTC_BLOCK_MONITOR_TOTALS: IntCounterVec =
         register_int_counter_vec_with_registry!(
             "chain_btc_block_monitor_totals",
