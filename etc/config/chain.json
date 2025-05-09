@@ -22,8 +22,9 @@
     "retargetParams": {
         "powNoRetargeting": false,
         "powLimit": 553713663,
-        "powTargetTimespan": 12000,
-        "powTargetSpacing": 1000
+        "powLowerLimit": 486604799,
+        "powTargetTimespan": 60,
+        "powTargetSpacing": 5
     },
     "isValidator": true,
     "requiredBtcTxnConfirmations": 144

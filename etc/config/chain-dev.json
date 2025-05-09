@@ -1,22 +1,23 @@
 {
-    "slotDuration": 5000,
-    "authorities": [
-        "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-    ],
-    "federation": [
-        "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
-    ],
-    "federationBitcoinPubkeys": [
-        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-    ],
-    "bits": 505794034,
-    "chainId": 121212,
-    "maxBlocksWithoutPow": 20,
-    "bitcoinStartHeight": 0,
-    "retargetParams": {
-        "powNoRetargeting": true,
-        "powLimit": 505794034,
-        "powTargetTimespan": 12000,
-        "powTargetSpacing": 1000
-    }
+  "slotDuration": 5000,
+  "authorities": [
+    "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+  ],
+  "federation": [
+    "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+  ],
+  "federationBitcoinPubkeys": [
+    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+  ],
+  "bits": 505794034,
+  "chainId": 121212,
+  "maxBlocksWithoutPow": 20,
+  "bitcoinStartHeight": 0,
+  "retargetParams": {
+    "powNoRetargeting": true,
+    "powLimit": 505794034,
+    "powLowerLimit": 439495319,
+    "powTargetTimespan": 12000,
+    "powTargetSpacing": 1000
+  }
 }

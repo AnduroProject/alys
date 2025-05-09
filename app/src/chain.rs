@@ -661,6 +661,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             self.check_pegout_proposal(&unverified_block, prev_payload_hash)
                 .await?;
         }
+        trace!("Made it past withdrawals and pegouts");
 
         // TODO: We should set the bitcoin connection to be optional
         if let Some(ref pow) = unverified_block.message.auxpow_header {
@@ -739,6 +740,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 return Err(Error::IllegalFinalization);
             }
         }
+        let sync_status = self.sync_status.read().await.is_synced();
+        trace!("Sync status: {:?}", sync_status);
 
         // store the candidate
         // TODO: this is also called on sync which isn't strictly required
@@ -747,7 +750,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             // First insert the block
             self.block_candidates
-                .insert(unverified_block.clone())
+                .insert(unverified_block.clone(), sync_status)
                 .await?;
 
             // Then add our approval
@@ -756,7 +759,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 signature: our_approval.clone().into(),
             };
             self.block_candidates
-                .add_approval(approval, &self.aura.authorities)
+                .add_approval(approval, &self.aura.authorities, sync_status)
                 .await?;
 
             Some(our_approval)
@@ -764,7 +767,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             trace!("Full node doesn't need to approve");
             // full node doesn't need to approve
             self.block_candidates
-                .insert(unverified_block.clone())
+                .insert(unverified_block.clone(), sync_status)
                 .await?;
             None
         };
@@ -1000,9 +1003,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     async fn process_approval(self: &Arc<Self>, approval: ApproveBlock) -> Result<(), Error> {
         let hash = approval.block_hash;
 
+        let sync_status = self.sync_status.read().await.is_synced();
+
         // Add the approval to the cache
         self.block_candidates
-            .add_approval(approval, &self.aura.authorities)
+            .add_approval(approval, &self.aura.authorities, sync_status)
             .await?;
 
         // Process the block if it has reached majority approval
@@ -1446,6 +1451,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             Err(x) => match x {
                                 Error::MissingParent => {
                                     // self.clone().sync(Some((number - head_height) as u32)).await;
+                                    self.clone().sync().await;
+                                }
+                                Error::MissingBlock => {
                                     self.clone().sync().await;
                                 }
                                 _ => {

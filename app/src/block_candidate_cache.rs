@@ -109,7 +109,7 @@ impl BlockCandidateCache {
 
     /// Inserts a block candidate into the cache.
     /// If there's already a block at the same height, only keeps the one with the higher slot.
-    pub fn insert(&mut self, block: SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error> {
+    pub fn insert(&mut self, block: SignedConsensusBlock<MainnetEthSpec>, is_syncing: bool) -> Result<(), Error> {
         let block_hash = block.canonical_root();
         let block_height = block.message.execution_payload.block_number;
         let block_slot = block.message.slot;
@@ -126,7 +126,7 @@ impl BlockCandidateCache {
             // If there's a block in the candidate state
             if let Some(existing_block) = candidate_state.get_block() {
                 // Only replace if the new block has a higher slot
-                if block_slot > existing_block.message.slot {
+                if block_slot > existing_block.message.slot || is_syncing {
                     trace!(
                         "BlockCandidateCache: Replacing block at height {} (slot {} -> slot {})",
                         block_height,
@@ -174,6 +174,7 @@ impl BlockCandidateCache {
         &mut self,
         approval: ApproveBlock,
         authorities: &[PublicKey],
+        is_syncing: bool,
     ) -> Result<(), Error> {
         let block_hash = approval.block_hash;
 
@@ -181,7 +182,7 @@ impl BlockCandidateCache {
         if let Some(&block_height) = self.hash_to_height.get(&block_hash) {
             if let Some(candidate_state) = self.candidates_by_height.get_mut(&block_height) {
                 return if let Some(current_highest_slot_block) = candidate_state.get_block() {
-                    if current_highest_slot_block.canonical_root() != block_hash {
+                    if current_highest_slot_block.canonical_root() != block_hash && !is_syncing {
                         // If the block hash doesn't match, this is an old block
                         // We need to remove this block from the cache
                         self.hash_to_height.remove(&block_hash);
@@ -268,8 +269,8 @@ impl BlockCandidates {
     }
 
     /// Inserts a block candidate into the cache.
-    pub async fn insert(&self, block: SignedConsensusBlock<MainnetEthSpec>) -> Result<(), Error> {
-        self.cache.write().await.insert(block)
+    pub async fn insert(&self, block: SignedConsensusBlock<MainnetEthSpec>, is_synced: bool) -> Result<(), Error> {
+        self.cache.write().await.insert(block, is_synced)
     }
 
     /// Adds an approval for a block.
@@ -277,8 +278,9 @@ impl BlockCandidates {
         &self,
         approval: ApproveBlock,
         authorities: &[PublicKey],
+        is_syncing: bool,
     ) -> Result<(), Error> {
-        self.cache.write().await.add_approval(approval, authorities)
+        self.cache.write().await.add_approval(approval, authorities, is_syncing)
     }
 
     /// Checks if a block hash exists in the cache
@@ -361,7 +363,7 @@ mod tests {
         let block = create_test_block(100, 200);
         let block_hash = block.canonical_root();
 
-        assert!(cache.insert(block).is_ok());
+        assert!(cache.insert(block, false).is_ok());
 
         // Verify it's in the cache
         assert!(cache.hash_to_height.contains_key(&block_hash));
@@ -388,12 +390,12 @@ mod tests {
         // Insert first block
         let block1 = create_test_block(100, 200);
         let hash1 = block1.canonical_root();
-        assert!(cache.insert(block1).is_ok());
+        assert!(cache.insert(block1, false).is_ok());
 
         // Insert second block at same height but higher slot
         let block2 = create_test_block(100, 300);
         let hash2 = block2.canonical_root();
-        assert!(cache.insert(block2).is_ok());
+        assert!(cache.insert(block2, false).is_ok());
 
         // Verify only the second block is kept
         assert!(!cache.hash_to_height.contains_key(&hash1));
@@ -419,12 +421,12 @@ mod tests {
         // Insert first block with higher slot
         let block1 = create_test_block(100, 300);
         let hash1 = block1.canonical_root();
-        assert!(cache.insert(block1).is_ok());
+        assert!(cache.insert(block1, false).is_ok());
 
         // Insert second block at same height but lower slot
         let block2 = create_test_block(100, 200);
         let hash2 = block2.canonical_root();
-        assert!(cache.insert(block2).is_ok());
+        assert!(cache.insert(block2, false).is_ok());
 
         // Verify only the first block is kept
         assert!(cache.hash_to_height.contains_key(&hash1));
@@ -451,8 +453,8 @@ mod tests {
         let block1 = create_test_block(100, 200);
         let block2 = create_test_block(101, 201);
 
-        assert!(cache.insert(block1).is_ok());
-        assert!(cache.insert(block2).is_ok());
+        assert!(cache.insert(block1, false).is_ok());
+        assert!(cache.insert(block2, false).is_ok());
         assert_eq!(cache.len(), 2);
 
         // Clear the cache
@@ -470,7 +472,7 @@ mod tests {
         // Insert a block
         let block = create_test_block(100, 200);
         let hash = block.canonical_root();
-        assert!(cache.insert(block).is_ok());
+        assert!(cache.insert(block, false).is_ok());
         assert_eq!(cache.len(), 1);
 
         // Remove the block

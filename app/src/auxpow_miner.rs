@@ -113,6 +113,8 @@ pub trait BlockIndex {
 pub struct BitcoinConsensusParams {
     /// The proof of work limit of the bitcoin network
     pub pow_limit: u32,
+    /// The proof of work lower limit
+    pub pow_lower_limit: u32,
     /// The targeted timespan between difficulty adjustments
     pub pow_target_timespan: u64,
     /// The targeted interval between blocks
@@ -126,6 +128,7 @@ impl BitcoinConsensusParams {
     const BITCOIN_MAINNET: Self = Self {
         // https://github.com/rust-bitcoin/rust-bitcoin/blob/67793d04c302bd494519b20b44b260ec3ff8a2f1/bitcoin/src/pow.rs#L124C9-L124C90
         pow_limit: 486604799,
+        pow_lower_limit: 439495319,
         pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
         pow_target_spacing: 10 * 60,            // ten minutes
         pow_no_retargeting: false,
@@ -183,16 +186,29 @@ fn calculate_next_work_required(
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
     let min_timespan = params.pow_target_timespan >> 2;
+    // trace!("Min timespan: {}", min_timespan);
     let max_timespan = params.pow_target_timespan << 2;
+    // trace!("Max timespan: {}", max_timespan);
 
-    let timespan = last_block_time - first_block_time;
+    // let timespan = last_block_time - first_block_time;
+    let timespan =  first_block_time - last_block_time;
+    // trace!("Timespan before clamping: {}", timespan);
     let timespan = timespan.clamp(min_timespan, max_timespan);
 
+    // trace!("Timespan: {}", timespan);
+
     let target = uint256_target_from_compact(last_bits);
+    trace!("Target from last bits {}", target);
     // TODO: figure out why this was overflowing with new consensus params
     let target = target.saturating_mul(Uint256::from(timespan));
+    // trace!("Target after multiplying by timespan {}", target);
     let target = target / Uint256::from(params.pow_target_timespan);
+    // trace!("Target after dividing by target timespan {}", target);
     let target = target.min(uint256_target_from_compact(params.pow_limit));
+    // trace!("Target after clamping to pow limit {}", target);
+    let target = target.max(uint256_target_from_compact(params.pow_lower_limit));
+    // trace!("Target after clamping to pow lower limit {}", target);
+
 
     trace!(
         "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
@@ -206,15 +222,12 @@ fn calculate_next_work_required(
     target_to_compact_lossy(target)
 }
 
-fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
+fn is_retarget_height(height_difference: u32, params: &BitcoinConsensusParams) -> bool {
     let adjustment_interval = params.difficulty_adjustment_interval() as u32;
-    trace!(
-        "Height: {}, interval: {}, is_time: {}",
-        height,
-        adjustment_interval,
-        height % adjustment_interval as u64 == 0
-    );
-    height % adjustment_interval as u64 == 0
+    if height_difference < adjustment_interval {
+        return false;
+    }
+    true
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
@@ -228,24 +241,24 @@ pub fn get_next_work_required<BI: BlockIndex>(
         return Ok(target);
     }
 
-    if params.pow_no_retargeting || !is_retarget_height(chain_head_height + 1, params) {
-        info!(
+    if params.pow_no_retargeting || !is_retarget_height((chain_head_height + 1 - index_last.height()) as u32, params) {
+        trace!(
             "No retargeting, using last bits: {:?}",
             params.pow_no_retargeting
         );
-        info!("Last bits: {:?}", index_last.bits());
+        trace!("Last bits: {:?}", index_last.bits());
         return Ok(CompactTarget::from_consensus(index_last.bits()));
     } else {
-        info!(
+        trace!(
             "Retargeting, using new bits at height {}",
             chain_head_height + 1
         );
-        info!("Last bits: {:?}", index_last.bits());
+        trace!("Last bits: {:?}", index_last.bits());
     }
 
-    let blocks_back = chain_head_height - index_last.height();
-    let height_first = index_last.height() - blocks_back;
-    let index_first = get_block_at_height(height_first)?;
+    // let blocks_back = params.difficulty_adjustment_interval() - 1;
+    // let height_first = index_last.height() - blocks_back;
+    let index_first = get_block_at_height(chain_head_height)?;
 
     let next_work = calculate_next_work_required(
         index_first.block_time(),
