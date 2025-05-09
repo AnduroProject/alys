@@ -204,7 +204,17 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             encoder.encode(&metric_families, &mut buffer).unwrap();
-            Ok(Response::new(Body::from(buffer)))
+            
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(
+                    hyper::header::CONTENT_TYPE,
+                    encoder.format_type(), // returns "text/plain; version=0.0.4"
+                )
+                .body(Body::from(buffer))
+                .unwrap();
+
+            Ok(response)
         }
         _ => {
             let mut not_found = Response::new(Body::from("Not Found"));
