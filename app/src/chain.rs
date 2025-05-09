@@ -13,9 +13,10 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS,
-    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
-    CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
+    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS,
+    CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS,
+    CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -881,7 +882,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             header.range_start, header.range_end,
         );
 
-        let last_pow = self.storage.get_latest_pow_block()?.unwrap().hash;
+        let last_pow_block = self.storage.get_latest_pow_block()?.unwrap();
+        let last_pow = last_pow_block.hash;
+
+        info!("Last pow block: {}", last_pow);
+
+        let last_pow_block = self
+            .storage
+            .get_block(&last_pow)?
+            .ok_or(Error::MissingParent)?;
+        info!("Last pow block {:?}", last_pow_block);
+
         let last_finalized = self
             .get_latest_finalized_block_ref()?
             .ok_or(Error::MissingParent)?;
@@ -1461,6 +1472,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 }
                             },
                             Ok(Some(our_approval)) => {
+                                CHAIN_LAST_APPROVED_BLOCK
+                                    .set(x.message.execution_payload.block_number as i64);
+
                                 // broadcast our approval
                                 let block_hash = x.canonical_root();
                                 info!("✅ Sending approval for {block_hash}");
@@ -1992,7 +2006,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
 
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
         #[allow(clippy::needless_question_mark)]
-        Ok(self
+        let head_block = self
             .storage
             .get_block(
                 &self
@@ -2001,7 +2015,12 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
                     .ok_or(ChainError(Head.into()))?
                     .hash,
             )?
-            .ok_or(ChainError(Head.into()))?)
+            .ok_or(ChainError(Head.into()))?;
+
+        // Set the CHAIN_BLOCK_HEIGHT gauge with the block height of the head block
+        CHAIN_BLOCK_HEIGHT.set(head_block.message.execution_payload.block_number as i64);
+
+        Ok(head_block)
     }
 }
 

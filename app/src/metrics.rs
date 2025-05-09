@@ -120,6 +120,18 @@ lazy_static! {
             ALYS_REGISTRY
         )
         .unwrap();
+    pub static ref CHAIN_LAST_APPROVED_BLOCK: IntGauge = register_int_gauge_with_registry!(
+        "last_approved_block",
+        "The last block that was approved by node",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    pub static ref CHAIN_BLOCK_HEIGHT: IntGauge = register_int_gauge_with_registry!(
+        "chain_block_height",
+        "The current block height of the node",
+        ALYS_REGISTRY
+    )
+    .unwrap();
     pub static ref CHAIN_BTC_BLOCK_MONITOR_TOTALS: IntCounterVec =
         register_int_counter_vec_with_registry!(
             "chain_btc_block_monitor_totals",
@@ -192,7 +204,17 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             encoder.encode(&metric_families, &mut buffer).unwrap();
-            Ok(Response::new(Body::from(buffer)))
+            
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(
+                    hyper::header::CONTENT_TYPE,
+                    encoder.format_type(), // returns "text/plain; version=0.0.4"
+                )
+                .body(Body::from(buffer))
+                .unwrap();
+
+            Ok(response)
         }
         _ => {
             let mut not_found = Response::new(Body::from("Not Found"));
