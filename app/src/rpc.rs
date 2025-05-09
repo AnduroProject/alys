@@ -213,12 +213,9 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                     )
                 }
                 Err(e) => {
-                    let status = match e.downcast().unwrap() {
-                        Error::ChainSyncing => "chain_syncing",
-                        _ => "internal_error",
-                    };
+                    let status = e.to_string();
                     RPC_REQUESTS
-                        .with_label_values(&["createauxblock", status])
+                        .with_label_values(&["createauxblock", &status])
                         .inc();
                     new_json_rpc_error!(
                         id,

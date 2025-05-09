@@ -73,6 +73,12 @@ impl From<BlockErrorBlockTypes> for ChainError {
     }
 }
 
+impl From<BlockErrorBlockTypes> for Error {
+    fn from(e: BlockErrorBlockTypes) -> Self {
+        Error::ChainError(ChainError::BlockRetrievalError(e))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AuxPowMiningError {
     #[error("`{0}`")]
@@ -110,5 +116,11 @@ impl From<FederationError> for Error {
 impl From<execution_layer::Error> for Error {
     fn from(e: execution_layer::Error) -> Self {
         Error::ExecutionLayerError(e)
+    }
+}
+
+impl From<ChainError> for Error {
+    fn from(e: ChainError) -> Self {
+        Error::ChainError(e)
     }
 }
