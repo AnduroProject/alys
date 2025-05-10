@@ -191,7 +191,7 @@ fn calculate_next_work_required(
     // trace!("Max timespan: {}", max_timespan);
 
     // let timespan = last_block_time - first_block_time;
-    let timespan =  first_block_time - last_block_time;
+    let timespan = first_block_time - last_block_time;
     // trace!("Timespan before clamping: {}", timespan);
     let timespan = timespan.clamp(min_timespan, max_timespan);
 
@@ -208,7 +208,6 @@ fn calculate_next_work_required(
     // trace!("Target after clamping to pow limit {}", target);
     let target = target.max(uint256_target_from_compact(params.pow_lower_limit));
     // trace!("Target after clamping to pow lower limit {}", target);
-
 
     trace!(
         "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
@@ -241,7 +240,9 @@ pub fn get_next_work_required<BI: BlockIndex>(
         return Ok(target);
     }
 
-    if params.pow_no_retargeting || !is_retarget_height((chain_head_height + 1 - index_last.height()) as u32, params) {
+    if params.pow_no_retargeting
+        || !is_retarget_height((chain_head_height + 1 - index_last.height()) as u32, params)
+    {
         trace!(
             "No retargeting, using last bits: {:?}",
             params.pow_no_retargeting

@@ -109,7 +109,11 @@ impl BlockCandidateCache {
 
     /// Inserts a block candidate into the cache.
     /// If there's already a block at the same height, only keeps the one with the higher slot.
-    pub fn insert(&mut self, block: SignedConsensusBlock<MainnetEthSpec>, is_syncing: bool) -> Result<(), Error> {
+    pub fn insert(
+        &mut self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        is_syncing: bool,
+    ) -> Result<(), Error> {
         let block_hash = block.canonical_root();
         let block_height = block.message.execution_payload.block_number;
         let block_slot = block.message.slot;
@@ -269,7 +273,11 @@ impl BlockCandidates {
     }
 
     /// Inserts a block candidate into the cache.
-    pub async fn insert(&self, block: SignedConsensusBlock<MainnetEthSpec>, is_synced: bool) -> Result<(), Error> {
+    pub async fn insert(
+        &self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        is_synced: bool,
+    ) -> Result<(), Error> {
         self.cache.write().await.insert(block, is_synced)
     }
 
@@ -280,7 +288,10 @@ impl BlockCandidates {
         authorities: &[PublicKey],
         is_syncing: bool,
     ) -> Result<(), Error> {
-        self.cache.write().await.add_approval(approval, authorities, is_syncing)
+        self.cache
+            .write()
+            .await
+            .add_approval(approval, authorities, is_syncing)
     }
 
     /// Checks if a block hash exists in the cache

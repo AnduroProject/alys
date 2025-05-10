@@ -33,7 +33,7 @@ use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, 
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use execution_layer::Error::MissingLatestValidHash;
-use eyre::{eyre, Result};
+use eyre::{eyre, Report, Result};
 use libp2p::PeerId;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
@@ -814,11 +814,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut current = to;
         let mut ret = vec![];
         loop {
-            let block = self
-                .storage
-                .get_block(&current)?
-                .ok_or(Error::InvalidBlockRange)?
-                .message;
+            let block = match self.storage.get_block(&current) {
+                Ok(Some(block)) => block.message,
+                Ok(None) => {
+                    error!("Failed to get block {:?}", current);
+                    return Err(Error::InvalidBlockRange);
+                }
+                Err(e) => {
+                    return Err(Error::GenericError(Report::from(e)));
+                }
+            };
 
             if let Some(proposal) = block.pegout_payment_proposal {
                 ret.push(proposal);
@@ -848,12 +853,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             hashes.push(current);
 
-            current = self
-                .storage
-                .get_block(&current)?
-                .ok_or(Error::InvalidBlockRange)?
-                .message
-                .parent_hash;
+            match self.storage.get_block(&current) {
+                Ok(Some(block)) => {
+                    current = block.message.parent_hash;
+                }
+                Ok(None) => {
+                    error!("Failed to get block {:?}", current);
+                    return Err(Error::InvalidBlockRange);
+                }
+                Err(e) => {
+                    return Err(Error::GenericError(Report::from(e)));
+                }
+            }
         }
         hashes.reverse();
 

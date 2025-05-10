@@ -185,8 +185,8 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
     let response = match json_req.method {
         "createauxblock" => {
             RPC_REQUESTS
-            .with_label_values(&["createauxblock", "called"])
-            .inc();
+                .with_label_values(&["createauxblock", "called"])
+                .inc();
 
             let [script_pub_key] =
                 if let Ok(value) = serde_json::from_str::<[EvmAddress; 1]>(params.get()) {

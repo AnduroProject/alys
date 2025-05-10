@@ -204,7 +204,7 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
             let encoder = TextEncoder::new();
             let mut buffer = Vec::new();
             encoder.encode(&metric_families, &mut buffer).unwrap();
-            
+
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header(
