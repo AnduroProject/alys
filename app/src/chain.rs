@@ -1986,7 +1986,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             if let Some(ref block_hash_cache) = self.block_hash_cache {
                 Ok(block_hash_cache.read().await.get())
             } else {
-                Err(eyre!("Block hash cache not initialized"))
+                Err(eyre!("Block hash cache is not initialized"))
             }
         }
     }
