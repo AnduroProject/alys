@@ -1009,10 +1009,43 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     fn get_latest_finalized_block_ref(&self) -> Result<Option<BlockRef>, Error> {
         match self.storage.get_latest_pow_block()? {
             Some(blockref) => {
-                let pow_block = self.storage.get_block(&blockref.hash)?.unwrap();
-                let pow = pow_block.message.auxpow_header.unwrap();
+                let pow_block = match self.storage.get_block(&blockref.hash) {
+                    Ok(Some(block)) => block,
+                    Ok(None) => {
+                        error!("Failed to get latest pow block {:?}", blockref.height);
+                        error!("Failed to get latest pow block {:?}", blockref.hash);
+                        return Err(Error::InvalidBlockRange);
+                    }
+                    Err(e) => {
+                        error!("Failed to get latest pow block {:?}", blockref.hash);
+                        error!("Failed to get latest pow block {:?}", blockref.height);
+                        return Err(Error::GenericError(Report::from(e)));
+                    }
+                };
+
+                let pow = match pow_block.message.auxpow_header {
+                    Some(pow) => pow,
+                    None => {
+                        error!("Failed to get auxpow header {:?}", blockref.height);
+                        return Err(Error::InvalidBlockRange);
+                    }
+                };
+
+                // Conditional to check if the block is the genesis block
                 let last_finalized_blockref = if pow.height != 0 {
-                    self.storage.get_block(&pow.range_end)?.unwrap().block_ref()
+                    match self.storage.get_block(&pow.range_end) {
+                        Ok(Some(block)) => block.block_ref(),
+                        Ok(None) => {
+                            error!("Failed to get last block in prev-aux range {:?}", blockref.height);
+                            error!("Failed to get last block in prev-aux range {:?}", blockref.hash);
+                            return Err(Error::InvalidBlockRange);
+                        }
+                        Err(e) => {
+                            error!("Failed to get last block in prev-aux range {:?}", blockref.height);
+                            error!("Failed to get last block in prev-aux range {:?}", blockref.hash);
+                            return Err(Error::GenericError(Report::from(e)));
+                        }
+                    }
                 } else {
                     blockref
                 };
