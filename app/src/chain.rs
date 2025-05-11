@@ -1036,13 +1036,25 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     match self.storage.get_block(&pow.range_end) {
                         Ok(Some(block)) => block.block_ref(),
                         Ok(None) => {
-                            error!("Failed to get last block in prev-aux range {:?}", blockref.height);
-                            error!("Failed to get last block in prev-aux range {:?}", blockref.hash);
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.height
+                            );
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.hash
+                            );
                             return Err(Error::InvalidBlockRange);
                         }
                         Err(e) => {
-                            error!("Failed to get last block in prev-aux range {:?}", blockref.height);
-                            error!("Failed to get last block in prev-aux range {:?}", blockref.hash);
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.height
+                            );
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.hash
+                            );
                             return Err(Error::GenericError(Report::from(e)));
                         }
                     }
