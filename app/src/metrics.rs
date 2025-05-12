@@ -162,6 +162,12 @@ lazy_static! {
             ALYS_REGISTRY
         )
         .unwrap();
+    pub static ref CHAIN_LAST_FINALIZED_BLOCK: IntGauge = register_int_gauge_with_registry!(
+        "chain_last_finalized_block",
+        "The last block that was finalized by node",
+        ALYS_REGISTRY
+    )
+    .unwrap();
     pub static ref ENGINE_BUILD_BLOCK_CALLS: IntCounterVec =
         register_int_counter_vec_with_registry!(
             "engine_build_block_calls_total",

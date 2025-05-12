@@ -16,7 +16,7 @@ use crate::metrics::{
     CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
     CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS,
     CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS,
-    CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_TOTAL_PEGIN_AMOUNT, CHAIN_LAST_FINALIZED_BLOCK
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -1996,7 +1996,10 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         match self.storage.get_latest_pow_block() {
             Ok(Some(x)) => {
                 let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
-                // trace!("Found last finalized block: {:?}", last_block);
+
+                // Set the CHAIN_LAST_FINALIZED_BLOCK gauge with the block height of the last finalized block
+                CHAIN_LAST_FINALIZED_BLOCK
+                    .set(last_block.height() as i64);
 
                 last_block
             }
