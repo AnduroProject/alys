@@ -1,6 +1,6 @@
 use crate::{
     block::*,
-    error::{BlockErrorBlockTypes, Error},
+    error::{BlockErrorBlockTypes, Error}, metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
 use bitcoin::CompactTarget;
 use ethers_core::types::U256;
@@ -142,6 +142,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
 
     #[must_use]
     pub fn set_latest_pow_block(&self, block_ref: &BlockRef) -> Vec<KeyValueStoreOp> {
+        CHAIN_LAST_FINALIZED_BLOCK.set(block_ref.height as i64);
         self.set_ref(block_ref, LATEST_POW_BLOCK_KEY.as_bytes())
     }
 
