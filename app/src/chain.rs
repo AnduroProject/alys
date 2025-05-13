@@ -701,21 +701,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 return Err(Error::IllegalFinalization);
             }
 
-            for (expected_txid, tx) in required_finalizations
-                .into_iter()
-                .zip(unverified_block.message.finalized_pegouts.iter())
-            {
-                if tx.txid() != expected_txid {
-                    CHAIN_PROCESS_BLOCK_TOTALS
-                        .with_label_values(&["rejected", "invalid_finalization"])
-                        .inc();
-                    return Err(Error::IllegalFinalization);
-                }
+            if self.is_validator {
+                for (expected_txid, tx) in required_finalizations
+                    .into_iter()
+                    .zip(unverified_block.message.finalized_pegouts.iter())
+                {
+                    if tx.txid() != expected_txid {
+                        CHAIN_PROCESS_BLOCK_TOTALS
+                            .with_label_values(&["rejected", "invalid_finalization"])
+                            .inc();
+                        return Err(Error::IllegalFinalization);
+                    }
 
-                let wallet = self.bitcoin_wallet.read().await;
-                trace!("Checking signature for finalized pegout {:?}", tx.txid());
-                // NOTE: same as auxpow_override
-                wallet.check_transaction_signatures(tx, pow_override)?;
+                    let wallet = self.bitcoin_wallet.read().await;
+                    trace!("Checking signature for finalized pegout {:?}", tx.txid());
+                    // NOTE: same as auxpow_override
+                    wallet.check_transaction_signatures(tx, pow_override)?;
+                }
             }
         } else {
             trace!("Block does not have PoW");
@@ -1719,7 +1721,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         while let Some(x) = receive_stream.recv().await {
             match x {
                 RPCResponse::BlocksByRange(block) => {
-                    trace!("Received block: {:#?}", block);
+                    // trace!("Received block: {:#?}", block);
                     match self.process_block((*block).clone()).await {
                         Err(Error::ProcessGenesis) | Ok(_) => {
                             // nothing to do

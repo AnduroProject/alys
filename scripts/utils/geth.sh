@@ -110,7 +110,7 @@ function start_testnet_geth() {
 
     geth --datadir "${BASE_DIR}/etc/data/execution/node_${NUM}" \
         --state.scheme "hash" \
-        --networkid 212121 \
+        --networkid 727272 \
         --authrpc.vhosts "*" \
         --authrpc.addr "0.0.0.0" \
         --authrpc.jwtsecret "${BASE_DIR}/etc/config/jwt/jwt" \
@@ -137,7 +137,7 @@ function start_testnet_geth() {
         --port ${PORT} \
         --gcmode "archive" \
         --maxpeers 20 \
-        --bootnodes "enode://f18232ce8d651a06273107f2084a7d0c914712893968ad5b7ad77c324dde2e3d117fe6058b63eae817615bdd354a90217d19ba113a4237080e2527f626b80dcf@54.224.209.248:30303,enode://6f8c2bfe5b83e79d0dfcf2a619af0a05ca178c5c22c30654db80e8e975133797cf704f0707f6b739731c89cf147fd6835500e632484064b048fdad141ccf542c@54.161.100.208:30303,enode://6fa3a059cde5853f5702fcba00d7d682dfd8af4140fc088fe19ced7aaf245c238377bfa2c3fbb058593c412cfd20b26192b86ba4266770beff79d9fb8a18bc07@107.22.120.71:30303,enode://6fa3a059cde5853f5702fcba00d7d682dfd8af4140fc088fe19ced7aaf245c238377bfa2c3fbb058593c412cfd20b26192b86ba4266770beff79d9fb8a18bc07@107.22.120.71:30303,enode://3f596e6dee40c0a9ec4418788c1c73468f0c599d4b0cf7e5fccfbe7fe2910792039deacdb1d044b5e40264bc14bc9c8f83c6d1e6fa7944d04d2da7968d05688f@54.224.240.24:30303" \
+        --bootnodes "enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303" \
         $ARGUMENT &
     GETH_PIDS[$NUM]=$!
 }
