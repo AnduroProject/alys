@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use strum::IntoStaticStr;
-use types::{EthSpec, Hash256};
+use lighthouse_wrapper::types::{EthSpec, Hash256};
 
 /// Maximum number of blocks in a single request.
 pub const MAX_REQUEST_BLOCKS: u64 = 1024;

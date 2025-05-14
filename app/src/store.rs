@@ -8,10 +8,10 @@ use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use std::{fs, marker::PhantomData, path::PathBuf};
-use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
+use lighthouse_wrapper::store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
-use types::{EthSpec, Hash256, MainnetEthSpec};
+use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
 
 pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 

@@ -1,0 +1,11 @@
+[package]
+name = "lighthouse_wrapper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }

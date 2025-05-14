@@ -5,13 +5,13 @@ use crate::metrics::{
     AURA_CURRENT_SLOT, AURA_LATEST_SLOT_AUTHOR, AURA_PRODUCED_BLOCKS, AURA_SLOT_AUTHOR_RETRIEVALS,
     AURA_SLOT_CLAIM_TOTALS, AURA_VERIFY_SIGNED_BLOCK,
 };
-use bls::{Keypair, PublicKey};
+use lighthouse_wrapper::bls::{Keypair, PublicKey};
 use futures_timer::Delay;
 use std::sync::Arc;
 use std::time::Duration;
-use store::ItemStore;
+use lighthouse_wrapper::store::ItemStore;
 use tracing::*;
-use types::MainnetEthSpec;
+use lighthouse_wrapper::types::MainnetEthSpec;
 
 fn slot_from_timestamp(timestamp: u64, slot_duration: u64) -> u64 {
     timestamp / slot_duration
@@ -283,7 +283,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bls::SecretKey;
+    use lighthouse_wrapper::bls::SecretKey;
 
     #[test]
     fn should_find_slot_author() {

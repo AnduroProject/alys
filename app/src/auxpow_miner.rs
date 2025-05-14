@@ -11,11 +11,11 @@ use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
-use store::ItemStore;
+use lighthouse_wrapper::store::ItemStore;
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
-use types::{MainnetEthSpec, Uint256};
+use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
 where

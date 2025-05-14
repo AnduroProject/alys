@@ -16,10 +16,10 @@ use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use store::ItemStore;
+use lighthouse_wrapper::store::ItemStore;
 use tokio::sync::Mutex;
 use tracing::error;
-use types::{Hash256, MainnetEthSpec};
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {

@@ -1,16 +1,16 @@
 use crate::error::Error;
-use bls::SignatureSet;
+use lighthouse_wrapper::bls::SignatureSet;
 use serde_derive::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use ssz_types::typenum::U15;
 use std::borrow::Cow;
 use tree_hash_derive::TreeHash;
-use types::AggregateSignature;
-use types::BitList;
-use types::Hash256;
-use types::PublicKey;
-use types::Signature;
-use types::Unsigned;
+use lighthouse_wrapper::types::AggregateSignature;
+use lighthouse_wrapper::types::BitList;
+use lighthouse_wrapper::types::Hash256;
+use lighthouse_wrapper::types::PublicKey;
+use lighthouse_wrapper::types::Signature;
+use lighthouse_wrapper::types::Unsigned;
 
 /// upper bound on number of validators
 type MaxValidators = U15;
@@ -125,7 +125,7 @@ impl AggregateApproval {
 #[cfg(test)]
 mod test {
     use super::*;
-    use types::SecretKey;
+    use lighthouse_wrapper::types::SecretKey;
 
     #[test]
     fn test_aggregate_signatures() {

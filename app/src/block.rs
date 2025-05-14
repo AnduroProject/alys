@@ -8,9 +8,9 @@ use crate::{
     store::BlockRef,
 };
 use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction, Txid};
-use bls::PublicKey;
+use lighthouse_wrapper::bls::PublicKey;
 use serde_derive::{Deserialize, Serialize};
-use types::{
+use lighthouse_wrapper::types::{
     Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, FixedVector,
     Hash256, MainnetEthSpec, Transactions, Uint256, VariableList, Withdrawals,
 };
@@ -253,7 +253,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bls::Keypair;
+    use lighthouse_wrapper::bls::Keypair;
 
     #[test]
     fn should_sign_block() {

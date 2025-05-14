@@ -25,7 +25,7 @@ use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::{mpsc, oneshot};
 use tracing::*;
-use types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
+use lighthouse_wrapper::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 
 pub(crate) use self::rpc::OutboundRequest;
 use self::rpc::{

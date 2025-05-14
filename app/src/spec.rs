@@ -1,4 +1,4 @@
-use bls::PublicKey;
+use lighthouse_wrapper::bls::PublicKey;
 use bridge::BitcoinPublicKey;
 use ethereum_types::Address;
 use once_cell::sync::Lazy;

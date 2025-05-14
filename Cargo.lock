@@ -256,14 +256,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bitcoin",
- "bls",
  "clap 4.4.11",
  "ethereum-types 0.14.1",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "ethers",
  "ethers-core 2.0.12",
- "execution_layer",
  "eyre",
  "federation",
  "fnv",
@@ -274,12 +272,12 @@ dependencies = [
  "lazy_static",
  "leveldb",
  "libp2p",
+ "lighthouse_wrapper",
  "once_cell",
  "prometheus",
  "rand",
  "regex",
  "rmp-serde",
- "sensitive_url",
  "serde",
  "serde_derive",
  "serde_json",
@@ -287,7 +285,6 @@ dependencies = [
  "smallvec",
  "snap",
  "ssz_types",
- "store",
  "strum 0.26.3",
  "superstruct",
  "tempfile",
@@ -299,7 +296,6 @@ dependencies = [
  "tracing-subscriber",
  "tree_hash",
  "tree_hash_derive",
- "types",
  "unsigned-varint 0.6.0",
 ]
 
@@ -4473,6 +4469,17 @@ source = "git+https://github.com/sigp/lighthouse?rev=441fc16#441fc1691b69f9edc4b
 dependencies = [
  "git-version",
  "target_info",
+]
+
+[[package]]
+name = "lighthouse_wrapper"
+version = "0.1.0"
+dependencies = [
+ "bls",
+ "execution_layer",
+ "sensitive_url",
+ "store",
+ "types",
 ]
 
 [[package]]

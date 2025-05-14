@@ -11,11 +11,14 @@ edition = "2021"
 #types = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
 #store = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
 #bls = { git = "https://github.com/sigp/lighthouse", branch = "stable" }
-execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+#execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+#sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+#types = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+#store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+#bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+
+lighthouse_wrapper = { package = "lighthouse_wrapper", path = "../crates/lighthouse_wrapper" }
+
 
 
 # workspace

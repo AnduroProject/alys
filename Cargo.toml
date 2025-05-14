@@ -1,5 +1,5 @@
 [workspace]
-members = ["app", "crates/federation", "crates/miner"]
+members = ["app", "crates/federation", "crates/lighthouse_wrapper", "crates/miner"]
 
 resolver = "2"
 
