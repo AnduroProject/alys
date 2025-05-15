@@ -76,6 +76,7 @@ bitcoin = { workspace = true, features = ["serde"] }
 
 # networking
 hyper = { version = "0.14", features = ["full"] }
+rust_decimal = { version = "1.37.1", features = ["macros"] }
 
 [dependencies.libp2p]
 version = "0.52"

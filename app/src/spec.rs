@@ -66,6 +66,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             pow_target_timespan: 120000,
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
+            max_pow_adjustment: 20
         },
         is_validator: true,
         execution_timeout_length: 3,

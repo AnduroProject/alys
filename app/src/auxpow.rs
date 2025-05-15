@@ -387,10 +387,10 @@ impl AuxPow {
     pub fn check_proof_of_work(&self, bits: CompactTarget) -> bool {
         let diff_target = Target::from_compact(bits);
 
-        trace!(
-            "Checking PoW target with diff of: {}",
-            diff_target.difficulty()
-        );
+        // trace!(
+        //     "Checking PoW target with diff of: {}",
+        //     diff_target.difficulty()
+        // );
         diff_target.is_met_by(self.parent_block.block_hash())
     }
 
@@ -446,7 +446,7 @@ impl AuxPow {
             tokio::task::yield_now().await;
 
             aux_pow.parent_block.nonce = nonce;
-            trace!("Trying nonce: {}", nonce);
+            // trace!("Trying nonce: {}", nonce);
             if aux_pow.check_proof_of_work(target) {
                 // This unwrap should always succeed, just a sanity check to catch any bugs asap
                 aux_pow.check(sidechain_hash, chain_id).unwrap();

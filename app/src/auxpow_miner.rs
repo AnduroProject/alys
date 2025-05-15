@@ -121,6 +121,8 @@ pub struct BitcoinConsensusParams {
     pub pow_target_spacing: u64,
     /// Whether this chain supports proof of work retargeting or not
     pub pow_no_retargeting: bool,
+    /// The maximum range of adjustment for the proof of work represented as a whole number percentage (e.g. 20 == 20%)
+    pub max_pow_adjustment: u8,
 }
 
 impl BitcoinConsensusParams {
@@ -132,6 +134,7 @@ impl BitcoinConsensusParams {
         pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
         pow_target_spacing: 10 * 60,            // ten minutes
         pow_no_retargeting: false,
+        max_pow_adjustment: 20,
     };
 
     fn difficulty_adjustment_interval(&self) -> u64 {
@@ -180,45 +183,77 @@ pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
 }
 
 fn calculate_next_work_required(
-    first_block_time: u64,
+    head_block_time: u64,
     last_block_time: u64,
     last_bits: u32,
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
-    let min_timespan = params.pow_target_timespan >> 2;
-    // trace!("Min timespan: {}", min_timespan);
-    let max_timespan = params.pow_target_timespan << 2;
-    // trace!("Max timespan: {}", max_timespan);
-
-    // let timespan = last_block_time - first_block_time;
-    let timespan = first_block_time - last_block_time;
+    let timespan = head_block_time - last_block_time;
     // trace!("Timespan before clamping: {}", timespan);
-    let timespan = timespan.clamp(min_timespan, max_timespan);
 
-    // trace!("Timespan: {}", timespan);
-
-    let target = uint256_target_from_compact(last_bits);
-    trace!("Target from last bits {}", target);
-    // TODO: figure out why this was overflowing with new consensus params
-    let target = target.saturating_mul(Uint256::from(timespan));
-    // trace!("Target after multiplying by timespan {}", target);
-    let target = target / Uint256::from(params.pow_target_timespan);
-    // trace!("Target after dividing by target timespan {}", target);
-    let target = target.min(uint256_target_from_compact(params.pow_limit));
-    // trace!("Target after clamping to pow limit {}", target);
-    let target = target.max(uint256_target_from_compact(params.pow_lower_limit));
-    // trace!("Target after clamping to pow lower limit {}", target);
-
+    // Grab the ratio between actual timespan & target spacing
+    let ratio: Decimal = Decimal::from(timespan) / Decimal::from(params.pow_target_spacing);
+    let ratio = ratio.round_dp(2);
     trace!(
-        "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
-        first_block_time,
-        last_block_time,
-        last_bits,
-        timespan,
-        target
+        "Unclamped ratio between actual timespan and target timespan: {}",
+        ratio
     );
 
-    target_to_compact_lossy(target)
+    // Calculate the max & min for the adjustment from the defined parameter
+    // TODO: potential to optimize by caching these values
+    let max_adjustment = Decimal::from(params.max_pow_adjustment);
+    let max_upper_bound = max_adjustment / dec!(100);
+    let max_lower_bound = max_adjustment / dec!(-100);
+
+    // Ensure there can't be an adjustment ratio greater than the defined max_adjustment
+    let ratio = ratio.clamp(max_lower_bound, max_upper_bound);
+
+    trace!(
+        "Clamped ratio between actual timespan and target timespan: {}",
+        ratio
+    );
+
+    // Multiply the adjustment ratio by 100 to get the percentage in whole numbers and cast to u8
+    // TODO handle unwrap
+    let adjustment_percentage = (ratio * dec!(100)).to_u8().unwrap();
+
+    let target = uint256_target_from_compact(last_bits);
+    let single_percentage = target.checked_div(Uint256::from(100));
+
+    match single_percentage {
+        Some(single_percentage) => {
+            let adjustment_percentage = Uint256::from(adjustment_percentage);
+
+            trace!(
+                "Adjustment percentage: {}/Single Percentage: {}",
+                adjustment_percentage,
+                single_percentage
+            );
+
+            let adjusted_target = single_percentage.saturating_mul(adjustment_percentage);
+
+            trace!(
+                "Original target: {}, adjusted target: {}",
+                target,
+                adjusted_target
+            );
+
+            trace!(
+                "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
+                head_block_time,
+                last_block_time,
+                last_bits,
+                timespan,
+                adjusted_target
+            );
+
+            target_to_compact_lossy(adjusted_target)
+        }
+        None => {
+            error!("Target is too small to calculate adjustment percentage");
+            target_to_compact_lossy(uint256_target_from_compact(last_bits))
+        }
+    }
 }
 
 fn is_retarget_height(height_difference: u32, params: &BitcoinConsensusParams) -> bool {
@@ -503,6 +538,14 @@ mod test {
     use bitcoin::hashes::Hash as HashExt;
     use tokio::time::Instant;
 
+    fn init_tracing() {
+        tracing_subscriber::fmt()
+            .with_test_writer() // Important: use test writer!
+            .with_env_filter("trace") // Set desired level
+            .try_init()
+            .ok();
+    }
+
     #[test]
     fn parse_aux_block_rpc() {
         // namecoin-cli -regtest createauxblock n4cXYAUygg8jRypEamNcwgVwGnRdwBJb3S
@@ -520,6 +563,36 @@ mod test {
 
         let aux_block: AuxBlock = serde_json::from_str(&data).unwrap();
         assert_eq!(data, serde_json::to_string(&aux_block).unwrap());
+    }
+
+    #[test]
+    fn should_decrease_target_to_make_it_harder_when_timespan_is_shorter_then_target() {
+        init_tracing();
+        let head_block_time = 1_000_000_u64;
+        let last_block_time = 950_000_u64;
+
+        let test_consensus_params = BitcoinConsensusParams {
+            pow_target_spacing: 100_000,
+            max_pow_adjustment: 20,
+            ..Default::default()
+        };
+
+        let last_bits = 505544640;
+
+        let target = calculate_next_work_required(
+            head_block_time,
+            last_block_time,
+            last_bits,
+            &test_consensus_params,
+        );
+
+        let target = target.to_consensus();
+        let og_target = target_to_compact_lossy(uint256_target_from_compact(last_bits)).to_consensus();
+
+        println!("Target: {}", target);
+        println!("OG Target: {}", og_target);
+        
+        assert!(target < og_target);
     }
 
     #[test]
