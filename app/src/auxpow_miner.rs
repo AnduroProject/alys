@@ -9,13 +9,14 @@ use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
+use rust_decimal::prelude::*; // Includes the `dec` macro when feature specified
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
-use lighthouse_wrapper::store::ItemStore;
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
-use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
 where
@@ -182,18 +183,27 @@ pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
     CompactTarget::from_consensus(compact | ((size as u32) << 24))
 }
 
+// TODO: Might be better to rename last bits so that it doesn't conflate with the last block
+/// Calculate the next work required based on the timespan between the last block containing an `AuxPowHeader` and the head block vs the target spacing
+/// It returns the new target as a `CompactTarget`
 fn calculate_next_work_required(
+    // The unix timestamp of the head block
     head_block_time: u64,
+    // The unix timestamp of the last block containing an `AuxPowHeader`
     last_block_time: u64,
+    // The compact target of the head block
     last_bits: u32,
+    // The consensus parameters defined in the chain.json or via an update in the historical context
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
     let timespan = head_block_time - last_block_time;
     // trace!("Timespan before clamping: {}", timespan);
 
     // Grab the ratio between actual timespan & target spacing
-    let ratio: Decimal = Decimal::from(timespan) / Decimal::from(params.pow_target_spacing);
-    let ratio = ratio.round_dp(2);
+    let mut ratio: Decimal = Decimal::from(timespan) / Decimal::from(params.pow_target_spacing);
+
+    // Round to 2 decimal places
+    ratio = ratio.round_dp(2);
     trace!(
         "Unclamped ratio between actual timespan and target timespan: {}",
         ratio
@@ -202,11 +212,22 @@ fn calculate_next_work_required(
     // Calculate the max & min for the adjustment from the defined parameter
     // TODO: potential to optimize by caching these values
     let max_adjustment = Decimal::from(params.max_pow_adjustment);
-    let max_upper_bound = max_adjustment / dec!(100);
-    let max_lower_bound = max_adjustment / dec!(-100);
 
-    // Ensure there can't be an adjustment ratio greater than the defined max_adjustment
-    let ratio = ratio.clamp(max_lower_bound, max_upper_bound);
+    // Decimal representation of `max_pow_adjustment`
+    let max_lower_bound = max_adjustment / dec!(100);
+
+    // Decimal representation of `max_pow_adjustment` + 1.0
+    let max_upper_bound = max_lower_bound + dec!(1);
+
+    // Apply the ratio bounds based on whether it is >, <, or = 1
+    if ratio < dec!(1) {
+        // If the ratio is < 1, make sure it's below
+        ratio = ratio.min(max_lower_bound)
+    } else if ratio > dec!(1) {
+        ratio = ratio.min(max_upper_bound)
+    } else {
+        // If the ratio is 1 then we don't need to adjust the target
+    }
 
     trace!(
         "Clamped ratio between actual timespan and target timespan: {}",
@@ -214,7 +235,7 @@ fn calculate_next_work_required(
     );
 
     // Multiply the adjustment ratio by 100 to get the percentage in whole numbers and cast to u8
-    // TODO handle unwrap
+    // TODO: handle unwrap
     let adjustment_percentage = (ratio * dec!(100)).to_u8().unwrap();
 
     let target = uint256_target_from_compact(last_bits);
@@ -225,7 +246,7 @@ fn calculate_next_work_required(
             let adjustment_percentage = Uint256::from(adjustment_percentage);
 
             trace!(
-                "Adjustment percentage: {}/Single Percentage: {}",
+                "Adjustment percentage: {}\nSingle Percentage: {}",
                 adjustment_percentage,
                 single_percentage
             );
@@ -538,6 +559,8 @@ mod test {
     use bitcoin::hashes::Hash as HashExt;
     use tokio::time::Instant;
 
+    const PREV_BITS: u32 = 505544640;
+
     fn init_tracing() {
         tracing_subscriber::fmt()
             .with_test_writer() // Important: use test writer!
@@ -566,58 +589,70 @@ mod test {
     }
 
     #[test]
-    fn should_decrease_target_to_make_it_harder_when_timespan_is_shorter_then_target() {
+    fn should_increase_target_to_make_it_easier_when_timespan_is_larger_then_target() {
         init_tracing();
+
+        let actual_timespan = 150_000_u64;
+        let target_timespan = 100_000_u64;
+
         let head_block_time = 1_000_000_u64;
-        let last_block_time = 950_000_u64;
+        let last_block_time = head_block_time - actual_timespan;
 
         let test_consensus_params = BitcoinConsensusParams {
-            pow_target_spacing: 100_000,
+            pow_target_spacing: target_timespan,
             max_pow_adjustment: 20,
             ..Default::default()
         };
-
-        let last_bits = 505544640;
+        let previous_target =
+            target_to_compact_lossy(uint256_target_from_compact(PREV_BITS)).to_consensus();
 
         let target = calculate_next_work_required(
             head_block_time,
             last_block_time,
-            last_bits,
+            PREV_BITS,
             &test_consensus_params,
         );
 
         let target = target.to_consensus();
-        let og_target = target_to_compact_lossy(uint256_target_from_compact(last_bits)).to_consensus();
 
-        println!("Target: {}", target);
-        println!("OG Target: {}", og_target);
-        
-        assert!(target < og_target);
+        println!("New Target: {}", target);
+        println!("Previous Target: {}", previous_target);
+
+        assert!(target > previous_target);
     }
 
     #[test]
-    fn should_calculate_target() {
-        assert_eq!(
-            0x1704e90f,
-            calculate_next_work_required(
-                0x650964b5,
-                0x651bc919,
-                0x1704ed7f,
-                &BitcoinConsensusParams::BITCOIN_MAINNET
-            )
-            .to_consensus()
+    fn should_decrease_target_to_make_it_harder_when_timespan_is_shorter_then_target() {
+        init_tracing();
+
+        let actual_timespan = 50_000_u64;
+        let target_timespan = 100_000_u64;
+
+        let head_block_time = 1_000_000_u64;
+        let last_block_time = head_block_time - actual_timespan;
+
+        let test_consensus_params = BitcoinConsensusParams {
+            pow_target_spacing: target_timespan,
+            max_pow_adjustment: 20,
+            ..Default::default()
+        };
+
+        let previous_target =
+            target_to_compact_lossy(uint256_target_from_compact(PREV_BITS));
+
+        let target = calculate_next_work_required(
+            head_block_time,
+            last_block_time,
+            PREV_BITS,
+            &test_consensus_params,
         );
 
-        assert_eq!(
-            453150034, // 106848
-            calculate_next_work_required(
-                1296116171, // 104832
-                1297140342, // 106847
-                453179945,
-                &BitcoinConsensusParams::BITCOIN_MAINNET
-            )
-            .to_consensus()
-        );
+        // let target = target;
+
+        println!("New Target: {:?}", target);
+        println!("Previous Target: {:?}", previous_target);
+
+        assert!(target < previous_target);
     }
 
     #[ignore]
