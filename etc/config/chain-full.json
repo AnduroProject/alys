@@ -24,7 +24,8 @@
     "powLimit": 553713663,
     "powLowerLimit": 486604799,
     "powTargetTimespan": 60,
-    "powTargetSpacing": 5
+    "powTargetSpacing": 5,
+    "maxPowAdjustment": 20
   },
   "isValidator": false,
   "requiredBtcTxnConfirmations": 144

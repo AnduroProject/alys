@@ -277,12 +277,12 @@ fn calculate_next_work_required(
     }
 }
 
-fn is_retarget_height(height_difference: u32, params: &BitcoinConsensusParams) -> bool {
-    let adjustment_interval = params.difficulty_adjustment_interval() as u32;
-    if height_difference < adjustment_interval {
-        return false;
+fn is_retarget_height(chain_head_height: u64, height_difference: u32, params: &BitcoinConsensusParams) -> bool {
+    let adjustment_interval = params.difficulty_adjustment_interval();
+    if chain_head_height % adjustment_interval == 0 || height_difference > adjustment_interval as u32 {
+        return true;
     }
-    true
+    false
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
@@ -297,7 +297,7 @@ pub fn get_next_work_required<BI: BlockIndex>(
     }
 
     if params.pow_no_retargeting
-        || !is_retarget_height((chain_head_height + 1 - index_last.height()) as u32, params)
+        || !is_retarget_height(chain_head_height, (chain_head_height + 1 - index_last.height()) as u32, params)
     {
         trace!(
             "No retargeting, using last bits: {:?}",

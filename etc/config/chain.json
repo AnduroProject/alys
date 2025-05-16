@@ -23,7 +23,7 @@
         "powNoRetargeting": false,
         "powLimit": 553713663,
         "powLowerLimit": 486604799,
-        "powTargetTimespan": 60,
+    "maxPowAdjustment": 20,
         "powTargetSpacing": 5
     },
     "isValidator": true,

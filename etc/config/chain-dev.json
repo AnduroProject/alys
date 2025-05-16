@@ -18,6 +18,7 @@
     "powLimit": 505794034,
     "powLowerLimit": 439495319,
     "powTargetTimespan": 12000,
+    "maxPowAdjustment": 20,
     "powTargetSpacing": 1000
   }
 }
