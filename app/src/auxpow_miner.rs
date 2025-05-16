@@ -187,20 +187,21 @@ pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
 /// Calculate the next work required based on the timespan between the last block containing an `AuxPowHeader` and the head block vs the target spacing
 /// It returns the new target as a `CompactTarget`
 fn calculate_next_work_required(
-    // The unix timestamp of the head block
-    head_block_time: u64,
-    // The unix timestamp of the last block containing an `AuxPowHeader`
-    last_block_time: u64,
+    // The difference between the head block + 1 and the last block containing an auxpow header
+    mut auxpow_height_difference: u32,
     // The compact target of the head block
     last_bits: u32,
     // The consensus parameters defined in the chain.json or via an update in the historical context
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
-    let timespan = head_block_time - last_block_time;
-    // trace!("Timespan before clamping: {}", timespan);
-
+    // Guarantee that the auxpow height difference is not 0
+    if auxpow_height_difference == 0 {
+        error!("Auxpow height difference is 0");
+        auxpow_height_difference = 1;
+    }
     // Grab the ratio between actual timespan & target spacing
-    let mut ratio: Decimal = Decimal::from(timespan) / Decimal::from(params.pow_target_spacing);
+    let mut ratio: Decimal =
+        Decimal::from(auxpow_height_difference) / Decimal::from(params.pow_target_spacing);
 
     // Round to 2 decimal places
     ratio = ratio.round_dp(2);
@@ -259,15 +260,6 @@ fn calculate_next_work_required(
                 adjusted_target
             );
 
-            trace!(
-                "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
-                head_block_time,
-                last_block_time,
-                last_bits,
-                timespan,
-                adjusted_target
-            );
-
             target_to_compact_lossy(adjusted_target)
         }
         None => {
@@ -279,12 +271,12 @@ fn calculate_next_work_required(
 
 fn is_retarget_height(
     chain_head_height: u64,
-    height_difference: u32,
+    height_difference: &u32,
     params: &BitcoinConsensusParams,
 ) -> bool {
     let adjustment_interval = params.difficulty_adjustment_interval();
     if chain_head_height % adjustment_interval == 0
-        || height_difference > adjustment_interval as u32
+        || height_difference > &(adjustment_interval as u32)
     {
         return true;
     }
@@ -302,12 +294,11 @@ pub fn get_next_work_required<BI: BlockIndex>(
         return Ok(target);
     }
 
+    // Calculate the difference between the current head + 1 and the last block that contains a auxpow header
+    let auxpow_height_difference = (chain_head_height + 1 - index_last.height()) as u32;
+
     if params.pow_no_retargeting
-        || !is_retarget_height(
-            chain_head_height,
-            (chain_head_height + 1 - index_last.height()) as u32,
-            params,
-        )
+        || !is_retarget_height(chain_head_height, &auxpow_height_difference, params)
     {
         trace!(
             "No retargeting, using last bits: {:?}",
@@ -327,12 +318,8 @@ pub fn get_next_work_required<BI: BlockIndex>(
     // let height_first = index_last.height() - blocks_back;
     let index_first = get_block_at_height(chain_head_height)?;
 
-    let next_work = calculate_next_work_required(
-        index_first.block_time(),
-        index_last.block_time(),
-        index_last.bits(),
-        params,
-    );
+    let next_work =
+        calculate_next_work_required(auxpow_height_difference, index_last.bits(), params);
 
     info!(
         "Difficulty adjustment from {} to {}",
@@ -602,11 +589,8 @@ mod test {
     fn should_increase_target_to_make_it_easier_when_timespan_is_larger_then_target() {
         init_tracing();
 
-        let actual_timespan = 150_000_u64;
+        let actual_timespan = 150_000_u32;
         let target_timespan = 100_000_u64;
-
-        let head_block_time = 1_000_000_u64;
-        let last_block_time = head_block_time - actual_timespan;
 
         let test_consensus_params = BitcoinConsensusParams {
             pow_target_spacing: target_timespan,
@@ -616,12 +600,8 @@ mod test {
         let previous_target =
             target_to_compact_lossy(uint256_target_from_compact(PREV_BITS)).to_consensus();
 
-        let target = calculate_next_work_required(
-            head_block_time,
-            last_block_time,
-            PREV_BITS,
-            &test_consensus_params,
-        );
+        let target =
+            calculate_next_work_required(actual_timespan, PREV_BITS, &test_consensus_params);
 
         let target = target.to_consensus();
 
@@ -635,11 +615,8 @@ mod test {
     fn should_decrease_target_to_make_it_harder_when_timespan_is_shorter_then_target() {
         init_tracing();
 
-        let actual_timespan = 50_000_u64;
+        let actual_timespan = 50_000_u32;
         let target_timespan = 100_000_u64;
-
-        let head_block_time = 1_000_000_u64;
-        let last_block_time = head_block_time - actual_timespan;
 
         let test_consensus_params = BitcoinConsensusParams {
             pow_target_spacing: target_timespan,
@@ -649,12 +626,8 @@ mod test {
 
         let previous_target = target_to_compact_lossy(uint256_target_from_compact(PREV_BITS));
 
-        let target = calculate_next_work_required(
-            head_block_time,
-            last_block_time,
-            PREV_BITS,
-            &test_consensus_params,
-        );
+        let target =
+            calculate_next_work_required(actual_timespan, PREV_BITS, &test_consensus_params);
 
         // let target = target;
 
