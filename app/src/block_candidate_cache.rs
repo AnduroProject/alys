@@ -4,11 +4,11 @@ use crate::network::ApproveBlock;
 use crate::signatures::CheckedIndividualApproval;
 use async_trait::async_trait;
 use lighthouse_wrapper::bls::PublicKey;
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::trace;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 
 /// CandidateState enum represents the state of a block candidate.
 #[allow(clippy::large_enum_variant)]
@@ -348,10 +348,10 @@ impl BlockCandidates {
 
 #[cfg(test)]
 mod tests {
-    use lighthouse_wrapper::types;
     use super::*;
     use crate::block::ConsensusBlock;
     use crate::signatures::AggregateApproval;
+    use lighthouse_wrapper::types;
 
     fn create_test_block(height: u64, slot: u64) -> SignedConsensusBlock<MainnetEthSpec> {
         // Create a simple consensus block with only the fields we need for testing

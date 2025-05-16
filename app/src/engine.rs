@@ -8,6 +8,11 @@ use lighthouse_wrapper::execution_layer::{
     PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
 };
 use lighthouse_wrapper::sensitive_url::SensitiveUrl;
+use lighthouse_wrapper::types::{
+    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
+    Uint256, Withdrawal,
+};
+use lighthouse_wrapper::{execution_layer, types};
 use serde_json::json;
 use ssz_types::VariableList;
 use std::{
@@ -18,11 +23,6 @@ use std::{
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{debug, trace};
-use lighthouse_wrapper::{execution_layer, types};
-use lighthouse_wrapper::types::{
-    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
-    Uint256, Withdrawal,
-};
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
 

@@ -9,11 +9,11 @@ use crate::{
 };
 use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction, Txid};
 use lighthouse_wrapper::bls::PublicKey;
-use serde_derive::{Deserialize, Serialize};
 use lighthouse_wrapper::types::{
     Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, FixedVector,
     Hash256, MainnetEthSpec, Transactions, Uint256, VariableList, Withdrawals,
 };
+use serde_derive::{Deserialize, Serialize};
 
 pub trait ConvertBlockHash<H> {
     fn to_block_hash(&self) -> H;

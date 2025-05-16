@@ -1,17 +1,20 @@
 use crate::{
     block::*,
-    error::{BlockErrorBlockTypes, Error}, metrics::CHAIN_LAST_FINALIZED_BLOCK,
+    error::{BlockErrorBlockTypes, Error},
+    metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
 use bitcoin::CompactTarget;
 use ethers_core::types::U256;
+use lighthouse_wrapper::store::{
+    get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore,
+};
+use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use std::{fs, marker::PhantomData, path::PathBuf};
-use lighthouse_wrapper::store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
-use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
 
 pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 

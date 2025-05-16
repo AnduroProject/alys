@@ -11,15 +11,15 @@ use bitcoin::{Address, BlockHash};
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use lighthouse_wrapper::store::ItemStore;
 use tokio::sync::Mutex;
 use tracing::error;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {

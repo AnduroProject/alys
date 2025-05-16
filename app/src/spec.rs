@@ -1,6 +1,6 @@
-use lighthouse_wrapper::bls::PublicKey;
 use bridge::BitcoinPublicKey;
 use ethereum_types::Address;
+use lighthouse_wrapper::bls::PublicKey;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};

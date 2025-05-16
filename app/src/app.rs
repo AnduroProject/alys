@@ -9,16 +9,16 @@ use crate::spec::{
     genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
 };
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
-use lighthouse_wrapper::bls::{Keypair, SecretKey};
 use bridge::{
     bitcoin::Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
     Bridge, Federation,
 };
 use clap::builder::ArgPredicate;
 use clap::Parser;
-use lighthouse_wrapper::execution_layer::auth::JwtKey;
 use eyre::Result;
 use futures::pin_mut;
+use lighthouse_wrapper::bls::{Keypair, SecretKey};
+use lighthouse_wrapper::execution_layer::auth::JwtKey;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};

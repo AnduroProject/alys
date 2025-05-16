@@ -32,19 +32,19 @@ use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
-use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
 use eyre::{eyre, Report, Result};
 use libp2p::PeerId;
+use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::store::KeyValueStoreOp;
+use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
-use lighthouse_wrapper::store::ItemStore;
-use lighthouse_wrapper::store::KeyValueStoreOp;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
-use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -1115,7 +1115,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     pub async fn store_genesis(self: &Arc<Self>, chain_spec: ChainSpec) -> Result<(), Error> {
         let execution_payload = self
             .engine
-            .get_payload_by_tag_from_engine(lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag("0x0"))
+            .get_payload_by_tag_from_engine(
+                lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag("0x0"),
+            )
             .await
             .expect("Should have genesis");
 

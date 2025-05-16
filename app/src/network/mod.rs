@@ -13,6 +13,7 @@ use libp2p::gossipsub::PublishError;
 use libp2p::swarm::{ConnectionId, DialError};
 use libp2p::{gossipsub, mdns, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux};
 use libp2p::{Multiaddr, PeerId, Swarm};
+use lighthouse_wrapper::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -25,7 +26,6 @@ use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::{mpsc, oneshot};
 use tracing::*;
-use lighthouse_wrapper::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 
 pub(crate) use self::rpc::OutboundRequest;
 use self::rpc::{

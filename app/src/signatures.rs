@@ -1,16 +1,16 @@
 use crate::error::Error;
 use lighthouse_wrapper::bls::SignatureSet;
-use serde_derive::{Deserialize, Serialize};
-use ssz_derive::{Decode, Encode};
-use ssz_types::typenum::U15;
-use std::borrow::Cow;
-use tree_hash_derive::TreeHash;
 use lighthouse_wrapper::types::AggregateSignature;
 use lighthouse_wrapper::types::BitList;
 use lighthouse_wrapper::types::Hash256;
 use lighthouse_wrapper::types::PublicKey;
 use lighthouse_wrapper::types::Signature;
 use lighthouse_wrapper::types::Unsigned;
+use serde_derive::{Deserialize, Serialize};
+use ssz_derive::{Decode, Encode};
+use ssz_types::typenum::U15;
+use std::borrow::Cow;
+use tree_hash_derive::TreeHash;
 
 /// upper bound on number of validators
 type MaxValidators = U15;
