@@ -534,10 +534,14 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
                 trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
                 trace!("Calling submit_aux_block");
-                miner
-                    .submit_aux_block(aux_block.hash, auxpow)
-                    .await
-                    .unwrap();
+                match miner.submit_aux_block(aux_block.hash, auxpow).await {
+                    Ok(_) => {
+                        trace!("AuxPow submitted successfully");
+                    }
+                    Err(e) => {
+                        trace!("Error submitting auxpow: {}", e);
+                    }
+                }
             } else {
                 trace!("No aux block created");
                 sleep(Duration::from_millis(250)).await;
