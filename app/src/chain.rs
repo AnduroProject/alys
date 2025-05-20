@@ -673,19 +673,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let mut pow_override = false;
 
             // TODO: Historical Context
-            if unverified_block.message.execution_payload.block_number == 39171
-                || unverified_block.message.execution_payload.block_number == 39264
-                || unverified_block.message.execution_payload.block_number == 39266
-                || unverified_block.message.execution_payload.block_number == 41369
-                || unverified_block.message.execution_payload.block_number == 42338
-                || unverified_block.message.execution_payload.block_number == 45989
-                || unverified_block.message.execution_payload.block_number == 48055
-                || unverified_block.message.execution_payload.block_number == 48263
-                || unverified_block.message.execution_payload.block_number == 48288
-                || unverified_block.message.execution_payload.block_number == 48765
-                || unverified_block.message.execution_payload.block_number == 50260
-                || unverified_block.message.execution_payload.block_number == 50544
-                || unverified_block.message.execution_payload.block_number == 53143
+            if unverified_block.message.execution_payload.block_number <= 533683
             {
                 pow_override = true;
             }
@@ -907,7 +895,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .storage
             .get_block(&last_pow)?
             .ok_or(Error::MissingParent)?;
-        info!("Last pow block {:?}", last_pow_block);
+        info!("Last pow block {}", last_pow_block.canonical_root());
 
         let last_finalized = self
             .get_latest_finalized_block_ref()?

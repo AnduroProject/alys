@@ -387,10 +387,11 @@ impl AuxPow {
     pub fn check_proof_of_work(&self, bits: CompactTarget) -> bool {
         let diff_target = Target::from_compact(bits);
 
-        // trace!(
-        //     "Checking PoW target with diff of: {}",
-        //     diff_target.difficulty()
-        // );
+        trace!(
+            "Checking PoW target with target of: {:?}",
+            diff_target
+        );
+        // self.parent_block.block_hash().
         diff_target.is_met_by(self.parent_block.block_hash())
     }
 
