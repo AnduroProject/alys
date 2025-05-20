@@ -17,12 +17,12 @@
   ],
   "bits": 486604799,
   "chainId": 727272,
-  "maxBlocksWithoutPow": 500000000000,
+  "maxBlocksWithoutPow": 50000,
   "bitcoinStartHeight": 0,
   "retargetParams": {
     "powNoRetargeting": false,
     "powLimit": 553713663,
-    "powLowerLimit": 486604799,
+    "powLowerLimit": 439495319,
     "maxPowAdjustment": 20,
     "powTargetTimespan": 60,
     "powTargetSpacing": 5
