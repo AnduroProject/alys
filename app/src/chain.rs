@@ -673,8 +673,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let mut pow_override = false;
 
             // TODO: Historical Context
-            if unverified_block.message.execution_payload.block_number <= 533683
-            {
+            if unverified_block.message.execution_payload.block_number <= 533683 {
                 pow_override = true;
             }
             self.check_pow(pow, pow_override).await?;
