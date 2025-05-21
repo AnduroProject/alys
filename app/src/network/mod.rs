@@ -326,21 +326,13 @@ impl NetworkBackend {
                     SwarmEvent::Behaviour(MyBehaviourEvent::Eth2Rpc(x)) => {
                         match &x.event {
                             Ok(RPCReceived::Request(_substream_id, _request)) => {
-                                let _ = network_rpc_event_tx.send(x);
                                 // send to rpc listener
+                                let _ = network_rpc_event_tx.send(x);
                             }
                             Ok(RPCReceived::Response(request_id, received_response)) => {
                                 // propagate response
                                 // todo: make robust
                                 let _res = rpc_response_channels[request_id].send(received_response.clone()).await;
-
-                                // if let Err(err) = rpc_response_channels[request_id].send(received_response.clone()).await {
-                                    // debug!("Failed to propagate response: {}", request_id);
-                                    // error!("{}", err.to_string());
-                                    // remove the channel
-                                    // rpc_response_channels.remove(request_id);
-
-                                // }
                             }
                             Ok(RPCReceived::EndOfStream(request_id, _)) => {
                                 rpc_response_channels.remove(request_id);
