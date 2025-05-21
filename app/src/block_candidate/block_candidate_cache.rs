@@ -95,7 +95,26 @@ pub struct BlockCandidateCache {
 #[async_trait]
 pub trait BlockCandidateCacheInit {
     /// Initializes the cache with existing block candidates.
-    async fn init_block_candidate_cache(self: &Arc<Self>) -> eyre::Result<()>;
+    async fn init_block_candidate_cache() -> Self;
+}
+
+#[async_trait]
+pub trait BlockCandidateCacheTrait {
+    async fn add_approval(
+        &self,
+        approval: ApproveBlock,
+        authorities: &[PublicKey],
+        is_syncing: bool,
+    ) -> Result<(), Error>;
+
+    async fn insert(
+        &self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        is_synced: bool,
+    ) -> Result<(), Error>;
+
+    async fn get_block(&self, hash: &Hash256) -> Option<SignedConsensusBlock<MainnetEthSpec>>;
+    fn remove(&mut self, hash: &Hash256) -> Option<CandidateState>;
 }
 
 impl BlockCandidateCache {
@@ -272,28 +291,6 @@ impl BlockCandidates {
         }
     }
 
-    /// Inserts a block candidate into the cache.
-    pub async fn insert(
-        &self,
-        block: SignedConsensusBlock<MainnetEthSpec>,
-        is_synced: bool,
-    ) -> Result<(), Error> {
-        self.cache.write().await.insert(block, is_synced)
-    }
-
-    /// Adds an approval for a block.
-    pub async fn add_approval(
-        &self,
-        approval: ApproveBlock,
-        authorities: &[PublicKey],
-        is_syncing: bool,
-    ) -> Result<(), Error> {
-        self.cache
-            .write()
-            .await
-            .add_approval(approval, authorities, is_syncing)
-    }
-
     /// Checks if a block hash exists in the cache
     pub async fn exists(&self, hash: &Hash256) -> bool {
         self.cache.read().await.hash_to_height.contains_key(hash)
@@ -343,6 +340,38 @@ impl BlockCandidates {
     /// Returns true if the cache is empty.
     pub async fn is_empty(&self) -> bool {
         self.cache.read().await.is_empty()
+    }
+}
+
+impl BlockCandidateCacheInit for BlockCandidates {
+    async fn init_block_candidate_cache() -> BlockCandidateCache {
+        // Initialize the cache with existing block candidates if needed
+        // This is a placeholder for any initialization logic you might have
+        BlockCandidateCache::new()
+    }
+}
+
+impl BlockCandidateCacheTrait for BlockCandidates {
+    /// Inserts a block candidate into the cache.
+    async fn insert(
+        &self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        is_synced: bool,
+    ) -> Result<(), Error> {
+        self.cache.write().await.insert(block, is_synced)
+    }
+
+    /// Adds an approval for a block.
+    async fn add_approval(
+        &self,
+        approval: ApproveBlock,
+        authorities: &[PublicKey],
+        is_syncing: bool,
+    ) -> Result<(), Error> {
+        self.cache
+            .write()
+            .await
+            .add_approval(approval, authorities, is_syncing)
     }
 }
 
