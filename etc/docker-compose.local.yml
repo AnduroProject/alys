@@ -85,7 +85,7 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:72-testnet-4
+    image: ghcr.io/anduroproject/alys:master
 
     volumes:
       - ./data/alys/db/:/lib/alys/data/db

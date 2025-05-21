@@ -87,7 +87,7 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:77-auxpow-block-creation-is-not-working
+    image: ghcr.io/anduroproject/alys:master
     ports:
       - 3000:3000
       - 55444:55444
