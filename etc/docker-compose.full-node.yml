@@ -87,7 +87,7 @@ services:
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:72-testnet-4
+    image: ghcr.io/anduroproject/alys:77-auxpow-block-creation-is-not-working
     ports:
       - 3000:3000
       - 55444:55444
@@ -115,7 +115,7 @@ services:
       - --geth-execution-url
       - http://execution:8545
       - --remote-bootnode
-      - {{ BOOTNODE_ARG }}
+      - /ip4/209.160.175.125/tcp/55444
       - --no-mine
       - --p2p-port
       - "55444"

@@ -7,7 +7,7 @@ name: Docker
 
 on:
   push:
-    branches: [ "master", "development", "60-block-unkown-merge-mine", "72-testnet-4", "72-testnet-4_debug"]
+    branches: [ "master", "77-auxpow-block-creation-is-not-working" ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
@@ -22,8 +22,7 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on: Temp-64-Core-Ubutnu-Runner
     permissions:
       contents: read
       packages: write

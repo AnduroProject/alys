@@ -13,6 +13,7 @@ use libp2p::gossipsub::PublishError;
 use libp2p::swarm::{ConnectionId, DialError};
 use libp2p::{gossipsub, mdns, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux};
 use libp2p::{Multiaddr, PeerId, Swarm};
+use lighthouse_wrapper::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -25,7 +26,6 @@ use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::{mpsc, oneshot};
 use tracing::*;
-use types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 
 pub(crate) use self::rpc::OutboundRequest;
 use self::rpc::{
@@ -246,7 +246,7 @@ impl NetworkBackend {
                         let _ = response.send(result);
                     }
                     Some(FrontToBackCommand::Dial(address, response)) => {
-                        error!("Dialing..");
+                        info!("Dialing...");
                         let result = self.swarm.dial(address);
                         // if sending the response fails, there is nothing we can do, so ignore
                         let _ = response.send(result);
@@ -280,7 +280,6 @@ impl NetworkBackend {
                         next_id += 1;
                     }
                     Some(FrontToBackCommand::RespondRpc(peer_id, connection_id, substream_id, payload, _response)) => {
-                        // info!("Responding to rpc...");
                         self.swarm.behaviour_mut().eth2_rpc.send_response(peer_id, (connection_id, substream_id), payload);
                     }
                     None => {

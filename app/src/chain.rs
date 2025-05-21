@@ -5,7 +5,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
-use crate::block_candidate_cache::BlockCandidates;
+use crate::block_candidate::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
@@ -13,7 +13,8 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS,
+    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
+    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
     CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
     CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
@@ -26,24 +27,25 @@ use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use async_trait::async_trait;
-use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
-use execution_layer::Error::MissingLatestValidHash;
-use eyre::{eyre, Result};
+use eyre::{eyre, Report, Result};
 use libp2p::PeerId;
+use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::store::KeyValueStoreOp;
+use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
-use store::ItemStore;
-use store::KeyValueStoreOp;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
-use types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
+use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -589,6 +591,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         CHAIN_PROCESS_BLOCK_TOTALS
             .with_label_values(&["attempted", "default"])
             .inc();
+        CHAIN_LAST_PROCESSED_BLOCK
+            .set(unverified_block.message.execution_payload.block_number as i64);
+
         let root_hash = unverified_block.canonical_root();
         info!(
             "Processing block at height {}",
@@ -661,6 +666,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             self.check_pegout_proposal(&unverified_block, prev_payload_hash)
                 .await?;
         }
+        trace!("Made it past withdrawals and pegouts");
 
         // TODO: We should set the bitcoin connection to be optional
         if let Some(ref pow) = unverified_block.message.auxpow_header {
@@ -668,20 +674,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let mut pow_override = false;
 
             // TODO: Historical Context
-            if unverified_block.message.execution_payload.block_number == 39171
-                || unverified_block.message.execution_payload.block_number == 39264
-                || unverified_block.message.execution_payload.block_number == 39266
-                || unverified_block.message.execution_payload.block_number == 41369
-                || unverified_block.message.execution_payload.block_number == 42338
-                || unverified_block.message.execution_payload.block_number == 45989
-                || unverified_block.message.execution_payload.block_number == 48055
-                || unverified_block.message.execution_payload.block_number == 48263
-                || unverified_block.message.execution_payload.block_number == 48288
-                || unverified_block.message.execution_payload.block_number == 48765
-                || unverified_block.message.execution_payload.block_number == 50260
-                || unverified_block.message.execution_payload.block_number == 50544
-                || unverified_block.message.execution_payload.block_number == 53143
-            {
+            if unverified_block.message.execution_payload.block_number <= 533683 {
                 pow_override = true;
             }
             self.check_pow(pow, pow_override).await?;
@@ -699,21 +692,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 return Err(Error::IllegalFinalization);
             }
 
-            for (expected_txid, tx) in required_finalizations
-                .into_iter()
-                .zip(unverified_block.message.finalized_pegouts.iter())
-            {
-                if tx.txid() != expected_txid {
-                    CHAIN_PROCESS_BLOCK_TOTALS
-                        .with_label_values(&["rejected", "invalid_finalization"])
-                        .inc();
-                    return Err(Error::IllegalFinalization);
-                }
+            if self.is_validator {
+                for (expected_txid, tx) in required_finalizations
+                    .into_iter()
+                    .zip(unverified_block.message.finalized_pegouts.iter())
+                {
+                    if tx.txid() != expected_txid {
+                        CHAIN_PROCESS_BLOCK_TOTALS
+                            .with_label_values(&["rejected", "invalid_finalization"])
+                            .inc();
+                        return Err(Error::IllegalFinalization);
+                    }
 
-                let wallet = self.bitcoin_wallet.read().await;
-                trace!("Checking signature for finalized pegout {:?}", tx.txid());
-                // NOTE: same as auxpow_override
-                wallet.check_transaction_signatures(tx, pow_override)?;
+                    let wallet = self.bitcoin_wallet.read().await;
+                    trace!("Checking signature for finalized pegout {:?}", tx.txid());
+                    // NOTE: same as auxpow_override
+                    wallet.check_transaction_signatures(tx, pow_override)?;
+                }
             }
         } else {
             trace!("Block does not have PoW");
@@ -739,6 +734,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 return Err(Error::IllegalFinalization);
             }
         }
+        let sync_status = self.sync_status.read().await.is_synced();
+        trace!("Sync status: {:?}", sync_status);
 
         // store the candidate
         // TODO: this is also called on sync which isn't strictly required
@@ -747,7 +744,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             // First insert the block
             self.block_candidates
-                .insert(unverified_block.clone())
+                .insert(unverified_block.clone(), sync_status)
                 .await?;
 
             // Then add our approval
@@ -756,7 +753,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 signature: our_approval.clone().into(),
             };
             self.block_candidates
-                .add_approval(approval, &self.aura.authorities)
+                .add_approval(approval, &self.aura.authorities, sync_status)
                 .await?;
 
             Some(our_approval)
@@ -764,7 +761,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             trace!("Full node doesn't need to approve");
             // full node doesn't need to approve
             self.block_candidates
-                .insert(unverified_block.clone())
+                .insert(unverified_block.clone(), sync_status)
                 .await?;
             None
         };
@@ -810,11 +807,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut current = to;
         let mut ret = vec![];
         loop {
-            let block = self
-                .storage
-                .get_block(&current)?
-                .ok_or(Error::InvalidBlockRange)?
-                .message;
+            let block = match self.storage.get_block(&current) {
+                Ok(Some(block)) => block.message,
+                Ok(None) => {
+                    error!("Failed to get block {:?}", current);
+                    return Err(Error::InvalidBlockRange);
+                }
+                Err(e) => {
+                    return Err(Error::GenericError(Report::from(e)));
+                }
+            };
 
             if let Some(proposal) = block.pegout_payment_proposal {
                 ret.push(proposal);
@@ -834,7 +836,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         from: Hash256, // exclusive
         to: Hash256,   // inclusive
     ) -> Result<Vec<Hash256>, Error> {
-        // trace!("Getting hashes from {:?} to {:?}", from, to);
+        trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
         let mut hashes = vec![];
         loop {
@@ -843,14 +845,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             }
 
             hashes.push(current);
-            // trace!("Pushing hash {:?}", current);
 
-            current = self
-                .storage
-                .get_block(&current)?
-                .ok_or(Error::InvalidBlockRange)?
-                .message
-                .parent_hash;
+            match self.storage.get_block(&current) {
+                Ok(Some(block)) => {
+                    current = block.message.parent_hash;
+                }
+                Ok(None) => {
+                    error!("Failed to get block {:?}", current);
+                    return Err(Error::InvalidBlockRange);
+                }
+                Err(e) => {
+                    return Err(Error::GenericError(Report::from(e)));
+                }
+            }
         }
         hashes.reverse();
 
@@ -879,7 +886,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             header.range_start, header.range_end,
         );
 
-        let last_pow = self.storage.get_latest_pow_block()?.unwrap().hash;
+        let last_pow_block = self.storage.get_latest_pow_block()?.unwrap();
+        let last_pow = last_pow_block.hash;
+
+        info!("Last pow block: {}", last_pow);
+
+        let last_pow_block = self
+            .storage
+            .get_block(&last_pow)?
+            .ok_or(Error::MissingParent)?;
+        info!("Last pow block {}", last_pow_block.canonical_root());
+
         let last_finalized = self
             .get_latest_finalized_block_ref()?
             .ok_or(Error::MissingParent)?;
@@ -923,13 +940,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .collect::<Vec<_>>(),
         );
 
+        let head_height = self.get_head()?.message.height();
         let bits = get_next_work_required(
-            |height| self.get_block_at_height(height),
             &self
                 .get_block_by_hash(&last_pow.to_block_hash())
                 .map_err(Error::GenericError)?,
             &self.retarget_params,
-            self.storage.get_target_override()?,
+            head_height,
         )
         .map_err(Error::GenericError)?;
 
@@ -983,10 +1000,55 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     fn get_latest_finalized_block_ref(&self) -> Result<Option<BlockRef>, Error> {
         match self.storage.get_latest_pow_block()? {
             Some(blockref) => {
-                let pow_block = self.storage.get_block(&blockref.hash)?.unwrap();
-                let pow = pow_block.message.auxpow_header.unwrap();
+                let pow_block = match self.storage.get_block(&blockref.hash) {
+                    Ok(Some(block)) => block,
+                    Ok(None) => {
+                        error!("Failed to get latest pow block {:?}", blockref.height);
+                        error!("Failed to get latest pow block {:?}", blockref.hash);
+                        return Err(Error::InvalidBlockRange);
+                    }
+                    Err(e) => {
+                        error!("Failed to get latest pow block {:?}", blockref.hash);
+                        error!("Failed to get latest pow block {:?}", blockref.height);
+                        return Err(Error::GenericError(Report::from(e)));
+                    }
+                };
+
+                let pow = match pow_block.message.auxpow_header {
+                    Some(pow) => pow,
+                    None => {
+                        error!("Failed to get auxpow header {:?}", blockref.height);
+                        return Err(Error::InvalidBlockRange);
+                    }
+                };
+
+                // Conditional to check if the block is the genesis block
                 let last_finalized_blockref = if pow.height != 0 {
-                    self.storage.get_block(&pow.range_end)?.unwrap().block_ref()
+                    match self.storage.get_block(&pow.range_end) {
+                        Ok(Some(block)) => block.block_ref(),
+                        Ok(None) => {
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.height
+                            );
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.hash
+                            );
+                            return Err(Error::InvalidBlockRange);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.height
+                            );
+                            error!(
+                                "Failed to get last block in prev-aux range {:?}",
+                                blockref.hash
+                            );
+                            return Err(Error::GenericError(Report::from(e)));
+                        }
+                    }
                 } else {
                     blockref
                 };
@@ -999,9 +1061,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     async fn process_approval(self: &Arc<Self>, approval: ApproveBlock) -> Result<(), Error> {
         let hash = approval.block_hash;
 
+        let sync_status = self.sync_status.read().await.is_synced();
+
         // Add the approval to the cache
         self.block_candidates
-            .add_approval(approval, &self.aura.authorities)
+            .add_approval(approval, &self.aura.authorities, sync_status)
             .await?;
 
         // Process the block if it has reached majority approval
@@ -1037,7 +1101,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     pub async fn store_genesis(self: &Arc<Self>, chain_spec: ChainSpec) -> Result<(), Error> {
         let execution_payload = self
             .engine
-            .get_payload_by_tag_from_engine(execution_layer::BlockByNumberQuery::Tag("0x0"))
+            .get_payload_by_tag_from_engine(
+                lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag("0x0"),
+            )
             .await
             .expect("Should have genesis");
 
@@ -1176,21 +1242,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(self
             .storage
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
-    }
-
-    pub(crate) async fn get_accumulated_fees(
-        &self,
-        block_hash: Option<&Hash256>,
-    ) -> Result<U256, Error> {
-        if let Some(block_hash) = block_hash {
-            self.storage
-                .get_accumulated_block_fees(block_hash)?
-                .ok_or(Error::MissingBlock)
-        } else {
-            self.storage
-                .get_accumulated_block_fees(&self.get_latest_finalized_block_ref()?.unwrap().hash)?
-                .ok_or(Error::MissingBlock)
-        }
     }
 
     async fn update_head_ref_ops(
@@ -1447,11 +1498,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                     // self.clone().sync(Some((number - head_height) as u32)).await;
                                     self.clone().sync().await;
                                 }
+                                Error::MissingBlock => {
+                                    self.clone().sync().await;
+                                }
                                 _ => {
                                     error!("Got error while processing: {x:?}");
                                 }
                             },
                             Ok(Some(our_approval)) => {
+                                CHAIN_LAST_APPROVED_BLOCK
+                                    .set(x.message.execution_payload.block_number as i64);
+
                                 // broadcast our approval
                                 let block_hash = x.canonical_root();
                                 info!("✅ Sending approval for {block_hash}");
@@ -1787,48 +1844,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
-    pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
-        let head = self.head.read().await.as_ref().unwrap().clone();
-        let mut pending_pegouts = HashMap::new();
-        let mut finalized_pegouts = HashMap::new();
-        let mut current = head.hash;
-        debug!("Getting pegouts");
-        loop {
-            let block = self.storage.get_block(&current)?.unwrap();
-
-            // revert previous checkpoints
-            if block.message.auxpow_header.is_some() {
-                let proposal = block.message.pegout_payment_proposal.clone().unwrap();
-                info!("Found pegout tx: {:?}", proposal);
-                pending_pegouts.insert(proposal.txid(), proposal);
-            }
-            if !block.message.finalized_pegouts.is_empty() {
-                let _: Vec<_> = block
-                    .message
-                    .finalized_pegouts
-                    .into_iter()
-                    .map(|tx| {
-                        info!("Found pegout tx: {:?}", tx);
-                        finalized_pegouts.insert(tx.txid(), tx.clone());
-                    })
-                    .collect();
-            }
-            if block.message.parent_hash.is_zero() {
-                break;
-            }
-            // blocks.push(block.clone());
-            // block_heights.push(block.message.execution_payload.block_number);
-
-            current = block.message.parent_hash;
-        }
-        // blocks.reverse();
-        // block_heights.reverse();
-
-        debug!("finalized_pegouts: {:#?}", finalized_pegouts);
-        debug!("pending_pegouts: {:#?}", pending_pegouts);
-        Ok(())
-    }
-
     pub fn get_block_by_height(
         self: &Arc<Self>,
         block_height: u64,
@@ -1891,7 +1906,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             .as_ref()
             .ok_or(ChainError(Head.into()))?
             .hash;
-        // trace!("Head: {:?}", head);
+        trace!("Head: {:?}", head);
 
         let queued_pow = self.queued_pow.read().await;
 
@@ -1907,20 +1922,25 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             if let Some(ref block_hash_cache) = self.block_hash_cache {
                 Ok(block_hash_cache.read().await.get())
             } else {
-                Err(eyre!("Block hash cache not initialized"))
+                Err(eyre!("Block hash cache is not initialized"))
             }
         }
     }
 
     fn get_last_finalized_block(&self) -> ConsensusBlock<MainnetEthSpec> {
+        trace!("Getting last finalized block");
         match self.storage.get_latest_pow_block() {
-            Ok(Some(x)) => self.storage.get_block(&x.hash).unwrap().unwrap().message,
+            Ok(Some(x)) => {
+                let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
+
+                last_block
+            }
             _ => unreachable!("Should always have AuxPow"),
         }
     }
 
     fn get_block_by_hash(&self, hash: &BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
-        // trace!("Getting block by hash: {:?}", hash);
+        trace!("Getting block by hash: {:?}", hash);
         let block = self.storage.get_block(&hash.to_block_hash())?.unwrap();
         Ok(block.message)
     }
@@ -1963,13 +1983,6 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
         }
         self.check_pow(&pow, false).await.is_ok() && self.share_pow(pow).await.is_ok()
     }
-    fn set_target_override(&self, target: CompactTarget) {
-        self.storage.set_target_override(target).unwrap()
-    }
-
-    fn get_target_override(&self) -> Option<CompactTarget> {
-        self.storage.get_target_override().unwrap()
-    }
 
     async fn is_synced(&self) -> bool {
         self.sync_status.read().await.is_synced()
@@ -1977,7 +1990,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
 
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
         #[allow(clippy::needless_question_mark)]
-        Ok(self
+        let head_block = self
             .storage
             .get_block(
                 &self
@@ -1986,7 +1999,12 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
                     .ok_or(ChainError(Head.into()))?
                     .hash,
             )?
-            .ok_or(ChainError(Head.into()))?)
+            .ok_or(ChainError(Head.into()))?;
+
+        // Set the CHAIN_BLOCK_HEIGHT gauge with the block height of the head block
+        CHAIN_BLOCK_HEIGHT.set(head_block.message.execution_payload.block_number as i64);
+
+        Ok(head_block)
     }
 }
 

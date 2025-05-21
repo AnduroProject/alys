@@ -1,6 +1,6 @@
-use bls::PublicKey;
 use bridge::BitcoinPublicKey;
 use ethereum_types::Address;
+use lighthouse_wrapper::bls::PublicKey;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
@@ -62,9 +62,11 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
         bitcoin_start_height: 0,
         retarget_params: BitcoinConsensusParams {
             pow_limit: 553713663,
+            pow_lower_limit: 439495319,
             pow_target_timespan: 120000,
             pow_target_spacing: 10000,
             pow_no_retargeting: true,
+            max_pow_adjustment: 20
         },
         is_validator: true,
         execution_timeout_length: 3,

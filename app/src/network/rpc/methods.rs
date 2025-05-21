@@ -2,6 +2,7 @@
 
 use crate::block::SignedConsensusBlock;
 use crate::network::{EnrAttestationBitfield, EnrSyncCommitteeBitfield};
+use lighthouse_wrapper::types::{EthSpec, Hash256};
 use regex::bytes::Regex;
 use serde::Serialize;
 use ssz_derive::{Decode, Encode};
@@ -10,7 +11,6 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use strum::IntoStaticStr;
-use types::{EthSpec, Hash256};
 
 /// Maximum number of blocks in a single request.
 pub const MAX_REQUEST_BLOCKS: u64 = 1024;

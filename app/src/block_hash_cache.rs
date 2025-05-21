@@ -36,7 +36,7 @@ impl BlockHashCache {
     /// Initializes the cache with a given vector of hashes.
     pub fn init(&mut self, hashes: Vec<BlockHash>) -> eyre::Result<()> {
         trace!("BlockHashCache::init");
-        // trace!("BlockHashCache::init: hashes: {:#?}", hashes);
+        trace!("BlockHashCache::init: hashes: {:#?}", hashes.len());
         self.hashes = hashes;
         Ok(())
     }
@@ -50,7 +50,7 @@ impl BlockHashCache {
     /// Returns a reference to all stored hashes.
     pub fn get(&self) -> Vec<BlockHash> {
         trace!("BlockHashCache::get");
-        // trace!("{:#?}", self.hashes);
+        trace!("{:#?}", self.hashes.len());
         self.hashes.clone()
     }
 
@@ -70,17 +70,14 @@ impl BlockHashCache {
         }
     }
 
-    /// Clears the cache and returns all stored hashes.
-    pub fn flush(&mut self) -> Vec<BlockHash> {
-        std::mem::take(&mut self.hashes)
-    }
-
     /// Returns the number of hashes in the cache.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.hashes.len()
     }
 
     /// Returns true if the cache is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.hashes.is_empty()
     }
@@ -217,27 +214,6 @@ mod tests {
         }
 
         assert_eq!(cache.get(), hashes);
-    }
-
-    #[test]
-    fn test_flush() {
-        let mut cache = BlockHashCache::new(None);
-        let hash1 = BlockHash::from_byte_array([1; 32]);
-        let hash2 = BlockHash::from_byte_array([2; 32]);
-
-        cache.add(hash1);
-        cache.add(hash2);
-
-        let flushed = cache.flush();
-
-        // Check returned hashes
-        let expected = vec![hash1, hash2];
-        assert_eq!(flushed, expected);
-
-        // Check cache is now empty
-        assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
-        assert!(cache.get().is_empty());
     }
 
     #[test]

@@ -1,30 +1,32 @@
 {
-    "slotDuration": 5000,
-    "authorities": [
-        "0x8dd89bf44ae1b76f5e105dddb56ca27da51ae04120869c794a66dbd755f2102881b0eabac42c3f72e59a78e9feaec64d",
-        "0xad1b7a31e6176e48a89336786ae8b9950da04fee6fa901b0bc23ce15136b6afff9f42a513b25fe6ccdec19e5a3fddb66",
-        "0x9877f2d934d46d8ab03f37f5a898f0e10434b3e3b033cba3be0205fe7b11a4d874d4610e20c6620b56c8d17345a73b8b"
-    ],
-    "federation": [
-        "0x8c483d6Bf33288318143da93bB533d599DE04e72",
-        "0x11a96B2A888141953203df5C745C14449477D65d",
-        "0x910e69Ac27e50a71E0b31283f9f087dAF0543cDC"
-    ],
-    "federationBitcoinPubkeys": [
-        "021c0aa327d1f7f6fe9bbb0bb479ffcc8c022b52183b0f813a4107bf0f8f5ec226",
-        "02c91be74598eff42512b29c64919b8681690754f7c0ac9c5e991ace761cc962ad",
-        "037b169ff8392c0c1c488b5ac3f8fbc8a6387a3ea75904fa2cf9b175128d9890e7"
-    ],
-    "bits": 486604799,
-    "chainId": 727272,
-    "maxBlocksWithoutPow": 500000000000,
-    "bitcoinStartHeight": 0,
-    "retargetParams": {
-        "powNoRetargeting": false,
-        "powLimit": 553713663,
-        "powTargetTimespan": 12000,
-        "powTargetSpacing": 1000
-    },
-    "isValidator": true,
-    "requiredBtcTxnConfirmations": 144
+  "slotDuration": 5000,
+  "authorities": [
+    "0x8dd89bf44ae1b76f5e105dddb56ca27da51ae04120869c794a66dbd755f2102881b0eabac42c3f72e59a78e9feaec64d",
+    "0xad1b7a31e6176e48a89336786ae8b9950da04fee6fa901b0bc23ce15136b6afff9f42a513b25fe6ccdec19e5a3fddb66",
+    "0x9877f2d934d46d8ab03f37f5a898f0e10434b3e3b033cba3be0205fe7b11a4d874d4610e20c6620b56c8d17345a73b8b"
+  ],
+  "federation": [
+    "0x8c483d6Bf33288318143da93bB533d599DE04e72",
+    "0x11a96B2A888141953203df5C745C14449477D65d",
+    "0x910e69Ac27e50a71E0b31283f9f087dAF0543cDC"
+  ],
+  "federationBitcoinPubkeys": [
+    "021c0aa327d1f7f6fe9bbb0bb479ffcc8c022b52183b0f813a4107bf0f8f5ec226",
+    "02c91be74598eff42512b29c64919b8681690754f7c0ac9c5e991ace761cc962ad",
+    "037b169ff8392c0c1c488b5ac3f8fbc8a6387a3ea75904fa2cf9b175128d9890e7"
+  ],
+  "bits": 486604799,
+  "chainId": 727272,
+  "maxBlocksWithoutPow": 50000,
+  "bitcoinStartHeight": 0,
+  "retargetParams": {
+    "powNoRetargeting": false,
+    "powLimit": 553713663,
+    "powLowerLimit": 439495319,
+    "maxPowAdjustment": 20,
+    "powTargetTimespan": 60,
+    "powTargetSpacing": 5
+  },
+  "isValidator": true,
+  "requiredBtcTxnConfirmations": 144
 }

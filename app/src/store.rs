@@ -1,23 +1,27 @@
 use crate::{
     block::*,
     error::{BlockErrorBlockTypes, Error},
+    metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
-use bitcoin::CompactTarget;
 use ethers_core::types::U256;
+use lighthouse_wrapper::store::{
+    get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore,
+};
+use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
 use std::{fs, marker::PhantomData, path::PathBuf};
-use store::{get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore};
 use strum::{EnumString, IntoStaticStr};
 use tracing::*;
-use types::{EthSpec, Hash256, MainnetEthSpec};
 
 pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 
 pub const HEAD_KEY: Hash256 = Hash256::repeat_byte(5);
 pub const LATEST_POW_BLOCK_KEY: Hash256 = Hash256::repeat_byte(6);
 pub const DEFAULT_KEY: Hash256 = Hash256::repeat_byte(7);
+// TODO: Can be removed on later version, kept to maintain key ordering
+#[allow(dead_code)]
 pub const TARGET_OVERRIDE_KEY: Hash256 = Hash256::repeat_byte(8);
 // TODO: should we keep this or use `DBColumn`
 // it might make more sense to rewrite the db stuff entirely
@@ -106,7 +110,7 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
         &self,
         height: u64,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
-        // trace!("Getting block by height {}", height);
+        trace!("Getting block by height {}", height);
 
         match self
             .db
@@ -142,6 +146,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
 
     #[must_use]
     pub fn set_latest_pow_block(&self, block_ref: &BlockRef) -> Vec<KeyValueStoreOp> {
+        CHAIN_LAST_FINALIZED_BLOCK.set(block_ref.height as i64);
         self.set_ref(block_ref, LATEST_POW_BLOCK_KEY.as_bytes())
     }
 
@@ -159,14 +164,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             .map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
     }
 
-    fn get_previous_head(&self, head_ref: &BlockRef) -> Result<Option<BlockRef>, Error> {
-        let previous_head = self.get_block(&head_ref.hash)?.unwrap().message.parent_hash;
-        Ok(Some(BlockRef {
-            hash: previous_head,
-            height: head_ref.height - 1,
-        }))
-    }
-
     pub fn get_latest_pow_block(&self) -> Result<Option<BlockRef>, Error> {
         self.get_ref(LATEST_POW_BLOCK_KEY.as_bytes())
     }
@@ -178,43 +175,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             .map(|bytes| BlockRef::from_ssz_bytes(&bytes))
             .transpose()
             .map_err(|_| Error::DbReadError)
-    }
-
-    pub fn set_target_override(&self, target: CompactTarget) -> Result<(), Error> {
-        let db_key = get_key_for_col(DbColumn::ChainInfo.into(), TARGET_OVERRIDE_KEY.as_bytes());
-        self.commit_ops(vec![KeyValueStoreOp::PutKeyValue(
-            db_key,
-            target.to_consensus().as_ssz_bytes(),
-        )])
-    }
-
-    pub fn get_target_override(&self) -> Result<Option<CompactTarget>, Error> {
-        let consensus_rep_bytes = self
-            .db
-            .get_bytes(DbColumn::ChainInfo.into(), TARGET_OVERRIDE_KEY.as_bytes())
-            .unwrap()
-            .map(|bytes| u32::from_ssz_bytes(&bytes))
-            .transpose()
-            .map_err(|_| Error::DbReadError)?;
-
-        // let consensus_rep = if let Some(consensus_rep_bytes) = consensus_rep_bytes {
-        //     consensus_rep_bytes
-        //         .map(|bytes| u32::from_ssz_bytes(&bytes))
-        //         .transpose()
-        //         .map_err(|_| Error::DbReadError)?
-        // } else {
-        //     Ok(None)
-        // };
-
-        if let Some(consensus_rep) = consensus_rep_bytes {
-            if consensus_rep != 0 {
-                Ok(Some(CompactTarget::from_consensus(consensus_rep)))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
     }
 
     #[must_use]
@@ -258,15 +218,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             )
             .map_err(|_| Error::DbReadError)?
             .map(|bytes| u32::from_ssz_bytes(&bytes).unwrap()))
-    }
-
-    /// Fetch the hash of the auxpow block at this height
-    pub fn get_auxpow_block_hash(&self, height: u64) -> Result<Option<Hash256>, Error> {
-        Ok(self
-            .db
-            .get_bytes(DbColumn::AuxPowBlockHeight.into(), &height.to_be_bytes())
-            .map_err(|_| Error::DbReadError)?
-            .map(|bytes| Hash256::from_slice(&bytes)))
     }
 
     pub fn get_block(

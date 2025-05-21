@@ -1,5 +1,6 @@
 use crate::aura::AuraError;
 use bridge::Error as FederationError;
+use lighthouse_wrapper::execution_layer;
 use std::time::SystemTimeError;
 use strum::Display;
 use thiserror::Error;
@@ -38,6 +39,7 @@ pub enum Error {
     GenericError(eyre::Report),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum ChainError {
     #[error("`{0}`")]
@@ -47,6 +49,7 @@ pub enum ChainError {
     BlockRetrievalError(BlockErrorBlockTypes),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum BlockErrorBlockTypes {
     #[error("Failed to retrieve the last finalized block")]
@@ -73,6 +76,13 @@ impl From<BlockErrorBlockTypes> for ChainError {
     }
 }
 
+impl From<BlockErrorBlockTypes> for Error {
+    fn from(e: BlockErrorBlockTypes) -> Self {
+        Error::ChainError(ChainError::BlockRetrievalError(e))
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum AuxPowMiningError {
     #[error("`{0}`")]
@@ -110,5 +120,11 @@ impl From<FederationError> for Error {
 impl From<execution_layer::Error> for Error {
     fn from(e: execution_layer::Error) -> Self {
         Error::ExecutionLayerError(e)
+    }
+}
+
+impl From<ChainError> for Error {
+    fn from(e: ChainError) -> Self {
+        Error::ChainError(e)
     }
 }

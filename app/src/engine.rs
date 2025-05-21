@@ -2,12 +2,17 @@ use crate::error::Error;
 use crate::metrics::{ENGINE_BUILD_BLOCK_CALLS, ENGINE_COMMIT_BLOCK_CALLS};
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
-use execution_layer::{
+use lighthouse_wrapper::execution_layer::{
     auth::{Auth, JwtKey},
     BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc,
     PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
 };
-use sensitive_url::SensitiveUrl;
+use lighthouse_wrapper::sensitive_url::SensitiveUrl;
+use lighthouse_wrapper::types::{
+    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
+    Uint256, Withdrawal,
+};
+use lighthouse_wrapper::{execution_layer, types};
 use serde_json::json;
 use ssz_types::VariableList;
 use std::{
@@ -18,10 +23,6 @@ use std::{
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{debug, trace};
-use types::{
-    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
-    Uint256, Withdrawal,
-};
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
 const ENGINE_API_QUERY_RETRY_COUNT: i32 = 1;
@@ -78,16 +79,14 @@ pub struct Engine {
     pub api: HttpJsonRpc,
     pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
-    jwt_key: [u8; 32],
 }
 
 impl Engine {
-    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc, jwt_key_bytes: [u8; 32]) -> Self {
+    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc) -> Self {
         Self {
             api,
             execution_api,
             finalized: Default::default(),
-            jwt_key: jwt_key_bytes,
         }
     }
 

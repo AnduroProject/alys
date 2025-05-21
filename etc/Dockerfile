@@ -1,13 +1,13 @@
 # Start from the latest Rust base image
-FROM rust:bullseye AS chef
+FROM rust:bullseye AS planner
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-RUN cargo install cargo-chef
+#RUN cargo install cargo-chef
 
-FROM chef AS planner
-WORKDIR /opt/alys
-
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+#FROM chef AS planner
+#WORKDIR /opt/alys
+#
+#COPY . .
+#RUN cargo chef prepare --recipe-path recipe.json
 
 #------------------------------------------------------------------------------------------
 FROM planner AS system-pkg-cache
@@ -22,20 +22,26 @@ FROM system-pkg-cache AS builder
 WORKDIR /opt/alys
 
 # Create mount points for cargo cache
-RUN mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
+#RUN mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
-COPY --from=planner /opt/alys/recipe.json recipe.json
+#COPY --from=planner /opt/alys/recipe.json recipe.json
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-  --mount=type=cache,target=/usr/local/cargo/git \
-  cargo chef cook --recipe-path recipe.json
+#RUN #--mount=type=cache,target=/usr/local/cargo/registry \
+#  --mount=type=cache,target=/usr/local/cargo/git \
+#  cargo chef cook --recipe-path recipe.json
 
 COPY . .
 
+##RUN --mount=type=cache,target=/usr/local/cargo/registry \
+#  --mount=type=cache,target=/usr/local/cargo/git \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-  --mount=type=cache,target=/usr/local/cargo/git \
-  cargo build --bin app
-#  cargo build --release --bin app
+    --mount=type=cache,target=/home/root/app/target \
+    --mount=type=cache,target=/usr/local/cargo/git \
+     cargo build --lib --verbose
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/home/root/app/target \
+    --mount=type=cache,target=/usr/local/cargo/git \
+      cargo build --bin app --verbose
 
 #------------------------------------------------------------------------------------------
 

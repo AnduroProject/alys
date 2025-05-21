@@ -9,13 +9,14 @@ use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
+use rust_decimal::prelude::*; // Includes the `dec` macro when feature specified
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
-use store::ItemStore;
 use tokio::runtime::Handle;
 use tokio::time::sleep;
 use tracing::*;
-use types::{MainnetEthSpec, Uint256};
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
 where
@@ -82,6 +83,7 @@ pub trait ChainManager<BI> {
     fn get_last_finalized_block(&self) -> BI;
     fn get_block_by_hash(&self, hash: &BlockHash) -> Result<BI>;
     async fn get_queued_auxpow(&self) -> Option<AuxPowHeader>;
+    #[allow(dead_code)]
     fn get_block_at_height(&self, height: u64) -> Result<BI>;
     #[allow(clippy::too_many_arguments)]
     async fn push_auxpow(
@@ -94,14 +96,13 @@ pub trait ChainManager<BI> {
         auxpow: AuxPow,
         address: EvmAddress,
     ) -> bool;
-    fn set_target_override(&self, target: CompactTarget);
-    fn get_target_override(&self) -> Option<CompactTarget>;
     async fn is_synced(&self) -> bool;
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error>;
 }
 
 pub trait BlockIndex {
     fn block_hash(&self) -> BlockHash;
+    #[allow(dead_code)]
     fn block_time(&self) -> u64;
     fn bits(&self) -> u32;
     fn chain_id(&self) -> u32;
@@ -113,12 +114,16 @@ pub trait BlockIndex {
 pub struct BitcoinConsensusParams {
     /// The proof of work limit of the bitcoin network
     pub pow_limit: u32,
+    /// The proof of work lower limit
+    pub pow_lower_limit: u32,
     /// The targeted timespan between difficulty adjustments
     pub pow_target_timespan: u64,
     /// The targeted interval between blocks
     pub pow_target_spacing: u64,
     /// Whether this chain supports proof of work retargeting or not
     pub pow_no_retargeting: bool,
+    /// The maximum range of adjustment for the proof of work represented as a whole number percentage (e.g. 20 == 20%)
+    pub max_pow_adjustment: u8,
 }
 
 impl BitcoinConsensusParams {
@@ -126,9 +131,11 @@ impl BitcoinConsensusParams {
     const BITCOIN_MAINNET: Self = Self {
         // https://github.com/rust-bitcoin/rust-bitcoin/blob/67793d04c302bd494519b20b44b260ec3ff8a2f1/bitcoin/src/pow.rs#L124C9-L124C90
         pow_limit: 486604799,
+        pow_lower_limit: 439495319,
         pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
         pow_target_spacing: 10 * 60,            // ten minutes
         pow_no_retargeting: false,
+        max_pow_adjustment: 20,
     };
 
     fn difficulty_adjustment_interval(&self) -> u64 {
@@ -176,70 +183,136 @@ pub fn target_to_compact_lossy(target: Uint256) -> CompactTarget {
     CompactTarget::from_consensus(compact | ((size as u32) << 24))
 }
 
+// TODO: Might be better to rename last bits so that it doesn't conflate with the last block
+/// Calculate the next work required based on the timespan between the last block containing an `AuxPowHeader` and the head block vs the target spacing
+/// It returns the new target as a `CompactTarget`
 fn calculate_next_work_required(
-    first_block_time: u64,
-    last_block_time: u64,
+    // The difference between the head block + 1 and the last block containing an auxpow header
+    mut auxpow_height_difference: u32,
+    // The compact target of the head block
     last_bits: u32,
+    // The consensus parameters defined in the chain.json or via an update in the historical context
     params: &BitcoinConsensusParams,
 ) -> CompactTarget {
-    let min_timespan = params.pow_target_timespan >> 2;
-    let max_timespan = params.pow_target_timespan << 2;
+    // Guarantee that the auxpow height difference is not 0
+    if auxpow_height_difference == 0 {
+        error!("Auxpow height difference is 0");
+        auxpow_height_difference = 1;
+    }
+    // Grab the ratio between actual timespan & target spacing
+    let mut ratio: Decimal =
+        Decimal::from(auxpow_height_difference) / Decimal::from(params.pow_target_spacing);
 
-    let timespan = last_block_time - first_block_time;
-    let timespan = timespan.clamp(min_timespan, max_timespan);
+    // Round to 2 decimal places
+    ratio = ratio.round_dp(2);
+    trace!(
+        "Unclamped ratio between actual timespan and target timespan: {}",
+        ratio
+    );
+
+    // Calculate the max & min for the adjustment from the defined parameter
+    // TODO: potential to optimize by caching these values
+    let max_adjustment = Decimal::from(params.max_pow_adjustment);
+
+    // Decimal representation of `max_pow_adjustment`
+    let max_lower_bound = max_adjustment / dec!(100);
+
+    // Decimal representation of `max_pow_adjustment` + 1.0
+    let max_upper_bound = max_lower_bound + dec!(1);
+
+    // Apply the ratio bounds based on whether it is >, <, or = 1
+    if ratio < dec!(1) {
+        // If the ratio is < 1, make sure it's below
+        ratio = ratio.min(max_lower_bound)
+    } else if ratio > dec!(1) {
+        ratio = ratio.min(max_upper_bound)
+    } else {
+        // If the ratio is 1 then we don't need to adjust the target
+    }
+
+    trace!(
+        "Clamped ratio between actual timespan and target timespan: {}",
+        ratio
+    );
+
+    // Multiply the adjustment ratio by 100 to get the percentage in whole numbers and cast to u8
+    // TODO: handle unwrap
+    let adjustment_percentage = (ratio * dec!(100)).to_u8().unwrap();
 
     let target = uint256_target_from_compact(last_bits);
-    // TODO: figure out why this was overflowing with new consensus params
-    let target = target.saturating_mul(Uint256::from(timespan));
-    let target = target / Uint256::from(params.pow_target_timespan);
-    let target = target.min(uint256_target_from_compact(params.pow_limit));
+    let single_percentage = target.checked_div(Uint256::from(100));
 
-    trace!(
-        "First block time: {}, last block time: {}, last bits: {}, timespan: {}, target: {}",
-        first_block_time,
-        last_block_time,
-        last_bits,
-        timespan,
-        target
-    );
+    match single_percentage {
+        Some(single_percentage) => {
+            let adjustment_percentage = Uint256::from(adjustment_percentage);
 
-    target_to_compact_lossy(target)
+            trace!(
+                "Adjustment percentage: {}\nSingle Percentage: {}",
+                adjustment_percentage,
+                single_percentage
+            );
+
+            let adjusted_target = single_percentage.saturating_mul(adjustment_percentage);
+
+            trace!(
+                "Original target: {}, adjusted target: {}",
+                target,
+                adjusted_target
+            );
+
+            target_to_compact_lossy(adjusted_target)
+        }
+        None => {
+            error!("Target is too small to calculate adjustment percentage");
+            target_to_compact_lossy(uint256_target_from_compact(last_bits))
+        }
+    }
 }
 
-fn is_retarget_height(height: u64, params: &BitcoinConsensusParams) -> bool {
-    let adjustment_interval = params.difficulty_adjustment_interval() as u32;
-    trace!(
-        "Height: {}, interval: {}, is_time: {}",
-        height,
-        adjustment_interval,
-        height % adjustment_interval as u64 == 0
-    );
-    height % adjustment_interval as u64 == 0
+fn is_retarget_height(
+    chain_head_height: u64,
+    height_difference: &u32,
+    params: &BitcoinConsensusParams,
+) -> bool {
+    let adjustment_interval = params.difficulty_adjustment_interval();
+    let height_is_multiple_of_adjustment_interval = chain_head_height % adjustment_interval == 0;
+    let height_diff_is_greater_then_adjustment_interval =
+        height_difference > &(adjustment_interval as u32);
+
+    if height_is_multiple_of_adjustment_interval || height_diff_is_greater_then_adjustment_interval
+    {
+        return true;
+    }
+    false
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
-    get_block_at_height: impl Fn(u64) -> Result<BI>,
     index_last: &BI,
     params: &BitcoinConsensusParams,
-    target_override: Option<CompactTarget>,
+    chain_head_height: u64,
 ) -> Result<CompactTarget> {
-    if let Some(target) = target_override {
-        return Ok(target);
-    }
-    if params.pow_no_retargeting || !is_retarget_height(index_last.height() + 1, params) {
+    // Calculate the difference between the current head + 1 and the last block that contains a auxpow header
+    let auxpow_height_difference = (chain_head_height + 1 - index_last.height()) as u32;
+
+    if params.pow_no_retargeting
+        || !is_retarget_height(chain_head_height, &auxpow_height_difference, params)
+    {
+        trace!(
+            "No retargeting, using last bits: {:?}",
+            params.pow_no_retargeting
+        );
+        trace!("Last bits: {:?}", index_last.bits());
         return Ok(CompactTarget::from_consensus(index_last.bits()));
+    } else {
+        trace!(
+            "Retargeting, using new bits at height {}",
+            chain_head_height + 1
+        );
+        trace!("Last bits: {:?}", index_last.bits());
     }
 
-    let blocks_back = params.difficulty_adjustment_interval() - 1;
-    let height_first = index_last.height() - blocks_back;
-    let index_first = get_block_at_height(height_first)?;
-
-    let next_work = calculate_next_work_required(
-        index_first.block_time(),
-        index_last.block_time(),
-        index_last.bits(),
-        params,
-    );
+    let next_work =
+        calculate_next_work_required(auxpow_height_difference, index_last.bits(), params);
 
     info!(
         "Difficulty adjustment from {} to {}",
@@ -275,20 +348,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     }
 
     fn get_next_work_required(&self, index_last: &BI) -> Result<CompactTarget> {
-        get_next_work_required(
-            |height| self.chain.get_block_at_height(height),
-            index_last,
-            &self.retarget_params,
-            self.get_target_override(),
-        )
-    }
-
-    pub fn set_target_override(&mut self, target: CompactTarget) {
-        self.chain.set_target_override(target);
-    }
-
-    pub fn get_target_override(&self) -> Option<CompactTarget> {
-        self.chain.get_target_override()
+        let head_height = self.chain.get_head()?.message.height();
+        get_next_work_required(index_last, &self.retarget_params, head_height)
     }
 
     /// Creates a new block and returns information required to merge-mine it.
@@ -307,6 +368,12 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
 
         let index_last = self.chain.get_last_finalized_block();
 
+        trace!(
+            "Index last hash={} height={}",
+            index_last.block_hash(),
+            index_last.height()
+        );
+
         let hashes = self.chain.get_aggregate_hashes().await?;
         // trace!("Found {} hashes", hashes.len());
 
@@ -315,7 +382,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
         // calculates the "vector commitment" for previous blocks without PoW.
         let hash = AuxPow::aggregate_hash(&hashes);
 
-        // trace!("Creating AuxBlock for hash {}", hash);
+        trace!("Creating AuxBlock for hash {}", hash);
 
         // store the height for this hash so we can retrieve the
         // same unverified hashes on submit
@@ -363,7 +430,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             .with_label_values(&["called"])
             .inc();
 
-        // trace!("Submitting AuxPow for hash {}", hash);
+        trace!("Submitting AuxPow for hash {}", hash);
         let AuxInfo {
             last_hash,
             start_hash,
@@ -387,11 +454,11 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             return Err(eyre!("Last block not found"));
         };
 
-        // trace!("Last block hash: {}", index_last.block_hash());
+        trace!("Last block hash: {}", index_last.block_hash());
         let bits = self.get_next_work_required(&index_last)?;
-        // trace!("Next work required: {}", bits.to_consensus());
+        trace!("Next work required: {}", bits.to_consensus());
         let chain_id = index_last.chain_id();
-        // trace!("Chain ID: {}", chain_id);
+        trace!("Chain ID: {}", chain_id);
 
         // NOTE: we also check this in `check_pow`
         // process block
@@ -440,16 +507,20 @@ pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB
     let task = async move {
         let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
         loop {
-            // trace!("Calling create_aux_block");
+            trace!("Calling create_aux_block");
             // TODO: set miner address
             if let Ok(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
-                // trace!("Created AuxBlock for hash {}", aux_block.hash);
+                trace!("Created AuxBlock for hash {}", aux_block.hash);
                 let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
-                // trace!("Calling submit_aux_block");
-                miner
-                    .submit_aux_block(aux_block.hash, auxpow)
-                    .await
-                    .unwrap();
+                trace!("Calling submit_aux_block");
+                match miner.submit_aux_block(aux_block.hash, auxpow).await {
+                    Ok(_) => {
+                        trace!("AuxPow submitted successfully");
+                    }
+                    Err(e) => {
+                        trace!("Error submitting auxpow: {}", e);
+                    }
+                }
             } else {
                 trace!("No aux block created");
                 sleep(Duration::from_millis(250)).await;
@@ -467,6 +538,16 @@ mod test {
     use super::*;
     use bitcoin::hashes::Hash as HashExt;
     use tokio::time::Instant;
+
+    const PREV_BITS: u32 = 505544640;
+
+    fn init_tracing() {
+        tracing_subscriber::fmt()
+            .with_test_writer() // Important: use test writer!
+            .with_env_filter("trace") // Set desired level
+            .try_init()
+            .ok();
+    }
 
     #[test]
     fn parse_aux_block_rpc() {
@@ -488,28 +569,55 @@ mod test {
     }
 
     #[test]
-    fn should_calculate_target() {
-        assert_eq!(
-            0x1704e90f,
-            calculate_next_work_required(
-                0x650964b5,
-                0x651bc919,
-                0x1704ed7f,
-                &BitcoinConsensusParams::BITCOIN_MAINNET
-            )
-            .to_consensus()
-        );
+    fn should_increase_target_to_make_it_easier_when_timespan_is_larger_then_target() {
+        init_tracing();
 
-        assert_eq!(
-            453150034, // 106848
-            calculate_next_work_required(
-                1296116171, // 104832
-                1297140342, // 106847
-                453179945,
-                &BitcoinConsensusParams::BITCOIN_MAINNET
-            )
-            .to_consensus()
-        );
+        let actual_timespan = 150_000_u32;
+        let target_timespan = 100_000_u64;
+
+        let test_consensus_params = BitcoinConsensusParams {
+            pow_target_spacing: target_timespan,
+            max_pow_adjustment: 20,
+            ..Default::default()
+        };
+        let previous_target =
+            target_to_compact_lossy(uint256_target_from_compact(PREV_BITS)).to_consensus();
+
+        let target =
+            calculate_next_work_required(actual_timespan, PREV_BITS, &test_consensus_params);
+
+        let target = target.to_consensus();
+
+        println!("New Target: {}", target);
+        println!("Previous Target: {}", previous_target);
+
+        assert!(target > previous_target);
+    }
+
+    #[test]
+    fn should_decrease_target_to_make_it_harder_when_timespan_is_shorter_then_target() {
+        init_tracing();
+
+        let actual_timespan = 50_000_u32;
+        let target_timespan = 100_000_u64;
+
+        let test_consensus_params = BitcoinConsensusParams {
+            pow_target_spacing: target_timespan,
+            max_pow_adjustment: 20,
+            ..Default::default()
+        };
+
+        let previous_target = target_to_compact_lossy(uint256_target_from_compact(PREV_BITS));
+
+        let target =
+            calculate_next_work_required(actual_timespan, PREV_BITS, &test_consensus_params);
+
+        // let target = target;
+
+        println!("New Target: {:?}", target);
+        println!("Previous Target: {:?}", previous_target);
+
+        assert!(target < previous_target);
     }
 
     #[ignore]

@@ -2,7 +2,6 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
 use crate::block::SignedConsensusBlock;
 use crate::chain::Chain;
-use crate::error::Error;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
@@ -11,15 +10,15 @@ use bitcoin::{Address, BlockHash};
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
+use lighthouse_wrapper::store::ItemStore;
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use store::ItemStore;
 use tokio::sync::Mutex;
 use tracing::error;
-use types::{Hash256, MainnetEthSpec};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {
@@ -64,6 +63,7 @@ impl JsonRpcErrorV1 {
         }
     }
 
+    #[allow(dead_code)]
     fn internal_error() -> Self {
         Self {
             code: -32603,
@@ -184,6 +184,10 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
 
     let response = match json_req.method {
         "createauxblock" => {
+            RPC_REQUESTS
+                .with_label_values(&["createauxblock", "called"])
+                .inc();
+
             let [script_pub_key] =
                 if let Ok(value) = serde_json::from_str::<[EvmAddress; 1]>(params.get()) {
                     value
@@ -213,12 +217,9 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                     )
                 }
                 Err(e) => {
-                    let status = match e.downcast().unwrap() {
-                        Error::ChainSyncing => "chain_syncing",
-                        _ => "internal_error",
-                    };
+                    let status = e.to_string();
                     RPC_REQUESTS
-                        .with_label_values(&["createauxblock", status])
+                        .with_label_values(&["createauxblock", &status])
                         .inc();
                     new_json_rpc_error!(
                         id,
@@ -229,6 +230,10 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
             }
         }
         "submitauxblock" => {
+            RPC_REQUESTS
+                .with_label_values(&["submitauxblock", "called"])
+                .inc();
+
             #[allow(unused_mut)]
             let mut hash;
             #[allow(unused_mut)]
@@ -267,7 +272,7 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
         }
         "getdepositaddress" => {
             RPC_REQUESTS
-                .with_label_values(&["getdepositaddress", "success"])
+                .with_label_values(&["getdepositaddress", "called"])
                 .inc();
             Response::builder().status(hyper::StatusCode::OK).body(
                 JsonRpcResponseV1 {
