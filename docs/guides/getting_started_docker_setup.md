@@ -27,7 +27,7 @@ To have your Alys node connect with other nodes, update the `BOOTNODE_ARG`.
 
 If you want your Alys node to connect to `Alys Testnet4` use the following value(s):
 
-`BOOTNODE_ARG=/ip4/209.160.175.123/tcp/55444`
+`BOOTNODE_ARG=/ip4/209.160.175.125/tcp/55444`
 
 **IMPORTANT:** Provide valid values for the remaining placeholders in the `docker-compose` file.
 
@@ -39,7 +39,7 @@ For example, to connect to `Alys Testnet4` set to the following:
 [peers]
 ...
 trusted_nodes = [
-    "enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303"
+    "enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303"
 ]
 ...
 ```
@@ -70,7 +70,7 @@ $ docker compose -f etc/docker-compose.j2.yml logs -f
 
 Alys full nodes do **NOT** sign blocks or Bitcoin transactions. Thus, you do not need to generate secret keys for signing. You only need to update your docker-compose file with a valid `BOOTNODE_ARG`:
 
-`BOOTNODE_ARG=/ip4/209.160.175.123/tcp/55444`
+`BOOTNODE_ARG=/ip4/209.160.175.125/tcp/55444`
 
 #### Step 2.
 
