@@ -171,10 +171,10 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 ## Connecting to an Alys Network
 
 ### Testnet
-
 - RPC: http://209.160.175.123:8545
 - Explorer: http://testnet.alyscan.io/
 - Faucet: https://faucet.anduro.io/
+
 - Chain ID: 212121
 
 ## Full Node
