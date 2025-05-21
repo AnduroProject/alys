@@ -82,11 +82,14 @@ pub struct App {
     #[arg(long = "db-path")]
     pub db_path: Option<String>,
 
+    /// Flag to enable mining
     #[arg(long = "mine")]
     pub mine: bool,
 
+    /// Flag to disable mining regardless of the `--dev` flags
     #[arg(long = "no-mine", default_value_t = false)]
     pub no_mine: bool,
+
     #[arg(long = "not-validator", default_value_t = false)]
     pub not_validator: bool,
 

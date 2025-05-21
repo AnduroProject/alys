@@ -222,7 +222,7 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                         .inc();
                     new_json_rpc_error!(
                         id,
-                        hyper::StatusCode::METHOD_NOT_ALLOWED,
+                        hyper::StatusCode::SERVICE_UNAVAILABLE,
                         JsonRpcErrorV1::chain_syncing_error()
                     )
                 }

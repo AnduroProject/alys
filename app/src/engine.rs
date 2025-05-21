@@ -24,6 +24,7 @@ use types::{
 };
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
+const ENGINE_API_QUERY_RETRY_COUNT: i32 = 1;
 
 #[derive(Debug, Default, Clone)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9
@@ -263,7 +264,7 @@ impl Engine {
         transaction_hash: H256,
     ) -> Result<Option<TransactionReceipt>, execution_layer::Error> {
         let params = json!([transaction_hash]);
-        for i in 0..1 {
+        for i in 0..ENGINE_API_QUERY_RETRY_COUNT {
             debug!(
                 "Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}",
                 params, i
