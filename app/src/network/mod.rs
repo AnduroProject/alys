@@ -280,7 +280,6 @@ impl NetworkBackend {
                         next_id += 1;
                     }
                     Some(FrontToBackCommand::RespondRpc(peer_id, connection_id, substream_id, payload, _response)) => {
-                        // info!("Responding to rpc...");
                         self.swarm.behaviour_mut().eth2_rpc.send_response(peer_id, (connection_id, substream_id), payload);
                     }
                     None => {
