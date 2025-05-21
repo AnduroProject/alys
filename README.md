@@ -33,6 +33,7 @@ On a high level, the repository consists of three parts:
 
 ## Getting Started Guides:
 
+To help you get started with Alys, we provide two guides. The first guide demonstrates how to set up and run Alys using Docker Compose, which is the easiest and quickest way to get started. The second guide walks you through a manual setup process for more control and customization.
 * ### [Running Alys with Docker Compose](./docs/guides/getting_started_docker_setup.md)
 * ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md)
 
