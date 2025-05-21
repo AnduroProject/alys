@@ -39,6 +39,7 @@ pub enum Error {
     GenericError(eyre::Report),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum ChainError {
     #[error("`{0}`")]
@@ -48,6 +49,7 @@ pub enum ChainError {
     BlockRetrievalError(BlockErrorBlockTypes),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum BlockErrorBlockTypes {
     #[error("Failed to retrieve the last finalized block")]
@@ -80,6 +82,7 @@ impl From<BlockErrorBlockTypes> for Error {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum AuxPowMiningError {
     #[error("`{0}`")]

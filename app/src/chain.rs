@@ -5,7 +5,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
-use crate::block_candidate_cache::BlockCandidates;
+use crate::block_candidate::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
@@ -27,7 +27,7 @@ use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use async_trait::async_trait;
-use bitcoin::{BlockHash, CompactTarget, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
@@ -45,6 +45,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
+use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -941,12 +942,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let head_height = self.get_head()?.message.height();
         let bits = get_next_work_required(
-            |height| self.get_block_at_height(height),
             &self
                 .get_block_by_hash(&last_pow.to_block_hash())
                 .map_err(Error::GenericError)?,
             &self.retarget_params,
-            self.storage.get_target_override()?,
             head_height,
         )
         .map_err(Error::GenericError)?;
@@ -1243,21 +1242,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(self
             .storage
             .set_accumulated_block_fees(&verified_block.canonical_root(), fees))
-    }
-
-    pub(crate) async fn get_accumulated_fees(
-        &self,
-        block_hash: Option<&Hash256>,
-    ) -> Result<U256, Error> {
-        if let Some(block_hash) = block_hash {
-            self.storage
-                .get_accumulated_block_fees(block_hash)?
-                .ok_or(Error::MissingBlock)
-        } else {
-            self.storage
-                .get_accumulated_block_fees(&self.get_latest_finalized_block_ref()?.unwrap().hash)?
-                .ok_or(Error::MissingBlock)
-        }
     }
 
     async fn update_head_ref_ops(
@@ -1860,48 +1844,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
-    pub async fn get_blocks_with_pegouts(self: &Arc<Self>) -> Result<(), Error> {
-        let head = self.head.read().await.as_ref().unwrap().clone();
-        let mut pending_pegouts = HashMap::new();
-        let mut finalized_pegouts = HashMap::new();
-        let mut current = head.hash;
-        debug!("Getting pegouts");
-        loop {
-            let block = self.storage.get_block(&current)?.unwrap();
-
-            // revert previous checkpoints
-            if block.message.auxpow_header.is_some() {
-                let proposal = block.message.pegout_payment_proposal.clone().unwrap();
-                info!("Found pegout tx: {:?}", proposal);
-                pending_pegouts.insert(proposal.txid(), proposal);
-            }
-            if !block.message.finalized_pegouts.is_empty() {
-                let _: Vec<_> = block
-                    .message
-                    .finalized_pegouts
-                    .into_iter()
-                    .map(|tx| {
-                        info!("Found pegout tx: {:?}", tx);
-                        finalized_pegouts.insert(tx.txid(), tx.clone());
-                    })
-                    .collect();
-            }
-            if block.message.parent_hash.is_zero() {
-                break;
-            }
-            // blocks.push(block.clone());
-            // block_heights.push(block.message.execution_payload.block_number);
-
-            current = block.message.parent_hash;
-        }
-        // blocks.reverse();
-        // block_heights.reverse();
-
-        debug!("finalized_pegouts: {:#?}", finalized_pegouts);
-        debug!("pending_pegouts: {:#?}", pending_pegouts);
-        Ok(())
-    }
-
     pub fn get_block_by_height(
         self: &Arc<Self>,
         block_height: u64,
@@ -2040,13 +1982,6 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             return false;
         }
         self.check_pow(&pow, false).await.is_ok() && self.share_pow(pow).await.is_ok()
-    }
-    fn set_target_override(&self, target: CompactTarget) {
-        self.storage.set_target_override(target).unwrap()
-    }
-
-    fn get_target_override(&self) -> Option<CompactTarget> {
-        self.storage.get_target_override().unwrap()
     }
 
     async fn is_synced(&self) -> bool {

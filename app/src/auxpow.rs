@@ -388,7 +388,6 @@ impl AuxPow {
         let diff_target = Target::from_compact(bits);
 
         trace!("Checking PoW target with target of: {:?}", diff_target);
-        // self.parent_block.block_hash().
         diff_target.is_met_by(self.parent_block.block_hash())
     }
 

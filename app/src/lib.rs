@@ -3,7 +3,6 @@ mod aura;
 mod auxpow;
 mod auxpow_miner;
 mod block;
-mod block_candidate_cache;
 mod block_hash_cache;
 mod chain;
 mod engine;
@@ -14,6 +13,7 @@ mod rpc;
 mod signatures;
 mod spec;
 mod store;
+mod block_candidate;
 
 // for main.rs
 pub use app::run;

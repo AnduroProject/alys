@@ -83,6 +83,7 @@ pub trait ChainManager<BI> {
     fn get_last_finalized_block(&self) -> BI;
     fn get_block_by_hash(&self, hash: &BlockHash) -> Result<BI>;
     async fn get_queued_auxpow(&self) -> Option<AuxPowHeader>;
+    #[allow(dead_code)]
     fn get_block_at_height(&self, height: u64) -> Result<BI>;
     #[allow(clippy::too_many_arguments)]
     async fn push_auxpow(
@@ -95,14 +96,13 @@ pub trait ChainManager<BI> {
         auxpow: AuxPow,
         address: EvmAddress,
     ) -> bool;
-    fn set_target_override(&self, target: CompactTarget);
-    fn get_target_override(&self) -> Option<CompactTarget>;
     async fn is_synced(&self) -> bool;
     fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error>;
 }
 
 pub trait BlockIndex {
     fn block_hash(&self) -> BlockHash;
+    #[allow(dead_code)]
     fn block_time(&self) -> u64;
     fn bits(&self) -> u32;
     fn chain_id(&self) -> u32;
@@ -275,8 +275,11 @@ fn is_retarget_height(
     params: &BitcoinConsensusParams,
 ) -> bool {
     let adjustment_interval = params.difficulty_adjustment_interval();
-    if chain_head_height % adjustment_interval == 0
-        || height_difference > &(adjustment_interval as u32)
+    let height_is_multiple_of_adjustment_interval = chain_head_height % adjustment_interval == 0;
+    let height_diff_is_greater_then_adjustment_interval =
+        height_difference > &(adjustment_interval as u32);
+
+    if height_is_multiple_of_adjustment_interval || height_diff_is_greater_then_adjustment_interval
     {
         return true;
     }
@@ -284,16 +287,10 @@ fn is_retarget_height(
 }
 
 pub fn get_next_work_required<BI: BlockIndex>(
-    get_block_at_height: impl Fn(u64) -> Result<BI>,
     index_last: &BI,
     params: &BitcoinConsensusParams,
-    target_override: Option<CompactTarget>,
     chain_head_height: u64,
 ) -> Result<CompactTarget> {
-    if let Some(target) = target_override {
-        return Ok(target);
-    }
-
     // Calculate the difference between the current head + 1 and the last block that contains a auxpow header
     let auxpow_height_difference = (chain_head_height + 1 - index_last.height()) as u32;
 
@@ -313,10 +310,6 @@ pub fn get_next_work_required<BI: BlockIndex>(
         );
         trace!("Last bits: {:?}", index_last.bits());
     }
-
-    // let blocks_back = params.difficulty_adjustment_interval() - 1;
-    // let height_first = index_last.height() - blocks_back;
-    let index_first = get_block_at_height(chain_head_height)?;
 
     let next_work =
         calculate_next_work_required(auxpow_height_difference, index_last.bits(), params);
@@ -356,21 +349,7 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
 
     fn get_next_work_required(&self, index_last: &BI) -> Result<CompactTarget> {
         let head_height = self.chain.get_head()?.message.height();
-        get_next_work_required(
-            |height| self.chain.get_block_at_height(height),
-            index_last,
-            &self.retarget_params,
-            self.get_target_override(),
-            head_height,
-        )
-    }
-
-    pub fn set_target_override(&mut self, target: CompactTarget) {
-        self.chain.set_target_override(target);
-    }
-
-    pub fn get_target_override(&self) -> Option<CompactTarget> {
-        self.chain.get_target_override()
+        get_next_work_required(index_last, &self.retarget_params, head_height)
     }
 
     /// Creates a new block and returns information required to merge-mine it.

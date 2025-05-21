@@ -2,7 +2,6 @@ use crate::auxpow::AuxPow;
 use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
 use crate::block::SignedConsensusBlock;
 use crate::chain::Chain;
-use crate::error::Error;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use bitcoin::address::NetworkChecked;
 use bitcoin::consensus::Decodable;
@@ -64,6 +63,7 @@ impl JsonRpcErrorV1 {
         }
     }
 
+    #[allow(dead_code)]
     fn internal_error() -> Self {
         Self {
             code: -32603,

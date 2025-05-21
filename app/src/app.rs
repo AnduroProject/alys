@@ -195,7 +195,6 @@ impl App {
         let engine = Engine::new(
             http_engine_json_rpc,
             public_execution_json_rpc,
-            self.jwt_secret,
         );
 
         let network = crate::network::spawn_network_handler(
