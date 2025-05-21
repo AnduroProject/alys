@@ -1,8 +1,13 @@
+#![allow(clippy::manual_div_ceil)]
+
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
+use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
-use crate::spec::{genesis_value_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY};
+use crate::spec::{
+    genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
+};
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bls::{Keypair, SecretKey};
 use bridge::{
@@ -11,6 +16,8 @@ use bridge::{
 };
 use clap::builder::ArgPredicate;
 use clap::Parser;
+use execution_layer::auth::JwtKey;
+use eyre::Result;
 use futures::pin_mut;
 use std::str::FromStr;
 use std::time::Duration;
@@ -19,11 +26,11 @@ use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[inline]
-pub fn run() -> eyre::Result<()> {
+pub fn run() -> Result<()> {
     App::parse().run()
 }
 
-pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
+pub fn parse_secret_key(s: &str) -> Result<SecretKey, eyre::Error> {
     let secret_key = SecretKey::deserialize(&hex::decode(s)?[..])
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -31,7 +38,7 @@ pub fn parse_secret_key(s: &str) -> eyre::Result<SecretKey, eyre::Error> {
 
 pub fn parse_bitcoin_secret_key(
     s: &str,
-) -> eyre::Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
+) -> Result<bitcoin::key::secp256k1::SecretKey, eyre::Error> {
     let secret_key = bitcoin::key::secp256k1::SecretKey::from_str(s)
         .map_err(|_err| eyre::Error::msg("Failed to deserialize key"))?;
     Ok(secret_key)
@@ -75,14 +82,32 @@ pub struct App {
     #[arg(long = "db-path")]
     pub db_path: Option<String>,
 
+    /// Flag to enable mining
     #[arg(long = "mine")]
     pub mine: bool,
+
+    /// Flag to disable mining regardless of the `--dev` flags
+    #[arg(long = "no-mine", default_value_t = false)]
+    pub no_mine: bool,
+
+    #[arg(long = "not-validator", default_value_t = false)]
+    pub not_validator: bool,
+
+    #[arg(
+        long = "full-log-context",
+        env = "FULL_LOG_CONTEXT",
+        default_value_t = false
+    )]
+    pub full_log_context: bool,
 
     #[arg(long, default_value_t = 3000)]
     pub rpc_port: u16,
 
     #[arg(long, default_value_t = 0)]
     pub p2p_port: u16,
+
+    #[arg(long, default_value = "0.0.0.0")]
+    pub p2p_listen_addr: String,
 
     #[arg(long)]
     pub remote_bootnode: Option<String>,
@@ -94,7 +119,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_URL",
         default_value_if("dev", ArgPredicate::IsPresent, Some("http://0.0.0.0:18443")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_url: Option<String>,
 
@@ -102,7 +127,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_USER",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcuser")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_user: Option<String>,
 
@@ -110,16 +135,19 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_PASS",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcpassword")),
-        required_unless_present = "dev"
+        // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_pass: Option<String>,
 
     #[clap(long, default_value("regtest"))]
     pub bitcoin_network: Network,
+
+    #[clap(long, required = true, value_parser = hex_file_parser)]
+    pub jwt_secret: [u8; 32],
 }
 
 impl App {
-    pub fn run(self) -> eyre::Result<()> {
+    pub fn run(self) -> Result<()> {
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
         tokio_runtime.block_on(run_until_ctrl_c(self.execute()))?;
@@ -134,7 +162,13 @@ impl App {
         )
         .unwrap();
 
-        let filter = EnvFilter::builder().parse_lossy(rust_log_level.as_str());
+        let filter = if self.full_log_context {
+            EnvFilter::builder().parse_lossy(rust_log_level.as_str())
+        } else {
+            let filter_tag =
+                format!("app={rust_log_level},federation={rust_log_level},miner={rust_log_level}");
+            EnvFilter::builder().parse_lossy(filter_tag.as_str())
+        };
 
         let main_layer = tracing_subscriber::fmt::layer().with_target(true);
 
@@ -151,18 +185,28 @@ impl App {
         tracing_subscriber::registry().with(layers).init();
     }
 
-    async fn execute(self) -> eyre::Result<()> {
+    async fn execute(self) -> Result<()> {
         let disk_store = Storage::new_disk(self.db_path);
 
         info!("Head: {:?}", disk_store.get_head());
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
-        let http_engine_json_rpc = new_http_engine_json_rpc(self.geth_url);
+        // TODO: Combine instantiation of engine & execution apis into Engine::new
+        let http_engine_json_rpc =
+            new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(&self.jwt_secret).unwrap());
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
+        let engine = Engine::new(
+            http_engine_json_rpc,
+            public_execution_json_rpc,
+            self.jwt_secret,
+        );
 
-        let network =
-            crate::network::spawn_network_handler(self.p2p_port, self.remote_bootnode).await?;
+        let network = crate::network::spawn_network_handler(
+            self.p2p_listen_addr,
+            self.p2p_port,
+            self.remote_bootnode,
+        )
+        .await?;
 
         let chain_spec = self.chain_spec.expect("Chain spec is configured");
         let authorities = chain_spec.authorities.clone();
@@ -191,17 +235,6 @@ impl App {
 
         bitcoin_addresses.push(bitcoin_federation.taproot_address.clone());
 
-        if chain_spec.federation_bitcoin_pubkeys.len() > 3 {
-            {
-                let original_federation_set = chain_spec.federation_bitcoin_pubkeys[0..3].to_vec();
-                let og_threshold = calculate_threshold(original_federation_set.len());
-                let og_bitcoin_federation =
-                    Federation::new(original_federation_set, og_threshold, self.bitcoin_network);
-
-                bitcoin_addresses.push(og_bitcoin_federation.taproot_address.clone());
-            }
-        }
-
         let wallet_path = self
             .wallet_path
             .unwrap_or(format!("{DEFAULT_ROOT_DIR}/wallet"));
@@ -210,7 +243,7 @@ impl App {
             BitcoinSignatureCollector::new(bitcoin_federation.clone());
 
         let (maybe_aura_signer, maybe_bitcoin_signer);
-        if chain_spec.is_validator {
+        if chain_spec.is_validator && !self.not_validator {
             (maybe_aura_signer, maybe_bitcoin_signer) =
                 match (self.aura_secret_key, self.bitcoin_secret_key) {
                     (Some(aura_sk), Some(bitcoin_sk)) => {
@@ -242,6 +275,7 @@ impl App {
             maybe_aura_signer.clone(),
         );
 
+        // TODO: We probably just want to persist the chain_spec struct
         let chain = Arc::new(Chain::new(
             engine,
             network,
@@ -256,11 +290,13 @@ impl App {
                     self.bitcoin_rpc_pass.expect("RPC password is configured"),
                 ),
                 bitcoin_addresses,
+                chain_spec.required_btc_txn_confirmations,
             ),
             bitcoin_wallet,
             bitcoin_signature_collector,
             maybe_bitcoin_signer,
             chain_spec.retarget_params.clone(),
+            chain_spec.is_validator && !self.not_validator,
         ));
 
         // import genesis block without signatures or verification
@@ -268,6 +304,9 @@ impl App {
             .store_genesis(chain_spec.clone())
             .await
             .expect("Should store genesis");
+
+        // Initialize the block hash cache
+        chain.init_block_hash_cache().await?;
 
         // start json-rpc v1 server
         crate::rpc::run_server(
@@ -278,7 +317,9 @@ impl App {
         )
         .await;
 
-        if self.mine || self.dev {
+        crate::metrics::start_server().await;
+
+        if (self.mine || self.dev) && !self.no_mine {
             info!("Spawning miner");
             spawn_background_miner(chain.clone());
         }
@@ -287,7 +328,7 @@ impl App {
         chain.clone().listen_for_peer_discovery().await;
         chain.clone().listen_for_rpc_requests().await;
 
-        if chain_spec.is_validator {
+        if chain_spec.is_validator && !self.not_validator {
             chain
                 .clone()
                 .monitor_bitcoin_blocks(bitcoin_start_height)

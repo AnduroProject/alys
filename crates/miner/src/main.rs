@@ -27,12 +27,12 @@ async fn main() {
 }
 
 async fn try_mine(args: &Args) -> Result<(), Error> {
-    let client = Client::simple_http(&args.url, None, None)?;
+    let client = Client::simple_http(&args.url, None, None).unwrap();
     let aux_block = call::<AuxBlock>(
         &client,
         "createauxblock",
         &[serde_json::Value::String(
-            "0x0000000000000000000000000000000000000000".to_string(),
+            "0xb95f80EC665a534b1e309a2a24F8849d27B70FDE".to_string(),
         )],
     )?;
 
@@ -40,18 +40,22 @@ async fn try_mine(args: &Args) -> Result<(), Error> {
     let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
 
     let mut encoded_auxpow = Vec::new();
-    auxpow.consensus_encode(&mut encoded_auxpow)?;
+    auxpow.consensus_encode(&mut encoded_auxpow).unwrap();
     let stringified_auxpow = hex::encode(encoded_auxpow);
 
     let mut encoded_auxpow_hash = Vec::new();
-    aux_block.hash.consensus_encode(&mut encoded_auxpow_hash)?;
+    aux_block
+        .hash
+        .consensus_encode(&mut encoded_auxpow_hash)
+        .unwrap();
     let stringified_aux_hash = hex::encode(encoded_auxpow_hash);
 
     let result = call::<bool>(
         &client,
         "submitauxblock",
         &[json!(stringified_aux_hash), json!(stringified_auxpow)],
-    )?;
+    )
+    .unwrap();
 
     println!("submitauxblock result: {result}");
     Ok(())

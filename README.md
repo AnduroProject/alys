@@ -30,56 +30,40 @@ On a high level, the repository consists of three parts:
 - Install libssl-dev
 - Install build-essential
 - Install foundry: https://book.getfoundry.sh/getting-started/installation
-- Clone Alys repo:
 
+## Getting Started Guides:
+
+To help you get started with Alys, we provide two guides. The first guide demonstrates how to set up and run Alys using Docker Compose, which is the easiest and quickest way to get started. The second guide walks you through a manual setup process for more control and customization.
+* ### [Running Alys with Docker Compose](./docs/guides/getting_started_docker_setup.md)
+* ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md)
+
+## Alys Testnet4
+
+Anduro operates a public testnet for Alys used for development & testing. Anyone wishing to interact with the Alys testnet, whether it be to query the chain, send transactions, or connect your own node to the
+network, can find connection info below.
+
+### Alys Node #1:
 ```shell
-git clone git@github.com:AnduroProject/Alys.git
-cd Alys
+IP: 209.160.175.123
+Enode: enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303
 ```
 
-## Getting Started
-
-We will describe how to run an Alys sidechain and execute a peg in and out. The sidechain will consist of a single local node, and the federation will have a single member.
-
-### Geth and Bitcoin
-
-We will start a single geth node and a Bitcoin regtest node.
-
+### Alys Node #2:
 ```shell
-# cleanup, init and run geth
-./scripts/start_geth.sh
+IP: 209.160.175.124
+Enode: enode://15d60f94195b361bf20acfd8b025b8f332b79f5752637e225e7c73aca7b17dd978ca94ab825d0f5221210e69ffcd96e910a257e25ff936c918335c44cc7041ba@209.160.175.124:30303
 ```
 
+### Alys Node #3:
 ```shell
-# in a new terminal start bitcoin
-bitcoind -regtest -server -rest -rpcport=18443 -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002 -rpcallowip=127.0.0.1 -debug=rpc
+IP: 209.160.175.125
+Enode: enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303
 ```
 
-### Alys node
+## Faucet
 
-Next, we start a single Alys node with the federation having exactly one member.
+https://faucet.anduro.io/
 
-```shell
-# dev (single node)
-
-# From the Alys root directory
-cargo run --bin app -- --dev
-```
-
-You will see that the node is producing blocks continuously.
-
-<details>
-<summary>Further details on AuxPoW submission</summary>
-
-According to the target time of merged mining, eventually, a merged mining block bundle is added to the chain, finalizing the previously created blocks together with the federation's validation and signing of the AuxPoW.
-
-In dev mode, we use an embedded miner to get the AuxPoW.
-
-When the AuxPoW is not submitted, the node will stop producing blocks.
-
-Block production will resume once the next valid AuxPoW is submitted.
-
-</details>
 
 ### Peg-In
 
@@ -116,7 +100,7 @@ EVM_ADDRESS="09Af4E864b84706fbCFE8679BF696e8c0B472201"
 
 The Alys node will automatically bridge the BTC.
 
-#### Check that Funds are Allocated inAlys
+#### Check that Funds are Allocated in Alys
 
 Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1x10^18 wei instead of 1x10^8 satoshis.
 
@@ -188,17 +172,10 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 ## Connecting to an Alys Network
 
 ### Testnet
-
-- RPC: http://btcalys.xyz:8545
+- RPC: http://209.160.175.123:8545
 - Explorer: http://testnet.alyscan.io/
 - Faucet: https://faucet.anduro.io/
-- Chain ID: 212121
 
-### Alphanet
-
-- RPC: http:/54.162.190.202:8545
-- Explorer: http://alyscan.io/
-- Faucet: https://faucet.anduro.io/alpha
 - Chain ID: 212121
 
 ## Full Node
@@ -245,16 +222,6 @@ bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
 cargo run --bin app -- --dev
 ```
 
-#### Testnet
-
-```shell
-Node IP: 107.20.115.193
-Node Port: 8545
-```
-
-#### Faucet
-
-https://faucet.anduro.io/
 
 #### Unit tests
 

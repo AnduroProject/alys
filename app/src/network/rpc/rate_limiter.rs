@@ -150,7 +150,7 @@ impl RPCRateLimiterBuilder {
         let bbrange_rl = Limiter::from_quota(bbrange_quota)?;
 
         // check for peers to prune every 30 seconds, starting in 30 seconds
-        let prune_every = tokio::time::Duration::from_secs(30);
+        let prune_every = Duration::from_secs(30);
         let prune_start = tokio::time::Instant::now() + prune_every;
         let prune_interval = tokio::time::interval_at(prune_start, prune_every);
         Ok(RPCRateLimiter {

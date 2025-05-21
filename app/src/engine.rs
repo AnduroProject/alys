@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::metrics::{ENGINE_BUILD_BLOCK_CALLS, ENGINE_COMMIT_BLOCK_CALLS};
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
 use execution_layer::{
@@ -23,7 +24,7 @@ use types::{
 };
 
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
-const DEFAULT_JWT_SECRET: [u8; 32] = [42; 32];
+const ENGINE_API_QUERY_RETRY_COUNT: i32 = 1;
 
 #[derive(Debug, Default, Clone)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9
@@ -39,7 +40,7 @@ impl ConsensusAmount {
     }
 }
 
-impl std::cmp::PartialEq<u64> for ConsensusAmount {
+impl PartialEq<u64> for ConsensusAmount {
     fn eq(&self, other: &u64) -> bool {
         self.0 == *other
     }
@@ -77,14 +78,16 @@ pub struct Engine {
     pub api: HttpJsonRpc,
     pub execution_api: HttpJsonRpc,
     finalized: RwLock<Option<ExecutionBlockHash>>,
+    jwt_key: [u8; 32],
 }
 
 impl Engine {
-    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc) -> Self {
+    pub fn new(api: HttpJsonRpc, execution_api: HttpJsonRpc, jwt_key_bytes: [u8; 32]) -> Self {
         Self {
             api,
             execution_api,
             finalized: Default::default(),
+            jwt_key: jwt_key_bytes,
         }
     }
 
@@ -98,6 +101,10 @@ impl Engine {
         payload_head: Option<ExecutionBlockHash>,
         add_balances: Vec<AddBalance>,
     ) -> Result<ExecutionPayload<MainnetEthSpec>, Error> {
+        ENGINE_BUILD_BLOCK_CALLS
+            .with_label_values(&["called", "default"])
+            .inc();
+
         // FIXME: geth is not accepting >4 withdrawals
         let payload_attributes = PayloadAttributes::new(
             timestamp.as_secs(),
@@ -133,7 +140,12 @@ impl Engine {
             .api
             .forkchoice_updated(forkchoice_state, Some(payload_attributes))
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+            .map_err(|err| {
+                ENGINE_BUILD_BLOCK_CALLS
+                    .with_label_values(&["failed", "engine_api_forkchoice_updated_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
         trace!("Forkchoice updated: {:?}", response);
         let payload_id = response.payload_id.ok_or(Error::PayloadIdUnavailable)?;
 
@@ -141,12 +153,21 @@ impl Engine {
             .api
             .get_payload::<MainnetEthSpec>(types::ForkName::Capella, payload_id)
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
+            .map_err(|err| {
+                ENGINE_BUILD_BLOCK_CALLS
+                    .with_label_values(&["failed", "engine_api_get_payload_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
 
         tracing::info!("Expected block value is {}", response.block_value());
 
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/miner/payload_building.go#L178
         let execution_payload = response.execution_payload_ref().clone_from_ref();
+
+        ENGINE_BUILD_BLOCK_CALLS
+            .with_label_values(&["success", "default"])
+            .inc();
 
         Ok(execution_payload)
     }
@@ -155,6 +176,10 @@ impl Engine {
         &self,
         execution_payload: ExecutionPayload<MainnetEthSpec>,
     ) -> Result<ExecutionBlockHash, Error> {
+        ENGINE_COMMIT_BLOCK_CALLS
+            .with_label_values(&["called"])
+            .inc();
+
         let finalized = self.finalized.read().await.unwrap_or_default();
 
         self.api
@@ -175,8 +200,18 @@ impl Engine {
             .api
             .new_payload::<MainnetEthSpec>(execution_payload)
             .await
-            .map_err(|err| Error::EngineApiError(format!("{:?}", err)))?;
-        let head = response.latest_valid_hash.ok_or(Error::InvalidBlockHash)?;
+            .map_err(|err| {
+                ENGINE_COMMIT_BLOCK_CALLS
+                    .with_label_values(&["engine_api_new_payload_error"])
+                    .inc();
+                Error::EngineApiError(format!("{:?}", err))
+            })?;
+        let head = response.latest_valid_hash.ok_or_else(|| {
+            ENGINE_COMMIT_BLOCK_CALLS
+                .with_label_values(&["engine_api_invalid_block_hash_error"])
+                .inc();
+            Error::InvalidBlockHash
+        })?;
 
         // update now to the new head so we can fetch the txs and
         // receipts from the ethereum rpc
@@ -229,7 +264,7 @@ impl Engine {
         transaction_hash: H256,
     ) -> Result<Option<TransactionReceipt>, execution_layer::Error> {
         let params = json!([transaction_hash]);
-        for i in 0..50 {
+        for i in 0..ENGINE_API_QUERY_RETRY_COUNT {
             debug!(
                 "Querying `eth_getTransactionReceipt` with params: {:?}, attempt: {}",
                 params, i
@@ -244,8 +279,8 @@ impl Engine {
                 .await;
             if rpc_result.is_ok() {
                 return Ok(rpc_result?);
-            } else {
-                sleep(Duration::from_millis(1000)).await;
+            } else if i > 0 {
+                sleep(Duration::from_millis(500)).await;
             }
         }
         Err(execution_layer::Error::InvalidPayloadBody(
@@ -324,8 +359,8 @@ impl Engine {
     }
 }
 
-pub fn new_http_engine_json_rpc(url_override: Option<String>) -> HttpJsonRpc {
-    let rpc_auth = Auth::new(JwtKey::from_slice(&DEFAULT_JWT_SECRET).unwrap(), None, None);
+pub fn new_http_engine_json_rpc(url_override: Option<String>, jwt_key: JwtKey) -> HttpJsonRpc {
+    let rpc_auth = Auth::new(jwt_key, None, None);
     let rpc_url =
         SensitiveUrl::parse(&url_override.unwrap_or(DEFAULT_EXECUTION_ENDPOINT.to_string()))
             .unwrap();

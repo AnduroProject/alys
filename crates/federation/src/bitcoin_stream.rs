@@ -174,7 +174,9 @@ pub async fn stream_blocks(
             let height = state.next_height;
             match state.rpc.wait_for_block(height, num_confirmations).await {
                 Ok(block) => {
-                    debug!("found block {} at height {}", block.block_hash(), height);
+                    if height % 10000 == 0 {
+                        debug!("found block {} at height {}", block.block_hash(), height);
+                    }
                     state.next_height += 1;
                     Some((Ok((block, height)), state))
                 }

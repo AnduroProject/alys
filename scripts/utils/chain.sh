@@ -82,7 +82,9 @@ function start_testnet_full_node() {
     local NUM=$1
     local LOG_FILE=$(get_log_path $NUM)
 
-    cargo run --bin app -- --chain "${PWD}/etc/config/chain.json" --geth-execution-url http://localhost:8551 --geth-url http://localhost:8551/ --db-path "$(get_data_path $NUM)/chain_db" --rpc-port 3000 --wallet-path "$(get_data_path $NUM)" --bitcoin-rpc-url $BTC_RPC_URL --bitcoin-rpc-user $BTC_RPC_USER --bitcoin-rpc-pass $BTC_RPC_PASSWORD --bitcoin-network testnet --p2p-port 55444 --remote-bootnode /ip4/54.161.100.208/tcp/55444 > "$LOG_FILE" 2>&1 &
+#     cargo run --bin app -- --chain "${PWD}/etc/config/chain.json" --geth-execution-url http://localhost:8551 --geth-url http://localhost:8551/ --db-path "$(get_data_path $NUM)/chain_db" --rpc-port 3000 --wallet-path "$(get_data_path $NUM)" --bitcoin-rpc-url $BTC_RPC_URL --bitcoin-rpc-user $BTC_RPC_USER --bitcoin-rpc-pass $BTC_RPC_PASSWORD --bitcoin-network testnet --p2p-port 55444 --remote-bootnode /ip4/54.161.100.208/tcp/55444/ip4/107.22.120.71/tcp/55444/ip4/54.224.209.248/tcp/55444 > "$LOG_FILE" 2>&1 &
+    cargo run --bin app -- --chain "${PWD}/etc/config/chain.json" --geth-execution-url http://localhost:8551 --geth-url http://localhost:8551/ --db-path "$(get_data_path $NUM)/chain_db" --rpc-port 3000 --wallet-path "$(get_data_path $NUM)" --bitcoin-rpc-url $BTC_RPC_URL --bitcoin-rpc-user $BTC_RPC_USER --bitcoin-rpc-pass $BTC_RPC_PASSWORD --bitcoin-network testnet --p2p-port 55444 --remote-bootnode /ip4/54.224.240.24/tcp/55444 > "$LOG_FILE" 2>&1 &
+
     CHAIN_PIDS[$NUM]=$!
 }
 

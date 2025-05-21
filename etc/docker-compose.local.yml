@@ -2,7 +2,7 @@ services:
   execution:
     container_name: execution
     restart: unless-stopped
-    image: ghcr.io/paradigmxyz/reth
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
     ports:
       - '9001:9001' # metrics
       - '30303:30303' # eth/66 peering
@@ -16,6 +16,10 @@ services:
       - ./jwttoken:/opt/alys/execution/config/jwt:ro
     # https://paradigmxyz.github.io/reth/run/troubleshooting.html#concurrent-database-access-error-using-containersdocker
     pid: host
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+
     command: > 
         node
         --chain "opt/alys/execution/config/genesis.json"
@@ -35,6 +39,7 @@ services:
         --ws.port 8456
         --ws.origins "*"
         --port 30303
+        
 
   prometheus:
     container_name: prometheus
@@ -74,18 +79,23 @@ services:
              find /etc/grafana/provisioning/dashboards/ -name '*.json' -exec sed -i 's/$${DS_PROMETHEUS}/Prometheus/g' {} \+ &&
              /run.sh"
 
-  alys:
-    container_name: alys
+  consensus:
+    container_name: consensus
     restart: unless-stopped
 #    build:
 #      context: ../
 #      dockerfile: Dockerfile
-    image: ghcr.io/anduroproject/alys:dev
+    image: ghcr.io/anduroproject/alys:72-testnet-4
+
     volumes:
       - ./data/alys/db/:/lib/alys/data/db
       - ./data/alys/wallet/:/lib/alys/data/wallet
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
     command:
       - /bin/alys
+      - --dev
       - --geth-url
       - http://execution:8551/
       - --db-path
@@ -95,11 +105,14 @@ services:
       - --bitcoin-rpc-url
       - http://bitcoin-core:18443
       - --bitcoin-rpc-user
-      - bitcoin
+      - rpcuser
       - --bitcoin-rpc-pass
-      - bitcoin
+      - rpcpassword
+      - --geth-execution-url
+      - http://execution:8545
     depends_on:
       - execution
+      - bitcoin-core
     ports:
       - 3000:3000
 
@@ -120,10 +133,11 @@ services:
       -rpcallowip=0.0.0.0/0
       -rpcbind=0.0.0.0
       -server
-      -rpcuser=bitcoin
-      -rpcpassword=bitcoin
+      -rpcuser=rpcuser
+      -rpcpassword=rpcpassword
       -port=18333
       -rpcport=18443
+
 
 volumes:
   logs:
@@ -132,3 +146,4 @@ volumes:
     driver: local
   grafanadata:
     driver: local
+ 

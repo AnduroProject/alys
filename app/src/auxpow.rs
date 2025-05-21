@@ -386,10 +386,13 @@ impl AuxPow {
     // https://github.com/namecoin/namecoin-core/blob/1e19d9f53a403d627d7a53a27c835561500c76f5/src/validation.cpp#L1744
     pub fn check_proof_of_work(&self, bits: CompactTarget) -> bool {
         let diff_target = Target::from_compact(bits);
+
+        // trace!("Checking PoW target with diff of: {}", diff_target.difficulty());
         diff_target.is_met_by(self.parent_block.block_hash())
     }
 
     pub async fn mine(sidechain_hash: BlockHash, target: CompactTarget, chain_id: u32) -> Self {
+        trace!("Mining AuxPow with target: {}", target.to_consensus());
         let parent_chainid = 1u32;
 
         let transaction = Transaction {
@@ -440,6 +443,7 @@ impl AuxPow {
             tokio::task::yield_now().await;
 
             aux_pow.parent_block.nonce = nonce;
+            // trace!("Trying nonce: {}", nonce);
             if aux_pow.check_proof_of_work(target) {
                 // This unwrap should always succeed, just a sanity check to catch any bugs asap
                 aux_pow.check(sidechain_hash, chain_id).unwrap();

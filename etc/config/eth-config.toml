@@ -1,15 +1,15 @@
 [stages.headers]
-downloader_max_concurrent_requests = 100
-downloader_min_concurrent_requests = 5
-downloader_max_buffered_responses = 100
-downloader_request_limit = 1000
+downloader_max_concurrent_requests = 200
+downloader_min_concurrent_requests = 10
+downloader_max_buffered_responses = 200
+downloader_request_limit = 2000
 commit_threshold = 10000
 
 [stages.bodies]
 downloader_request_limit = 200
 downloader_stream_batch_size = 1000
 downloader_max_buffered_blocks_size_bytes = 2147483648
-downloader_min_concurrent_requests = 5
+downloader_min_concurrent_requests = 10
 downloader_max_concurrent_requests = 100
 
 [stages.sender_recovery]
@@ -47,22 +47,17 @@ commit_threshold = 100000
 [stages.etl]
 file_size = 524288000
 
-[prune]
-block_interval = 5
-
-[prune.segments.receipts_log_filter]
-
 [peers]
 refill_slots_interval = "5s"
-trusted_nodes = []
+trusted_nodes = ["enode://4a131d635e3b1ab30624912f769a376581087a84eef53f4fccc28bac0a45493bd4e2ee1ff409608c0993dd05e2b8a3d351e65a7697f1ee2b3c9ee9b49529958f@209.160.175.123:30303"]
 trusted_nodes_only = false
 max_backoff_count = 5
 ban_duration = "12h"
 
 [peers.connection_info]
-max_outbound = 5
+max_outbound = 30
 max_inbound = 30
-max_concurrent_outbound_dials = 0
+max_concurrent_outbound_dials = 30
 
 [peers.reputation_weights]
 bad_message = -16384

@@ -7,7 +7,7 @@ name: Docker
 
 on:
   push:
-    branches: [ "master", "development" ]
+    branches: [ "master", "development", "60-block-unkown-merge-mine", "72-testnet-4", "72-testnet-4_debug"]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
@@ -78,6 +78,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

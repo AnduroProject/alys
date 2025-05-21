@@ -1,0 +1,22 @@
+scrape_configs:
+  - job_name: reth
+    metrics_path: "/"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['reth:9001', 'localhost:9001', 'host.docker.internal:9001']
+  - job_name: ethereum-metrics-exporter
+    metrics_path: "/metrics"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['metrics-exporter:9091']
+
+remote_write:
+  - url: https://aps-workspaces.{{ AMP_REGION }}.amazonaws.com/workspaces/{{ AMP_WORKSPACE_ID }}/api/v1/remote_write
+    sigv4:
+      region: {{ AMP_REGION }}
+      access_key: {{ AMP_ACCESS_KEY }}
+      secret_key: {{ AMP_SECRET_KEY }}
+    queue_config:
+      max_samples_per_send: 1000
+      max_shards: 200
+      capacity: 2500

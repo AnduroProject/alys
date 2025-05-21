@@ -39,7 +39,7 @@ pub type EnrSyncCommitteeBitfield<T> = BitVector<<T as EthSpec>::SyncCommitteeSu
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
     /// The Eth2 RPC specified in the wire-0 protocol.
-    eth2_rpc: rpc::RPC<RequestId, MainnetEthSpec>,
+    eth2_rpc: RPC<RequestId, MainnetEthSpec>,
     mdns: mdns::tokio::Behaviour,
 }
 
@@ -280,7 +280,7 @@ impl NetworkBackend {
                         next_id += 1;
                     }
                     Some(FrontToBackCommand::RespondRpc(peer_id, connection_id, substream_id, payload, _response)) => {
-                        info!("Responding to rpc...");
+                        // info!("Responding to rpc...");
                         self.swarm.behaviour_mut().eth2_rpc.send_response(peer_id, (connection_id, substream_id), payload);
                     }
                     None => {
@@ -326,21 +326,13 @@ impl NetworkBackend {
                     SwarmEvent::Behaviour(MyBehaviourEvent::Eth2Rpc(x)) => {
                         match &x.event {
                             Ok(RPCReceived::Request(_substream_id, _request)) => {
-                                let _ = network_rpc_event_tx.send(x);
                                 // send to rpc listener
+                                let _ = network_rpc_event_tx.send(x);
                             }
                             Ok(RPCReceived::Response(request_id, received_response)) => {
                                 // propagate response
                                 // todo: make robust
-                                // let propagated_response_result = rpc_response_channels[request_id].send(received_response.clone()).await;
-
-                                if let Err(err) = rpc_response_channels[request_id].send(received_response.clone()).await {
-                                    warn!("Failed to propagate response: {}", request_id);
-                                    error!("{}", err.to_string());
-                                    // remove the channel
-                                    // rpc_response_channels.remove(request_id);
-
-                                }
+                                let _res = rpc_response_channels[request_id].send(received_response.clone()).await;
                             }
                             Ok(RPCReceived::EndOfStream(request_id, _)) => {
                                 rpc_response_channels.remove(request_id);
@@ -359,6 +351,11 @@ impl NetworkBackend {
                         peers.insert(peer_id);
                         let _ = peers_connected_tx.send(peers.clone());
                     }
+                    SwarmEvent::ConnectionClosed { peer_id, connection_id, endpoint, num_established, cause } => {
+                        debug!("Connection closed: peer_id: {peer_id}, connection_id: {connection_id}, endpoint: {endpoint:?}, num_established: {num_established}, cause: {cause:?}");
+                        peers.remove(&peer_id);
+                        let _ = peers_connected_tx.send(peers.clone());
+                    }
                     x => {
                         trace!("Unhandled message {x:?}");
                     }
@@ -369,6 +366,7 @@ impl NetworkBackend {
 }
 
 pub async fn spawn_network_handler(
+    addr: String,
     port: u16,
     remote_bootnode: Option<String>,
 ) -> Result<Client, Error> {
@@ -397,8 +395,8 @@ pub async fn spawn_network_handler(
         .subscribe(&GossipKind::PegoutSignatures.topic())?;
 
     // Listen on all interfaces and whatever port the OS assigns
-    swarm.listen_on(format!("/ip4/0.0.0.0/udp/{port}/quic-v1").parse()?)?;
-    swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{port}").parse()?)?;
+    swarm.listen_on(format!("/ip4/{addr}/udp/{port}/quic-v1").parse()?)?;
+    swarm.listen_on(format!("/ip4/{addr}/tcp/{port}").parse()?)?;
     let backend = NetworkBackend {
         front_to_back_rx: rx,
         swarm,
@@ -409,6 +407,7 @@ pub async fn spawn_network_handler(
     });
 
     if let Some(bootnode) = remote_bootnode {
+        trace!("Dialing bootnode: {}", bootnode);
         let address = Multiaddr::from_str(&bootnode)?;
         client.dial(address).await?;
     }
@@ -474,7 +473,7 @@ fn create_swarm() -> Result<Swarm<MyBehaviour>, Error> {
             })
         })
         .map_err(|_| Error::BehaviorError)?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(180)))
         .build();
     Ok(swarm)
 }

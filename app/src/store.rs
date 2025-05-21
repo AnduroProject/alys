@@ -1,4 +1,8 @@
-use crate::{block::*, error::Error};
+use crate::{
+    block::*,
+    error::{BlockErrorBlockTypes, Error},
+};
+use bitcoin::CompactTarget;
 use ethers_core::types::U256;
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
@@ -14,6 +18,7 @@ pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
 pub const HEAD_KEY: Hash256 = Hash256::repeat_byte(5);
 pub const LATEST_POW_BLOCK_KEY: Hash256 = Hash256::repeat_byte(6);
 pub const DEFAULT_KEY: Hash256 = Hash256::repeat_byte(7);
+pub const TARGET_OVERRIDE_KEY: Hash256 = Hash256::repeat_byte(8);
 // TODO: should we keep this or use `DBColumn`
 // it might make more sense to rewrite the db stuff entirely
 #[derive(Debug, Clone, Copy, PartialEq, IntoStaticStr, EnumString)]
@@ -28,6 +33,8 @@ pub enum DbColumn {
     BlockFees,
     #[strum(serialize = "scn")]
     BitcoinScanStartHeight,
+    #[strum(serialize = "bbh")]
+    BlockByHeight,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -39,6 +46,17 @@ pub struct BlockRef {
 pub struct Storage<E: EthSpec, DB> {
     db: DB,
     _phantom: PhantomData<E>,
+}
+
+pub trait BlockByHeight {
+    fn put_block_by_height(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<(), Error>;
+    fn get_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error>;
 }
 
 impl Storage<MainnetEthSpec, MemoryStore<MainnetEthSpec>> {
@@ -66,6 +84,41 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
         Self {
             db: level_db,
             _phantom: PhantomData,
+        }
+    }
+}
+
+impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB> {
+    fn put_block_by_height(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<(), Error> {
+        let block_root = block.canonical_root();
+        let height = block.message.execution_payload.block_number;
+
+        self.commit_ops(vec![KeyValueStoreOp::PutKeyValue(
+            get_key_for_col(DbColumn::BlockByHeight.into(), &height.to_be_bytes()),
+            block_root.as_bytes().to_vec(),
+        )])
+    }
+
+    fn get_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        // trace!("Getting block by height {}", height);
+
+        match self
+            .db
+            .get_bytes(DbColumn::BlockByHeight.into(), &height.to_be_bytes())
+            .map_err(|_| Error::DbReadError)?
+        {
+            // Get the block hash from the block by height index
+            Some(block_hash) => {
+                // Use the hash to retrieve the block
+                self.get_block(&Hash256::from_slice(&block_hash)) // return the block
+            }
+            None => Ok(None),
         }
     }
 }
@@ -103,6 +156,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
 
     pub fn get_head(&self) -> Result<Option<BlockRef>, Error> {
         self.get_ref(HEAD_KEY.as_bytes())
+            .map_err(|_| Error::ChainError(BlockErrorBlockTypes::Head.into()))
+    }
+
+    fn get_previous_head(&self, head_ref: &BlockRef) -> Result<Option<BlockRef>, Error> {
+        let previous_head = self.get_block(&head_ref.hash)?.unwrap().message.parent_hash;
+        Ok(Some(BlockRef {
+            hash: previous_head,
+            height: head_ref.height - 1,
+        }))
     }
 
     pub fn get_latest_pow_block(&self) -> Result<Option<BlockRef>, Error> {
@@ -118,6 +180,43 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             .map_err(|_| Error::DbReadError)
     }
 
+    pub fn set_target_override(&self, target: CompactTarget) -> Result<(), Error> {
+        let db_key = get_key_for_col(DbColumn::ChainInfo.into(), TARGET_OVERRIDE_KEY.as_bytes());
+        self.commit_ops(vec![KeyValueStoreOp::PutKeyValue(
+            db_key,
+            target.to_consensus().as_ssz_bytes(),
+        )])
+    }
+
+    pub fn get_target_override(&self) -> Result<Option<CompactTarget>, Error> {
+        let consensus_rep_bytes = self
+            .db
+            .get_bytes(DbColumn::ChainInfo.into(), TARGET_OVERRIDE_KEY.as_bytes())
+            .unwrap()
+            .map(|bytes| u32::from_ssz_bytes(&bytes))
+            .transpose()
+            .map_err(|_| Error::DbReadError)?;
+
+        // let consensus_rep = if let Some(consensus_rep_bytes) = consensus_rep_bytes {
+        //     consensus_rep_bytes
+        //         .map(|bytes| u32::from_ssz_bytes(&bytes))
+        //         .transpose()
+        //         .map_err(|_| Error::DbReadError)?
+        // } else {
+        //     Ok(None)
+        // };
+
+        if let Some(consensus_rep) = consensus_rep_bytes {
+            if consensus_rep != 0 {
+                Ok(Some(CompactTarget::from_consensus(consensus_rep)))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     #[must_use]
     pub fn put_block(
         &self,
@@ -128,6 +227,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
             get_key_for_col(DbColumn::Block.into(), block_root.as_bytes()),
             rmp_serde::to_vec(&block).unwrap(),
         )];
+
+        ops.push(KeyValueStoreOp::PutKeyValue(
+            get_key_for_col(
+                DbColumn::BlockByHeight.into(),
+                &block.message.execution_payload.block_number.to_be_bytes(),
+            ),
+            Vec::from(block_root.as_bytes()),
+        ));
 
         if let Some(auxpow_header) = block.message.auxpow_header {
             ops.push(KeyValueStoreOp::PutKeyValue(
