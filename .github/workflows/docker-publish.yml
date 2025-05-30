@@ -22,7 +22,7 @@ env:
 
 jobs:
   build:
-    runs-on: anduro-github-self-hosted
+    runs-on: anduro
     permissions:
       contents: read
       packages: write
