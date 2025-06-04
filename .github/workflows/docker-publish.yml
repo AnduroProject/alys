@@ -7,7 +7,11 @@ name: Docker
 
 on:
   push:
-    branches: [ "master", "77-auxpow-block-creation-is-not-working" ]
+    branches: 
+      - master
+      - development
+      - 'feature/**'
+      - 'bug/**'
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
