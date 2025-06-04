@@ -193,6 +193,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut total_pegin_amount = 0u64;
 
         {
+            trace!("Filling pegins...");
+
             // Remove pegins that we already processed. In the happy path, this code
             // shouldn't really do anything. It's added to prevent the block producer
             // from permanently being rejected by other nodes.
@@ -209,8 +211,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             {
                 let wallet = self.bitcoin_wallet.read().await;
-                txids.retain(|txid| wallet.get_tx(txid).unwrap().is_some());
+                txids.retain(|txid| {
+                    let exists = wallet.get_tx(txid).unwrap().is_some();
+                    trace!("Checking if txid {:?} exists in wallet: {}", txid, exists);
+                    exists
+                });
             }
+
+            info!(count = txids.len(), "Already processed peg-ins");
 
             for already_processed_txid in txids {
                 self.queued_pegins
