@@ -136,7 +136,14 @@ lazy_static! {
         register_int_counter_vec_with_registry!(
             "chain_btc_block_monitor_totals",
             "Total number of BTC block monitor messages, labeled by message type",
-            &["block_height", "status"],
+            &["status"],
+            ALYS_REGISTRY
+        )
+        .unwrap();
+    pub static ref CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT: IntGauge =
+        register_int_gauge_with_registry!(
+            "chain_btc_block_monitor_start_height",
+            "The start height of the BTC block monitor",
             ALYS_REGISTRY
         )
         .unwrap();
