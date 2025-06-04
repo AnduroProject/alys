@@ -5,6 +5,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
+use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 use crate::block_candidate::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
@@ -13,10 +14,10 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
-    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
-    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
-    CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT,
+    CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK,
+    CHAIN_LAST_PROCESSED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS,
+    CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -45,7 +46,6 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
-use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -1788,10 +1788,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
-        info!("Monitoring bitcoin blocks from height {start_height}");
-        CHAIN_BTC_BLOCK_MONITOR_TOTALS
-            .with_label_values(&[start_height.to_string().as_str(), "called"])
-            .inc();
+        info!("Starting to monitor bitcoin blocks from height {start_height}");
+        CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT.set(start_height as i64);
 
         tokio::spawn(async move {
             let chain = &self;
@@ -1799,6 +1797,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let sync_status = self.sync_status.read().await;
             let is_synced = sync_status.is_synced();
             drop(sync_status);
+
+            info!("Sync status: {}", is_synced);
 
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
@@ -1810,16 +1810,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
                             CHAIN_BTC_BLOCK_MONITOR_TOTALS
-                                .with_label_values(&[
-                                    start_height.to_string().as_str(),
-                                    "queued_pegins",
-                                ])
+                                .with_label_values(&["queued_pegins"])
                                 .inc();
                         } else {
                             debug!(
                                 "Not synced, ignoring pegin {} for {} in {}",
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
+                            CHAIN_BTC_BLOCK_MONITOR_TOTALS
+                                .with_label_values(&["ignored_pegins"])
+                                .inc();
 
                             break;
                         }
@@ -1839,8 +1839,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .storage
                         .set_bitcoin_scan_start_height(rescan_start)
                         .unwrap();
+
+                    info!("Set next rescan start height to {}", rescan_start);
                 })
                 .await;
+            info!("Finished monitoring bitcoin blocks");
         });
     }
 
