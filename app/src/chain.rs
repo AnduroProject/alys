@@ -188,6 +188,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         add_balances: &mut Vec<(Address, ConsensusAmount)>,
     ) -> Vec<(Txid, BlockHash)> {
+        let _span = tracing::info_span!("fill_pegins").entered();
+
         let mut withdrawals = BTreeMap::<_, u64>::new();
         let mut processed_pegins = Vec::new();
         let mut total_pegin_amount = 0u64;
@@ -322,6 +324,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         slot: u64,
         timestamp: Duration,
     ) -> Result<(), Error> {
+        let trace_id = uuid::Uuid::new_v4();
+        let _span = tracing::info_span!("produce_block", trace_id = %trace_id).entered();
+
         CHAIN_BLOCK_PRODUCTION_TOTALS
             .with_label_values(&["attempted", "default"])
             .inc();
@@ -410,6 +415,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         } else {
             Default::default()
         };
+        info!("Add balances: {:?}", add_balances.len());
+
         let pegins = self.fill_pegins(&mut add_balances).await;
         info!("Filled pegins: {:?}", pegins.len());
 
