@@ -1820,7 +1820,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
-                    info!("Inside stream_blocks_for_pegins, pegins: {:?}", pegins.len());
+                    info!(
+                        "Inside stream_blocks_for_pegins, pegins: {:?}",
+                        pegins.len()
+                    );
                     for pegin in pegins.into_iter() {
                         if is_synced {
                             info!(
