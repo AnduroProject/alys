@@ -288,6 +288,7 @@ dependencies = [
  "ssz_types",
  "strum 0.26.3",
  "superstruct",
+ "svix-ksuid",
  "tempfile",
  "thiserror",
  "tokio",
@@ -298,7 +299,6 @@ dependencies = [
  "tree_hash",
  "tree_hash_derive",
  "unsigned-varint 0.6.0",
- "uuid 1.17.0",
 ]
 
 [[package]]
@@ -572,6 +572,12 @@ dependencies = [
  "object",
  "rustc-demangle",
 ]
+
+[[package]]
+name = "base-encode"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a17bd29f7c70f32e9387f4d4acfa5ea7b7749ef784fb78cf382df97069337b8c"
 
 [[package]]
 name = "base-x"
@@ -7584,6 +7590,18 @@ dependencies = [
  "quote",
  "smallvec",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "svix-ksuid"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66f014385b7fc154f59e9480770c2187b6e61037c2439895788a9a4d421d7859"
+dependencies = [
+ "base-encode",
+ "byteorder",
+ "getrandom",
+ "time",
 ]
 
 [[package]]

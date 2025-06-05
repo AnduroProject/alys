@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use svix_ksuid::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
@@ -324,8 +325,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         slot: u64,
         timestamp: Duration,
     ) -> Result<(), Error> {
-        let trace_id = uuid::Uuid::new_v4();
-        let _span = tracing::info_span!("produce_block", trace_id = %trace_id).entered();
+        let ksuid = Ksuid::new(None, None);
+        let _span = tracing::info_span!("produce_block", trace_id = %ksuid.to_string()).entered();
 
         CHAIN_BLOCK_PRODUCTION_TOTALS
             .with_label_values(&["attempted", "default"])
