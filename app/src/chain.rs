@@ -329,6 +329,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             CHAIN_BLOCK_PRODUCTION_TOTALS
                 .with_label_values(&["attempted", "not_synced"])
                 .inc();
+            info!("Node is not synced, skipping block production.");
             return Ok(());
         }
         let mut prev_height = 0;
@@ -410,6 +411,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Default::default()
         };
         let pegins = self.fill_pegins(&mut add_balances).await;
+        info!("Filled pegins: {:?}", pegins.len());
 
         let payload_result = self
             .engine
@@ -461,6 +463,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             CHAIN_BLOCK_PRODUCTION_TOTALS
                 .with_label_values(&["pegouts_created", "success"])
                 .inc();
+            info!("Created pegout payments.");
         }
 
         if !finalized_pegouts.is_empty() {
@@ -1806,10 +1809,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let is_synced = sync_status.is_synced();
             drop(sync_status);
 
-            info!("Sync status: {}", is_synced);
+            info!("Inside monitor_bitcoin_blocks, Sync status: {}", is_synced);
 
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
+                    info!("Inside stream_blocks_for_pegins, pegins: {:?}", pegins.len());
                     for pegin in pegins.into_iter() {
                         if is_synced {
                             info!(
