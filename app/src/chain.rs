@@ -1870,6 +1870,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         });
     }
 
+    pub fn set_bitcoin_scan_start_height(&self, height: u32) -> Result<(), Error> {
+        self.storage.set_bitcoin_scan_start_height(height)
+    }
+
     pub fn get_block_by_height(
         self: &Arc<Self>,
         block_height: u64,

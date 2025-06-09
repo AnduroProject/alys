@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequestV1<'a> {
@@ -365,6 +365,28 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
                     }
                     .into(),
                 )
+            }
+        },
+        "clearbtcscanheight" => match params.get().parse::<u32>() {
+            Ok(target_height) => {
+                // block_response_helper(id, chain.get_block_by_height(target_height))
+                info!("clearbtcscanheight: clearing btc scan height to {}", target_height);
+                chain.set_bitcoin_scan_start_height(target_height).unwrap();
+                Response::builder().status(hyper::StatusCode::OK).body(
+                    JsonRpcResponseV1 {
+                        result: Some(json!(())),
+                        error: None,
+                        id,
+                    }
+                    .into(),
+                )
+            }
+            Err(e) => {
+                return Ok(new_json_rpc_error!(
+                    id,
+                    hyper::StatusCode::BAD_REQUEST,
+                    JsonRpcErrorV1::debug_error(e.to_string())
+                )?)
             }
         },
         _ => {

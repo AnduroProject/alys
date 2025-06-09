@@ -118,6 +118,7 @@ impl BitcoinCore {
     /// * `height` - block height to fetch
     /// * `num_confirmations` - minimum for a block to be accepted
     async fn wait_for_block(&self, height: u32, num_confirmations: u32) -> Result<Block, Error> {
+        info!("wait_for_block: waiting for block at height {}", height);
         loop {
             match self.rpc.get_block_hash(height.into()) {
                 Ok(hash) => {
