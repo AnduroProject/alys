@@ -117,10 +117,11 @@ impl Bridge {
         )
         .await;
         while let Some(x) = stream.next().await {
+            info!("Streamed block");
             let (block, height) = x.unwrap();
             let block_hash = block.block_hash();
             info!(
-                "Processing block at height {} with hash {:?}",
+                "Processing block from stream at height {} with hash {:?}",
                 height, block_hash
             );
 

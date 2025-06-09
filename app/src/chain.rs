@@ -196,7 +196,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut total_pegin_amount = 0u64;
 
         {
-            trace!("Filling pegins...");
+            trace!("Filling pegins... add_balances: {:?}", add_balances);
 
             // Remove pegins that we already processed. In the happy path, this code
             // shouldn't really do anything. It's added to prevent the block producer

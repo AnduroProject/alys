@@ -172,8 +172,10 @@ pub async fn stream_blocks(
         stream::unfold(state, move |mut state| async move {
             // FIXME: if Bitcoin Core forks, this may skip a block
             let height = state.next_height;
+            trace!("waiting for block at height {}", height);
             match state.rpc.wait_for_block(height, num_confirmations).await {
                 Ok(block) => {
+                    info!("found block {} at height {}", block.block_hash(), height);
                     if height % 10000 == 0 {
                         debug!("found block {} at height {}", block.block_hash(), height);
                     }
