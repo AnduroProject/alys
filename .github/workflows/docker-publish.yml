@@ -26,7 +26,7 @@ env:
 
 jobs:
   build:
-    runs-on: Temp-64-Core-Ubutnu-Runner
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
