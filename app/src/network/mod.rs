@@ -432,6 +432,7 @@ fn create_swarm() -> Result<Swarm<MyBehaviour>, Error> {
             };
 
             // Set a custom gossipsub configuration
+            #[allow(clippy::io_other_error)]
             let gossipsub_config = gossipsub::ConfigBuilder::default()
                 .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
                 .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)

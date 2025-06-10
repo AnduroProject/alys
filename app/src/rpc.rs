@@ -370,7 +370,10 @@ async fn http_req_json_rpc<BI: BlockIndex, CM: ChainManager<BI>, DB: ItemStore<M
         "setbtcscanheight" => match params.get().parse::<u32>() {
             Ok(target_height) => {
                 // block_response_helper(id, chain.get_block_by_height(target_height))
-                info!("clearbtcscanheight: clearing btc scan height to {}", target_height);
+                info!(
+                    "clearbtcscanheight: clearing btc scan height to {}",
+                    target_height
+                );
                 chain.set_bitcoin_scan_start_height(target_height).unwrap();
                 Response::builder().status(hyper::StatusCode::OK).body(
                     JsonRpcResponseV1 {
