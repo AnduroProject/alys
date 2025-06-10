@@ -16,8 +16,9 @@ use crate::error::Error::ChainError;
 use crate::metrics::{
     CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT,
     CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK,
-    CHAIN_LAST_PROCESSED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS,
-    CHAIN_PROCESS_BLOCK_TOTALS, CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
+    CHAIN_LAST_PROCESSED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_QUEUE_SIZE,
+    CHAIN_PEGIN_SKIPPED_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
@@ -193,11 +194,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let mut withdrawals = BTreeMap::<_, u64>::new();
         let mut processed_pegins = Vec::new();
-        let mut total_pegin_amount = 0u64;
+        let mut total_pegin_amount: u64 = 0;
+
+        // Track initial queue size
+        let initial_queue_size = self.queued_pegins.read().await.len();
+        debug!(initial_queue_size, "Starting fill_pegins operation");
 
         {
-            trace!("Filling pegins... add_balances: {:?}", add_balances);
-
             // Remove pegins that we already processed. In the happy path, this code
             // shouldn't really do anything. It's added to prevent the block producer
             // from permanently being rejected by other nodes.
@@ -212,13 +215,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .copied()
                 .collect::<Vec<_>>();
 
+            debug!(total_txids = txids.len(), "Retrieved queued pegin txids");
+
             {
                 let wallet = self.bitcoin_wallet.read().await;
+                let initial_txid_count = txids.len();
                 txids.retain(|txid| {
                     let exists = wallet.get_tx(txid).unwrap().is_some();
                     trace!("Checking if txid {:?} exists in wallet: {}", txid, exists);
                     exists
                 });
+                let filtered_count = initial_txid_count - txids.len();
+                debug!(
+                    initial_count = initial_txid_count,
+                    retained_count = txids.len(),
+                    filtered_count,
+                    "Filtered txids based on wallet existence"
+                );
             }
 
             info!(count = txids.len(), "Already processed peg-ins");
@@ -229,10 +242,22 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .await
                     .remove(&already_processed_txid);
                 CHAIN_PEGIN_TOTALS.with_label_values(&["removed"]).inc();
+                debug!(txid = %already_processed_txid, "Removed already processed pegin");
             }
         }
 
-        for pegin in self.queued_pegins.read().await.values() {
+        // Process remaining pegins
+        let queued_pegins = self.queued_pegins.read().await;
+        let total_available_pegins = queued_pegins.len();
+        debug!(
+            available_pegins = total_available_pegins,
+            "Processing available pegins"
+        );
+
+        let mut skipped_pegins = 0;
+        let mut unique_addresses = std::collections::HashSet::new();
+
+        for pegin in queued_pegins.values() {
             if withdrawals.len() < MAINNET_MAX_WITHDRAWALS
                 || withdrawals.contains_key(&pegin.evm_account)
             {
@@ -247,11 +272,36 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 processed_pegins.push((pegin.txid, pegin.block_hash));
                 CHAIN_PEGIN_TOTALS.with_label_values(&["added"]).inc();
                 total_pegin_amount += pegin.amount;
+                unique_addresses.insert(pegin.evm_account);
+
+                debug!(
+                    txid = %pegin.txid,
+                    amount = pegin.amount,
+                    evm_account = %pegin.evm_account,
+                    "Added pegin to processing queue"
+                );
+            } else {
+                skipped_pegins += 1;
+                debug!(
+                    txid = %pegin.txid,
+                    current_withdrawals = withdrawals.len(),
+                    max_withdrawals = MAINNET_MAX_WITHDRAWALS,
+                    "Skipped pegin due to withdrawal limit"
+                );
             }
         }
+        drop(queued_pegins);
+
         let withdrawals: Vec<(Address, u64)> = withdrawals.into_iter().collect();
 
-        info!("Adding {} pegins", processed_pegins.len());
+        info!(
+            processed_count = processed_pegins.len(),
+            skipped_count = skipped_pegins,
+            unique_addresses = unique_addresses.len(),
+            total_amount = total_pegin_amount,
+            "Completed pegin processing"
+        );
+
         // these are the withdrawals, merge payments to the same EVM address
         add_balances.extend(
             withdrawals
@@ -259,10 +309,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .map(|(address, amount)| (*address, ConsensusAmount::from_satoshi(*amount))),
         );
 
+        // Update prometheus metrics
         CHAIN_PEGIN_TOTALS
             .with_label_values(&["processed"])
             .inc_by(processed_pegins.len() as u64);
         CHAIN_TOTAL_PEGIN_AMOUNT.set(total_pegin_amount as i64);
+        CHAIN_PEGIN_QUEUE_SIZE.set(self.queued_pegins.read().await.len() as i64);
+        if skipped_pegins > 0 {
+            CHAIN_PEGIN_SKIPPED_TOTALS
+                .with_label_values(&["withdrawal_limit"])
+                .inc_by(skipped_pegins);
+        }
 
         processed_pegins
     }
@@ -1960,11 +2017,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     fn get_last_finalized_block(&self) -> ConsensusBlock<MainnetEthSpec> {
         trace!("Getting last finalized block");
         match self.storage.get_latest_pow_block() {
-            Ok(Some(x)) => {
-                let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
-
-                last_block
-            }
+            Ok(Some(x)) => self.storage.get_block(&x.hash).unwrap().unwrap().message,
             _ => unreachable!("Should always have AuxPow"),
         }
     }

@@ -123,7 +123,10 @@ impl BitcoinCore {
             match self.rpc.get_block_hash(height.into()) {
                 Ok(hash) => {
                     let info = self.rpc.get_block_info(&hash)?;
-                    info!("wait_for_block: block {} exists with hash {} and confirmations {}", height, hash, info.confirmations);
+                    info!(
+                        "wait_for_block: block {} exists with hash {} and confirmations {}",
+                        height, hash, info.confirmations
+                    );
                     if info.confirmations >= num_confirmations as i32 {
                         return Ok(self.rpc.get_block(&hash)?);
                     } else {

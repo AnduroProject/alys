@@ -98,6 +98,20 @@ lazy_static! {
         ALYS_REGISTRY
     )
     .unwrap();
+    pub static ref CHAIN_PEGIN_QUEUE_SIZE: IntGauge = register_int_gauge_with_registry!(
+        "chain_pegin_queue_size",
+        "Current number of queued peg-ins awaiting processing",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    pub static ref CHAIN_PEGIN_SKIPPED_TOTALS: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "chain_pegin_skipped_totals",
+            "Total number of peg-ins skipped during processing",
+            &["reason"],
+            ALYS_REGISTRY
+        )
+        .unwrap();
     pub static ref CHAIN_PROCESS_BLOCK_ATTEMPTS: IntCounter = register_int_counter_with_registry!(
         "chain_process_block_attempts_total",
         "Number of times process_block is invoked",
