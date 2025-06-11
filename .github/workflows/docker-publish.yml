@@ -22,7 +22,7 @@ env:
 
 jobs:
   build:
-    runs-on: Temp-64-Core-Ubutnu-Runner
+    runs-on: anduro-runner
     permissions:
       contents: read
       packages: write
