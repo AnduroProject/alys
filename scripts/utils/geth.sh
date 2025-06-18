@@ -66,7 +66,7 @@ function start_geth() {
         --ws.origins "*" \
         --port ${PORT} \
         --gcmode "archive" \
-        --verbosity 5 \
+        --verbosity 1
         --log.file $LOG_FILE \
         --syncmode full \
         --maxpeers 20 \
@@ -126,7 +126,7 @@ function start_testnet_geth() {
         --ws.addr "0.0.0.0" \
         --ws.port ${WS_PORT} \
         --ws.origins "*" \
-        --verbosity 2 \
+        --verbosity 1 \
         --log.file $LOG_FILE \
         --gpo.ignoreprice 1 \
         --metrics \
