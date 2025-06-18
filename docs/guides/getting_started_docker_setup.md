@@ -85,7 +85,3 @@ Check the logs to see if everything is running smoothly.
 ```sh
 $ docker compose -f etc/docker-compose.j2.yml logs -f
 ```
-
-## *Option* #3: (Local Development) Run entire Alys stack
-
-*coming soon...*
