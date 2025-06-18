@@ -5,6 +5,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
+use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 use crate::block_candidate::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
@@ -45,7 +46,6 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
-use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
