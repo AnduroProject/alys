@@ -179,50 +179,12 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 
 </details>
 
-## Full Node
-
-Running a full node is similar to running a federation node. The main difference is that full nodes do not require an Aura or Bitcoin key since they are not signing blocks or Bitcoin transactions.
-
-1. Start Bitcoin with the network you want to connect to via `bitcoind`.
-2. Start geth via `NUM=0 ./scripts/start_geth.sh` (assuming you run the full node on a different machine. If running on the same machine as the three nodes, use `NUM=3 ./scripts/start_geth.sh`)
-3. Start the full node assuming the full node runs on a seperate machine:
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --geth-url http://localhost:8551/ \
-  --db-path etc/data/consensus/node_0/chain_db/ \
-  --rpc-port 3000 \
-  --wallet-path etc/data/consensus/node_0/wallet \
-  --bitcoin-rpc-url localhost:18332 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword \
-  --bitcoin-network testnet \
-  --remote-bootnode /ip4/BOOTNODE_IP/tcp/BOOTNODE_LIBP2P_PORT
-```
-
-- `BOOTNODE_IP`: To select a bootnode, get its public or private IP address.
-- `BOOTNODE_LIBP2P_PORT`: There are two ways to get the p2p port.
-  - You can find the listening port by running `lsof -Pn -i4` on the server running the bootnode.
-  - Set the P2P port explicitly: You can set a dedicated p2p port on the federation node/bootnode by adding the argument `--p2p-port 55444` to set this to port `55444`. Make sure to pick a free port.
 
 ## Development
 
 ### Alys Node (Consensus Layer)
 
-#### Build and Deploy
-
-```shell
-# cleanup, init and run geth
-./scripts/start_geth.sh
-
-# start bitcoin
-bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
-
-# dev (single node)
-cargo run --bin app -- --dev
-```
-
+First, follow the manual setup guide [here](./docs/guides/getting_started_manual_setup.md) to get your local environment setup.
 
 #### Unit tests
 
@@ -230,12 +192,6 @@ Tests are self-contained such that none of the services need to run.
 
 ```shell
 cargo test
-```
-
-#### Format
-
-```shell
-cargo fmt
 ```
 
 ### Smart Contracts

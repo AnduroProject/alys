@@ -68,7 +68,7 @@ $ docker compose -f etc/docker-compose.j2.yml logs -f
 
 #### Step 1. 
 
-Alys full nodes do **NOT** sign blocks or Bitcoin transactions. Thus, you do not need to generate secret keys for signing. You only need to update your docker-compose file with a valid `BOOTNODE_ARG`:
+Alys full nodes do **NOT** sign blocks or Bitcoin transactions. Thus, you do **NOT** need to generate secret keys for signing (Aura or Bitcoin keys). You only need to update your docker-compose file with a valid `BOOTNODE_ARG`:
 
 `BOOTNODE_ARG=/ip4/209.160.175.125/tcp/55444`
 
