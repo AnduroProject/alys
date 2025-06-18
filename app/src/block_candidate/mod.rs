@@ -1,13 +1,11 @@
 pub mod block_candidate_cache;
 mod candidate_state;
 
-use async_trait::async_trait;
 use crate::block::SignedConsensusBlock;
 use crate::error::Error;
 use crate::network::ApproveBlock;
-use block_candidate_cache::{
-    BlockCandidateCache, BlockCandidateCacheTrait,
-};
+use async_trait::async_trait;
+use block_candidate_cache::{BlockCandidateCache, BlockCandidateCacheTrait};
 use candidate_state::CandidateState;
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::execution_layer::Hash256;
@@ -28,7 +26,7 @@ impl BlockCandidates {
             cache: RwLock::new(BlockCandidateCache::new()),
         }
     }
-    
+
     /// Clears all candidates from the cache.
     #[allow(dead_code)]
     pub async fn clear(&self) {
@@ -40,7 +38,7 @@ impl BlockCandidates {
     pub async fn len(&self) -> usize {
         self.cache.read().await.len()
     }
-    
+
     /// Returns true if the cache is empty.
     #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
