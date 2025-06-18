@@ -473,10 +473,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         } else {
             Default::default()
         };
-        info!("Add balances: {:?}", add_balances.len());
+        debug!("Add balances: {:?}", add_balances.len());
 
         let pegins = self.fill_pegins(&mut add_balances).await;
-        info!("Filled pegins: {:?}", pegins.len());
+        debug!("Filled pegins: {:?}", pegins.len());
 
         let payload_result = self
             .engine
@@ -1874,11 +1874,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let is_synced = sync_status.is_synced();
             drop(sync_status);
 
-            info!("Inside monitor_bitcoin_blocks, Sync status: {}", is_synced);
+            debug!("Inside monitor_bitcoin_blocks, Sync status: {}", is_synced);
 
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
-                    info!(
+                    debug!(
                         "Inside stream_blocks_for_pegins, pegins: {:?}",
                         pegins.len()
                     );
@@ -1920,15 +1920,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .set_bitcoin_scan_start_height(rescan_start)
                         .unwrap();
 
-                    info!("Set next rescan start height to {}", rescan_start);
+                    debug!("Set next rescan start height to {}", rescan_start);
                 })
                 .await;
-            info!("Finished monitoring bitcoin blocks");
         });
-    }
-
-    pub fn set_bitcoin_scan_start_height(&self, height: u32) -> Result<(), Error> {
-        self.storage.set_bitcoin_scan_start_height(height)
     }
 
     pub fn get_block_by_height(

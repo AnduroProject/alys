@@ -181,7 +181,7 @@ pub async fn stream_blocks(
             trace!("waiting for block at height {}", height);
             match state.rpc.wait_for_block(height, num_confirmations).await {
                 Ok(block) => {
-                    info!("found block {} at height {}", block.block_hash(), height);
+                    debug!("found block {} at height {}", block.block_hash(), height);
                     if height % 10000 == 0 {
                         debug!("found block {} at height {}", block.block_hash(), height);
                     }
