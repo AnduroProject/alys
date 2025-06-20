@@ -118,10 +118,15 @@ impl BitcoinCore {
     /// * `height` - block height to fetch
     /// * `num_confirmations` - minimum for a block to be accepted
     async fn wait_for_block(&self, height: u32, num_confirmations: u32) -> Result<Block, Error> {
+        info!("wait_for_block: waiting for block at height {}", height);
         loop {
             match self.rpc.get_block_hash(height.into()) {
                 Ok(hash) => {
                     let info = self.rpc.get_block_info(&hash)?;
+                    info!(
+                        "wait_for_block: block {} exists with hash {} and confirmations {}",
+                        height, hash, info.confirmations
+                    );
                     if info.confirmations >= num_confirmations as i32 {
                         return Ok(self.rpc.get_block(&hash)?);
                     } else {
@@ -134,6 +139,7 @@ impl BitcoinCore {
                         == BitcoinRpcError::RpcInvalidParameter =>
                 {
                     // block does not exist yet
+                    warn!("block does not exist yet, retrying...");
                     tokio::time::sleep(RETRY_DURATION).await;
                     continue;
                 }
@@ -172,8 +178,10 @@ pub async fn stream_blocks(
         stream::unfold(state, move |mut state| async move {
             // FIXME: if Bitcoin Core forks, this may skip a block
             let height = state.next_height;
+            trace!("waiting for block at height {}", height);
             match state.rpc.wait_for_block(height, num_confirmations).await {
                 Ok(block) => {
+                    debug!("found block {} at height {}", block.block_hash(), height);
                     if height % 10000 == 0 {
                         debug!("found block {} at height {}", block.block_hash(), height);
                     }

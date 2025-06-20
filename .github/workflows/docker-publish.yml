@@ -7,7 +7,11 @@ name: Docker
 
 on:
   push:
-    branches: [ "master", "77-auxpow-block-creation-is-not-working" ]
+    branches: 
+      - master
+      - development
+      - 'feature/**'
+      - 'AN-*'
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
@@ -38,9 +42,7 @@ jobs:
       # https://github.com/sigstore/cosign-installer
       - name: Install cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
-        with:
-          cosign-release: 'v2.2.4'
+        uses: sigstore/cosign-installer@v3.5.0
 
       # Set up BuildKit Docker container builder to be able to build
       # multi-platform images and export cache

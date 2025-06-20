@@ -98,6 +98,20 @@ lazy_static! {
         ALYS_REGISTRY
     )
     .unwrap();
+    pub static ref CHAIN_PEGIN_QUEUE_SIZE: IntGauge = register_int_gauge_with_registry!(
+        "chain_pegin_queue_size",
+        "Current number of queued peg-ins awaiting processing",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    pub static ref CHAIN_PEGIN_SKIPPED_TOTALS: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "chain_pegin_skipped_totals",
+            "Total number of peg-ins skipped during processing",
+            &["reason"],
+            ALYS_REGISTRY
+        )
+        .unwrap();
     pub static ref CHAIN_PROCESS_BLOCK_ATTEMPTS: IntCounter = register_int_counter_with_registry!(
         "chain_process_block_attempts_total",
         "Number of times process_block is invoked",
@@ -136,7 +150,14 @@ lazy_static! {
         register_int_counter_vec_with_registry!(
             "chain_btc_block_monitor_totals",
             "Total number of BTC block monitor messages, labeled by message type",
-            &["block_height", "status"],
+            &["status"],
+            ALYS_REGISTRY
+        )
+        .unwrap();
+    pub static ref CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT: IntGauge =
+        register_int_gauge_with_registry!(
+            "chain_btc_block_monitor_start_height",
+            "The start height of the BTC block monitor",
             ALYS_REGISTRY
         )
         .unwrap();

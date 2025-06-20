@@ -5,6 +5,7 @@ use crate::auxpow_miner::{
     get_next_work_required, BitcoinConsensusParams, BlockIndex, ChainManager,
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
+use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 use crate::block_candidate::BlockCandidates;
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
@@ -13,9 +14,10 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
-    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
-    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT,
+    CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK,
+    CHAIN_LAST_PROCESSED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_QUEUE_SIZE,
+    CHAIN_PEGIN_SKIPPED_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
     CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
@@ -42,10 +44,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use svix_ksuid::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
-use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -188,9 +190,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         add_balances: &mut Vec<(Address, ConsensusAmount)>,
     ) -> Vec<(Txid, BlockHash)> {
+        let _span = tracing::info_span!("fill_pegins").entered();
+
         let mut withdrawals = BTreeMap::<_, u64>::new();
         let mut processed_pegins = Vec::new();
-        let mut total_pegin_amount = 0u64;
+        let mut total_pegin_amount: u64 = 0;
+
+        // Track initial queue size
+        let initial_queue_size = self.queued_pegins.read().await.len();
+        debug!(initial_queue_size, "Starting fill_pegins operation");
 
         {
             // Remove pegins that we already processed. In the happy path, this code
@@ -207,10 +215,26 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .copied()
                 .collect::<Vec<_>>();
 
+            debug!(total_txids = txids.len(), "Retrieved queued pegin txids");
+
             {
                 let wallet = self.bitcoin_wallet.read().await;
-                txids.retain(|txid| wallet.get_tx(txid).unwrap().is_some());
+                let initial_txid_count = txids.len();
+                txids.retain(|txid| {
+                    let exists = wallet.get_tx(txid).unwrap().is_some();
+                    trace!("Checking if txid {:?} exists in wallet: {}", txid, exists);
+                    exists
+                });
+                let filtered_count = initial_txid_count - txids.len();
+                debug!(
+                    initial_count = initial_txid_count,
+                    retained_count = txids.len(),
+                    filtered_count,
+                    "Filtered txids based on wallet existence"
+                );
             }
+
+            info!(count = txids.len(), "Already processed peg-ins");
 
             for already_processed_txid in txids {
                 self.queued_pegins
@@ -218,10 +242,22 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     .await
                     .remove(&already_processed_txid);
                 CHAIN_PEGIN_TOTALS.with_label_values(&["removed"]).inc();
+                debug!(txid = %already_processed_txid, "Removed already processed pegin");
             }
         }
 
-        for pegin in self.queued_pegins.read().await.values() {
+        // Process remaining pegins
+        let queued_pegins = self.queued_pegins.read().await;
+        let total_available_pegins = queued_pegins.len();
+        debug!(
+            available_pegins = total_available_pegins,
+            "Processing available pegins"
+        );
+
+        let mut skipped_pegins = 0;
+        let mut unique_addresses = std::collections::HashSet::new();
+
+        for pegin in queued_pegins.values() {
             if withdrawals.len() < MAINNET_MAX_WITHDRAWALS
                 || withdrawals.contains_key(&pegin.evm_account)
             {
@@ -236,11 +272,36 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 processed_pegins.push((pegin.txid, pegin.block_hash));
                 CHAIN_PEGIN_TOTALS.with_label_values(&["added"]).inc();
                 total_pegin_amount += pegin.amount;
+                unique_addresses.insert(pegin.evm_account);
+
+                debug!(
+                    txid = %pegin.txid,
+                    amount = pegin.amount,
+                    evm_account = %pegin.evm_account,
+                    "Added pegin to processing queue"
+                );
+            } else {
+                skipped_pegins += 1;
+                debug!(
+                    txid = %pegin.txid,
+                    current_withdrawals = withdrawals.len(),
+                    max_withdrawals = MAINNET_MAX_WITHDRAWALS,
+                    "Skipped pegin due to withdrawal limit"
+                );
             }
         }
+        drop(queued_pegins);
+
         let withdrawals: Vec<(Address, u64)> = withdrawals.into_iter().collect();
 
-        info!("Adding {} pegins", processed_pegins.len());
+        info!(
+            processed_count = processed_pegins.len(),
+            skipped_count = skipped_pegins,
+            unique_addresses = unique_addresses.len(),
+            total_amount = total_pegin_amount,
+            "Completed pegin processing"
+        );
+
         // these are the withdrawals, merge payments to the same EVM address
         add_balances.extend(
             withdrawals
@@ -248,10 +309,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .map(|(address, amount)| (*address, ConsensusAmount::from_satoshi(*amount))),
         );
 
+        // Update prometheus metrics
         CHAIN_PEGIN_TOTALS
             .with_label_values(&["processed"])
             .inc_by(processed_pegins.len() as u64);
         CHAIN_TOTAL_PEGIN_AMOUNT.set(total_pegin_amount as i64);
+        CHAIN_PEGIN_QUEUE_SIZE.set(self.queued_pegins.read().await.len() as i64);
+        if skipped_pegins > 0 {
+            CHAIN_PEGIN_SKIPPED_TOTALS
+                .with_label_values(&["withdrawal_limit"])
+                .inc_by(skipped_pegins);
+        }
 
         processed_pegins
     }
@@ -314,6 +382,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         slot: u64,
         timestamp: Duration,
     ) -> Result<(), Error> {
+        let ksuid = Ksuid::new(None, None);
+        let _span = tracing::info_span!("produce_block", trace_id = %ksuid.to_string()).entered();
+
         CHAIN_BLOCK_PRODUCTION_TOTALS
             .with_label_values(&["attempted", "default"])
             .inc();
@@ -321,6 +392,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             CHAIN_BLOCK_PRODUCTION_TOTALS
                 .with_label_values(&["attempted", "not_synced"])
                 .inc();
+            info!("Node is not synced, skipping block production.");
             return Ok(());
         }
         let mut prev_height = 0;
@@ -401,7 +473,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         } else {
             Default::default()
         };
+        debug!("Add balances: {:?}", add_balances.len());
+
         let pegins = self.fill_pegins(&mut add_balances).await;
+        debug!("Filled pegins: {:?}", pegins.len());
 
         let payload_result = self
             .engine
@@ -453,6 +528,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             CHAIN_BLOCK_PRODUCTION_TOTALS
                 .with_label_values(&["pegouts_created", "success"])
                 .inc();
+            info!("Created pegout payments.");
         }
 
         if !finalized_pegouts.is_empty() {
@@ -1788,10 +1864,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
-        info!("Monitoring bitcoin blocks from height {start_height}");
-        CHAIN_BTC_BLOCK_MONITOR_TOTALS
-            .with_label_values(&[start_height.to_string().as_str(), "called"])
-            .inc();
+        info!("Starting to monitor bitcoin blocks from height {start_height}");
+        CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT.set(start_height as i64);
 
         tokio::spawn(async move {
             let chain = &self;
@@ -1800,8 +1874,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let is_synced = sync_status.is_synced();
             drop(sync_status);
 
+            debug!("Inside monitor_bitcoin_blocks, Sync status: {}", is_synced);
+
             self.bridge
                 .stream_blocks_for_pegins(start_height, |pegins, bitcoin_height| async move {
+                    debug!(
+                        "Inside stream_blocks_for_pegins, pegins: {:?}",
+                        pegins.len()
+                    );
                     for pegin in pegins.into_iter() {
                         if is_synced {
                             info!(
@@ -1810,16 +1890,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
                             CHAIN_BTC_BLOCK_MONITOR_TOTALS
-                                .with_label_values(&[
-                                    start_height.to_string().as_str(),
-                                    "queued_pegins",
-                                ])
+                                .with_label_values(&["queued_pegins"])
                                 .inc();
                         } else {
                             debug!(
                                 "Not synced, ignoring pegin {} for {} in {}",
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
+                            CHAIN_BTC_BLOCK_MONITOR_TOTALS
+                                .with_label_values(&["ignored_pegins"])
+                                .inc();
 
                             break;
                         }
@@ -1839,6 +1919,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .storage
                         .set_bitcoin_scan_start_height(rescan_start)
                         .unwrap();
+
+                    debug!("Set next rescan start height to {}", rescan_start);
                 })
                 .await;
         });
@@ -1930,11 +2012,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
     fn get_last_finalized_block(&self) -> ConsensusBlock<MainnetEthSpec> {
         trace!("Getting last finalized block");
         match self.storage.get_latest_pow_block() {
-            Ok(Some(x)) => {
-                let last_block = self.storage.get_block(&x.hash).unwrap().unwrap().message;
-
-                last_block
-            }
+            Ok(Some(x)) => self.storage.get_block(&x.hash).unwrap().unwrap().message,
             _ => unreachable!("Should always have AuxPow"),
         }
     }

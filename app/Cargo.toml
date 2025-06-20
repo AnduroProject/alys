@@ -43,6 +43,7 @@ rand = "0.8.5"
 once_cell = "1.19.0"
 prometheus = { workspace = true }
 lazy_static = { workspace = true }
+svix-ksuid = "0.8.0"
 
 # async
 futures = { workspace = true }
