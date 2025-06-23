@@ -34,12 +34,10 @@ COPY . .
 
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
+#RUN --mount=type=cache,target=/usr/local/cargo/registry \
+#    --mount=type=cache,target=/usr/local/cargo/git \
+#     cargo build --lib --verbose
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/home/root/app/target \
-    --mount=type=cache,target=/usr/local/cargo/git \
-     cargo build --lib --verbose
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/home/root/app/target \
     --mount=type=cache,target=/usr/local/cargo/git \
       cargo build --bin app --verbose
 
