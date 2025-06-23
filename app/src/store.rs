@@ -110,7 +110,6 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
         &self,
         height: u64,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
-        trace!("Getting block by height {}", height);
 
         match self
             .db

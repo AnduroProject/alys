@@ -98,20 +98,6 @@ lazy_static! {
         ALYS_REGISTRY
     )
     .unwrap();
-    pub static ref CHAIN_PEGIN_QUEUE_SIZE: IntGauge = register_int_gauge_with_registry!(
-        "chain_pegin_queue_size",
-        "Current number of queued peg-ins awaiting processing",
-        ALYS_REGISTRY
-    )
-    .unwrap();
-    pub static ref CHAIN_PEGIN_SKIPPED_TOTALS: IntCounterVec =
-        register_int_counter_vec_with_registry!(
-            "chain_pegin_skipped_totals",
-            "Total number of peg-ins skipped during processing",
-            &["reason"],
-            ALYS_REGISTRY
-        )
-        .unwrap();
     pub static ref CHAIN_PROCESS_BLOCK_ATTEMPTS: IntCounter = register_int_counter_with_registry!(
         "chain_process_block_attempts_total",
         "Number of times process_block is invoked",
@@ -150,14 +136,7 @@ lazy_static! {
         register_int_counter_vec_with_registry!(
             "chain_btc_block_monitor_totals",
             "Total number of BTC block monitor messages, labeled by message type",
-            &["status"],
-            ALYS_REGISTRY
-        )
-        .unwrap();
-    pub static ref CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT: IntGauge =
-        register_int_gauge_with_registry!(
-            "chain_btc_block_monitor_start_height",
-            "The start height of the BTC block monitor",
+            &["block_height", "status"],
             ALYS_REGISTRY
         )
         .unwrap();
@@ -257,8 +236,15 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
     }
 }
 
-pub async fn start_server() {
-    let addr = SocketAddr::from(([0, 0, 0, 0], 9001));
+pub async fn start_server(port_number: Option<u16>) {
+    // Default port is 9001 if not specified
+    const DEFAULT_PORT: u16 = 9001;
+    
+    // Use the provided port number or fall back to the default
+    let port = port_number.unwrap_or(DEFAULT_PORT);
+    
+    // Create a socket address for the server to bind to
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let make_svc =
         make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle_request)) });
