@@ -23,6 +23,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
 use tracing::*;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 #[inline]
@@ -170,7 +171,9 @@ impl App {
             EnvFilter::builder().parse_lossy(filter_tag.as_str())
         };
 
-        let main_layer = tracing_subscriber::fmt::layer().with_target(true);
+        let main_layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE);
 
         let layers = if rust_log_level == Level::DEBUG || rust_log_level == Level::TRACE {
             vec![main_layer
@@ -195,10 +198,7 @@ impl App {
         let http_engine_json_rpc =
             new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(&self.jwt_secret).unwrap());
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(
-            http_engine_json_rpc,
-            public_execution_json_rpc,
-        );
+        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
 
         let network = crate::network::spawn_network_handler(
             self.p2p_listen_addr,

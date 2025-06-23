@@ -17,16 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: olix0r/cargo-action-fmt/setup@v2
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
       - name: Lint src
-        run: cargo clippy --message-format=json -- -D warnings | cargo-action-fmt
+        run: cargo clippy --message-format=json -- -D warnings
 
       - name: Lint tests
-        run: cargo clippy --tests --message-format=json -- -D warnings | cargo-action-fmt
+        run: cargo clippy --tests --message-format=json -- -D warnings
 
       - name: Setup Bitcoin Core
         run: |
