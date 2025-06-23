@@ -239,10 +239,10 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
 pub async fn start_server(port_number: Option<u16>) {
     // Default port is 9001 if not specified
     const DEFAULT_PORT: u16 = 9001;
-    
+
     // Use the provided port number or fall back to the default
     let port = port_number.unwrap_or(DEFAULT_PORT);
-    
+
     // Create a socket address for the server to bind to
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 

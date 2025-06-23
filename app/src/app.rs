@@ -198,10 +198,7 @@ impl App {
         let http_engine_json_rpc =
             new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(&self.jwt_secret).unwrap());
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(
-            http_engine_json_rpc,
-            public_execution_json_rpc,
-        );
+        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
 
         let network = crate::network::spawn_network_handler(
             self.p2p_listen_addr,
