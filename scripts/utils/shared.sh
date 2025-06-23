@@ -4,6 +4,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 . $SCRIPT_DIR/bitcoin.sh
 . $SCRIPT_DIR/chain.sh
 . $SCRIPT_DIR/geth.sh
+. $SCRIPT_DIR/reth.sh
+
+function get_log_path() {
+    local node_NUM=$1
+    echo "${BASE_DIR}/etc/data/logs/execution_${node_NUM}.txt"
+}
 
 DEV_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
