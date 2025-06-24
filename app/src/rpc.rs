@@ -521,6 +521,7 @@ mod tests {
 
     // Note: This test is a placeholder and will only pass when run with a live node
     #[tokio::test]
+    #[ignore = "Requires a running node with valid chain data"]
     async fn test_getblockbyheight_height_one() {
         // Setup logger
         setup_logger();
