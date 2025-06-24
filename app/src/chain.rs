@@ -14,10 +14,9 @@ use crate::error::BlockErrorBlockTypes;
 use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
-    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT,
-    CHAIN_BTC_BLOCK_MONITOR_TOTALS, CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK,
-    CHAIN_LAST_PROCESSED_BLOCK, CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_QUEUE_SIZE,
-    CHAIN_PEGIN_SKIPPED_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
+    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
+    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
     CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
 use crate::network::rpc::InboundRequest;
@@ -314,12 +313,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .with_label_values(&["processed"])
             .inc_by(processed_pegins.len() as u64);
         CHAIN_TOTAL_PEGIN_AMOUNT.set(total_pegin_amount as i64);
-        CHAIN_PEGIN_QUEUE_SIZE.set(self.queued_pegins.read().await.len() as i64);
-        if skipped_pegins > 0 {
-            CHAIN_PEGIN_SKIPPED_TOTALS
-                .with_label_values(&["withdrawal_limit"])
-                .inc_by(skipped_pegins);
-        }
 
         processed_pegins
     }
@@ -1865,7 +1858,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {
         info!("Starting to monitor bitcoin blocks from height {start_height}");
-        CHAIN_BTC_BLOCK_MONITOR_START_HEIGHT.set(start_height as i64);
 
         tokio::spawn(async move {
             let chain = &self;
