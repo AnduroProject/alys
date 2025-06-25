@@ -9,6 +9,39 @@ function stop_all_reth() {
 function start_reth() {
     NUM=$1
 
+    AUTHRPC_PORT=$((8551 + $NUM * 10))
+    HTTP_PORT=$((8545 + $NUM * 10))
+    WS_PORT=$((8546 + $NUM * 10))
+    PORT=$((30303 + $NUM * 10))
+
+    reth init \
+    --config ./etc/config/eth-config-dev.toml \
+    --datadir "$PWD/etc/data/execution/node_${NUM}" \
+    --chain "$PWD/etc/config/dev-genesis.json"
+
+    reth node \
+    --datadir "$PWD/etc/data/execution/node_${NUM}" \
+    --config "$PWD/etc/config/eth-config-dev.toml" \
+    --chain "$PWD/etc/config/dev-genesis.json" \
+    --metrics 0.0.0.0:9001 \
+    --log.file.directory "$PWD/etc/data/logs/" \
+    --authrpc.addr 0.0.0.0 \
+    --authrpc.port ${AUTHRPC_PORT} \
+    --authrpc.jwtsecret "$PWD/etc/jwttoken/jwt.hex" \
+    --http --http.addr 0.0.0.0 \
+    --http.port ${HTTP_PORT} \
+    --http.api "debug,net,eth,web3,txpool" \
+    --http.corsdomain "*" \
+    --ws.api "eth,net,web3,debug,txpool" \
+    --ws --ws.addr "0.0.0.0" \
+    --ws.port ${WS_PORT} \
+    --ws.origins "*" \
+    --port ${PORT} &
+    RETH_PIDS[$i]=$!
+}
+function start_testnet_reth() {
+    NUM=$1
+
     rm -rf "${PWD}/data/execution/node${NUM}"
 
     AUTHRPC_PORT=$((8551 + $NUM * 10))

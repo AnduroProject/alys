@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# includes
+# Load utility functions from reth.sh
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+BASE_DIR=$(realpath "$SCRIPT_DIR/../")
+. "$SCRIPT_DIR/utils/shared.sh"
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-. $SCRIPT_DIR/utils/reth.sh
-
-trap stop_all_reth SIGINT
-
-if [[ -z "${NUM}" ]]; then
-    # when running dev mode (single node)
-    rm -rf "$PWD/etc/data/consensus/node_${NUM}/chain_db"
-    rm -rf "$PWD/etc/data/consensus/node_${NUM}/wallet"
-fi
-
-mkdir -p data/logs/
-
+# Set default number of nodes if not already set
 NUM=${NUM:-0}
+
+echo "${NUM}"
+
+# Initialize logs directory
+mkdir -p "${BASE_DIR}/etc/data/logs"
+touch "$(get_log_path $NUM)"
+
 start_reth $NUM
-tail -f "$PWD/etc/data/logs/reth${NUM}.txt"
+
+tail -f "$(get_log_path $NUM)"
