@@ -19,7 +19,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use strum::AsRefStr;
 use tokio::io;
 use tokio::select;
@@ -214,9 +214,48 @@ impl Client {
     }
 }
 
+#[derive(Debug, Clone)]
+struct PeerReconnectInfo {
+    address: Multiaddr,
+    last_attempt: Option<Instant>,
+    attempt_count: u32,
+}
+
+impl PeerReconnectInfo {
+    fn new(address: Multiaddr) -> Self {
+        Self {
+            address,
+            last_attempt: None,
+            attempt_count: 0,
+        }
+    }
+    
+    fn should_reconnect(&self) -> bool {
+        match self.last_attempt {
+            None => true,
+            Some(last) => {
+                let backoff_duration = Duration::from_secs(2_u64.pow(self.attempt_count.min(6)));
+                last.elapsed() >= backoff_duration
+            }
+        }
+    }
+    
+    fn mark_attempt(&mut self) {
+        self.last_attempt = Some(Instant::now());
+        self.attempt_count += 1;
+    }
+    
+    fn reset_attempts(&mut self) {
+        self.attempt_count = 0;
+        self.last_attempt = None;
+    }
+}
+
 struct NetworkBackend {
     front_to_back_rx: mpsc::Receiver<FrontToBackCommand>,
     swarm: Swarm<MyBehaviour>,
+    peer_addresses: HashMap<PeerId, Multiaddr>,
+    reconnect_info: HashMap<PeerId, PeerReconnectInfo>,
 }
 
 impl NetworkBackend {
@@ -232,9 +271,14 @@ impl NetworkBackend {
             mpsc::Sender<RPCResponse<MainnetEthSpec>>,
         > = HashMap::new();
         let mut next_id = 0;
+        
+        let mut reconnect_timer = tokio::time::interval(Duration::from_secs(5));
 
         loop {
             select! {
+                _ = reconnect_timer.tick() => {
+                    self.attempt_reconnections().await;
+                }
                 maybe_message = self.front_to_back_rx.recv() => match maybe_message {
                     Some(FrontToBackCommand::Publish(msg, response)) => {
                         let result = self.swarm
@@ -346,17 +390,73 @@ impl NetworkBackend {
                         }
 
                     }
-                    SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         peers.insert(peer_id);
+                        
+                        // Store peer address for potential reconnection
+                        self.peer_addresses.insert(peer_id, endpoint.get_remote_address().clone());
+                        
+                        // Reset reconnection attempts on successful connection
+                        if let Some(info) = self.reconnect_info.get_mut(&peer_id) {
+                            info.reset_attempts();
+                        }
+                        
                         let _ = peers_connected_tx.send(peers.clone());
                     }
                     SwarmEvent::ConnectionClosed { peer_id, connection_id, endpoint, num_established, cause } => {
                         debug!("Connection closed: peer_id: {peer_id}, connection_id: {connection_id}, endpoint: {endpoint:?}, num_established: {num_established}, cause: {cause:?}");
-                        peers.remove(&peer_id);
-                        let _ = peers_connected_tx.send(peers.clone());
+                        
+                        // Only remove from peers if no more connections to this peer
+                        if num_established == 0 {
+                            peers.remove(&peer_id);
+                            
+                            // Set up for reconnection if we have the address and it was an unexpected disconnection
+                            if let Some(address) = self.peer_addresses.get(&peer_id) {
+                                if !matches!(cause, Some(libp2p::swarm::ConnectionError::KeepAliveTimeout)) {
+                                    // Only reconnect for unexpected disconnections (not timeouts)
+                                    info!("Scheduling reconnection attempt for peer {peer_id}");
+                                    self.reconnect_info.insert(peer_id, PeerReconnectInfo::new(address.clone()));
+                                }
+                            }
+                            
+                            let _ = peers_connected_tx.send(peers.clone());
+                        }
                     }
                     x => {
                         trace!("Unhandled message {x:?}");
+                    }
+                }
+            }
+        }
+    }
+    
+    async fn attempt_reconnections(&mut self) {
+        let mut to_reconnect = Vec::new();
+        
+        // Collect peers that should be reconnected
+        for (peer_id, info) in &mut self.reconnect_info {
+            if info.should_reconnect() {
+                to_reconnect.push((*peer_id, info.address.clone()));
+                info.mark_attempt();
+            }
+        }
+        
+        // Attempt reconnections
+        for (peer_id, address) in to_reconnect {
+            debug!("Attempting to reconnect to peer {peer_id} at {address}");
+            match self.swarm.dial(address) {
+                Ok(_) => {
+                    debug!("Reconnection dial initiated for peer {peer_id}");
+                }
+                Err(e) => {
+                    warn!("Failed to initiate reconnection to peer {peer_id}: {e}");
+                    // If we can't dial after many attempts, remove from reconnect list
+                    if let Some(info) = self.reconnect_info.get(&peer_id) {
+                        if info.attempt_count >= 10 {
+                            warn!("Giving up reconnection attempts for peer {peer_id} after 10 tries");
+                            self.reconnect_info.remove(&peer_id);
+                            self.peer_addresses.remove(&peer_id);
+                        }
                     }
                 }
             }
@@ -399,6 +499,8 @@ pub async fn spawn_network_handler(
     let backend = NetworkBackend {
         front_to_back_rx: rx,
         swarm,
+        peer_addresses: HashMap::new(),
+        reconnect_info: HashMap::new(),
     };
 
     tokio::spawn(async move {
