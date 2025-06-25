@@ -1882,7 +1882,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             );
                             chain.queued_pegins.write().await.insert(pegin.txid, pegin);
                             CHAIN_BTC_BLOCK_MONITOR_TOTALS
-                                .with_label_values(&["queued_pegins"])
+                                .with_label_values(&["queued_pegins", "synced"])
                                 .inc();
                         } else {
                             debug!(
@@ -1890,7 +1890,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 pegin.amount, pegin.evm_account, pegin.txid
                             );
                             CHAIN_BTC_BLOCK_MONITOR_TOTALS
-                                .with_label_values(&["ignored_pegins"])
+                                .with_label_values(&["ignored_pegins", "not_synced"])
                                 .inc();
 
                             break;
