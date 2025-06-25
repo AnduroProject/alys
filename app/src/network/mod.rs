@@ -234,7 +234,7 @@ impl PeerReconnectInfo {
         match self.last_attempt {
             None => true,
             Some(last) => {
-                let backoff_duration = Duration::from_secs(2_u64.pow(self.attempt_count.min(6)));
+                let backoff_duration = Duration::from_secs(2_u64.pow(self.attempt_count.min(12)));
                 last.elapsed() >= backoff_duration
             }
         }
@@ -290,7 +290,7 @@ impl NetworkBackend {
                         let _ = response.send(result);
                     }
                     Some(FrontToBackCommand::Dial(address, response)) => {
-                        info!("Dialing...");
+                        info!("Dialing to peer at address: {address}");
                         let result = self.swarm.dial(address);
                         // if sending the response fails, there is nothing we can do, so ignore
                         let _ = response.send(result);
@@ -443,17 +443,17 @@ impl NetworkBackend {
         
         // Attempt reconnections
         for (peer_id, address) in to_reconnect {
-            debug!("Attempting to reconnect to peer {peer_id} at {address}");
+            info!("Attempting to reconnect to peer {peer_id} at {address}");
             match self.swarm.dial(address) {
                 Ok(_) => {
-                    debug!("Reconnection dial initiated for peer {peer_id}");
+                    info!("Reconnection dial initiated for peer {peer_id}");
                 }
                 Err(e) => {
                     warn!("Failed to initiate reconnection to peer {peer_id}: {e}");
                     // If we can't dial after many attempts, remove from reconnect list
                     if let Some(info) = self.reconnect_info.get(&peer_id) {
-                        if info.attempt_count >= 10 {
-                            warn!("Giving up reconnection attempts for peer {peer_id} after 10 tries");
+                        if info.attempt_count > 12 {
+                            warn!("Giving up reconnection attempts for peer {peer_id} after 12 tries");
                             self.reconnect_info.remove(&peer_id);
                             self.peer_addresses.remove(&peer_id);
                         }
