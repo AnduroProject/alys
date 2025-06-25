@@ -229,7 +229,7 @@ impl PeerReconnectInfo {
             attempt_count: 0,
         }
     }
-    
+
     fn should_reconnect(&self) -> bool {
         match self.last_attempt {
             None => true,
@@ -239,12 +239,12 @@ impl PeerReconnectInfo {
             }
         }
     }
-    
+
     fn mark_attempt(&mut self) {
         self.last_attempt = Some(Instant::now());
         self.attempt_count += 1;
     }
-    
+
     fn reset_attempts(&mut self) {
         self.attempt_count = 0;
         self.last_attempt = None;
@@ -271,7 +271,7 @@ impl NetworkBackend {
             mpsc::Sender<RPCResponse<MainnetEthSpec>>,
         > = HashMap::new();
         let mut next_id = 0;
-        
+
         let mut reconnect_timer = tokio::time::interval(Duration::from_secs(5));
 
         loop {
@@ -392,24 +392,24 @@ impl NetworkBackend {
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         peers.insert(peer_id);
-                        
+
                         // Store peer address for potential reconnection
                         self.peer_addresses.insert(peer_id, endpoint.get_remote_address().clone());
-                        
+
                         // Reset reconnection attempts on successful connection
                         if let Some(info) = self.reconnect_info.get_mut(&peer_id) {
                             info.reset_attempts();
                         }
-                        
+
                         let _ = peers_connected_tx.send(peers.clone());
                     }
                     SwarmEvent::ConnectionClosed { peer_id, connection_id, endpoint, num_established, cause } => {
                         debug!("Connection closed: peer_id: {peer_id}, connection_id: {connection_id}, endpoint: {endpoint:?}, num_established: {num_established}, cause: {cause:?}");
-                        
+
                         // Only remove from peers if no more connections to this peer
                         if num_established == 0 {
                             peers.remove(&peer_id);
-                            
+
                             // Set up for reconnection if we have the address and it was an unexpected disconnection
                             if let Some(address) = self.peer_addresses.get(&peer_id) {
                                 if !matches!(cause, Some(libp2p::swarm::ConnectionError::KeepAliveTimeout)) {
@@ -418,7 +418,7 @@ impl NetworkBackend {
                                     self.reconnect_info.insert(peer_id, PeerReconnectInfo::new(address.clone()));
                                 }
                             }
-                            
+
                             let _ = peers_connected_tx.send(peers.clone());
                         }
                     }
@@ -429,10 +429,10 @@ impl NetworkBackend {
             }
         }
     }
-    
+
     async fn attempt_reconnections(&mut self) {
         let mut to_reconnect = Vec::new();
-        
+
         // Collect peers that should be reconnected
         for (peer_id, info) in &mut self.reconnect_info {
             if info.should_reconnect() {
@@ -440,7 +440,7 @@ impl NetworkBackend {
                 info.mark_attempt();
             }
         }
-        
+
         // Attempt reconnections
         for (peer_id, address) in to_reconnect {
             info!("Attempting to reconnect to peer {peer_id} at {address}");
@@ -453,7 +453,9 @@ impl NetworkBackend {
                     // If we can't dial after many attempts, remove from reconnect list
                     if let Some(info) = self.reconnect_info.get(&peer_id) {
                         if info.attempt_count > 12 {
-                            warn!("Giving up reconnection attempts for peer {peer_id} after 12 tries");
+                            warn!(
+                                "Giving up reconnection attempts for peer {peer_id} after 12 tries"
+                            );
                             self.reconnect_info.remove(&peer_id);
                             self.peer_addresses.remove(&peer_id);
                         }
