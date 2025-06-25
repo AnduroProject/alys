@@ -1773,6 +1773,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         }
                         Err(err) => {
                             error!("Unexpected block import error: {:?}", err);
+                            self.rollback_head(head - 1).await.unwrap();
+
                             return;
                         }
                     }
