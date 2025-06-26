@@ -284,7 +284,8 @@ impl NetworkBackend {
         > = HashMap::new();
         let mut next_id = 0;
 
-        let mut reconnect_timer = tokio::time::interval(Duration::from_secs(RECONNECT_INTERVAL_SECS));
+        let mut reconnect_timer =
+            tokio::time::interval(Duration::from_secs(RECONNECT_INTERVAL_SECS));
 
         loop {
             select! {
