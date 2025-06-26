@@ -35,6 +35,9 @@ use self::rpc::{
 pub type EnrAttestationBitfield<T> = BitVector<<T as EthSpec>::SubnetBitfieldLength>;
 pub type EnrSyncCommitteeBitfield<T> = BitVector<<T as EthSpec>::SyncCommitteeSubnetCount>;
 
+const RECONNECT_INTERVAL_SECS: u64 = 5;
+const RECONNECT_MAX_ATTEMPTS: u32 = 12;
+
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
@@ -214,10 +217,14 @@ impl Client {
     }
 }
 
+/// Information about a peer's reconnection attempts
 #[derive(Debug, Clone)]
 struct PeerReconnectInfo {
+    /// The multiaddress of the peer to reconnect to
     address: Multiaddr,
+    /// Timestamp of the last reconnection attempt, if any
     last_attempt: Option<Instant>,
+    /// Number of reconnection attempts made so far
     attempt_count: u32,
 }
 
@@ -251,10 +258,15 @@ impl PeerReconnectInfo {
     }
 }
 
+/// Internal network backend that handles all network operations
 struct NetworkBackend {
+    /// Channel receiver for commands from the client
     front_to_back_rx: mpsc::Receiver<FrontToBackCommand>,
+    /// The libp2p swarm managing network connections
     swarm: Swarm<MyBehaviour>,
+    /// Mapping of peer IDs to their multiaddresses for reconnection
     peer_addresses: HashMap<PeerId, Multiaddr>,
+    /// Information about peers that need reconnection attempts
     reconnect_info: HashMap<PeerId, PeerReconnectInfo>,
 }
 
@@ -272,7 +284,7 @@ impl NetworkBackend {
         > = HashMap::new();
         let mut next_id = 0;
 
-        let mut reconnect_timer = tokio::time::interval(Duration::from_secs(5));
+        let mut reconnect_timer = tokio::time::interval(Duration::from_secs(RECONNECT_INTERVAL_SECS));
 
         loop {
             select! {
@@ -414,7 +426,7 @@ impl NetworkBackend {
                             if let Some(address) = self.peer_addresses.get(&peer_id) {
                                 if !matches!(cause, Some(libp2p::swarm::ConnectionError::KeepAliveTimeout)) {
                                     // Only reconnect for unexpected disconnections (not timeouts)
-                                    info!("Scheduling reconnection attempt for peer {peer_id}");
+                                    debug!("Scheduling reconnection attempt for peer {peer_id}");
                                     self.reconnect_info.insert(peer_id, PeerReconnectInfo::new(address.clone()));
                                 }
                             }
@@ -452,9 +464,9 @@ impl NetworkBackend {
                     warn!("Failed to initiate reconnection to peer {peer_id}: {e}");
                     // If we can't dial after many attempts, remove from reconnect list
                     if let Some(info) = self.reconnect_info.get(&peer_id) {
-                        if info.attempt_count > 12 {
+                        if info.attempt_count > RECONNECT_MAX_ATTEMPTS {
                             warn!(
-                                "Giving up reconnection attempts for peer {peer_id} after 12 tries"
+                                "Giving up reconnection attempts for peer {peer_id} after {RECONNECT_MAX_ATTEMPTS} tries"
                             );
                             self.reconnect_info.remove(&peer_id);
                             self.peer_addresses.remove(&peer_id);
