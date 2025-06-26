@@ -1773,7 +1773,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         }
                         Err(err) => {
                             error!("Unexpected block import error: {:?}", err);
-                            self.rollback_head(head - 1).await.unwrap();
+                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
+                                error!("Failed to rollback head: {:?}", rollback_err);
+                            }
 
                             return;
                         }
