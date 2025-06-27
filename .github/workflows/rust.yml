@@ -91,4 +91,4 @@ jobs:
       - name: Build & Test
         run: |
           cargo build --release
-          cargo test --release --no-fail-fast --verbose -- --nocapture --test-threads=1
+          cargo test --release --no-fail-fast --verbose -- --nocapture
