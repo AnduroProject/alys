@@ -82,9 +82,6 @@ services:
   consensus:
     container_name: consensus
     restart: unless-stopped
-#    build:
-#      context: ../
-#      dockerfile: Dockerfile
     image: ghcr.io/anduroproject/alys:master
 
     volumes:

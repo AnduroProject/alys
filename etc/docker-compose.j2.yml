@@ -84,9 +84,6 @@ services:
   consensus:
     container_name: consensus
     restart: unless-stopped
-    #    build:
-    #      context: ../
-    #      dockerfile: Dockerfile
     image: ghcr.io/anduroproject/alys:master
     ports:
       - 3000:3000
@@ -133,8 +130,6 @@ services:
       - "55444"
       - --jwt-secret
       - /opt/alys/execution/config/jwtsecret.hex
-    #      - --p2p-listen-address
-    #      - {{hostvars[inventory_hostname].ansible_host}}
     depends_on:
       - execution
 

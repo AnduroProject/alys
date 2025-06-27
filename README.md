@@ -18,14 +18,15 @@ On a high level, the repository consists of three parts:
 
 ## Prerequisites
 
-- Install Rust `1.75.0` or higher: https://www.rust-lang.org/tools/install
-- Install Geth `<=1.14.10`: https://geth.ethereum.org/docs/getting-started/installing-geth
-- Install Bitcoin Core `25.0` or higher so that you have access to the `bitcoind` and `bitcoin-cli` commands:
+- Install Rust `1.87.0` or higher: https://www.rust-lang.org/tools/install
+- Install Geth `1.14.10`: https://geth.ethereum.org/docs/getting-started/installing-geth
+- Install Bitcoin Core `28.0` or higher so that you have access to the `bitcoind` and `bitcoin-cli` commands:
   - MacOS: `brew install bitcoin`
   - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
   - Arch: `yay bitcoin-core`
   - Download a binary: https://bitcoin.org/en/download
 - Install clang
+- Install cmake `3.31.3`
 - Install pkg-config
 - Install libssl-dev
 - Install build-essential
@@ -35,9 +36,13 @@ On a high level, the repository consists of three parts:
 
 To help you get started with Alys, we provide two guides. The first guide demonstrates how to set up and run Alys using Docker Compose, which is the easiest and quickest way to get started. The second guide walks you through a manual setup process for more control and customization.
 * ### [Running Alys with Docker Compose](./docs/guides/getting_started_docker_setup.md)
-* ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md)
+* ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md) (for local development)
 
-## Alys Testnet4
+## Connecting to Alys Testnet4
+
+- Explorer: http://testnet.alyscan.io/
+- Faucet: https://faucet.anduro.io/
+- Chain ID: 212121
 
 Anduro operates a public testnet for Alys used for development & testing. Anyone wishing to interact with the Alys testnet, whether it be to query the chain, send transactions, or connect your own node to the
 network, can find connection info below.
@@ -58,6 +63,11 @@ Enode: enode://15d60f94195b361bf20acfd8b025b8f332b79f5752637e225e7c73aca7b17dd97
 ```shell
 IP: 209.160.175.125
 Enode: enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303
+```
+
+To establish peering connections between the nodes, you can use the following command:
+```shell
+cast rpc admin_addTrustedPeer '["<enode_url_of_any_alys_node_listed_above>"]'
 ```
 
 ## Faucet
@@ -169,59 +179,12 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions 
 
 </details>
 
-## Connecting to an Alys Network
-
-### Testnet
-- RPC: http://209.160.175.123:8545
-- Explorer: http://testnet.alyscan.io/
-- Faucet: https://faucet.anduro.io/
-
-- Chain ID: 212121
-
-## Full Node
-
-Running a full node is similar to running a federation node. The main difference is that full nodes do not require an Aura or Bitcoin key since they are not signing blocks or Bitcoin transactions.
-
-1. Start Bitcoin with the network you want to connect to via `bitcoind`.
-2. Start geth via `NUM=0 ./scripts/start_geth.sh` (assuming you run the full node on a different machine. If running on the same machine as the three nodes, use `NUM=3 ./scripts/start_geth.sh`)
-3. Start the full node assuming the full node runs on a seperate machine:
-
-```shell
-cargo run --bin app -- \
-  --chain etc/config/chain.json \
-  --geth-url http://localhost:8551/ \
-  --db-path etc/data/consensus/node_0/chain_db/ \
-  --rpc-port 3000 \
-  --wallet-path etc/data/consensus/node_0/wallet \
-  --bitcoin-rpc-url localhost:18332 \
-  --bitcoin-rpc-user rpcuser \
-  --bitcoin-rpc-pass rpcpassword \
-  --bitcoin-network testnet \
-  --remote-bootnode /ip4/BOOTNODE_IP/tcp/BOOTNODE_LIBP2P_PORT
-```
-
-- `BOOTNODE_IP`: To select a bootnode, get its public or private IP address.
-- `BOOTNODE_LIBP2P_PORT`: There are two ways to get the p2p port.
-  - You can find the listening port by running `lsof -Pn -i4` on the server running the bootnode.
-  - Set the P2P port explicitly: You can set a dedicated p2p port on the federation node/bootnode by adding the argument `--p2p-port 55444` to set this to port `55444`. Make sure to pick a free port.
 
 ## Development
 
 ### Alys Node (Consensus Layer)
 
-#### Build and Deploy
-
-```shell
-# cleanup, init and run geth
-./scripts/start_geth.sh
-
-# start bitcoin
-bitcoind -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword -fallbackfee=0.002
-
-# dev (single node)
-cargo run --bin app -- --dev
-```
-
+First, follow the manual setup guide [here](./docs/guides/getting_started_manual_setup.md) to get your local environment setup.
 
 #### Unit tests
 
@@ -229,12 +192,6 @@ Tests are self-contained such that none of the services need to run.
 
 ```shell
 cargo test
-```
-
-#### Format
-
-```shell
-cargo fmt
 ```
 
 ### Smart Contracts
@@ -388,6 +345,15 @@ When you start the Alys sidechain it will use a chain spec to configure it's own
 Each node should use the same genesis and chain spec, otherwise blocks will be rejected.
 
 Ensure that each federation member has set an EVM address to receive fees - this can be derived from the same secret key used to generate the public key in `"authorities"`. When fees are generated from EVM transactions they are sent directly to that account.
+
+## Important Links
+
+- [Alys Testnet4](https://testnet.alyscan.io/)
+- [Alys Faucet](https://faucet.anduro.io/)
+- [Alys Docs](https://github.com/AnduroProject/alys)
+- [Alys Github](https://github.com/anduroproject/alys)
+- [Alys Discord](https://discord.gg/Me3gjyZ2Nh)
+- [Alys Twitter](https://twitter.com/andurobtc)
 
 ## Resources
 
