@@ -112,7 +112,7 @@ services:
       - --geth-execution-url
       - http://execution:8545
       - --remote-bootnode
-      - /ip4/209.160.175.125/tcp/55444
+      - /ip4/10.38.1.104/tcp/55444/ip4/10.38.1.103/tcp/55444
       - --no-mine
       - --p2p-port
       - "55444"
