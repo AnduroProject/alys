@@ -2,7 +2,10 @@ if [ -z "$BASE_DIR" ]; then
     BASE_DIR=${PWD}
 fi
 
-
+function get_log_path() {
+    local node_NUM=$1
+    echo "${BASE_DIR}/etc/data/logs/execution_${node_NUM}.txt"
+}
 
 function stop_all_geth() {
     echo "Shutting down all geth processes..."
