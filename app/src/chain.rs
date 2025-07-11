@@ -915,6 +915,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             hashes.push(current);
 
+            trace!("Getting block {:?}", current);
+
             match self.storage.get_block(&current) {
                 Ok(Some(block)) => {
                     current = block.message.parent_hash;
@@ -1959,10 +1961,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         trace!("Head: {:?}", head);
 
         trace!("Getting aggregate hashes");
+        let last_finalized_block_ref = self
+            .get_latest_finalized_block_ref()?
+            .ok_or(ChainError(BlockErrorBlockTypes::LastFinalized.into()))?
+            .hash;
+
+        trace!("Last finalized block: {:?}", last_finalized_block_ref);
+
         let hashes = self.get_hashes(
-            self.get_latest_finalized_block_ref()?
-                .ok_or(ChainError(BlockErrorBlockTypes::LastFinalized.into()))?
-                .hash,
+            last_finalized_block_ref,
             // self.head.read().await.as_ref().ok_or(Error::ChainError(BlockErrorBlockTypes::Head.into()))?.hash,
             head,
         )?;
