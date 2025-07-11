@@ -907,6 +907,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Result<Vec<Hash256>, Error> {
         trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
+        let mut prev = to;
         let mut hashes = vec![];
         loop {
             if current == from {
@@ -915,14 +916,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             hashes.push(current);
 
-            trace!("Getting block {:?}", current);
-
             match self.storage.get_block(&current) {
                 Ok(Some(block)) => {
+                    prev = current;
                     current = block.message.parent_hash;
                 }
                 Ok(None) => {
-                    error!("Failed to get block {:?}", current);
+                    error!("Failed to get block {:?} {:?}", current, prev);
                     return Err(Error::InvalidBlockRange);
                 }
                 Err(e) => {
