@@ -1007,12 +1007,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let last_pow_block = self
             .storage
             .get_block(&last_pow)?
-            .ok_or(Error::MissingParent)?;
+            .ok_or(Error::MissingBlock)?;
+
         info!("Last pow block {}", last_pow_block.canonical_root());
 
         let last_finalized = self
             .get_latest_finalized_block_ref()?
-            .ok_or(Error::MissingParent)?;
+            .ok_or(Error::MissingBlock)?;
 
         info!(
             "Last finalized {} (height {}) in block {}",
