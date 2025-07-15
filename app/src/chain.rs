@@ -900,6 +900,40 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(ret)
     }
 
+    /// Retrieves a sequence of block hashes from the blockchain between two specified blocks.
+    /// 
+    /// This method iterates backwards from the chain head (`to`) towards the last finalized block (`from`),
+    /// collecting block hashes along the way. The method traverses the chain by following parent_hash
+    /// references from each block.
+    /// 
+    /// # Parameters
+    /// - `from`: The hash of the last finalized block (exclusive) - should have smaller block height than `to`
+    /// - `to`: The hash of the chain head (inclusive) - should have larger block height than `from`
+    /// 
+    /// # Returns
+    /// A vector of block hashes in chronological order (oldest to newest), where:
+    /// - The first element is the block immediately after `from`
+    /// - The last element is the chain head (`to`)
+    /// 
+    /// # Example
+    /// If we have blocks 100 (finalized) and 105 (head):
+    /// - `from` = block 100 hash (exclusive)
+    /// - `to` = block 105 hash (inclusive)
+    /// 
+    /// The method will:
+    /// 1. Start at block 105 (head) and push its hash to the array
+    /// 2. Get block 105's parent (block 104) and push its hash
+    /// 3. Get block 104's parent (block 103) and push its hash
+    /// 4. Get block 103's parent (block 102) and push its hash
+    /// 5. Get block 102's parent (block 101) and push its hash
+    /// 6. Stop when reaching block 100 (from parameter)
+    /// 
+    /// After reversal, the returned array will be: [block101, block102, block103, block104, block105]
+    /// 
+    /// # Note
+    /// The vector is reversed at the end because we collect hashes in reverse chronological order
+    /// (newest to oldest) during iteration, but need to return them in chronological order
+    /// (oldest to newest) for proper processing.
     fn get_hashes(
         &self,
         from: Hash256, // exclusive
@@ -908,6 +942,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
         let mut hashes = vec![];
+
+        // Query block inputs to assert the range is valid
+        let from_block = self.storage.get_block(&from)?.ok_or(Error::MissingBlock)?;
+        let to_block = self.storage.get_block(&to)?.ok_or(Error::MissingBlock)?;
+
+        // Assert that execution block number for `from` is smaller than `to`
+        if from_block.message.execution_payload.block_number >= to_block.message.execution_payload.block_number {
+            return Err(Error::InvalidBlockRange);
+        }
+
         loop {
             if current == from {
                 break;
