@@ -620,9 +620,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     /// Finds the preceding finalized block for a given block.
     ///
-    /// This method traverses backwards from the given block to find the most recent
-    /// finalized block (a block with auxpow_header). If the given block itself is
-    /// finalized, it returns the block that was finalized by the previous PoW block.
+    /// This method finds the block that was finalized by the previous PoW block.
+    /// It uses the latest finalized block as a reference point and traverses backwards
+    /// to find the previous PoW block.
     ///
     /// # Arguments
     /// * `block` - The block to find the preceding finalized block for
@@ -633,59 +633,59 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     /// * `Err(Error)` - Error occurred during the search
     fn get_preceding_finalized_block(
         &self,
-        block: &SignedConsensusBlock<MainnetEthSpec>,
+        _block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
-        let mut current_block = block.clone();
+        // Get the latest finalized block reference
+        let latest_finalized_ref = self.get_latest_finalized_block_ref()?;
 
-        // If the current block is finalized (has auxpow_header), we need to find
-        // the block that was finalized by the previous PoW block
-        if let Some(ref auxpow) = current_block.message.auxpow_header {
-            // For genesis block (height 0), there's no preceding finalized block
-            if auxpow.height == 0 {
-                return Ok(None);
-            }
+        if let Some(_latest_finalized_ref) = latest_finalized_ref {
+            // Get the latest PoW block
+            let latest_pow_ref = self.storage.get_latest_pow_block()?;
+            if let Some(latest_pow_ref) = latest_pow_ref {
+                let latest_pow_block = self.storage.get_block(&latest_pow_ref.hash)?;
+                if let Some(latest_pow_block) = latest_pow_block {
+                    if let Some(ref latest_auxpow) = latest_pow_block.message.auxpow_header {
+                        // For genesis block (height 0), there's no preceding finalized block
+                        if latest_auxpow.height == 0 {
+                            return Ok(None);
+                        }
 
-            // The block at auxpow.range_end is the one that was finalized by this PoW
-            // We need to find the block that was finalized by the previous PoW
-            let finalized_block = self.storage.get_block(&auxpow.range_end)?;
-            if let Some(finalized) = finalized_block {
-                current_block = finalized;
-            } else {
-                return Err(Error::MissingBlock);
+                        // Find the previous PoW block by traversing backwards from the latest PoW block
+                        let mut current_block = latest_pow_block.clone();
+                        loop {
+                            if current_block.message.parent_hash.is_zero() {
+                                // Reached genesis without finding a previous PoW block
+                                return Ok(None);
+                            }
+
+                            let parent =
+                                self.storage.get_block(&current_block.message.parent_hash)?;
+                            if let Some(parent) = parent {
+                                if let Some(ref parent_auxpow) = parent.message.auxpow_header {
+                                    // Found the previous PoW block
+                                    // Return the block that was finalized by this previous PoW
+                                    let finalized_block =
+                                        self.storage.get_block(&parent_auxpow.range_end)?;
+                                    if let Some(finalized) = finalized_block {
+                                        return Ok(Some(finalized));
+                                    } else {
+                                        return Err(Error::MissingBlock);
+                                    }
+                                } else {
+                                    // Parent is not a PoW block, continue searching
+                                    current_block = parent;
+                                }
+                            } else {
+                                return Err(Error::MissingParent);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Now traverse backwards to find the most recent finalized block
-        loop {
-            // Check if current block is finalized
-            if let Some(ref auxpow) = current_block.message.auxpow_header {
-                // For genesis block, return None as there's no preceding finalized block
-                if auxpow.height == 0 {
-                    return Ok(None);
-                }
-
-                // Return the block that was finalized by this PoW
-                let finalized_block = self.storage.get_block(&auxpow.range_end)?;
-                if let Some(finalized) = finalized_block {
-                    return Ok(Some(finalized));
-                } else {
-                    return Err(Error::MissingBlock);
-                }
-            }
-
-            // If not finalized, move to parent
-            if current_block.message.parent_hash.is_zero() {
-                // Reached genesis block without finding a finalized block
-                return Ok(None);
-            }
-
-            let parent_block = self.storage.get_block(&current_block.message.parent_hash)?;
-            if let Some(parent) = parent_block {
-                current_block = parent;
-            } else {
-                return Err(Error::MissingParent);
-            }
-        }
+        // No finalized blocks found
+        Ok(None)
     }
 
     async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
@@ -744,7 +744,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         let rollback_hash = rollback_block.canonical_root();
         let rollback_height = rollback_block.message.height();
-        
+
         let update_head_ref_ops = {
             let _span = tracing::debug_span!(
                 "update_head_ref_ops",
@@ -752,16 +752,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 rollback_height = rollback_height
             )
             .entered();
-            
+
             // Drop the span before the await
             drop(_span);
-            
-            self.update_head_ref_ops(
-                rollback_hash,
-                rollback_height,
-                true,
-            )
-            .await
+
+            self.update_head_ref_ops(rollback_hash, rollback_height, true)
+                .await
         };
 
         trace!(
@@ -1177,14 +1173,20 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let last_pow_block_ref = self.storage.get_latest_pow_block()?.unwrap();
         let last_pow = last_pow_block_ref.hash;
 
-        info!("Last pow block: {} ({})", last_pow, last_pow_block_ref.height);
+        info!(
+            "Last pow block: {} ({})",
+            last_pow, last_pow_block_ref.height
+        );
 
         let last_pow_block = self
             .storage
             .get_block(&last_pow)?
             .ok_or(Error::MissingBlock)?;
 
-        info!("Last pow block {} canonical root", last_pow_block.canonical_root());
+        info!(
+            "Last pow block {} canonical root",
+            last_pow_block.canonical_root()
+        );
 
         let last_finalized = self
             .get_latest_finalized_block_ref()?
@@ -1317,23 +1319,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         Ok(Some(block)) => block.block_ref(),
                         Ok(None) => {
                             error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.height
-                            );
-                            error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.hash
+                                "Failed to get last block in prev-aux range {:?} ({})",
+                                blockref.hash, blockref.height
                             );
                             return Err(Error::InvalidBlockRange);
                         }
                         Err(e) => {
                             error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.height
-                            );
-                            error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.hash
+                                "Failed to get last block in prev-aux range {:?} ({})",
+                                blockref.hash, blockref.height
                             );
                             return Err(Error::GenericError(Report::from(e)));
                         }
