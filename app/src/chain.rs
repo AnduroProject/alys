@@ -636,57 +636,109 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         _block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        let _span = tracing::debug_span!("get_preceding_finalized_block").entered();
+        
         // Get the latest finalized block reference
-        let latest_finalized_ref = self.get_latest_finalized_block_ref()?;
-
-        if let Some(_latest_finalized_ref) = latest_finalized_ref {
-            // Get the latest PoW block
-            let latest_pow_ref = self.storage.get_latest_pow_block()?;
-            if let Some(latest_pow_ref) = latest_pow_ref {
-                let latest_pow_block = self.storage.get_block(&latest_pow_ref.hash)?;
-                if let Some(latest_pow_block) = latest_pow_block {
-                    if let Some(ref latest_auxpow) = latest_pow_block.message.auxpow_header {
-                        // For genesis block (height 0), there's no preceding finalized block
-                        if latest_auxpow.height == 0 {
-                            return Ok(None);
-                        }
-
-                        // Find the previous PoW block by traversing backwards from the latest PoW block
-                        let mut current_block = latest_pow_block.clone();
-                        loop {
-                            if current_block.message.parent_hash.is_zero() {
-                                // Reached genesis without finding a previous PoW block
-                                return Ok(None);
-                            }
-
-                            let parent =
-                                self.storage.get_block(&current_block.message.parent_hash)?;
-                            if let Some(parent) = parent {
-                                if let Some(ref parent_auxpow) = parent.message.auxpow_header {
-                                    // Found the previous PoW block
-                                    // Return the block that was finalized by this previous PoW
-                                    let finalized_block =
-                                        self.storage.get_block(&parent_auxpow.range_end)?;
-                                    if let Some(finalized) = finalized_block {
-                                        return Ok(Some(finalized));
-                                    } else {
-                                        return Err(Error::MissingBlock);
-                                    }
-                                } else {
-                                    // Parent is not a PoW block, continue searching
-                                    current_block = parent;
-                                }
-                            } else {
-                                return Err(Error::MissingParent);
-                            }
-                        }
-                    }
-                }
-            }
+        let latest_finalized_ref = {
+            let _span = tracing::debug_span!("get_latest_finalized_block_ref").entered();
+            let result = self.get_latest_finalized_block_ref()?;
+            trace!("Latest finalized block ref: {:?}", result);
+            result
+        };
+        
+        if latest_finalized_ref.is_none() {
+            debug!("No latest finalized block reference found");
+            return Ok(None);
         }
 
-        // No finalized blocks found
-        Ok(None)
+        // Get the latest PoW block
+        let latest_pow_ref = {
+            let _span = tracing::debug_span!("get_latest_pow_block").entered();
+            let result = self.storage.get_latest_pow_block()?.ok_or(Error::MissingBlock)?;
+            trace!("Latest PoW block ref: hash={:?}, height={}", result.hash, result.height);
+            result
+        };
+
+        // Get the latest PoW block details
+        let latest_pow_block = {
+            let _span = tracing::debug_span!("get_latest_pow_block_details", pow_hash = %latest_pow_ref.hash).entered();
+            let result = self.storage.get_block(&latest_pow_ref.hash)?.ok_or(Error::MissingBlock)?;
+            trace!("Latest PoW block details: height={}", result.message.height());
+            result
+        };
+
+        // Check if the latest PoW block has an auxpow header
+        let latest_auxpow = {
+            let _span = tracing::debug_span!("check_auxpow_header").entered();
+            match &latest_pow_block.message.auxpow_header {
+                Some(auxpow) => {
+                    trace!("Found auxpow header: height={}, range_start={:?}, range_end={:?}", 
+                           auxpow.height, auxpow.range_start, auxpow.range_end);
+                    auxpow
+                }
+                None => {
+                    debug!("Latest PoW block has no auxpow header");
+                    return Ok(None);
+                }
+            }
+        };
+
+        // For genesis block (height 0), there's no preceding finalized block
+        if latest_auxpow.height == 0 {
+            debug!("Genesis block detected (height 0), no preceding finalized block");
+            return Ok(None);
+        }
+
+        // Find the previous PoW block by traversing backwards from the latest PoW block
+        let mut current_block = latest_pow_block;
+        let mut traversal_count = 0;
+        
+        loop {
+            traversal_count += 1;
+            
+            if current_block.message.parent_hash.is_zero() {
+                debug!("Reached genesis without finding a previous PoW block after {} traversals", traversal_count);
+                return Ok(None);
+            }
+
+            let parent = {
+                let _span = tracing::debug_span!("get_parent_block", 
+                    parent_hash = %current_block.message.parent_hash,
+                    traversal_count = traversal_count
+                ).entered();
+                
+                let result = self.storage.get_block(&current_block.message.parent_hash)?.ok_or(Error::MissingParent)?;
+                trace!("Retrieved parent block: height={}", result.message.height());
+                result
+            };
+
+            // Check if parent is a PoW block
+            if let Some(ref parent_auxpow) = parent.message.auxpow_header {
+                // Found the previous PoW block
+                debug!("Found previous PoW block after {} traversals: height={}, range_end={:?}", 
+                       traversal_count, parent_auxpow.height, parent_auxpow.range_end);
+                
+                // Return the block that was finalized by this previous PoW
+                let finalized_block = {
+                    let _span = tracing::debug_span!("get_finalized_block", 
+                        finalized_hash = %parent_auxpow.range_end
+                    ).entered();
+                    
+                    let result = self.storage.get_block(&parent_auxpow.range_end)?.ok_or(Error::MissingBlock)?;
+                    trace!("Retrieved finalized block: height={}", result.message.height());
+                    result
+                };
+                
+                info!("Found preceding finalized block: height={}, hash={:?}", 
+                      finalized_block.message.height(), finalized_block.canonical_root());
+                return Ok(Some(finalized_block));
+            } else {
+                // Parent is not a PoW block, continue searching
+                trace!("Parent block at height {} is not a PoW block, continuing traversal", 
+                       parent.message.height());
+                current_block = parent;
+            }
+        }
     }
 
     async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
