@@ -1850,10 +1850,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .inc();
 
                         let number = x.message.execution_payload.block_number;
-                        let payload_hash = x.message.execution_payload.block_hash;
-                        let payload_prev_hash = x.message.execution_payload.parent_hash;
+	                    let received_block_hash = x.canonical_root();
 
-                        info!("Received payload at height {number} {payload_prev_hash} -> {payload_hash}");
+                        info!("Received payload at height {number} {received_block_hash:?}");
                         let head_hash = self.head.read().await.as_ref().unwrap().hash;
                         let head_height = self.head.read().await.as_ref().unwrap().height;
                         debug!("Local head: {:#?}, height: {}", head_hash, head_height);
