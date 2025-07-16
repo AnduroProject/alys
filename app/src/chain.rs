@@ -47,6 +47,7 @@ use svix_ksuid::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
+use tracing_futures::Instrument;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -1940,73 +1941,140 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     async fn sync(self: Arc<Self>) {
-        info!("Syncing!");
-        *self.sync_status.write().await = SyncStatus::InProgress;
+        let ksuid = Ksuid::new(None, None);
+        let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        let peer_id = loop {
-            if let Some(peer) = self.peers.read().await.iter().next() {
-                break *peer;
-            }
-            info!("Waiting for peers...");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        };
+        async move {
+            info!("Syncing!");
+            *self.sync_status.write().await = SyncStatus::InProgress;
 
-        let head = self
-            .head
-            .read()
-            .await
-            .as_ref()
-            .map(|x| x.height)
-            .unwrap_or_default();
-        info!("Starting sync from {}", head);
-        CHAIN_SYNCING_OPERATION_TOTALS
-            .with_label_values(&[head.to_string().as_str(), "called"])
-            .inc();
-
-        let mut receive_stream = self
-            .network
-            .send_rpc(
-                peer_id,
-                OutboundRequest::BlocksByRange(
-                    crate::network::rpc::methods::BlocksByRangeRequest {
-                        start_height: head + 1,
-                        count: 1024,
-                    },
-                ),
-            )
-            .await
-            .unwrap();
-
-        while let Some(x) = receive_stream.recv().await {
-            match x {
-                RPCResponse::BlocksByRange(block) => {
-                    // trace!("Received block: {:#?}", block);
-                    match self.process_block((*block).clone()).await {
-                        Err(Error::ProcessGenesis) | Ok(_) => {
-                            // nothing to do
+            // Phase 1: Wait for peers
+            let peer_id = {
+                async {
+                    let mut wait_count = 0;
+                    loop {
+                        if let Some(peer) = self.peers.read().await.iter().next() {
+                            debug!("Found peer after {} attempts: {}", wait_count, peer);
+                            break *peer;
                         }
-                        Err(err) => {
-                            error!("Unexpected block import error: {:?}", err);
-                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
-                                error!("Failed to rollback head: {:?}", rollback_err);
-                            }
-
-                            return;
+                        wait_count += 1;
+                        if wait_count % 10 == 0 {
+                            info!("Waiting for peers... (attempt {})", wait_count);
+                        } else {
+                            debug!("Waiting for peers... (attempt {})", wait_count);
                         }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
-                err => {
-                    error!("Received unexpected result: {err:?}");
+                .instrument(tracing::debug_span!("wait_for_peers"))
+                .await
+            };
+
+            // Phase 2: Get current head and prepare sync request
+            let (head, start_height, block_count) = {
+                async {
+                    let head = self
+                        .head
+                        .read()
+                        .await
+                        .as_ref()
+                        .map(|x| x.height)
+                        .unwrap_or_default();
+                    let start_height = head + 1;
+                    let block_count = 1024;
+                    
+                    info!("Starting sync from height {} (requesting {} blocks from height {})", 
+                          head, block_count, start_height);
+                    
+                    CHAIN_SYNCING_OPERATION_TOTALS
+                        .with_label_values(&[head.to_string().as_str(), "called"])
+                        .inc();
+                        
+                    (head, start_height, block_count)
+                }
+                .instrument(tracing::debug_span!("prepare_sync_request"))
+                .await
+            };
+
+            // Phase 3: Send RPC request and process blocks
+            let mut receive_stream = {
+                async {
+                    self.network
+                        .send_rpc(
+                            peer_id,
+                            OutboundRequest::BlocksByRange(
+                                crate::network::rpc::methods::BlocksByRangeRequest {
+                                    start_height,
+                                    count: block_count,
+                                },
+                            ),
+                        )
+                        .await
+                        .unwrap()
+                }
+                .instrument(tracing::debug_span!("send_rpc_request", peer_id = %peer_id, start_height = start_height, block_count = block_count))
+                .await
+            };
+
+            let mut blocks_processed = 0;
+            let mut blocks_failed = 0;
+            let mut last_processed_height = head;
+
+            while let Some(x) = receive_stream.recv().await {
+                match x {
+                    RPCResponse::BlocksByRange(block) => {
+                        blocks_processed += 1;
+                        let block_height = block.message.execution_payload.block_number;
+                        
+                        trace!("Processing sync block at height {}", block_height);
+                        
+                        #[warn(unused_assignments)]
+                        match self.process_block((*block).clone()).await {
+                            Err(Error::ProcessGenesis) | Ok(_) => {
+                                last_processed_height = block_height;
+                                trace!("Successfully processed block at height {}", block_height);
+                            }
+                            Err(err) => {
+                                blocks_failed += 1;
+                                error!("Unexpected block import error at height {}: {:?}", block_height, err);
+                                
+                                async {
+                                    if let Err(rollback_err) = self.rollback_head(head - 1).await {
+                                        error!("Failed to rollback head: {:?}", rollback_err);
+                                    }
+                                }
+                                .instrument(tracing::debug_span!("rollback_on_sync_error", failed_height = block_height))
+                                .await;
+
+                                return;
+                            }
+                        }
+                    }
+                    err => {
+                        error!("Received unexpected result during sync: {err:?}");
+                    }
                 }
             }
+
+            // Phase 4: Complete sync
+            async {
+                *self.sync_status.write().await = SyncStatus::Synced;
+
+                info!("Finished syncing! Processed {} blocks, failed: {}, final height: {}", 
+                      blocks_processed, blocks_failed, last_processed_height);
+                CHAIN_SYNCING_OPERATION_TOTALS
+                    .with_label_values(&[head.to_string().as_str(), "success"])
+                    .inc();
+            }
+            .instrument(tracing::debug_span!("complete_sync", 
+                blocks_processed = blocks_processed,
+                blocks_failed = blocks_failed,
+                final_height = last_processed_height
+            ))
+            .await;
         }
-
-        *self.sync_status.write().await = SyncStatus::Synced;
-
-        info!("Finished syncing...");
-        CHAIN_SYNCING_OPERATION_TOTALS
-            .with_label_values(&[head.to_string().as_str(), "success"])
-            .inc();
+        .instrument(span)
+        .await
     }
 
     pub async fn listen_for_peer_discovery(self: Arc<Self>) {
