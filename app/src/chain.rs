@@ -666,7 +666,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         // Find the preceding finalized block
         let preceding_finalized = self.get_preceding_finalized_block(&target_block)?;
-        
+
         let rollback_block = if let Some(finalized) = preceding_finalized {
             // Use the preceding finalized block if found
             finalized
