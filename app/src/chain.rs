@@ -1982,14 +1982,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .unwrap_or_default();
                     let start_height = head + 1;
                     let block_count = 1024;
-                    
+
                     info!("Starting sync from height {} (requesting {} blocks from height {})", 
                           head, block_count, start_height);
-                    
+
                     CHAIN_SYNCING_OPERATION_TOTALS
                         .with_label_values(&[head.to_string().as_str(), "called"])
                         .inc();
-                        
+
                     (head, start_height, block_count)
                 }
                 .instrument(tracing::debug_span!("prepare_sync_request"))
@@ -2025,10 +2025,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     RPCResponse::BlocksByRange(block) => {
                         blocks_processed += 1;
                         let block_height = block.message.execution_payload.block_number;
-                        
+
                         trace!("Processing sync block at height {}", block_height);
-                        
-                        #[warn(unused_assignments)]
+
                         match self.process_block((*block).clone()).await {
                             Err(Error::ProcessGenesis) | Ok(_) => {
                                 last_processed_height = block_height;
@@ -2037,7 +2036,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             Err(err) => {
                                 blocks_failed += 1;
                                 error!("Unexpected block import error at height {}: {:?}", block_height, err);
-                                
+
                                 async {
                                     if let Err(rollback_err) = self.rollback_head(head - 1).await {
                                         error!("Failed to rollback head: {:?}", rollback_err);
