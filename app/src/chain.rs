@@ -587,23 +587,105 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
+    /// Finds the preceding finalized block for a given block.
+    ///
+    /// This method traverses backwards from the given block to find the most recent
+    /// finalized block (a block with auxpow_header). If the given block itself is
+    /// finalized, it returns the block that was finalized by the previous PoW block.
+    ///
+    /// # Arguments
+    /// * `block` - The block to find the preceding finalized block for
+    ///
+    /// # Returns
+    /// * `Ok(Some(block))` - The preceding finalized block if found
+    /// * `Ok(None)` - No preceding finalized block found (e.g., genesis block)
+    /// * `Err(Error)` - Error occurred during the search
+    fn get_preceding_finalized_block(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        let mut current_block = block.clone();
+
+        // If the current block is finalized (has auxpow_header), we need to find
+        // the block that was finalized by the previous PoW block
+        if let Some(ref auxpow) = current_block.message.auxpow_header {
+            // For genesis block (height 0), there's no preceding finalized block
+            if auxpow.height == 0 {
+                return Ok(None);
+            }
+
+            // The block at auxpow.range_end is the one that was finalized by this PoW
+            // We need to find the block that was finalized by the previous PoW
+            let finalized_block = self.storage.get_block(&auxpow.range_end)?;
+            if let Some(finalized) = finalized_block {
+                current_block = finalized;
+            } else {
+                return Err(Error::MissingBlock);
+            }
+        }
+
+        // Now traverse backwards to find the most recent finalized block
+        loop {
+            // Check if current block is finalized
+            if let Some(ref auxpow) = current_block.message.auxpow_header {
+                // For genesis block, return None as there's no preceding finalized block
+                if auxpow.height == 0 {
+                    return Ok(None);
+                }
+
+                // Return the block that was finalized by this PoW
+                let finalized_block = self.storage.get_block(&auxpow.range_end)?;
+                if let Some(finalized) = finalized_block {
+                    return Ok(Some(finalized));
+                } else {
+                    return Err(Error::MissingBlock);
+                }
+            }
+
+            // If not finalized, move to parent
+            if current_block.message.parent_hash.is_zero() {
+                // Reached genesis block without finding a finalized block
+                return Ok(None);
+            }
+
+            let parent_block = self.storage.get_block(&current_block.message.parent_hash)?;
+            if let Some(parent) = parent_block {
+                current_block = parent;
+            } else {
+                return Err(Error::MissingParent);
+            }
+        }
+    }
+
     async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
-        let prev_block_parent = self
+        // Get the block at the target height
+        let target_block = self
             .storage
             .get_block_by_height(target_height)?
             .ok_or(Error::MissingParent)?;
 
+        // Find the preceding finalized block
+        let preceding_finalized = self.get_preceding_finalized_block(&target_block)?;
+        
+        let rollback_block = if let Some(finalized) = preceding_finalized {
+            // Use the preceding finalized block if found
+            finalized
+        } else {
+            // Fall back to the target block if no preceding finalized block exists
+            target_block
+        };
+
         let update_head_ref_ops = self
             .update_head_ref_ops(
-                prev_block_parent.canonical_root(),
-                prev_block_parent.message.height(),
+                rollback_block.canonical_root(),
+                rollback_block.message.height(),
                 true,
             )
             .await;
 
         trace!(
-            "Rolling back head to {:?}",
-            prev_block_parent.message.height()
+            "Rolling back head to {:?} (preceding finalized block)",
+            rollback_block.message.height()
         );
 
         self.storage.commit_ops(update_head_ref_ops)?;
@@ -901,25 +983,25 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     /// Retrieves a sequence of block hashes from the blockchain between two specified blocks.
-    /// 
+    ///
     /// This method iterates backwards from the chain head (`to`) towards the last finalized block (`from`),
     /// collecting block hashes along the way. The method traverses the chain by following parent_hash
     /// references from each block.
-    /// 
+    ///
     /// # Parameters
     /// - `from`: The hash of the last finalized block (exclusive) - should have smaller block height than `to`
     /// - `to`: The hash of the chain head (inclusive) - should have larger block height than `from`
-    /// 
+    ///
     /// # Returns
     /// A vector of block hashes in chronological order (oldest to newest), where:
     /// - The first element is the block immediately after `from`
     /// - The last element is the chain head (`to`)
-    /// 
+    ///
     /// # Example
     /// If we have blocks 100 (finalized) and 105 (head):
     /// - `from` = block 100 hash (exclusive)
     /// - `to` = block 105 hash (inclusive)
-    /// 
+    ///
     /// The method will:
     /// 1. Start at block 105 (head) and push its hash to the array
     /// 2. Get block 105's parent (block 104) and push its hash
@@ -927,9 +1009,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     /// 4. Get block 103's parent (block 102) and push its hash
     /// 5. Get block 102's parent (block 101) and push its hash
     /// 6. Stop when reaching block 100 (from parameter)
-    /// 
+    ///
     /// After reversal, the returned array will be: [block101, block102, block103, block104, block105]
-    /// 
+    ///
     /// # Note
     /// The vector is reversed at the end because we collect hashes in reverse chronological order
     /// (newest to oldest) during iteration, but need to return them in chronological order
@@ -948,8 +1030,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let to_block = self.storage.get_block(&to)?.ok_or(Error::MissingBlock)?;
 
         // Assert that execution block number for `from` is smaller than `to`
-        if from_block.message.execution_payload.block_number >= to_block.message.execution_payload.block_number {
-            return Err(Error::InvalidBlockRange);
+        if from_block.message.execution_payload.block_number
+            >= to_block.message.execution_payload.block_number
+        {
+            return Ok(vec![from]);
         }
 
         loop {
