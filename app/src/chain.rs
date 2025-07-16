@@ -662,7 +662,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let target_block = self
             .storage
             .get_block_by_height(target_height)?
-            .ok_or(Error::MissingParent)?;
+            .ok_or(Error::MissingBlock)?;
 
         // Find the preceding finalized block
         let preceding_finalized = self.get_preceding_finalized_block(&target_block)?;
