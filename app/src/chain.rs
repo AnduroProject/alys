@@ -1284,7 +1284,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .ok_or(Error::MissingBlock)?;
 
         info!(
-            "Last finalized {} (height {}) in block {}",
+            "Last finalized range_end_hash={} range_end_height={} in block {}",
             last_finalized.hash, last_finalized.height, last_pow,
         );
         let range_start_block =
