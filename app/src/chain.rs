@@ -392,36 +392,67 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut rollback_head = false;
 
         // TODO: should we set forkchoice here?
-        let (prev, prev_payload_head) = match *(self.head.read().await) {
-            Some(ref x) => {
-                let prev = self
-                    .storage
-                    .get_block(&x.hash)
-                    .map_err(|_| Error::MissingParent)?
-                    .ok_or(Error::MissingParent)?;
+        let (prev, prev_payload_head) = {
+            let _span = tracing::info_span!("determine_previous_block", slot = slot).entered();
 
-                // make sure payload is built on top of the correct block
-                let prev_payload_hash = prev.message.execution_payload.block_hash;
-                prev_height = prev.message.execution_payload.block_number;
+            match *(self.head.read().await) {
+                Some(ref x) => {
+                    trace!("Head block found: hash={:?}, height={}", x.hash, x.height);
 
-                // make sure that the execution payload is available
-                let prev_payload_body = self
-                    .engine
-                    .api
-                    .get_payload_bodies_by_hash_v1::<MainnetEthSpec>(vec![prev_payload_hash])
-                    .await
-                    .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?;
+                    let prev = {
+                        let _span = tracing::debug_span!("get_previous_block", head_hash = %x.hash)
+                            .entered();
+                        self.storage
+                            .get_block(&x.hash)
+                            .map_err(|_| Error::MissingParent)?
+                            .ok_or(Error::MissingParent)?
+                    };
 
-                if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
-                    rollback_head = true;
+                    // make sure payload is built on top of the correct block
+                    let prev_payload_hash = prev.message.execution_payload.block_hash;
+                    prev_height = prev.message.execution_payload.block_number;
+
+                    trace!(
+                        "Previous block details: height={}, payload_hash={:?}",
+                        prev_height,
+                        prev_payload_hash
+                    );
+
+                    // make sure that the execution payload is available
+                    let prev_payload_body = {
+                        let _span = tracing::debug_span!(
+                            "check_payload_availability",
+                            payload_hash = %prev_payload_hash
+                        )
+                        .entered();
+
+                        self.engine
+                            .api
+                            .get_payload_bodies_by_hash_v1::<MainnetEthSpec>(vec![
+                                prev_payload_hash,
+                            ])
+                            .await
+                            .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?
+                    };
+
+                    if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
+                        warn!(
+                            "Payload body not available for hash {:?}, triggering rollback",
+                            prev_payload_hash
+                        );
+                        rollback_head = true;
+                        (Hash256::zero(), None)
+                    } else {
+                        trace!("Payload body available, proceeding with block production");
+                        (x.hash, Some(prev_payload_hash))
+                    }
+                }
+                None => {
+                    debug!("No head block found, starting from genesis");
                     (Hash256::zero(), None)
-                } else {
-                    (x.hash, Some(prev_payload_hash))
                 }
             }
-            None => (Hash256::zero(), None),
         };
-        debug!("Previous block: {:?}", prev);
 
         if rollback_head {
             warn!("No payload head found");
@@ -658,37 +689,97 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
+        info!("Starting head rollback to height {}", target_height);
+
         // Get the block at the target height
-        let target_block = self
-            .storage
-            .get_block_by_height(target_height)?
-            .ok_or(Error::MissingBlock)?;
+        let target_block = {
+            let _span =
+                tracing::debug_span!("get_target_block", target_height = target_height).entered();
+
+            let block = self
+                .storage
+                .get_block_by_height(target_height)?
+                .ok_or(Error::MissingBlock)?;
+
+            trace!(
+                "Retrieved target block: hash={:?}, height={}",
+                block.canonical_root(),
+                block.message.height()
+            );
+
+            block
+        };
 
         // Find the preceding finalized block
-        let preceding_finalized = self.get_preceding_finalized_block(&target_block)?;
+        let preceding_finalized = {
+            let _span = tracing::debug_span!("find_preceding_finalized_block").entered();
+
+            let finalized = self.get_preceding_finalized_block(&target_block)?;
+
+            match &finalized {
+                Some(block) => {
+                    trace!(
+                        "Found preceding finalized block: hash={:?}, height={}",
+                        block.canonical_root(),
+                        block.message.height()
+                    );
+                }
+                None => {
+                    debug!("No preceding finalized block found, will use target block");
+                }
+            }
+
+            finalized
+        };
 
         let rollback_block = if let Some(finalized) = preceding_finalized {
             // Use the preceding finalized block if found
+            trace!("Using preceding finalized block for rollback");
             finalized
         } else {
             // Fall back to the target block if no preceding finalized block exists
+            trace!("Using target block for rollback (no preceding finalized block)");
             target_block
         };
 
-        let update_head_ref_ops = self
-            .update_head_ref_ops(
-                rollback_block.canonical_root(),
-                rollback_block.message.height(),
+        let rollback_hash = rollback_block.canonical_root();
+        let rollback_height = rollback_block.message.height();
+        
+        let update_head_ref_ops = {
+            let _span = tracing::debug_span!(
+                "update_head_ref_ops",
+                rollback_hash = %rollback_hash,
+                rollback_height = rollback_height
+            )
+            .entered();
+            
+            // Drop the span before the await
+            drop(_span);
+            
+            self.update_head_ref_ops(
+                rollback_hash,
+                rollback_height,
                 true,
             )
-            .await;
+            .await
+        };
 
         trace!(
             "Rolling back head to {:?} (preceding finalized block)",
             rollback_block.message.height()
         );
 
-        self.storage.commit_ops(update_head_ref_ops)?;
+        {
+            let _span = tracing::debug_span!("commit_rollback_ops").entered();
+            self.storage.commit_ops(update_head_ref_ops)?;
+        }
+
+        info!(
+            "Successfully rolled back head to height {} (hash: {:?})",
+            rollback_block.message.height(),
+            rollback_block.canonical_root()
+        );
+
         Ok(())
     }
 
