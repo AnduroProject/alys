@@ -637,7 +637,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         _block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
         let _span = tracing::debug_span!("get_preceding_finalized_block").entered();
-        
+
         // Get the latest finalized block reference
         let latest_finalized_ref = {
             let _span = tracing::debug_span!("get_latest_finalized_block_ref").entered();
@@ -645,7 +645,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             trace!("Latest finalized block ref: {:?}", result);
             result
         };
-        
+
         if latest_finalized_ref.is_none() {
             debug!("No latest finalized block reference found");
             return Ok(None);
@@ -654,16 +654,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // Get the latest PoW block
         let latest_pow_ref = {
             let _span = tracing::debug_span!("get_latest_pow_block").entered();
-            let result = self.storage.get_latest_pow_block()?.ok_or(Error::MissingBlock)?;
-            trace!("Latest PoW block ref: hash={:?}, height={}", result.hash, result.height);
+            let result = self
+                .storage
+                .get_latest_pow_block()?
+                .ok_or(Error::MissingBlock)?;
+            trace!(
+                "Latest PoW block ref: hash={:?}, height={}",
+                result.hash,
+                result.height
+            );
             result
         };
 
         // Get the latest PoW block details
         let latest_pow_block = {
             let _span = tracing::debug_span!("get_latest_pow_block_details", pow_hash = %latest_pow_ref.hash).entered();
-            let result = self.storage.get_block(&latest_pow_ref.hash)?.ok_or(Error::MissingBlock)?;
-            trace!("Latest PoW block details: height={}", result.message.height());
+            let result = self
+                .storage
+                .get_block(&latest_pow_ref.hash)?
+                .ok_or(Error::MissingBlock)?;
+            trace!(
+                "Latest PoW block details: height={}",
+                result.message.height()
+            );
             result
         };
 
@@ -672,8 +685,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let _span = tracing::debug_span!("check_auxpow_header").entered();
             match &latest_pow_block.message.auxpow_header {
                 Some(auxpow) => {
-                    trace!("Found auxpow header: height={}, range_start={:?}, range_end={:?}", 
-                           auxpow.height, auxpow.range_start, auxpow.range_end);
+                    trace!(
+                        "Found auxpow header: height={}, range_start={:?}, range_end={:?}",
+                        auxpow.height,
+                        auxpow.range_start,
+                        auxpow.range_end
+                    );
                     auxpow
                 }
                 None => {
@@ -692,22 +709,29 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         // Find the previous PoW block by traversing backwards from the latest PoW block
         let mut current_block = latest_pow_block;
         let mut traversal_count = 0;
-        
+
         loop {
             traversal_count += 1;
-            
+
             if current_block.message.parent_hash.is_zero() {
-                debug!("Reached genesis without finding a previous PoW block after {} traversals", traversal_count);
+                debug!(
+                    "Reached genesis without finding a previous PoW block after {} traversals",
+                    traversal_count
+                );
                 return Ok(None);
             }
 
             let parent = {
-                let _span = tracing::debug_span!("get_parent_block", 
+                let _span = tracing::debug_span!("get_parent_block",
                     parent_hash = %current_block.message.parent_hash,
                     traversal_count = traversal_count
-                ).entered();
-                
-                let result = self.storage.get_block(&current_block.message.parent_hash)?.ok_or(Error::MissingParent)?;
+                )
+                .entered();
+
+                let result = self
+                    .storage
+                    .get_block(&current_block.message.parent_hash)?
+                    .ok_or(Error::MissingParent)?;
                 trace!("Retrieved parent block: height={}", result.message.height());
                 result
             };
@@ -715,27 +739,41 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             // Check if parent is a PoW block
             if let Some(ref parent_auxpow) = parent.message.auxpow_header {
                 // Found the previous PoW block
-                debug!("Found previous PoW block after {} traversals: height={}, range_end={:?}", 
-                       traversal_count, parent_auxpow.height, parent_auxpow.range_end);
-                
+                debug!(
+                    "Found previous PoW block after {} traversals: height={}, range_end={:?}",
+                    traversal_count, parent_auxpow.height, parent_auxpow.range_end
+                );
+
                 // Return the block that was finalized by this previous PoW
                 let finalized_block = {
-                    let _span = tracing::debug_span!("get_finalized_block", 
+                    let _span = tracing::debug_span!("get_finalized_block",
                         finalized_hash = %parent_auxpow.range_end
-                    ).entered();
-                    
-                    let result = self.storage.get_block(&parent_auxpow.range_end)?.ok_or(Error::MissingBlock)?;
-                    trace!("Retrieved finalized block: height={}", result.message.height());
+                    )
+                    .entered();
+
+                    let result = self
+                        .storage
+                        .get_block(&parent_auxpow.range_end)?
+                        .ok_or(Error::MissingBlock)?;
+                    trace!(
+                        "Retrieved finalized block: height={}",
+                        result.message.height()
+                    );
                     result
                 };
-                
-                info!("Found preceding finalized block: height={}, hash={:?}", 
-                      finalized_block.message.height(), finalized_block.canonical_root());
+
+                info!(
+                    "Found preceding finalized block: height={}, hash={:?}",
+                    finalized_block.message.height(),
+                    finalized_block.canonical_root()
+                );
                 return Ok(Some(finalized_block));
             } else {
                 // Parent is not a PoW block, continue searching
-                trace!("Parent block at height {} is not a PoW block, continuing traversal", 
-                       parent.message.height());
+                trace!(
+                    "Parent block at height {} is not a PoW block, continuing traversal",
+                    parent.message.height()
+                );
                 current_block = parent;
             }
         }
