@@ -1174,17 +1174,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             header.range_start, header.range_end,
         );
 
-        let last_pow_block = self.storage.get_latest_pow_block()?.unwrap();
-        let last_pow = last_pow_block.hash;
+        let last_pow_block_ref = self.storage.get_latest_pow_block()?.unwrap();
+        let last_pow = last_pow_block_ref.hash;
 
-        info!("Last pow block: {}", last_pow);
+        info!("Last pow block: {} ({})", last_pow, last_pow_block_ref.height);
 
         let last_pow_block = self
             .storage
             .get_block(&last_pow)?
             .ok_or(Error::MissingBlock)?;
 
-        info!("Last pow block {}", last_pow_block.canonical_root());
+        info!("Last pow block {} canonical root", last_pow_block.canonical_root());
 
         let last_finalized = self
             .get_latest_finalized_block_ref()?
