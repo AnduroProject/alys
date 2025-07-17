@@ -629,13 +629,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     /// * `block` - The block to find the preceding finalized block for
     ///
     /// # Returns
-    /// * `Ok(Some(block))` - The preceding finalized block if found
+    /// * `Ok(Some((finalized_block, pow_block)))` - The preceding finalized block and the PoW block that contains it if found
     /// * `Ok(None)` - No preceding finalized block found (e.g., genesis block)
     /// * `Err(Error)` - Error occurred during the search
     fn get_preceding_finalized_block(
         &self,
         _block: &SignedConsensusBlock<MainnetEthSpec>,
-    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+    ) -> Result<
+        Option<(
+            SignedConsensusBlock<MainnetEthSpec>,
+            SignedConsensusBlock<MainnetEthSpec>,
+        )>,
+        Error,
+    > {
         let _span = tracing::debug_span!("get_preceding_finalized_block").entered();
 
         // Get the latest finalized block reference
@@ -763,11 +769,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 };
 
                 info!(
-                    "Found preceding finalized block: height={}, hash={:?}",
+                    "Found preceding finalized block: height={}, hash={:?} (from PoW block: height={}, hash={:?})",
                     finalized_block.message.height(),
-                    finalized_block.canonical_root()
+                    finalized_block.canonical_root(),
+                    parent.message.height(),
+                    parent.canonical_root()
                 );
-                return Ok(Some(finalized_block));
+                return Ok(Some((finalized_block, parent)));
             } else {
                 // Parent is not a PoW block, continue searching
                 trace!(
@@ -808,11 +816,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             let finalized = self.get_preceding_finalized_block(&target_block)?;
 
             match &finalized {
-                Some(block) => {
+                Some((finalized_block, pow_block)) => {
                     trace!(
-                        "Found preceding finalized block: hash={:?}, height={}",
-                        block.canonical_root(),
-                        block.message.height()
+                        "Found preceding finalized block: hash={:?}, height={} (from PoW block: hash={:?}, height={})",
+                        finalized_block.canonical_root(),
+                        finalized_block.message.height(),
+                        pow_block.canonical_root(),
+                        pow_block.message.height()
                     );
                 }
                 None => {
@@ -823,20 +833,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             finalized
         };
 
-        let rollback_block = if let Some(finalized) = preceding_finalized {
-            // Use the preceding finalized block if found
-            trace!("Using preceding finalized block for rollback");
-            finalized
-        } else {
-            // Fall back to the target block if no preceding finalized block exists
-            trace!("Using target block for rollback (no preceding finalized block)");
-            target_block
-        };
+        let (rollback_block, latest_pow_block_ref) =
+            if let Some((finalized_block, pow_block)) = preceding_finalized {
+                // Use the preceding finalized block if found
+                trace!("Using preceding finalized block for rollback");
+                (finalized_block, Some(pow_block))
+            } else {
+                // Fall back to the target block if no preceding finalized block exists
+                trace!("Using target block for rollback (no preceding finalized block)");
+                (target_block, None)
+            };
 
         let rollback_hash = rollback_block.canonical_root();
         let rollback_height = rollback_block.message.height();
 
-        let update_head_ref_ops = {
+        let mut update_ops = {
             let _span = tracing::debug_span!(
                 "update_head_ref_ops",
                 rollback_hash = %rollback_hash,
@@ -851,6 +862,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .await
         };
 
+        // Update the latest PoW block if we found a preceding PoW block
+        if let Some(pow_block) = latest_pow_block_ref {
+            let pow_block_ref = BlockRef {
+                hash: pow_block.canonical_root(),
+                height: pow_block.message.execution_payload.block_number,
+            };
+            let pow_block_ops = self.storage.set_latest_pow_block(&pow_block_ref);
+            update_ops.extend(pow_block_ops);
+
+            info!(
+                "Updated latest PoW block to: height={}, hash={:?}",
+                pow_block_ref.height, pow_block_ref.hash
+            );
+        }
+
         trace!(
             "Rolling back head to {:?} (preceding finalized block)",
             rollback_block.message.height()
@@ -858,7 +884,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         {
             let _span = tracing::debug_span!("commit_rollback_ops").entered();
-            self.storage.commit_ops(update_head_ref_ops)?;
+            self.storage.commit_ops(update_ops)?;
         }
 
         info!(
