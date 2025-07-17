@@ -968,8 +968,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             error!(
                 "payload new: height {} hash {}",
-                unverified_block.message.execution_payload.block_hash,
-                unverified_block.message.execution_payload.block_number
+                unverified_block.message.execution_payload.block_number,
+                unverified_block.message.execution_payload.block_hash
             );
             error!(
                 "payload.prev.hash: {}",
@@ -977,8 +977,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             );
             error!(
                 "block.prev.payload height {} hash {}",
-                prev.message.execution_payload.block_hash,
-                prev.message.execution_payload.block_number
+                prev.message.execution_payload.block_number,
+                prev.message.execution_payload.block_hash
             );
             CHAIN_PROCESS_BLOCK_TOTALS
                 .with_label_values(&["rejected", "chain_incontiguous"])
@@ -990,9 +990,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self.aura.check_signed_by_author(&unverified_block)?;
 
         if self.is_validator {
-            self.check_withdrawals(&unverified_block).await?;
+            self.check_withdrawals(&unverified_block)
+                .instrument(tracing::debug_span!("check_withdrawals", 
+                    block_height = unverified_block.message.execution_payload.block_number,
+                    block_hash = %unverified_block.canonical_root()
+                ))
+                .await?;
 
             self.check_pegout_proposal(&unverified_block, prev_payload_hash)
+                .instrument(tracing::debug_span!("check_pegout_proposal", 
+                    block_height = unverified_block.message.execution_payload.block_number,
+                    block_hash = %unverified_block.canonical_root(),
+                    prev_payload_hash = %prev_payload_hash
+                ))
                 .await?;
         }
         trace!("Made it past withdrawals and pegouts");
