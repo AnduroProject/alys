@@ -40,7 +40,7 @@ use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::store::KeyValueStoreOp;
 use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use std::collections::{BTreeMap, HashSet};
-use std::ops::{Add, DerefMut, Div, Mul, Sub};
+use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use svix_ksuid::*;
@@ -1475,7 +1475,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 // nothing to do
             }
         } else {
-            debug!("Block {hash} not found in cache");
+            debug!("Block {hash:?} not found in cache");
             return Err(Error::CandidateCacheError);
         }
 
@@ -1860,10 +1860,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .inc();
 
                         let number = x.message.execution_payload.block_number;
-                        let payload_hash = x.message.execution_payload.block_hash;
-                        let payload_prev_hash = x.message.execution_payload.parent_hash;
+                        let received_block_hash = x.canonical_root();
 
-                        info!("Received payload at height {number} {payload_prev_hash} -> {payload_hash}");
+                        info!("Received payload at height {number} {received_block_hash:?}");
                         let head_hash = self.head.read().await.as_ref().unwrap().hash;
                         let head_height = self.head.read().await.as_ref().unwrap().height;
                         debug!("Local head: {:#?}, height: {}", head_hash, head_height);
@@ -2134,17 +2133,25 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 trace!("Successfully processed block at height {}", block_height);
                             }
                             Err(err) => {
-                                blocks_failed += 1;
-                                error!("Unexpected block import error at height {}: {:?}", block_height, err);
-
-                                async {
-                                    if let Err(rollback_err) = self.rollback_head(head - 1).await {
-                                        error!("Failed to rollback head: {:?}", rollback_err);
-                                    }
-                                }
-                                .instrument(tracing::debug_span!("rollback_on_sync_error", failed_height = block_height))
-                                .await;
-
+	                            let logging_closure = |blocks_failed_ref: &mut i32| {
+									blocks_failed_ref.add_assign(1);
+									error!("Unexpected block import error at height {}: {:?}", block_height, err);
+	                            };
+	                            match err {
+									Error::CandidateCacheError => {
+										logging_closure(&mut blocks_failed)
+									}
+		                            _ => {
+			                            async {
+										logging_closure(&mut blocks_failed);
+				                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
+					                            error!("Failed to rollback head: {:?}", rollback_err);
+				                            }
+			                            }
+				                            .instrument(tracing::debug_span!("rollback_on_sync_error", failed_height = block_height))
+				                            .await;
+		                            }
+	                            }
                                 return;
                             }
                         }
