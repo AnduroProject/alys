@@ -991,14 +991,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if self.is_validator {
             self.check_withdrawals(&unverified_block)
-                .instrument(tracing::debug_span!("check_withdrawals", 
+                .instrument(tracing::debug_span!("check_withdrawals",
                     block_height = unverified_block.message.execution_payload.block_number,
                     block_hash = %unverified_block.canonical_root()
                 ))
                 .await?;
 
             self.check_pegout_proposal(&unverified_block, prev_payload_hash)
-                .instrument(tracing::debug_span!("check_pegout_proposal", 
+                .instrument(tracing::debug_span!("check_pegout_proposal",
                     block_height = unverified_block.message.execution_payload.block_number,
                     block_hash = %unverified_block.canonical_root(),
                     prev_payload_hash = %prev_payload_hash
