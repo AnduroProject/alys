@@ -36,6 +36,8 @@ pub enum Error {
     InvalidPow,
     ChainSyncing,
     ChainError(ChainError),
+    MaxRetriesExceeded,
+    RpcRequestFailed,
     GenericError(eyre::Report),
 }
 

@@ -22,7 +22,7 @@ use crate::metrics::{
 use crate::network::rpc::InboundRequest;
 use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
 use crate::network::PubsubMessage;
-use crate::network::{ApproveBlock, Client as NetworkClient, OutboundRequest};
+use crate::network::{ApproveBlock, Client as NetworkClient};
 use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
@@ -41,7 +41,7 @@ use lighthouse_wrapper::store::KeyValueStoreOp;
 use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc};
 use svix_ksuid::*;
 use tokio::sync::broadcast::error::RecvError;
@@ -50,6 +50,62 @@ use tracing::*;
 use tracing_futures::Instrument;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
+
+/// Simple circuit breaker to avoid overwhelming failing peers with RPC requests
+#[derive(Debug)]
+struct RpcCircuitBreaker {
+    failure_count: u32,
+    last_failure_time: Option<Instant>,
+    is_open: bool,
+    failure_threshold: u32,
+    reset_timeout: Duration,
+}
+
+impl RpcCircuitBreaker {
+    fn new(failure_threshold: u32, reset_timeout: Duration) -> Self {
+        Self {
+            failure_count: 0,
+            last_failure_time: None,
+            is_open: false,
+            failure_threshold,
+            reset_timeout,
+        }
+    }
+
+    fn record_failure(&mut self) {
+        self.failure_count += 1;
+        self.last_failure_time = Some(Instant::now());
+        
+        if self.failure_count >= self.failure_threshold {
+            self.is_open = true;
+            warn!("Circuit breaker opened after {} failures", self.failure_count);
+        }
+    }
+
+    fn record_success(&mut self) {
+        self.failure_count = 0;
+        self.last_failure_time = None;
+        self.is_open = false;
+    }
+
+    fn can_attempt(&mut self) -> bool {
+        if !self.is_open {
+            return true;
+        }
+
+        // Check if enough time has passed to try again
+        if let Some(last_failure) = self.last_failure_time {
+            if last_failure.elapsed() >= self.reset_timeout {
+                self.is_open = false;
+                self.failure_count = 0;
+                debug!("Circuit breaker reset after timeout");
+                return true;
+            }
+        }
+        
+        false
+    }
+}
 
 #[derive(Debug)]
 enum SyncStatus {
@@ -84,6 +140,7 @@ pub struct Chain<DB> {
     pub retarget_params: BitcoinConsensusParams,
     pub is_validator: bool,
     pub block_hash_cache: Option<RwLock<BlockHashCache>>,
+    circuit_breaker: RwLock<RpcCircuitBreaker>,
 }
 
 const MAINNET_MAX_WITHDRAWALS: usize = 16;
@@ -153,6 +210,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             retarget_params,
             is_validator,
             block_hash_cache: Some(RwLock::new(BlockHashCache::new(None))),
+            circuit_breaker: RwLock::new(RpcCircuitBreaker::new(3, Duration::from_secs(60))),
         }
     }
 
@@ -1973,6 +2031,97 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(blocks)
     }
 
+    /// Sends a BlocksByRange RPC request with exponential backoff retry logic
+    async fn send_blocks_by_range_with_retry(
+        &self,
+        peer_id: PeerId,
+        request: crate::network::rpc::methods::BlocksByRangeRequest,
+        max_retries: u32,
+    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error> {
+        let mut attempt = 0;
+        let mut backoff = Duration::from_secs(1);
+        const MAX_BACKOFF: Duration = Duration::from_secs(30);
+        
+        // Check circuit breaker before attempting
+        {
+            let mut cb = self.circuit_breaker.write().await;
+            if !cb.can_attempt() {
+                return Err(Error::RpcRequestFailed);
+            }
+        }
+        
+        while attempt < max_retries {
+            match self.network
+                .send_rpc(
+                    peer_id,
+                    crate::network::rpc::OutboundRequest::BlocksByRange(request.clone()),
+                )
+                .await
+            {
+                Ok(stream) => {
+                    debug!("RPC request successful on attempt {}", attempt + 1);
+                    // Record success in circuit breaker
+                    self.circuit_breaker.write().await.record_success();
+                    return Ok(stream);
+                }
+                Err(err) => {
+                    attempt += 1;
+                    if attempt < max_retries {
+                        warn!("RPC request failed (attempt {}/{}): {:?}", attempt, max_retries, err);
+                        tokio::time::sleep(backoff).await;
+                        backoff = std::cmp::min(backoff * 2, MAX_BACKOFF); // Exponential backoff with cap
+                    } else {
+                        error!("RPC request failed after {} attempts: {:?}", max_retries, err);
+                        // Record failure in circuit breaker
+                        self.circuit_breaker.write().await.record_failure();
+                        return Err(Error::MaxRetriesExceeded);
+                    }
+                }
+            }
+        }
+        Err(Error::MaxRetriesExceeded)
+    }
+
+    /// Tries to send BlocksByRange request to multiple peers with fallback
+    async fn send_blocks_by_range_with_peer_fallback(
+        &self,
+        request: crate::network::rpc::methods::BlocksByRangeRequest,
+        max_retries_per_peer: u32,
+    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error> {
+        let available_peers: Vec<PeerId> = self.peers.read().await.iter().copied().collect();
+        
+        if available_peers.is_empty() {
+            return Err(Error::RpcRequestFailed);
+        }
+
+        for (peer_index, &peer_id) in available_peers.iter().enumerate() {
+            debug!("Trying peer {}/{}: {}", peer_index + 1, available_peers.len(), peer_id);
+            
+            match self.send_blocks_by_range_with_retry(peer_id, request.clone(), max_retries_per_peer).await {
+                Ok(stream) => {
+                    info!("Successfully connected to peer {} after trying {} peers", peer_id, peer_index + 1);
+                    return Ok(stream);
+                }
+                Err(Error::RpcRequestFailed) => {
+                    // Circuit breaker is open, don't try more peers
+                    warn!("Circuit breaker is open, stopping peer fallback");
+                    return Err(Error::RpcRequestFailed);
+                }
+                Err(err) => {
+                    warn!("Failed to connect to peer {}: {:?}", peer_id, err);
+                    if peer_index == available_peers.len() - 1 {
+                        // Last peer failed
+                        error!("All {} peers failed for BlocksByRange request", available_peers.len());
+                        return Err(Error::RpcRequestFailed);
+                    }
+                    // Continue to next peer
+                }
+            }
+        }
+        
+        Err(Error::RpcRequestFailed)
+    }
+
     async fn sync(self: Arc<Self>) {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
@@ -1982,7 +2131,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             *self.sync_status.write().await = SyncStatus::InProgress;
 
             // Phase 1: Wait for peers
-            let peer_id = {
+            let _peer_id = {
                 async {
                     let mut wait_count = 0;
                     loop {
@@ -2030,23 +2179,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             };
 
             // Phase 3: Send RPC request and process blocks
-            let mut receive_stream = {
-                async {
-                    self.network
-                        .send_rpc(
-                            peer_id,
-                            OutboundRequest::BlocksByRange(
-                                crate::network::rpc::methods::BlocksByRangeRequest {
-                                    start_height,
-                                    count: block_count,
-                                },
-                            ),
-                        )
-                        .await
-                        .unwrap()
+            let request = crate::network::rpc::methods::BlocksByRangeRequest {
+                start_height,
+                count: block_count,
+            };
+            
+            // Use peer fallback with retry logic instead of unwrap
+            let mut receive_stream = match self.send_blocks_by_range_with_peer_fallback(request, 3).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    error!("Failed to establish RPC connection with any peer: {:?}", err);
+                    return; // Exit sync, will be retriggered by reactive mechanisms
                 }
-                .instrument(tracing::debug_span!("send_rpc_request", peer_id = %peer_id, start_height = start_height, block_count = block_count))
-                .await
             };
 
             let mut blocks_processed = 0;
@@ -2154,12 +2298,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 Arc::new(block.clone()),
                             ));
                             // FIXME: handle result
-                            if let Err(_err) = self
+                            if let Err(err) = self
                                 .network
                                 .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
                                 .await
                             {
-                                // error!("Failed to respond to rpc BlocksByRange request: {err:?}");
+                                // If peer disconnects during block transmission, stop sending more blocks
+                                debug!("Peer disconnected during block transmission: {err:?}");
+                                break;
                             }
                         }
 
@@ -2171,7 +2317,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
                             .await
                         {
-                            error!("Failed to respond to rpc BlocksByRange request to terminate: {err:?}");
+                            // This error is expected when the peer disconnects before we can send termination
+                            // Only log as debug since it's not a real error condition
+                            debug!("Peer disconnected before termination message could be sent: {err:?}");
                         }
                     }
                     _ => {
