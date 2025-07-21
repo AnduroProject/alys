@@ -40,13 +40,14 @@ use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::store::KeyValueStoreOp;
 use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use std::collections::{BTreeMap, HashSet};
-use std::ops::{Add, DerefMut, Div, Mul, Sub};
+use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use svix_ksuid::*;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
+use tracing_futures::Instrument;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -392,36 +393,67 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let mut rollback_head = false;
 
         // TODO: should we set forkchoice here?
-        let (prev, prev_payload_head) = match *(self.head.read().await) {
-            Some(ref x) => {
-                let prev = self
-                    .storage
-                    .get_block(&x.hash)
-                    .map_err(|_| Error::MissingParent)?
-                    .ok_or(Error::MissingParent)?;
+        let (prev, prev_payload_head) = {
+            let _span = tracing::info_span!("determine_previous_block", slot = slot).entered();
 
-                // make sure payload is built on top of the correct block
-                let prev_payload_hash = prev.message.execution_payload.block_hash;
-                prev_height = prev.message.execution_payload.block_number;
+            match *(self.head.read().await) {
+                Some(ref x) => {
+                    trace!("Head block found: hash={:?}, height={}", x.hash, x.height);
 
-                // make sure that the execution payload is available
-                let prev_payload_body = self
-                    .engine
-                    .api
-                    .get_payload_bodies_by_hash_v1::<MainnetEthSpec>(vec![prev_payload_hash])
-                    .await
-                    .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?;
+                    let prev = {
+                        let _span = tracing::debug_span!("get_previous_block", head_hash = %x.hash)
+                            .entered();
+                        self.storage
+                            .get_block(&x.hash)
+                            .map_err(|_| Error::MissingParent)?
+                            .ok_or(Error::MissingParent)?
+                    };
 
-                if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
-                    rollback_head = true;
+                    // make sure payload is built on top of the correct block
+                    let prev_payload_hash = prev.message.execution_payload.block_hash;
+                    prev_height = prev.message.execution_payload.block_number;
+
+                    trace!(
+                        "Previous block details: height={}, payload_hash={:?}",
+                        prev_height,
+                        prev_payload_hash
+                    );
+
+                    // make sure that the execution payload is available
+                    let prev_payload_body = {
+                        let _span = tracing::debug_span!(
+                            "check_payload_availability",
+                            payload_hash = %prev_payload_hash
+                        )
+                        .entered();
+
+                        self.engine
+                            .api
+                            .get_payload_bodies_by_hash_v1::<MainnetEthSpec>(vec![
+                                prev_payload_hash,
+                            ])
+                            .await
+                            .map_err(|_| Error::ExecutionLayerError(MissingLatestValidHash))?
+                    };
+
+                    if prev_payload_body.is_empty() || prev_payload_body[0].is_none() {
+                        warn!(
+                            "Payload body not available for hash {:?}, triggering rollback",
+                            prev_payload_hash
+                        );
+                        rollback_head = true;
+                        (Hash256::zero(), None)
+                    } else {
+                        trace!("Payload body available, proceeding with block production");
+                        (x.hash, Some(prev_payload_hash))
+                    }
+                }
+                None => {
+                    debug!("No head block found, starting from genesis");
                     (Hash256::zero(), None)
-                } else {
-                    (x.hash, Some(prev_payload_hash))
                 }
             }
-            None => (Hash256::zero(), None),
         };
-        debug!("Previous block: {:?}", prev);
 
         if rollback_head {
             warn!("No payload head found");
@@ -587,26 +619,188 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
-    async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
-        let prev_block_parent = self
-            .storage
-            .get_block_by_height(target_height)?
-            .ok_or(Error::MissingParent)?;
+    /// Finds the PoW block at or before the given target height for rollback
+    ///
+    /// This method traverses backwards from the target height to find the first PoW block
+    /// that should become the new latest PoW block after rollback.
+    ///
+    /// # Arguments
+    /// * `target_height` - The height we want to roll back to
+    ///
+    /// # Returns
+    /// * `Ok(Some(pow_block))` - The PoW block that should become the new latest PoW block
+    /// * `Ok(None)` - No PoW block found (e.g., target height is before any PoW block)
+    /// * `Err(Error)` - Error occurred during the search
+    fn find_pow_block_for_rollback(
+        &self,
+        target_height: u64,
+    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        let _span = tracing::debug_span!("find_pow_block_for_rollback", target_height = target_height).entered();
 
-        let update_head_ref_ops = self
-            .update_head_ref_ops(
-                prev_block_parent.canonical_root(),
-                prev_block_parent.message.height(),
-                true,
+        // Get the block at the target height
+        let target_block = {
+            let _span = tracing::debug_span!("get_target_block", target_height = target_height).entered();
+            let result = self
+                .storage
+                .get_block_by_height(target_height)?
+                .ok_or(Error::MissingBlock)?;
+            trace!(
+                "Retrieved target block: hash={:?}, height={}",
+                result.canonical_root(),
+                result.message.height()
+            );
+            result
+        };
+
+        // Start traversing backwards from the target block to find a PoW block
+        let mut current_block = target_block;
+        let mut traversal_count = 0;
+
+        loop {
+            traversal_count += 1;
+
+            // Check if current block is a PoW block
+            if let Some(ref auxpow) = current_block.message.auxpow_header {
+                debug!(
+                    "Found PoW block at height {} after {} traversals: range_end={:?}",
+                    current_block.message.height(),
+                    traversal_count,
+                    auxpow.range_end
+                );
+                return Ok(Some(current_block));
+            }
+
+            // If we've reached genesis, no PoW block found
+            if current_block.message.parent_hash.is_zero() {
+                debug!(
+                    "Reached genesis without finding a PoW block after {} traversals",
+                    traversal_count
+                );
+                return Ok(None);
+            }
+
+            // Get the parent block and continue searching
+            let parent = {
+                let _span = tracing::debug_span!("get_parent_block",
+                    parent_hash = %current_block.message.parent_hash,
+                    traversal_count = traversal_count
+                )
+                .entered();
+
+                let result = self
+                    .storage
+                    .get_block(&current_block.message.parent_hash)?
+                    .ok_or(Error::MissingParent)?;
+                trace!("Retrieved parent block: height={}", result.message.height());
+                result
+            };
+
+            current_block = parent;
+        }
+    }
+
+    async fn rollback_head(self: &Arc<Self>, target_height: u64) -> Result<(), Error> {
+        info!("Starting head rollback to height {}", target_height);
+
+        // Get the block at the target height
+        let target_block = {
+            let _span =
+                tracing::debug_span!("get_target_block", target_height = target_height).entered();
+
+            let block = self
+                .storage
+                .get_block_by_height(target_height)?
+                .ok_or(Error::MissingBlock)?;
+
+            trace!(
+                "Retrieved target block: hash={:?}, height={}",
+                block.canonical_root(),
+                block.message.height()
+            );
+
+            block
+        };
+
+        // Find the PoW block for rollback
+        let pow_block_for_rollback = {
+            let _span = tracing::debug_span!("find_pow_block_for_rollback").entered();
+
+            let pow_block = self.find_pow_block_for_rollback(target_height)?;
+
+            match &pow_block {
+                Some(block) => {
+                    trace!(
+                        "Found PoW block for rollback: hash={:?}, height={}",
+                        block.canonical_root(),
+                        block.message.height()
+                    );
+                }
+                None => {
+                    debug!("No PoW block found for rollback, will use target block");
+                }
+            }
+
+            pow_block
+        };
+
+        // Use the target block as the rollback block
+        let rollback_block = target_block;
+        let latest_pow_block_ref = pow_block_for_rollback;
+
+        let rollback_hash = rollback_block.canonical_root();
+        let rollback_height = rollback_block.message.height();
+
+        let mut update_ops = {
+            let _span = tracing::debug_span!(
+                "update_head_ref_ops",
+                rollback_hash = %rollback_hash,
+                rollback_height = rollback_height
             )
-            .await;
+            .entered();
+
+            // Drop the span before the await
+            drop(_span);
+
+            self.update_head_ref_ops(rollback_hash, rollback_height, true)
+                .await
+        };
+
+        // Update the latest PoW block if we found a PoW block for rollback
+        if let Some(pow_block) = latest_pow_block_ref {
+            let pow_block_ref = BlockRef {
+                hash: pow_block.canonical_root(),
+                height: pow_block.message.execution_payload.block_number,
+            };
+            let pow_block_ops = self.storage.set_latest_pow_block(&pow_block_ref);
+            update_ops.extend(pow_block_ops);
+            
+            info!(
+                "Updated latest PoW block to: height={}, hash={:?} for rollback to height {}",
+                pow_block_ref.height, pow_block_ref.hash, target_height
+            );
+        } else {
+            info!(
+                "No PoW block found for rollback to height {}, latest PoW block unchanged",
+                target_height
+            );
+        }
 
         trace!(
-            "Rolling back head to {:?}",
-            prev_block_parent.message.height()
+            "Rolling back head to height {} (target block)",
+            rollback_block.message.height()
         );
 
-        self.storage.commit_ops(update_head_ref_ops)?;
+        {
+            let _span = tracing::debug_span!("commit_rollback_ops").entered();
+            self.storage.commit_ops(update_ops)?;
+        }
+
+        info!(
+            "Successfully rolled back head to height {} (hash: {:?})",
+            rollback_block.message.height(),
+            rollback_block.canonical_root()
+        );
+
         Ok(())
     }
 
@@ -708,8 +902,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             error!(
                 "payload new: height {} hash {}",
-                unverified_block.message.execution_payload.block_hash,
-                unverified_block.message.execution_payload.block_number
+                unverified_block.message.execution_payload.block_number,
+                unverified_block.message.execution_payload.block_hash
             );
             error!(
                 "payload.prev.hash: {}",
@@ -717,8 +911,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             );
             error!(
                 "block.prev.payload height {} hash {}",
-                prev.message.execution_payload.block_hash,
-                prev.message.execution_payload.block_number
+                prev.message.execution_payload.block_number,
+                prev.message.execution_payload.block_hash
             );
             CHAIN_PROCESS_BLOCK_TOTALS
                 .with_label_values(&["rejected", "chain_incontiguous"])
@@ -730,9 +924,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         self.aura.check_signed_by_author(&unverified_block)?;
 
         if self.is_validator {
-            self.check_withdrawals(&unverified_block).await?;
+            self.check_withdrawals(&unverified_block)
+                .instrument(tracing::debug_span!("check_withdrawals",
+                    block_height = unverified_block.message.execution_payload.block_number,
+                    block_hash = %unverified_block.canonical_root()
+                ))
+                .await?;
 
             self.check_pegout_proposal(&unverified_block, prev_payload_hash)
+                .instrument(tracing::debug_span!("check_pegout_proposal",
+                    block_height = unverified_block.message.execution_payload.block_number,
+                    block_hash = %unverified_block.canonical_root(),
+                    prev_payload_hash = %prev_payload_hash
+                ))
                 .await?;
         }
         trace!("Made it past withdrawals and pegouts");
@@ -900,6 +1104,40 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(ret)
     }
 
+    /// Retrieves a sequence of block hashes from the blockchain between two specified blocks.
+    ///
+    /// This method iterates backwards from the chain head (`to`) towards the last finalized block (`from`),
+    /// collecting block hashes along the way. The method traverses the chain by following parent_hash
+    /// references from each block.
+    ///
+    /// # Parameters
+    /// - `from`: The hash of the last finalized block (exclusive) - should have smaller block height than `to`
+    /// - `to`: The hash of the chain head (inclusive) - should have larger block height than `from`
+    ///
+    /// # Returns
+    /// A vector of block hashes in chronological order (oldest to newest), where:
+    /// - The first element is the block immediately after `from`
+    /// - The last element is the chain head (`to`)
+    ///
+    /// # Example
+    /// If we have blocks 100 (finalized) and 105 (head):
+    /// - `from` = block 100 hash (exclusive)
+    /// - `to` = block 105 hash (inclusive)
+    ///
+    /// The method will:
+    /// 1. Start at block 105 (head) and push its hash to the array
+    /// 2. Get block 105's parent (block 104) and push its hash
+    /// 3. Get block 104's parent (block 103) and push its hash
+    /// 4. Get block 103's parent (block 102) and push its hash
+    /// 5. Get block 102's parent (block 101) and push its hash
+    /// 6. Stop when reaching block 100 (from parameter)
+    ///
+    /// After reversal, the returned array will be: [block101, block102, block103, block104, block105]
+    ///
+    /// # Note
+    /// The vector is reversed at the end because we collect hashes in reverse chronological order
+    /// (newest to oldest) during iteration, but need to return them in chronological order
+    /// (oldest to newest) for proper processing.
     fn get_hashes(
         &self,
         from: Hash256, // exclusive
@@ -908,6 +1146,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         trace!("Getting hashes from {:?} to {:?}", from, to);
         let mut current = to;
         let mut hashes = vec![];
+
+        // Query block inputs to assert the range is valid
+        let from_block = self.storage.get_block(&from)?.ok_or(Error::MissingBlock)?;
+        let to_block = self.storage.get_block(&to)?.ok_or(Error::MissingBlock)?;
+
+        // Assert that execution block number for `from` is smaller than `to`
+        if from_block.message.execution_payload.block_number
+            >= to_block.message.execution_payload.block_number
+        {
+            return Ok(vec![from]);
+        }
+
         loop {
             if current == from {
                 break;
@@ -955,23 +1205,30 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             header.range_start, header.range_end,
         );
 
-        let last_pow_block = self.storage.get_latest_pow_block()?.unwrap();
-        let last_pow = last_pow_block.hash;
+        let last_pow_block_ref = self.storage.get_latest_pow_block()?.unwrap();
+        let last_pow = last_pow_block_ref.hash;
 
-        info!("Last pow block: {}", last_pow);
+        info!(
+            "Last pow block: {} ({})",
+            last_pow, last_pow_block_ref.height
+        );
 
         let last_pow_block = self
             .storage
             .get_block(&last_pow)?
-            .ok_or(Error::MissingParent)?;
-        info!("Last pow block {}", last_pow_block.canonical_root());
+            .ok_or(Error::MissingBlock)?;
+
+        info!(
+            "Last pow block {} canonical root",
+            last_pow_block.canonical_root()
+        );
 
         let last_finalized = self
             .get_latest_finalized_block_ref()?
-            .ok_or(Error::MissingParent)?;
+            .ok_or(Error::MissingBlock)?;
 
         info!(
-            "Last finalized {} (height {}) in block {}",
+            "Last finalized range_end_hash={} range_end_height={} in block {}",
             last_finalized.hash, last_finalized.height, last_pow,
         );
         let range_start_block =
@@ -1097,23 +1354,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         Ok(Some(block)) => block.block_ref(),
                         Ok(None) => {
                             error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.height
-                            );
-                            error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.hash
+                                "Failed to get last block in prev-aux range {:?} ({})",
+                                blockref.hash, blockref.height
                             );
                             return Err(Error::InvalidBlockRange);
                         }
                         Err(e) => {
                             error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.height
-                            );
-                            error!(
-                                "Failed to get last block in prev-aux range {:?}",
-                                blockref.hash
+                                "Failed to get last block in prev-aux range {:?} ({})",
+                                blockref.hash, blockref.height
                             );
                             return Err(Error::GenericError(Report::from(e)));
                         }
@@ -1160,7 +1409,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 // nothing to do
             }
         } else {
-            debug!("Block {hash} not found in cache");
+            debug!("Block {hash:?} not found in cache");
             return Err(Error::CandidateCacheError);
         }
 
@@ -1545,10 +1794,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .inc();
 
                         let number = x.message.execution_payload.block_number;
-                        let payload_hash = x.message.execution_payload.block_hash;
-                        let payload_prev_hash = x.message.execution_payload.parent_hash;
+                        let received_block_hash = x.canonical_root();
 
-                        info!("Received payload at height {number} {payload_prev_hash} -> {payload_hash}");
+                        info!("Received payload at height {number} {received_block_hash:?}");
                         let head_hash = self.head.read().await.as_ref().unwrap().hash;
                         let head_height = self.head.read().await.as_ref().unwrap().height;
                         debug!("Local head: {:#?}, height: {}", head_hash, head_height);
@@ -1726,73 +1974,147 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     }
 
     async fn sync(self: Arc<Self>) {
-        info!("Syncing!");
-        *self.sync_status.write().await = SyncStatus::InProgress;
+        let ksuid = Ksuid::new(None, None);
+        let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        let peer_id = loop {
-            if let Some(peer) = self.peers.read().await.iter().next() {
-                break *peer;
-            }
-            info!("Waiting for peers...");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        };
+        async move {
+            info!("Syncing!");
+            *self.sync_status.write().await = SyncStatus::InProgress;
 
-        let head = self
-            .head
-            .read()
-            .await
-            .as_ref()
-            .map(|x| x.height)
-            .unwrap_or_default();
-        info!("Starting sync from {}", head);
-        CHAIN_SYNCING_OPERATION_TOTALS
-            .with_label_values(&[head.to_string().as_str(), "called"])
-            .inc();
-
-        let mut receive_stream = self
-            .network
-            .send_rpc(
-                peer_id,
-                OutboundRequest::BlocksByRange(
-                    crate::network::rpc::methods::BlocksByRangeRequest {
-                        start_height: head + 1,
-                        count: 1024,
-                    },
-                ),
-            )
-            .await
-            .unwrap();
-
-        while let Some(x) = receive_stream.recv().await {
-            match x {
-                RPCResponse::BlocksByRange(block) => {
-                    // trace!("Received block: {:#?}", block);
-                    match self.process_block((*block).clone()).await {
-                        Err(Error::ProcessGenesis) | Ok(_) => {
-                            // nothing to do
+            // Phase 1: Wait for peers
+            let peer_id = {
+                async {
+                    let mut wait_count = 0;
+                    loop {
+                        if let Some(peer) = self.peers.read().await.iter().next() {
+                            debug!("Found peer after {} attempts: {}", wait_count, peer);
+                            break *peer;
                         }
-                        Err(err) => {
-                            error!("Unexpected block import error: {:?}", err);
-                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
-                                error!("Failed to rollback head: {:?}", rollback_err);
-                            }
-
-                            return;
+                        wait_count += 1;
+                        if wait_count % 10 == 0 {
+                            info!("Waiting for peers... (attempt {})", wait_count);
+                        } else {
+                            debug!("Waiting for peers... (attempt {})", wait_count);
                         }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
-                err => {
-                    error!("Received unexpected result: {err:?}");
+                .instrument(tracing::debug_span!("wait_for_peers"))
+                .await
+            };
+
+            // Phase 2: Get current head and prepare sync request
+            let (head, start_height, block_count) = {
+                async {
+                    let head = self
+                        .head
+                        .read()
+                        .await
+                        .as_ref()
+                        .map(|x| x.height)
+                        .unwrap_or_default();
+                    let start_height = head + 1;
+                    let block_count = 1024;
+
+                    info!("Starting sync from height {} (requesting {} blocks from height {})", 
+                          head, block_count, start_height);
+
+                    CHAIN_SYNCING_OPERATION_TOTALS
+                        .with_label_values(&[head.to_string().as_str(), "called"])
+                        .inc();
+
+                    (head, start_height, block_count)
+                }
+                .instrument(tracing::debug_span!("prepare_sync_request"))
+                .await
+            };
+
+            // Phase 3: Send RPC request and process blocks
+            let mut receive_stream = {
+                async {
+                    self.network
+                        .send_rpc(
+                            peer_id,
+                            OutboundRequest::BlocksByRange(
+                                crate::network::rpc::methods::BlocksByRangeRequest {
+                                    start_height,
+                                    count: block_count,
+                                },
+                            ),
+                        )
+                        .await
+                        .unwrap()
+                }
+                .instrument(tracing::debug_span!("send_rpc_request", peer_id = %peer_id, start_height = start_height, block_count = block_count))
+                .await
+            };
+
+            let mut blocks_processed = 0;
+            let mut blocks_failed = 0;
+            let mut last_processed_height = head;
+
+            while let Some(x) = receive_stream.recv().await {
+                match x {
+                    RPCResponse::BlocksByRange(block) => {
+                        blocks_processed += 1;
+                        let block_height = block.message.execution_payload.block_number;
+
+                        trace!("Processing sync block at height {}", block_height);
+
+                        match self.process_block((*block).clone()).await {
+                            Err(Error::ProcessGenesis) | Ok(_) => {
+                                last_processed_height = block_height;
+                                trace!("Successfully processed block at height {}", block_height);
+                            }
+                            Err(err) => {
+	                            let logging_closure = |blocks_failed_ref: &mut i32| {
+									blocks_failed_ref.add_assign(1);
+									error!("Unexpected block import error at height {}: {:?}", block_height, err);
+	                            };
+	                            match err {
+									Error::CandidateCacheError => {
+										logging_closure(&mut blocks_failed)
+									}
+		                            _ => {
+			                            async {
+										logging_closure(&mut blocks_failed);
+				                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
+					                            error!("Failed to rollback head: {:?}", rollback_err);
+				                            }
+			                            }
+				                            .instrument(tracing::debug_span!("rollback_on_sync_error", failed_height = block_height))
+				                            .await;
+		                            }
+	                            }
+                                return;
+                            }
+                        }
+                    }
+                    err => {
+                        error!("Received unexpected result during sync: {err:?}");
+                    }
                 }
             }
+
+            // Phase 4: Complete sync
+            async {
+                *self.sync_status.write().await = SyncStatus::Synced;
+
+                info!("Finished syncing! Processed {} blocks, failed: {}, final height: {}", 
+                      blocks_processed, blocks_failed, last_processed_height);
+                CHAIN_SYNCING_OPERATION_TOTALS
+                    .with_label_values(&[head.to_string().as_str(), "success"])
+                    .inc();
+            }
+            .instrument(tracing::debug_span!("complete_sync", 
+                blocks_processed = blocks_processed,
+                blocks_failed = blocks_failed,
+                final_height = last_processed_height
+            ))
+            .await;
         }
-
-        *self.sync_status.write().await = SyncStatus::Synced;
-
-        info!("Finished syncing...");
-        CHAIN_SYNCING_OPERATION_TOTALS
-            .with_label_values(&[head.to_string().as_str(), "success"])
-            .inc();
+        .instrument(span)
+        .await
     }
 
     pub async fn listen_for_peer_discovery(self: Arc<Self>) {
