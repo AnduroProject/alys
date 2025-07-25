@@ -48,6 +48,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use tracing_futures::Instrument;
+use rand::seq::SliceRandom;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -2135,9 +2136,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 async {
                     let mut wait_count = 0;
                     loop {
-                        if let Some(peer) = self.peers.read().await.iter().next() {
-                            debug!("Found peer after {} attempts: {}", wait_count, peer);
-                            break *peer;
+                        let peers = self.peers.read().await;
+                        if let Some(selected_peer) = peers.iter().collect::<Vec<_>>().choose(&mut rand::thread_rng()) {
+                            let selected_peer = **selected_peer;
+                            debug!("Found peer after {} attempts: {}", wait_count, selected_peer);
+                            break selected_peer;
                         }
                         wait_count += 1;
                         if wait_count % 10 == 0 {
