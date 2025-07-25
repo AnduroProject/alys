@@ -39,6 +39,7 @@ use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
 use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::store::KeyValueStoreOp;
 use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
+use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
 use std::time::{Duration, Instant};
@@ -48,7 +49,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use tracing_futures::Instrument;
-use rand::seq::SliceRandom;
 
 pub(crate) type BitcoinWallet = UtxoManager<Tree>;
 
@@ -76,10 +76,13 @@ impl RpcCircuitBreaker {
     fn record_failure(&mut self) {
         self.failure_count += 1;
         self.last_failure_time = Some(Instant::now());
-        
+
         if self.failure_count >= self.failure_threshold {
             self.is_open = true;
-            warn!("Circuit breaker opened after {} failures", self.failure_count);
+            warn!(
+                "Circuit breaker opened after {} failures",
+                self.failure_count
+            );
         }
     }
 
@@ -103,7 +106,7 @@ impl RpcCircuitBreaker {
                 return true;
             }
         }
-        
+
         false
     }
 }
@@ -694,11 +697,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         target_height: u64,
     ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
-        let _span = tracing::debug_span!("find_pow_block_for_rollback", target_height = target_height).entered();
+        let _span =
+            tracing::debug_span!("find_pow_block_for_rollback", target_height = target_height)
+                .entered();
 
         // Get the block at the target height
         let target_block = {
-            let _span = tracing::debug_span!("get_target_block", target_height = target_height).entered();
+            let _span =
+                tracing::debug_span!("get_target_block", target_height = target_height).entered();
             let result = self
                 .storage
                 .get_block_by_height(target_height)?
@@ -832,7 +838,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             };
             let pow_block_ops = self.storage.set_latest_pow_block(&pow_block_ref);
             update_ops.extend(pow_block_ops);
-            
+
             info!(
                 "Updated latest PoW block to: height={}, hash={:?} for rollback to height {}",
                 pow_block_ref.height, pow_block_ref.hash, target_height
@@ -2038,11 +2044,12 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         peer_id: PeerId,
         request: crate::network::rpc::methods::BlocksByRangeRequest,
         max_retries: u32,
-    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error> {
+    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error>
+    {
         let mut attempt = 0;
         let mut backoff = Duration::from_secs(1);
         const MAX_BACKOFF: Duration = Duration::from_secs(30);
-        
+
         // Check circuit breaker before attempting
         {
             let mut cb = self.circuit_breaker.write().await;
@@ -2050,9 +2057,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 return Err(Error::RpcRequestFailed);
             }
         }
-        
+
         while attempt < max_retries {
-            match self.network
+            match self
+                .network
                 .send_rpc(
                     peer_id,
                     crate::network::rpc::OutboundRequest::BlocksByRange(request.clone()),
@@ -2068,11 +2076,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 Err(err) => {
                     attempt += 1;
                     if attempt < max_retries {
-                        warn!("RPC request failed (attempt {}/{}): {:?}", attempt, max_retries, err);
+                        warn!(
+                            "RPC request failed (attempt {}/{}): {:?}",
+                            attempt, max_retries, err
+                        );
                         tokio::time::sleep(backoff).await;
                         backoff = std::cmp::min(backoff * 2, MAX_BACKOFF); // Exponential backoff with cap
                     } else {
-                        error!("RPC request failed after {} attempts: {:?}", max_retries, err);
+                        error!(
+                            "RPC request failed after {} attempts: {:?}",
+                            max_retries, err
+                        );
                         // Record failure in circuit breaker
                         self.circuit_breaker.write().await.record_failure();
                         return Err(Error::MaxRetriesExceeded);
@@ -2088,19 +2102,32 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         request: crate::network::rpc::methods::BlocksByRangeRequest,
         max_retries_per_peer: u32,
-    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error> {
+    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error>
+    {
         let available_peers: Vec<PeerId> = self.peers.read().await.iter().copied().collect();
-        
+
         if available_peers.is_empty() {
             return Err(Error::RpcRequestFailed);
         }
 
         for (peer_index, &peer_id) in available_peers.iter().enumerate() {
-            debug!("Trying peer {}/{}: {}", peer_index + 1, available_peers.len(), peer_id);
-            
-            match self.send_blocks_by_range_with_retry(peer_id, request.clone(), max_retries_per_peer).await {
+            debug!(
+                "Trying peer {}/{}: {}",
+                peer_index + 1,
+                available_peers.len(),
+                peer_id
+            );
+
+            match self
+                .send_blocks_by_range_with_retry(peer_id, request.clone(), max_retries_per_peer)
+                .await
+            {
                 Ok(stream) => {
-                    info!("Successfully connected to peer {} after trying {} peers", peer_id, peer_index + 1);
+                    info!(
+                        "Successfully connected to peer {} after trying {} peers",
+                        peer_id,
+                        peer_index + 1
+                    );
                     return Ok(stream);
                 }
                 Err(Error::RpcRequestFailed) => {
@@ -2112,14 +2139,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     warn!("Failed to connect to peer {}: {:?}", peer_id, err);
                     if peer_index == available_peers.len() - 1 {
                         // Last peer failed
-                        error!("All {} peers failed for BlocksByRange request", available_peers.len());
+                        error!(
+                            "All {} peers failed for BlocksByRange request",
+                            available_peers.len()
+                        );
                         return Err(Error::RpcRequestFailed);
                     }
                     // Continue to next peer
                 }
             }
         }
-        
+
         Err(Error::RpcRequestFailed)
     }
 
@@ -2137,9 +2167,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     let mut wait_count = 0;
                     loop {
                         let peers = self.peers.read().await;
-                        if let Some(selected_peer) = peers.iter().collect::<Vec<_>>().choose(&mut rand::thread_rng()) {
+                        if let Some(selected_peer) = peers
+                            .iter()
+                            .collect::<Vec<_>>()
+                            .choose(&mut rand::thread_rng())
+                        {
                             let selected_peer = **selected_peer;
-                            debug!("Found peer after {} attempts: {}", wait_count, selected_peer);
+                            debug!(
+                                "Found peer after {} attempts: {}",
+                                wait_count, selected_peer
+                            );
                             break selected_peer;
                         }
                         wait_count += 1;
@@ -2168,8 +2205,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                     let start_height = head + 1;
                     let block_count = 1024;
 
-                    info!("Starting sync from height {} (requesting {} blocks from height {})", 
-                          head, block_count, start_height);
+                    info!(
+                        "Starting sync from height {} (requesting {} blocks from height {})",
+                        head, block_count, start_height
+                    );
 
                     CHAIN_SYNCING_OPERATION_TOTALS
                         .with_label_values(&[head.to_string().as_str(), "called"])
@@ -2186,12 +2225,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 start_height,
                 count: block_count,
             };
-            
+
             // Use peer fallback with retry logic instead of unwrap
-            let mut receive_stream = match self.send_blocks_by_range_with_peer_fallback(request, 3).await {
+            let mut receive_stream = match self
+                .send_blocks_by_range_with_peer_fallback(request, 3)
+                .await
+            {
                 Ok(stream) => stream,
                 Err(err) => {
-                    error!("Failed to establish RPC connection with any peer: {:?}", err);
+                    error!(
+                        "Failed to establish RPC connection with any peer: {:?}",
+                        err
+                    );
                     return; // Exit sync, will be retriggered by reactive mechanisms
                 }
             };
@@ -2214,25 +2259,36 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                 trace!("Successfully processed block at height {}", block_height);
                             }
                             Err(err) => {
-	                            let logging_closure = |blocks_failed_ref: &mut i32| {
-									blocks_failed_ref.add_assign(1);
-									error!("Unexpected block import error at height {}: {:?}", block_height, err);
-	                            };
-	                            match err {
-									Error::CandidateCacheError => {
-										logging_closure(&mut blocks_failed)
-									}
-		                            _ => {
-			                            async {
-										logging_closure(&mut blocks_failed);
-				                            if let Err(rollback_err) = self.rollback_head(head - 1).await {
-					                            error!("Failed to rollback head: {:?}", rollback_err);
-				                            }
-			                            }
-				                            .instrument(tracing::debug_span!("rollback_on_sync_error", failed_height = block_height))
-				                            .await;
-		                            }
-	                            }
+                                let logging_closure = |blocks_failed_ref: &mut i32| {
+                                    blocks_failed_ref.add_assign(1);
+                                    error!(
+                                        "Unexpected block import error at height {}: {:?}",
+                                        block_height, err
+                                    );
+                                };
+                                match err {
+                                    Error::CandidateCacheError => {
+                                        logging_closure(&mut blocks_failed)
+                                    }
+                                    _ => {
+                                        async {
+                                            logging_closure(&mut blocks_failed);
+                                            if let Err(rollback_err) =
+                                                self.rollback_head(head - 1).await
+                                            {
+                                                error!(
+                                                    "Failed to rollback head: {:?}",
+                                                    rollback_err
+                                                );
+                                            }
+                                        }
+                                        .instrument(tracing::debug_span!(
+                                            "rollback_on_sync_error",
+                                            failed_height = block_height
+                                        ))
+                                        .await;
+                                    }
+                                }
                                 return;
                             }
                         }
@@ -2247,13 +2303,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             async {
                 *self.sync_status.write().await = SyncStatus::Synced;
 
-                info!("Finished syncing! Processed {} blocks, failed: {}, final height: {}", 
-                      blocks_processed, blocks_failed, last_processed_height);
+                info!(
+                    "Finished syncing! Processed {} blocks, failed: {}, final height: {}",
+                    blocks_processed, blocks_failed, last_processed_height
+                );
                 CHAIN_SYNCING_OPERATION_TOTALS
                     .with_label_values(&[head.to_string().as_str(), "success"])
                     .inc();
             }
-            .instrument(tracing::debug_span!("complete_sync", 
+            .instrument(tracing::debug_span!(
+                "complete_sync",
                 blocks_processed = blocks_processed,
                 blocks_failed = blocks_failed,
                 final_height = last_processed_height
