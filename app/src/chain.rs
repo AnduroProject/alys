@@ -2192,110 +2192,124 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 .await
             };
 
-            // Phase 2: Get current head and prepare sync request
-            let (head, start_height, block_count) = {
-                async {
-                    let head = self
-                        .head
-                        .read()
-                        .await
-                        .as_ref()
-                        .map(|x| x.height)
-                        .unwrap_or_default();
-                    let start_height = head + 1;
-                    let block_count = 1024;
+            // Phase 2: Continue syncing until fully caught up
+            let mut total_blocks_processed = 0;
+            let mut total_blocks_failed = 0;
+            let mut last_processed_height = 0;
+            
+            loop {
+                let (head, start_height, block_count) = {
+                    async {
+                        let head = self
+                            .head
+                            .read()
+                            .await
+                            .as_ref()
+                            .map(|x| x.height)
+                            .unwrap_or_default();
+                        let start_height = head + 1;
+                        let block_count = 1024;
 
-                    info!(
-                        "Starting sync from height {} (requesting {} blocks from height {})",
-                        head, block_count, start_height
-                    );
+                        info!(
+                            "Syncing from height {} (requesting {} blocks from height {})",
+                            head, block_count, start_height
+                        );
 
-                    CHAIN_SYNCING_OPERATION_TOTALS
-                        .with_label_values(&[head.to_string().as_str(), "called"])
-                        .inc();
+                        CHAIN_SYNCING_OPERATION_TOTALS
+                            .with_label_values(&[head.to_string().as_str(), "called"])
+                            .inc();
 
-                    (head, start_height, block_count)
-                }
-                .instrument(tracing::debug_span!("prepare_sync_request"))
-                .await
-            };
+                        (head, start_height, block_count)
+                    }
+                    .instrument(tracing::debug_span!("prepare_sync_request"))
+                    .await
+                };
 
-            // Phase 3: Send RPC request and process blocks
-            let request = crate::network::rpc::methods::BlocksByRangeRequest {
-                start_height,
-                count: block_count,
-            };
+                // Phase 3: Send RPC request and process blocks
+                let request = crate::network::rpc::methods::BlocksByRangeRequest {
+                    start_height,
+                    count: block_count,
+                };
 
-            // Use peer fallback with retry logic instead of unwrap
-            let mut receive_stream = match self
-                .send_blocks_by_range_with_peer_fallback(request, 3)
-                .await
-            {
-                Ok(stream) => stream,
-                Err(err) => {
-                    error!(
-                        "Failed to establish RPC connection with any peer: {:?}",
-                        err
-                    );
-                    return; // Exit sync, will be retriggered by reactive mechanisms
-                }
-            };
+                // Use peer fallback with retry logic instead of unwrap
+                let mut receive_stream = match self
+                    .send_blocks_by_range_with_peer_fallback(request, 3)
+                    .await
+                {
+                    Ok(stream) => stream,
+                    Err(err) => {
+                        error!(
+                            "Failed to establish RPC connection with any peer: {:?}",
+                            err
+                        );
+                        return; // Exit sync, will be retriggered by reactive mechanisms
+                    }
+                };
 
-            let mut blocks_processed = 0;
-            let mut blocks_failed = 0;
-            let mut last_processed_height = head;
+                let mut blocks_processed = 0;
+                let mut blocks_failed = 0;
+                let mut last_processed_height = head;
 
-            while let Some(x) = receive_stream.recv().await {
-                match x {
-                    RPCResponse::BlocksByRange(block) => {
-                        blocks_processed += 1;
-                        let block_height = block.message.execution_payload.block_number;
+                while let Some(x) = receive_stream.recv().await {
+                    match x {
+                        RPCResponse::BlocksByRange(block) => {
+                            blocks_processed += 1;
+                            let block_height = block.message.execution_payload.block_number;
 
-                        trace!("Processing sync block at height {}", block_height);
+                            trace!("Processing sync block at height {}", block_height);
 
-                        match self.process_block((*block).clone()).await {
-                            Err(Error::ProcessGenesis) | Ok(_) => {
-                                last_processed_height = block_height;
-                                trace!("Successfully processed block at height {}", block_height);
-                            }
-                            Err(err) => {
-                                let logging_closure = |blocks_failed_ref: &mut i32| {
-                                    blocks_failed_ref.add_assign(1);
-                                    error!(
-                                        "Unexpected block import error at height {}: {:?}",
-                                        block_height, err
-                                    );
-                                };
-                                match err {
-                                    Error::CandidateCacheError => {
-                                        logging_closure(&mut blocks_failed)
-                                    }
-                                    _ => {
-                                        async {
-                                            logging_closure(&mut blocks_failed);
-                                            if let Err(rollback_err) =
-                                                self.rollback_head(head - 1).await
-                                            {
-                                                error!(
-                                                    "Failed to rollback head: {:?}",
-                                                    rollback_err
-                                                );
-                                            }
-                                        }
-                                        .instrument(tracing::debug_span!(
-                                            "rollback_on_sync_error",
-                                            failed_height = block_height
-                                        ))
-                                        .await;
-                                    }
+                            match self.process_block((*block).clone()).await {
+                                Err(Error::ProcessGenesis) | Ok(_) => {
+                                    last_processed_height = block_height;
+                                    trace!("Successfully processed block at height {}", block_height);
                                 }
-                                return;
+                                Err(err) => {
+                                    let logging_closure = |blocks_failed_ref: &mut i32| {
+                                        blocks_failed_ref.add_assign(1);
+                                        error!(
+                                            "Unexpected block import error at height {}: {:?}",
+                                            block_height, err
+                                        );
+                                    };
+                                    match err {
+                                        Error::CandidateCacheError => {
+                                            logging_closure(&mut blocks_failed)
+                                        }
+                                        _ => {
+                                            async {
+                                                logging_closure(&mut blocks_failed);
+                                                if let Err(rollback_err) =
+                                                    self.rollback_head(head - 1).await
+                                                {
+                                                    error!(
+                                                        "Failed to rollback head: {:?}",
+                                                        rollback_err
+                                                    );
+                                                }
+                                            }
+                                            .instrument(tracing::debug_span!(
+                                                "rollback_on_sync_error",
+                                                failed_height = block_height
+                                            ))
+                                            .await;
+                                        }
+                                    }
+                                    return;
+                                }
                             }
                         }
+                        err => {
+                            error!("Received unexpected result during sync: {err:?}");
+                        }
                     }
-                    err => {
-                        error!("Received unexpected result during sync: {err:?}");
-                    }
+                }
+
+                total_blocks_processed += blocks_processed;
+                total_blocks_failed += blocks_failed;
+
+                // If we processed fewer blocks than requested, we're caught up
+                if blocks_processed < block_count {
+                    break;
                 }
             }
 
@@ -2304,17 +2318,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 *self.sync_status.write().await = SyncStatus::Synced;
 
                 info!(
-                    "Finished syncing! Processed {} blocks, failed: {}, final height: {}",
-                    blocks_processed, blocks_failed, last_processed_height
+                    "Finished syncing! Total processed: {} blocks, failed: {}, final height: {}",
+                    total_blocks_processed, total_blocks_failed, last_processed_height
                 );
-                CHAIN_SYNCING_OPERATION_TOTALS
-                    .with_label_values(&[head.to_string().as_str(), "success"])
-                    .inc();
             }
             .instrument(tracing::debug_span!(
                 "complete_sync",
-                blocks_processed = blocks_processed,
-                blocks_failed = blocks_failed,
+                total_blocks_processed = total_blocks_processed,
+                total_blocks_failed = total_blocks_failed,
                 final_height = last_processed_height
             ))
             .await;
