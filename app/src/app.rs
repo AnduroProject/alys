@@ -327,6 +327,12 @@ impl App {
         chain.clone().listen_for_peer_discovery().await;
         chain.clone().listen_for_rpc_requests().await;
 
+        info!("Triggering initial sync...");
+        let chain_clone = chain.clone();
+        tokio::spawn(async move {
+            chain_clone.sync().await;
+        });
+
         if chain_spec.is_validator && !self.not_validator {
             chain
                 .clone()

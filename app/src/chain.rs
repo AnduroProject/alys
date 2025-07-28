@@ -2153,7 +2153,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Err(Error::RpcRequestFailed)
     }
 
-    async fn sync(self: Arc<Self>) {
+    pub async fn sync(self: Arc<Self>) {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
