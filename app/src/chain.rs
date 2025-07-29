@@ -2195,8 +2195,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             // Phase 2: Continue syncing until fully caught up
             let mut total_blocks_processed = 0;
             let mut total_blocks_failed = 0;
-            let mut last_processed_height = 0;
-            
+
             loop {
                 let (head, start_height, block_count) = {
                     async {
@@ -2248,7 +2247,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
                 let mut blocks_processed = 0;
                 let mut blocks_failed = 0;
-                let mut last_processed_height = head;
 
                 while let Some(x) = receive_stream.recv().await {
                     match x {
@@ -2260,8 +2258,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
                             match self.process_block((*block).clone()).await {
                                 Err(Error::ProcessGenesis) | Ok(_) => {
-                                    last_processed_height = block_height;
-                                    trace!("Successfully processed block at height {}", block_height);
+                                    trace!(
+                                        "Successfully processed block at height {}",
+                                        block_height
+                                    );
                                 }
                                 Err(err) => {
                                     let logging_closure = |blocks_failed_ref: &mut i32| {
@@ -2318,15 +2318,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                 *self.sync_status.write().await = SyncStatus::Synced;
 
                 info!(
-                    "Finished syncing! Total processed: {} blocks, failed: {}, final height: {}",
-                    total_blocks_processed, total_blocks_failed, last_processed_height
+                    "Finished syncing! Total processed: {} blocks, failed: {}",
+                    total_blocks_processed, total_blocks_failed
                 );
             }
             .instrument(tracing::debug_span!(
                 "complete_sync",
                 total_blocks_processed = total_blocks_processed,
                 total_blocks_failed = total_blocks_failed,
-                final_height = last_processed_height
             ))
             .await;
         }
