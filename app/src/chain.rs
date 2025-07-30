@@ -2287,13 +2287,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                         _ => {
                                             async {
                                                 logging_closure(&mut blocks_failed);
-                                                if let Err(rollback_err) =
-                                                    self.rollback_head(head.saturating_sub(1)).await
-                                                {
-                                                    error!(
-                                                        "Failed to rollback head: {:?}",
-                                                        rollback_err
-                                                    );
+                                                if head == 0 {
+                                                    error!("Cannot rollback head: head is already at 0");
+                                                } else if let Err(rollback_err) = self.rollback_head(head.saturating_sub(1)).await {
+                                                    error!("Failed to rollback head: {:?}", rollback_err);
                                                 }
                                             }
                                             .instrument(tracing::debug_span!(
