@@ -1137,10 +1137,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             required_outputs.len()
         );
 
-        self.bitcoin_wallet.read().await.check_payment_proposal(
+        let missing_utxos = self.bitcoin_wallet.read().await.check_payment_proposal(
             required_outputs,
             unverified_block.message.pegout_payment_proposal.as_ref(),
+            Some(&self.bridge),
         )?;
+
+        // Register any missing UTXOs that were found on the Bitcoin network
+        if !missing_utxos.is_empty() {
+            let count = missing_utxos.len();
+            self.bitcoin_wallet
+                .write()
+                .await
+                .register_utxos(missing_utxos)?;
+            trace!("Registered {} missing UTXOs from Bitcoin network", count);
+        }
 
         trace!("Pegout proposal is valid");
         Ok(())
