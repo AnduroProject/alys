@@ -148,7 +148,7 @@ impl BitcoinCore {
                         == BitcoinRpcError::RpcInvalidAddressOrKey
                         && err.message.contains("Block not found") =>
                 {
-                    // Bitcoin Core sometimes returns RpcInvalidAddressOrKey with "Block not found" 
+                    // Bitcoin Core sometimes returns RpcInvalidAddressOrKey with "Block not found"
                     // instead of RpcInvalidParameter for blocks that don't exist yet
                     warn!("block does not exist yet (RpcInvalidAddressOrKey), retrying...");
                     tokio::time::sleep(RETRY_DURATION).await;
