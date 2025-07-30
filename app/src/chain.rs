@@ -519,7 +519,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if rollback_head {
             warn!("No payload head found");
-            self.rollback_head(prev_height - 1).await?;
+            self.rollback_head(prev_height.saturating_sub(1)).await?;
             return Ok(());
         }
 
@@ -2279,7 +2279,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                             async {
                                                 logging_closure(&mut blocks_failed);
                                                 if let Err(rollback_err) =
-                                                    self.rollback_head(head - 1).await
+                                                    self.rollback_head(head.saturating_sub(1)).await
                                                 {
                                                     error!(
                                                         "Failed to rollback head: {:?}",
