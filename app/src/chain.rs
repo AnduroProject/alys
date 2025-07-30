@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
+use bridge::Error as FederationError;
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use eyre::{eyre, Report, Result};
@@ -2294,6 +2295,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                     match err {
                                         Error::CandidateCacheError => {
                                             logging_closure(&mut blocks_failed)
+                                        }
+                                        Error::FederationError(FederationError::BitcoinBlockNotFound(block_hash)) => {
+                                            // Bitcoin block not found is a non-fatal error during sync
+                                            // This can happen when the Bitcoin node is not fully synced
+                                            warn!(
+                                                "Bitcoin block not found during sync at height {}: {}. Continuing sync...",
+                                                block_height, block_hash
+                                            );
                                         }
                                         _ => {
                                             async {

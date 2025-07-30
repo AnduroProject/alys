@@ -7,6 +7,8 @@ use thiserror::Error;
 use bitcoin::{Address as BitcoinAddress, BlockHash, Transaction, TxOut, Txid};
 use bitcoin_stream::stream_blocks;
 use bitcoincore_rpc::{Error as RpcError, RpcApi};
+use bitcoincore_rpc::jsonrpc::Error as JsonRpcError;
+use bitcoincore_rpc::Error as BitcoinError;
 use ethers::prelude::*;
 use futures::prelude::*;
 use std::str::FromStr;
@@ -64,6 +66,8 @@ pub enum Error {
     InsufficientConfirmations(i32),
     #[error("Transaction is not a valid peg-in transaction")]
     NotAPegin,
+    #[error("Bitcoin block not found: {0}")]
+    BitcoinBlockNotFound(BlockHash),
     #[error("Rpc error: {0}")]
     RpcError(#[from] RpcError),
 }
@@ -146,7 +150,16 @@ impl Bridge {
         txid: &Txid,
         block_hash: &BlockHash,
     ) -> Result<PegInInfo, Error> {
-        let block_info = self.bitcoin_core.rpc.get_block_header_info(block_hash)?;
+        let block_info = match self.bitcoin_core.rpc.get_block_header_info(block_hash) {
+            Ok(info) => info,
+            Err(BitcoinError::JsonRpc(JsonRpcError::Rpc(err))) 
+                if err.code == -5 && err.message.contains("Block not found") => {
+                // Return a more specific error for missing blocks
+                return Err(Error::BitcoinBlockNotFound(*block_hash));
+            }
+            Err(e) => return Err(Error::RpcError(e)),
+        };
+        
         if block_info.confirmations < self.required_confirmations.into() {
             return Err(Error::InsufficientConfirmations(block_info.confirmations));
         }
