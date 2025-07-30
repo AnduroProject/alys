@@ -519,7 +519,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         if rollback_head {
             warn!("No payload head found");
-            self.rollback_head(prev_height.saturating_sub(1)).await?;
+            if let Err(rollback_err) = self.rollback_head(prev_height.saturating_sub(1)).await {
+                match rollback_err {
+                    Error::MissingBlock if prev_height == 0 => {
+                        warn!("Cannot rollback from height 0 - chain is empty");
+                    }
+                    _ => {
+                        error!("Failed to rollback head: {:?}", rollback_err);
+                    }
+                }
+            }
             return Ok(());
         }
 
