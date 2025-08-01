@@ -223,12 +223,29 @@ impl<T: Database> UtxoManager<T> {
             return Err(Error::UnknownOrSpentInput);
         }
 
-        // Check if the output is already spent by looking at the transaction's inputs
-        // This is a simplified check - in a real implementation, you might want to check
-        // if this output appears as an input in any confirmed transaction
-        for input in &tx.input {
-            if input.previous_output == outpoint {
+        // Check if the output is already spent using Bitcoin Core's gettxout RPC method
+        // This method returns null if the output is spent or doesn't exist
+        match bridge
+            .bitcoin_core
+            .rpc
+            .get_tx_out(&outpoint.txid, outpoint.vout, None)
+        {
+            Ok(Some(_)) => {
+                // Output exists and is unspent
+            }
+            Ok(None) => {
+                // Output is spent or doesn't exist
                 return Err(Error::UnknownOrSpentInput);
+            }
+            Err(_) => {
+                // RPC call failed, fall back to the transaction-based check
+                // This is a simplified fallback - in a real implementation, you might want to
+                // check if this output appears as an input in any confirmed transaction
+                for input in &tx.input {
+                    if input.previous_output == outpoint {
+                        return Err(Error::UnknownOrSpentInput);
+                    }
+                }
             }
         }
 
