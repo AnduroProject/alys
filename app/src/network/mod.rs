@@ -479,6 +479,174 @@ impl NetworkBackend {
     }
 }
 
+/// Parse multiple multiaddresses from a string.
+/// Supports the following formats:
+/// - Comma-separated: "/ip4/1.2.3.4/tcp/1234,/ip4/5.6.7.8/tcp/5678"
+/// - Space-separated: "/ip4/1.2.3.4/tcp/1234 /ip4/5.6.7.8/tcp/5678"
+/// - Concatenated: "/ip4/1.2.3.4/tcp/1234/ip4/5.6.7.8/tcp/5678"
+fn parse_multiple_multiaddrs(input: &str) -> Result<Vec<Multiaddr>, Error> {
+    let mut addresses = Vec::new();
+    
+    // First, try to parse as comma-separated
+    if input.contains(',') {
+        for addr_str in input.split(',') {
+            let addr_str = addr_str.trim();
+            if !addr_str.is_empty() {
+                let addr = Multiaddr::from_str(addr_str)?;
+                addresses.push(addr);
+            }
+        }
+        return Ok(addresses);
+    }
+    
+    // Then, try to parse as space-separated
+    if input.contains(' ') {
+        for addr_str in input.split_whitespace() {
+            let addr_str = addr_str.trim();
+            if !addr_str.is_empty() {
+                let addr = Multiaddr::from_str(addr_str)?;
+                addresses.push(addr);
+            }
+        }
+        return Ok(addresses);
+    }
+    
+    // Finally, try to parse the concatenated format
+    // This is more complex as we need to split at protocol boundaries
+    let mut current_pos = 0;
+    
+    while current_pos < input.len() {
+        // Find the next complete multiaddress starting with '/'
+        if let Some(slash_pos) = input[current_pos..].find('/') {
+            let start_pos = current_pos + slash_pos;
+            
+            // Try to find the end of this multiaddress
+            let mut end_pos = input.len();
+            
+            // Look for the next occurrence of a protocol that could start a new multiaddress
+            let mut search_pos = start_pos + 1;
+            while search_pos < input.len() {
+                if let Some(next_slash) = input[search_pos..].find('/') {
+                    let protocol_start = search_pos + next_slash + 1;
+                    if protocol_start < input.len() {
+                        // Find the end of the protocol name
+                        if let Some(protocol_end) = input[protocol_start..].find('/') {
+                            let protocol = &input[protocol_start..protocol_start + protocol_end];
+                            // Check if this looks like a new multiaddress protocol
+                            if ["ip4", "ip6", "dns", "dns4", "dns6", "unix", "p2p", "p2p-webrtc-star", "p2p-websocket-star"].contains(&protocol) {
+                                // Verify this is actually a new multiaddress by trying to parse it
+                                let potential_addr = &input[protocol_start - 1..];
+                                if Multiaddr::from_str(potential_addr).is_ok() {
+                                    end_pos = protocol_start - 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    search_pos = protocol_start;
+                } else {
+                    break;
+                }
+            }
+            
+            let multiaddr_str = &input[start_pos..end_pos];
+            match Multiaddr::from_str(multiaddr_str) {
+                Ok(addr) => {
+                    addresses.push(addr);
+                    current_pos = end_pos;
+                }
+                Err(e) => {
+                    return Err(Error::MultiaddrError(e));
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    
+    if addresses.is_empty() {
+        return Err(Error::MultiaddrError(libp2p::multiaddr::Error::InvalidMultiaddr));
+    }
+    
+    Ok(addresses)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_multiple_multiaddrs() {
+        // Test the example from the user query (concatenated format)
+        let input = "/ip4/10.38.1.103/tcp/55444/ip4/10.38.1.105/tcp/55444";
+        let result = parse_multiple_multiaddrs(input).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].to_string(), "/ip4/10.38.1.103/tcp/55444");
+        assert_eq!(result[1].to_string(), "/ip4/10.38.1.105/tcp/55444");
+    }
+
+    #[test]
+    fn test_parse_comma_separated_multiaddrs() {
+        // Test comma-separated format
+        let input = "/ip4/10.38.1.103/tcp/55444,/ip4/10.38.1.105/tcp/55444";
+        let result = parse_multiple_multiaddrs(input).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].to_string(), "/ip4/10.38.1.103/tcp/55444");
+        assert_eq!(result[1].to_string(), "/ip4/10.38.1.105/tcp/55444");
+    }
+
+    #[test]
+    fn test_parse_space_separated_multiaddrs() {
+        // Test space-separated format
+        let input = "/ip4/10.38.1.103/tcp/55444 /ip4/10.38.1.105/tcp/55444";
+        let result = parse_multiple_multiaddrs(input).unwrap();
+        
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].to_string(), "/ip4/10.38.1.103/tcp/55444");
+        assert_eq!(result[1].to_string(), "/ip4/10.38.1.105/tcp/55444");
+    }
+
+    #[test]
+    fn test_parse_single_multiaddr() {
+        // Test with a single multiaddress
+        let input = "/ip4/10.38.1.103/tcp/55444";
+        let result = parse_multiple_multiaddrs(input).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].to_string(), "/ip4/10.38.1.103/tcp/55444");
+    }
+
+    #[test]
+    fn test_parse_three_multiaddrs() {
+        // Test with three multiaddresses
+        let input = "/ip4/10.38.1.103/tcp/55444/ip4/10.38.1.105/tcp/55444/ip4/10.38.1.106/tcp/55444";
+        let result = parse_multiple_multiaddrs(input).unwrap();
+        
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].to_string(), "/ip4/10.38.1.103/tcp/55444");
+        assert_eq!(result[1].to_string(), "/ip4/10.38.1.105/tcp/55444");
+        assert_eq!(result[2].to_string(), "/ip4/10.38.1.106/tcp/55444");
+    }
+
+    #[test]
+    fn test_parse_empty_input() {
+        // Test with empty input
+        let input = "";
+        let result = parse_multiple_multiaddrs(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_multiaddr() {
+        // Test with invalid multiaddress
+        let input = "/invalid/protocol";
+        let result = parse_multiple_multiaddrs(input);
+        assert!(result.is_err());
+    }
+}
+
 pub async fn spawn_network_handler(
     addr: String,
     port: u16,
@@ -524,8 +692,14 @@ pub async fn spawn_network_handler(
 
     if let Some(bootnode) = remote_bootnode {
         trace!("Dialing bootnode: {}", bootnode);
-        let address = Multiaddr::from_str(&bootnode)?;
-        client.dial(address).await?;
+        let addresses = parse_multiple_multiaddrs(&bootnode)?;
+        
+        for (i, address) in addresses.iter().enumerate() {
+            trace!("Dialing bootnode {}: {}", i + 1, address);
+            if let Err(e) = client.dial(address.clone()).await {
+                warn!("Failed to dial bootnode {} ({}): {}", i + 1, address, e);
+            }
+        }
     }
 
     Ok(client)
