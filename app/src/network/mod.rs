@@ -38,6 +38,19 @@ pub type EnrSyncCommitteeBitfield<T> = BitVector<<T as EthSpec>::SyncCommitteeSu
 const RECONNECT_INTERVAL_SECS: u64 = 5;
 const RECONNECT_MAX_ATTEMPTS: u32 = 12;
 
+/// Supported multiaddress protocols that can start a new multiaddress
+const SUPPORTED_MULTIADDR_PROTOCOLS: &[&str] = &[
+    "ip4",
+    "ip6", 
+    "dns",
+    "dns4",
+    "dns6",
+    "unix",
+    "p2p",
+    "p2p-webrtc-star",
+    "p2p-websocket-star",
+];
+
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
@@ -533,18 +546,7 @@ fn parse_multiple_multiaddrs(input: &str) -> Result<Vec<Multiaddr>, Error> {
                         if let Some(protocol_end) = input[protocol_start..].find('/') {
                             let protocol = &input[protocol_start..protocol_start + protocol_end];
                             // Check if this looks like a new multiaddress protocol
-                            if [
-                                "ip4",
-                                "ip6",
-                                "dns",
-                                "dns4",
-                                "dns6",
-                                "unix",
-                                "p2p",
-                                "p2p-webrtc-star",
-                                "p2p-websocket-star",
-                            ]
-                            .contains(&protocol)
+                            if SUPPORTED_MULTIADDR_PROTOCOLS.contains(&protocol)
                             {
                                 // Verify this is actually a new multiaddress by trying to parse it
                                 let potential_addr = &input[protocol_start - 1..];
