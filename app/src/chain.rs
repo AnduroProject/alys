@@ -29,6 +29,7 @@ use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use async_trait::async_trait;
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
+use bridge::Error as FederationError;
 use bridge::SingleMemberTransactionSignatures;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
 use ethereum_types::{Address, H256, U64};
@@ -1137,10 +1138,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             required_outputs.len()
         );
 
-        self.bitcoin_wallet.read().await.check_payment_proposal(
+        let missing_utxos = self.bitcoin_wallet.read().await.check_payment_proposal(
             required_outputs,
             unverified_block.message.pegout_payment_proposal.as_ref(),
+            Some(&self.bridge),
         )?;
+
+        // Register any missing UTXOs that were found on the Bitcoin network
+        if !missing_utxos.is_empty() {
+            let count = missing_utxos.len();
+            self.bitcoin_wallet
+                .write()
+                .await
+                .register_utxos(missing_utxos)?;
+            trace!("Registered {} missing UTXOs from Bitcoin network", count);
+        }
 
         trace!("Pegout proposal is valid");
         Ok(())
@@ -2283,6 +2295,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                     match err {
                                         Error::CandidateCacheError => {
                                             logging_closure(&mut blocks_failed)
+                                        }
+                                        Error::FederationError(FederationError::BitcoinBlockNotFound(block_hash)) => {
+                                            // Bitcoin block not found is a non-fatal error during sync
+                                            // This can happen when the Bitcoin node is not fully synced
+                                            warn!(
+                                                "Bitcoin block not found during sync at height {}: {}. Continuing sync...",
+                                                block_height, block_hash
+                                            );
                                         }
                                         _ => {
                                             async {

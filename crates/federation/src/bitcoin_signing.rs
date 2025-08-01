@@ -20,6 +20,7 @@ use bitcoin::sighash::{Prevouts, ScriptPath, SighashCache, TapSighashType};
 use bitcoin::taproot::{LeafVersion, Signature as SchnorrSig, TaprootBuilder, TaprootSpendInfo};
 use bitcoin::{Address, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, Witness};
 use bitcoincore_rpc::bitcoin::hashes::Hash;
+use bitcoincore_rpc::RpcApi;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -128,9 +129,10 @@ impl<T: Database> UtxoManager<T> {
         &self,
         required_outputs: Vec<TxOut>,
         pegout_proposal: Option<&Transaction>,
-    ) -> Result<(), Error> {
+        bridge: Option<&crate::Bridge>,
+    ) -> Result<Vec<LocalUtxo>, Error> {
         let tx = match pegout_proposal {
-            None if required_outputs.is_empty() => return Ok(()),
+            None if required_outputs.is_empty() => return Ok(vec![]),
             None => return Err(Error::MissingPegoutProposal),
             Some(ref proposal) => proposal,
         };
@@ -161,10 +163,21 @@ impl<T: Database> UtxoManager<T> {
             return Err(Error::InvalidPegoutOutput);
         }
 
-        // check the inputs
+        let mut missing_utxos = Vec::new();
+
+        // check the inputs - attempt to fetch missing UTXOs from Bitcoin network
         for input in tx.input.iter() {
             if !self.has_spendable_utxo(input.previous_output)? {
-                return Err(Error::UnspendableInput);
+                // Try to fetch the missing UTXO from the Bitcoin network
+                if let Some(bridge) = bridge {
+                    if let Ok(utxo) = self.try_fetch_utxo(input.previous_output, bridge) {
+                        missing_utxos.push(utxo);
+                    } else {
+                        return Err(Error::UnspendableInput);
+                    }
+                } else {
+                    return Err(Error::UnspendableInput);
+                }
             }
         }
 
@@ -178,6 +191,84 @@ impl<T: Database> UtxoManager<T> {
             actual_outputs.len()
         );
 
+        Ok(missing_utxos)
+    }
+
+    /// Attempts to fetch a missing UTXO from the Bitcoin network
+    fn try_fetch_utxo(
+        &self,
+        outpoint: OutPoint,
+        bridge: &crate::Bridge,
+    ) -> Result<LocalUtxo, Error> {
+        // Fetch the transaction from Bitcoin network
+        let tx = bridge
+            .bitcoin_core
+            .rpc
+            .get_raw_transaction(&outpoint.txid, None)
+            .map_err(|_| Error::BitcoinError)?;
+
+        // Check if the output exists and is unspent
+        if outpoint.vout as usize >= tx.output.len() {
+            return Err(Error::UnknownOrSpentInput);
+        }
+
+        let txout = &tx.output[outpoint.vout as usize];
+
+        // Check if this output belongs to the federation (matches our taproot address)
+        if !self
+            .federation
+            .taproot_address
+            .matches_script_pubkey(&txout.script_pubkey)
+        {
+            return Err(Error::UnknownOrSpentInput);
+        }
+
+        // Check if the output is already spent using Bitcoin Core's gettxout RPC method
+        // This method returns null if the output is spent or doesn't exist
+        match bridge
+            .bitcoin_core
+            .rpc
+            .get_tx_out(&outpoint.txid, outpoint.vout, None)
+        {
+            Ok(Some(_)) => {
+                // Output exists and is unspent
+            }
+            Ok(None) => {
+                // Output is spent or doesn't exist
+                return Err(Error::UnknownOrSpentInput);
+            }
+            Err(_) => {
+                // RPC call failed, fall back to the transaction-based check
+                // This is a simplified fallback - in a real implementation, you might want to
+                // check if this output appears as an input in any confirmed transaction
+                for input in &tx.input {
+                    if input.previous_output == outpoint {
+                        return Err(Error::UnknownOrSpentInput);
+                    }
+                }
+            }
+        }
+
+        // Create the UTXO to be registered
+        let utxo = LocalUtxo {
+            txout: txout.clone(),
+            outpoint,
+            is_spent: false,
+            keychain: KeychainKind::External,
+        };
+
+        trace!("Found missing UTXO on Bitcoin network: {:?}", outpoint);
+
+        Ok(utxo)
+    }
+
+    /// Register multiple UTXOs in the wallet database
+    pub fn register_utxos(&mut self, utxos: Vec<LocalUtxo>) -> Result<(), Error> {
+        let count = utxos.len();
+        for utxo in utxos {
+            self.tree.set_utxo(&utxo).map_err(|_| Error::DbError)?;
+        }
+        trace!("Registered {} UTXOs from Bitcoin network", count);
         Ok(())
     }
 

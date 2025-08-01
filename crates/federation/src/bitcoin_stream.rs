@@ -143,6 +143,17 @@ impl BitcoinCore {
                     tokio::time::sleep(RETRY_DURATION).await;
                     continue;
                 }
+                Err(BitcoinError::JsonRpc(JsonRpcError::Rpc(err)))
+                    if BitcoinRpcError::from(err.clone())
+                        == BitcoinRpcError::RpcInvalidAddressOrKey
+                        && err.message.contains("Block not found") =>
+                {
+                    // Bitcoin Core sometimes returns RpcInvalidAddressOrKey with "Block not found"
+                    // instead of RpcInvalidParameter for blocks that don't exist yet
+                    warn!("block does not exist yet (RpcInvalidAddressOrKey), retrying...");
+                    tokio::time::sleep(RETRY_DURATION).await;
+                    continue;
+                }
                 Err(err) => {
                     return Err(err.into());
                 }
