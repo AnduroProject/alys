@@ -41,7 +41,7 @@ const RECONNECT_MAX_ATTEMPTS: u32 = 12;
 /// Supported multiaddress protocols that can start a new multiaddress
 const SUPPORTED_MULTIADDR_PROTOCOLS: &[&str] = &[
     "ip4",
-    "ip6", 
+    "ip6",
     "dns",
     "dns4",
     "dns6",
@@ -546,8 +546,7 @@ fn parse_multiple_multiaddrs(input: &str) -> Result<Vec<Multiaddr>, Error> {
                         if let Some(protocol_end) = input[protocol_start..].find('/') {
                             let protocol = &input[protocol_start..protocol_start + protocol_end];
                             // Check if this looks like a new multiaddress protocol
-                            if SUPPORTED_MULTIADDR_PROTOCOLS.contains(&protocol)
-                            {
+                            if SUPPORTED_MULTIADDR_PROTOCOLS.contains(&protocol) {
                                 // Verify this is actually a new multiaddress by trying to parse it
                                 let potential_addr = &input[protocol_start - 1..];
                                 if Multiaddr::from_str(potential_addr).is_ok() {
