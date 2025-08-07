@@ -1128,6 +1128,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         unverified_block: &SignedConsensusBlock<MainnetEthSpec>,
         prev_payload_hash: ExecutionBlockHash,
     ) -> Result<(), Error> {
+        // TODO: remove this after resetting testnet + integration of governance module
+        if unverified_block.message.execution_payload.block_number == 70132 {
+            Ok(())
+        }
+
         let (_execution_block, execution_receipts) =
             self.get_block_and_receipts(&prev_payload_hash).await?;
 
