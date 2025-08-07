@@ -1130,7 +1130,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     ) -> Result<(), Error> {
         // TODO: remove this after resetting testnet + integration of governance module
         if unverified_block.message.execution_payload.block_number == 70132 {
-            Ok(())
+            return Ok(());
         }
 
         let (_execution_block, execution_receipts) =
