@@ -2213,15 +2213,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        async move {
-            // Check if we're already synced
-            let current_sync_status = self.sync_status.read().await;
-            if current_sync_status.is_synced() {
-                info!("Node is already synced, skipping sync process");
-                return;
-            }
-            drop(current_sync_status);
-            
+        async move {            
             info!("Starting sync");
             *self.sync_status.write().await = SyncStatus::InProgress;
 
