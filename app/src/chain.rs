@@ -1078,6 +1078,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             let block_height = unverified_block.message.execution_payload.block_number;
 
+            trace!("Block height: {}", block_height);
+            trace!("Latest finalized height: {}", latest_finalized_height);
+            trace!("Max blocks without PoW: {}", self.max_blocks_without_pow);
+            trace!("Block height - Latest finalized height: {}", block_height.saturating_sub(latest_finalized_height)); 
+
             if block_height.saturating_sub(latest_finalized_height) > self.max_blocks_without_pow {
                 CHAIN_PROCESS_BLOCK_TOTALS
                     .with_label_values(&["rejected", "missing_pow"])
@@ -1538,7 +1543,22 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         }
 
         info!("Storing genesis block");
-        self.import_verified_block_no_commit(genesis_block).await
+        self.import_verified_block_no_commit(genesis_block.clone()).await?;
+        
+        // Update the head reference in memory to reflect the genesis block
+        let genesis_root = genesis_block.canonical_root();
+        let genesis_height = genesis_block.message.execution_payload.block_number;
+        let genesis_ref = BlockRef {
+            hash: genesis_root,
+            height: genesis_height,
+        };
+        *self.head.write().await = Some(genesis_ref);
+        
+        // Update sync status to Synced since we now have a genesis block
+        *self.sync_status.write().await = SyncStatus::Synced;
+        
+        info!("Genesis block stored and head updated");
+        Ok(())
     }
 
     async fn get_block_and_receipts(
@@ -2193,18 +2213,24 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        async move {            
+        async move {
+            // Check if we're already synced
+            let current_sync_status = self.sync_status.read().await;
+            if current_sync_status.is_synced() {
+                info!("Node is already synced, skipping sync process");
+                return;
+            }
+            drop(current_sync_status);
+            
             info!("Starting sync");
             *self.sync_status.write().await = SyncStatus::InProgress;
 
-            // Check if we need to store genesis block first
+            // Check if we have a head block - if not, we need to wait for genesis block storage
             let head = self.head.read().await;
             if head.is_none() {
-                warn!("No head block found, this indicates the genesis block may not be stored. Waiting before sync...");
+                warn!("No head block found, waiting for genesis block to be stored...");
                 drop(head);
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                // Reset sync status to InProgress so it can be retried
-                *self.sync_status.write().await = SyncStatus::InProgress;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 return; // Exit sync, will be retriggered by reactive mechanisms
             }
             drop(head);
@@ -2338,14 +2364,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                             // This can happen if the genesis block is not yet properly stored
                                             if head == 0 {
                                                 warn!(
-                                                    "MissingParent error at height {} when head is at 0. This may indicate the genesis block is not yet properly stored. Retrying sync after delay...",
+                                                    "MissingParent error at height {} when head is at 0. This may indicate the genesis block is not yet properly stored. Skipping this block and continuing...",
                                                     block_height
                                                 );
-                                                // Wait a bit and then return to retry the sync
-                                                tokio::time::sleep(Duration::from_secs(2)).await;
-                                                // Reset sync status to InProgress so it can be retried
-                                                *self.sync_status.write().await = SyncStatus::InProgress;
-                                                return;
+                                                // Skip this block and continue with the next one
+                                                continue;
                                             } else {
                                                 // For non-genesis cases, try to rollback
                                                 async {
