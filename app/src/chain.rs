@@ -1558,6 +1558,19 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         *self.sync_status.write().await = SyncStatus::Synced;
         
         info!("Genesis block stored and head updated");
+        
+        // Add a small delay to ensure the head update is visible
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        // Verify the head was updated correctly
+        let head = self.head.read().await;
+        if let Some(head_ref) = head.as_ref() {
+            info!("Head is now at height {} with hash {}", head_ref.height, head_ref.hash);
+        } else {
+            warn!("Head is still None after genesis block storage!");
+        }
+        drop(head);
+        
         Ok(())
     }
 
@@ -2213,7 +2226,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        async move {            
+                async move {
+            // Debug: Check the current head before starting sync
+            let head = self.head.read().await;
+            if let Some(head_ref) = head.as_ref() {
+                info!("Starting sync with head at height {} with hash {}", head_ref.height, head_ref.hash);
+            } else {
+                warn!("Starting sync with no head block!");
+            }
+            drop(head);
+            
             info!("Starting sync");
             *self.sync_status.write().await = SyncStatus::InProgress;
 
