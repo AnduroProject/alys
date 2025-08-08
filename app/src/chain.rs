@@ -1603,6 +1603,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         *self.sync_status.write().await = SyncStatus::Synced;
         
         info!("Genesis block stored and head updated");
+        info!("Genesis block height: {}, hash: {}", genesis_height, genesis_root);
         
         // Add a small delay to ensure the head update is visible
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2394,6 +2395,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
                             trace!("Processing sync block at height {}", block_height);
 
+                            let block_height = block.message.execution_payload.block_number;
+                            let block_hash = block.canonical_root();
+                            let parent_hash = block.message.parent_hash;
+                            
+                            info!("Received block: height={}, hash={}, parent_hash={}", 
+                                  block_height, block_hash, parent_hash);
+                            
                             match self.process_block((*block).clone()).await {
                                 Err(Error::ProcessGenesis) | Ok(_) => {
                                     trace!(
