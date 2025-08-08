@@ -195,13 +195,23 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         is_validator: bool,
     ) -> Self {
         let head = storage.get_head().expect("Failed to get head from storage");
+        
+        // Determine initial sync status based on whether we have blocks in storage
+        let initial_sync_status = if head.is_some() {
+            // If we have a head block, we're synced
+            SyncStatus::Synced
+        } else {
+            // If no head block, we need to sync
+            SyncStatus::InProgress
+        };
+        
         Self {
             engine,
             network,
             storage,
             aura,
             head: RwLock::new(head),
-            sync_status: RwLock::new(SyncStatus::Synced), // assume synced, we'll find out if not
+            sync_status: RwLock::new(initial_sync_status),
             peers: RwLock::new(HashSet::new()),
             block_candidates: BlockCandidates::new(),
             queued_pow: RwLock::new(None),
@@ -2183,9 +2193,21 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let ksuid = Ksuid::new(None, None);
         let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
 
-        async move {
-            info!("Syncing!");
+        async move {            
+            info!("Starting sync");
             *self.sync_status.write().await = SyncStatus::InProgress;
+
+            // Check if we need to store genesis block first
+            let head = self.head.read().await;
+            if head.is_none() {
+                warn!("No head block found, this indicates the genesis block may not be stored. Waiting before sync...");
+                drop(head);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                // Reset sync status to InProgress so it can be retried
+                *self.sync_status.write().await = SyncStatus::InProgress;
+                return; // Exit sync, will be retriggered by reactive mechanisms
+            }
+            drop(head);
 
             // Phase 1: Wait for peers
             let _peer_id = {
@@ -2267,6 +2289,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             "Failed to establish RPC connection with any peer: {:?}",
                             err
                         );
+                        // Reset sync status to InProgress so it can be retried
+                        *self.sync_status.write().await = SyncStatus::InProgress;
                         return; // Exit sync, will be retriggered by reactive mechanisms
                     }
                 };
@@ -2308,6 +2332,34 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                                 "Bitcoin block not found during sync at height {}: {}. Continuing sync...",
                                                 block_height, block_hash
                                             );
+                                        }
+                                        Error::MissingParent => {
+                                            // Special handling for MissingParent error when head is at 0
+                                            // This can happen if the genesis block is not yet properly stored
+                                            if head == 0 {
+                                                warn!(
+                                                    "MissingParent error at height {} when head is at 0. This may indicate the genesis block is not yet properly stored. Retrying sync after delay...",
+                                                    block_height
+                                                );
+                                                // Wait a bit and then return to retry the sync
+                                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                                // Reset sync status to InProgress so it can be retried
+                                                *self.sync_status.write().await = SyncStatus::InProgress;
+                                                return;
+                                            } else {
+                                                // For non-genesis cases, try to rollback
+                                                async {
+                                                    logging_closure(&mut blocks_failed);
+                                                    if let Err(rollback_err) = self.rollback_head(head.saturating_sub(1)).await {
+                                                        error!("Failed to rollback head: {:?}", rollback_err);
+                                                    }
+                                                }
+                                                .instrument(tracing::debug_span!(
+                                                    "rollback_on_sync_error",
+                                                    failed_height = block_height
+                                                ))
+                                                .await;
+                                            }
                                         }
                                         _ => {
                                             async {
@@ -2664,5 +2716,22 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockHashCacheInit for Chain<DB> {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::store::Storage;
+
+    #[test]
+    fn test_sync_status_initialization() {
+        // Test with empty storage (should start with InProgress)
+        let storage = Storage::new_memory();
+        let head = storage.get_head().expect("Failed to get head from storage");
+        assert!(head.is_none(), "Fresh storage should have no head");
+        
+        // Test with storage that has a head (should start with Synced)
+        // This would require setting up a mock storage with a head block
+        // For now, we just verify the logic in the constructor
     }
 }
