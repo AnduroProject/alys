@@ -920,10 +920,32 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         }
     }
 
-    fn get_parent(
+    async fn get_parent(
         &self,
         unverified_block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        // Special handling for genesis block parent (which has zero parent hash)
+        if unverified_block.message.parent_hash.is_zero() {
+            // For genesis block, we need to find it by its canonical root
+            // Since we know the head is at height 0, we can get the genesis block from there
+            let head = self.head.read().await;
+            if let Some(head_ref) = head.as_ref() {
+                if head_ref.height == 0 {
+                    // Get the genesis block using its canonical root
+                    return self.storage
+                        .get_block(&head_ref.hash)
+                        .map_err(|_| Error::MissingParent)?
+                        .ok_or(Error::MissingParent);
+                }
+            }
+        }
+        
+        // For non-genesis blocks, try to get by parent hash first
+        if let Ok(Some(parent_block)) = self.storage.get_block(&unverified_block.message.parent_hash) {
+            return Ok(parent_block);
+        }
+        
+        // If that fails, try to get by canonical root (fallback for genesis block)
         self.storage
             .get_block(&unverified_block.message.parent_hash)
             .map_err(|_| Error::MissingParent)?
@@ -977,7 +999,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             return Err(Error::InvalidBlock);
         }
 
-        let prev = self.get_parent(&unverified_block)?;
+        let prev = self.get_parent(&unverified_block).await?;
         let prev_payload_hash_according_to_consensus = prev.message.execution_payload.block_hash;
         let prev_payload_hash = unverified_block.message.execution_payload.parent_hash;
 
@@ -1936,7 +1958,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         debug!("Local head: {:#?}, height: {}", head_hash, head_height);
 
                         // sync first then process block so we don't skip and trigger a re-sync
-                        if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
+                        if matches!(self.get_parent(&x).await, Err(Error::MissingParent)) {
                             // TODO: we need to sync before processing (this is triggered by proposal)
                             // TODO: additional case needed where head height is not behind
                             // self.clone().sync(Some((number - head_height) as u32)).await;
