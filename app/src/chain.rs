@@ -924,30 +924,53 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         &self,
         unverified_block: &SignedConsensusBlock<MainnetEthSpec>,
     ) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        let block_height = unverified_block.message.execution_payload.block_number;
+        let parent_hash = unverified_block.message.parent_hash;
+        
+        info!("get_parent: Looking for parent of block at height {} with parent_hash {}", block_height, parent_hash);
+        
         // Special handling for genesis block parent (which has zero parent hash)
-        if unverified_block.message.parent_hash.is_zero() {
+        if parent_hash.is_zero() {
+            info!("get_parent: Parent hash is zero, looking for genesis block");
             // For genesis block, we need to find it by its canonical root
             // Since we know the head is at height 0, we can get the genesis block from there
             let head = self.head.read().await;
             if let Some(head_ref) = head.as_ref() {
+                info!("get_parent: Head is at height {} with hash {}", head_ref.height, head_ref.hash);
                 if head_ref.height == 0 {
                     // Get the genesis block using its canonical root
-                    return self.storage
-                        .get_block(&head_ref.hash)
-                        .map_err(|_| Error::MissingParent)?
-                        .ok_or(Error::MissingParent);
+                    info!("get_parent: Attempting to get genesis block using canonical root {}", head_ref.hash);
+                    match self.storage.get_block(&head_ref.hash) {
+                        Ok(Some(genesis_block)) => {
+                            info!("get_parent: Successfully found genesis block");
+                            return Ok(genesis_block);
+                        }
+                        Ok(None) => {
+                            warn!("get_parent: Genesis block not found in storage with canonical root {}", head_ref.hash);
+                        }
+                        Err(e) => {
+                            warn!("get_parent: Error getting genesis block: {:?}", e);
+                        }
+                    }
+                } else {
+                    warn!("get_parent: Head is not at height 0, it's at height {}", head_ref.height);
                 }
+            } else {
+                warn!("get_parent: No head block found");
             }
         }
         
         // For non-genesis blocks, try to get by parent hash first
-        if let Ok(Some(parent_block)) = self.storage.get_block(&unverified_block.message.parent_hash) {
+        info!("get_parent: Trying to get parent block by parent_hash {}", parent_hash);
+        if let Ok(Some(parent_block)) = self.storage.get_block(&parent_hash) {
+            info!("get_parent: Successfully found parent block by parent_hash");
             return Ok(parent_block);
         }
         
         // If that fails, try to get by canonical root (fallback for genesis block)
+        warn!("get_parent: Parent block not found by parent_hash, this will result in MissingParent error");
         self.storage
-            .get_block(&unverified_block.message.parent_hash)
+            .get_block(&parent_hash)
             .map_err(|_| Error::MissingParent)?
             .ok_or(Error::MissingParent)
     }
