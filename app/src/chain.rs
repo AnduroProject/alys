@@ -2272,7 +2272,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             .as_ref()
                             .map(|x| x.height)
                             .unwrap_or_default();
+                        
+                        // For now, always start from head + 1, but add better logging
                         let start_height = head + 1;
+                        
                         let block_count = 1024;
 
                         info!(
@@ -2330,6 +2333,17 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                         "Successfully processed block at height {}",
                                         block_height
                                     );
+                                    
+                                    // If this is the genesis block (height 0), update the head
+                                    if block_height == 0 {
+                                        let genesis_root = block.canonical_root();
+                                        let genesis_ref = BlockRef {
+                                            hash: genesis_root,
+                                            height: 0,
+                                        };
+                                        *self.head.write().await = Some(genesis_ref);
+                                        info!("Updated head to genesis block at height 0");
+                                    }
                                 }
                                 Err(err) => {
                                     let logging_closure = |blocks_failed_ref: &mut i32| {
@@ -2356,11 +2370,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                                             // This can happen if the genesis block is not yet properly stored
                                             if head == 0 {
                                                 warn!(
-                                                    "MissingParent error at height {} when head is at 0. This may indicate the genesis block is not yet properly stored. Skipping this block and continuing...",
+                                                    "MissingParent error at height {} when head is at 0. This may indicate the genesis block is not yet properly stored. Exiting sync to retry...",
                                                     block_height
                                                 );
-                                                // Skip this block and continue with the next one
-                                                continue;
+                                                // Exit sync to retry after genesis block is properly stored
+                                                return;
                                             } else {
                                                 // For non-genesis cases, try to rollback
                                                 async {
@@ -2413,12 +2427,20 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
             // Phase 4: Complete sync
             async {
-                *self.sync_status.write().await = SyncStatus::Synced;
-
-                info!(
-                    "Finished syncing! Total processed: {} blocks, failed: {}",
-                    total_blocks_processed, total_blocks_failed
-                );
+                if total_blocks_processed > 0 {
+                    *self.sync_status.write().await = SyncStatus::Synced;
+                    info!(
+                        "Finished syncing! Total processed: {} blocks, failed: {}",
+                        total_blocks_processed, total_blocks_failed
+                    );
+                } else {
+                    // No blocks were processed, keep sync status as InProgress
+                    *self.sync_status.write().await = SyncStatus::InProgress;
+                    info!(
+                        "Sync completed but no blocks were processed. Total processed: {} blocks, failed: {}",
+                        total_blocks_processed, total_blocks_failed
+                    );
+                }
             }
             .instrument(tracing::debug_span!(
                 "complete_sync",
