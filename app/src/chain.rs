@@ -2346,9 +2346,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         
                         let block_count = 1024;
 
+                        let genesis_hash = self.head.read().await.as_ref().map(|h| h.hash).unwrap_or_default();
                         info!(
-                            "Syncing from height {} (requesting {} blocks from height {})",
-                            head, block_count, start_height
+                            "Syncing from height {} (requesting {} blocks from height {}). Our genesis hash: {}",
+                            head, block_count, start_height, genesis_hash
                         );
 
                         CHAIN_SYNCING_OPERATION_TOTALS
@@ -2399,8 +2400,15 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                             let block_hash = block.canonical_root();
                             let parent_hash = block.message.parent_hash;
                             
-                            info!("Received block: height={}, hash={}, parent_hash={}", 
-                                  block_height, block_hash, parent_hash);
+                            let genesis_hash = self.head.read().await.as_ref().map(|h| h.hash).unwrap_or_default();
+                            info!("Received block: height={}, hash={}, parent_hash={}. Our genesis hash: {}", 
+                                  block_height, block_hash, parent_hash, genesis_hash);
+                            
+                            // Check if this block's parent matches our genesis
+                            if block_height == 1 && parent_hash != genesis_hash {
+                                warn!("Chain mismatch detected! Block at height 1 has parent_hash {} but our genesis hash is {}. Skipping this block.", parent_hash, genesis_hash);
+                                continue; // Skip this block and continue with the next one
+                            }
                             
                             match self.process_block((*block).clone()).await {
                                 Err(Error::ProcessGenesis) | Ok(_) => {
