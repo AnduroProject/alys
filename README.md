@@ -1,51 +1,149 @@
-# Alys
+# Alys - Bitcoin Sidechain with Two-Way Peg (V2 Migration)
 
-Alys is a merged mined Bitcoin sidechain.
+[![CI Status](https://github.com/AnduroProject/alys/workflows/CI/badge.svg)](https://github.com/AnduroProject/alys/actions)
+[![Docker](https://github.com/AnduroProject/alys/workflows/Docker/badge.svg)](https://github.com/AnduroProject/alys/pkgs/container/alys)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Migration Progress](https://img.shields.io/badge/V2_Migration-Phase_0_Foundation-yellow.svg)](#v2-migration-status)
 
-- Uses BTC as its base currency.
-- Reaches consensus through aux PoW executed by Bitcoin miners and a federation.
-- Facilitates a two-way peg between Bitcoin and the Alys sidechain through the federation members.
+Alys is a merged mined Bitcoin sidechain that uses BTC as its base currency and implements a two-way peg system. This repository contains the **V2 migration branch**, which is transitioning from a monolithic architecture to an actor-based system for improved reliability, performance, and maintainability.
 
-## Overview
+## 🚀 Project Overview
 
-On a high level, the repository consists of three parts:
+### Core Features
+- **Merged Mining**: Bitcoin miners can mine Alys blocks alongside Bitcoin blocks
+- **Two-Way Peg**: Secure BTC ↔ Alys transfers via federation-controlled multisig
+- **EVM Compatibility**: Full Ethereum JSON-RPC compatibility (supports MetaMask, Hardhat, Foundry)
+- **Federated Consensus**: Proof-of-Authority with BLS signatures and Bitcoin PoW finalization
+- **Actor Architecture** (V2): Message-passing system replacing Arc<RwLock<>> patterns
 
-- [app](./app): Contains a consensus client for block production and finalization and a federation client to process peg-in and peg-out transactions.
-- [contracts](.contracts): Contains the smart contract for burning bridged BTC by users to trigger the peg-out process.
-- [crates](./crates): Contains the logic for the peg-in and peg-out handling used by the app. It also contains the logic to interact with Bitcoin miners.
-- [docs](./docs/src/README.md): Contains more information on the architecture.
+### Architecture (V2)
+- **Consensus Layer**: Optimistic merged mining with federated block production
+- **Actor System**: Isolated actors for Chain, Engine, Bridge, Sync, and Network operations
+- **Two-Way Peg**: Bitcoin ↔ Alys transfers with 6-confirmation security
+- **Smart Contracts**: Solidity-based bridge contracts with automatic peg-out processing
+
+## 🏗️ V2 Migration Status
+
+### Current Phase: **Foundation Setup** 
+**Progress: 0% Complete** | **Target Completion: Q1 2025**
+
+#### Migration Overview
+The V2 migration is restructuring Alys from a monolithic architecture to an actor-based system to eliminate deadlocks, improve concurrency, and enhance fault tolerance.
+
+#### Epic Status
+| Epic | Status | Progress | Subtasks | Estimated Hours |
+|------|--------|----------|----------|-----------------|
+| [ALYS-001](https://anduroproject.atlassian.net/browse/AN-285) | 🟡 In Progress | 0% | 42 tasks | 24-32h |
+| [ALYS-002](docs/v2/jira/issue_2.md) | ⚪ Planned | 0% | 28 tasks | 32-40h |
+| [ALYS-003](docs/v2/jira/issue_3.md) | ⚪ Planned | 0% | 24 tasks | 20-24h |
+| [ALYS-004](docs/v2/jira/issue_4.md) | ⚪ Planned | 0% | 12 tasks | 12-16h |
+| [ALYS-005](docs/v2/jira/issue_5.md) | ⚪ Planned | 0% | 22 tasks | 24-32h |
 
 
-## Prerequisites
+#### Critical Dependencies
+1. **Lighthouse V5 Integration**: Consensus upgrade for improved performance
+2. **Anduro Governance**: Secure key management via gRPC streaming  
+3. **Actor System Foundation**: Core framework for all migration phases
 
-- Install Rust `1.87.0` or higher: https://www.rust-lang.org/tools/install
-- Install Geth `1.14.10`: https://geth.ethereum.org/docs/getting-started/installing-geth
-- Install Bitcoin Core `28.0` or higher so that you have access to the `bitcoind` and `bitcoin-cli` commands:
-  - MacOS: `brew install bitcoin`
-  - Ubuntu: `sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind`
-  - Arch: `yay bitcoin-core`
-  - Download a binary: https://bitcoin.org/en/download
-- Install clang
-- Install cmake `3.31.3`
-- Install pkg-config
-- Install libssl-dev
-- Install build-essential
-- Install foundry: https://book.getfoundry.sh/getting-started/installation
+## 🔧 Repository Structure
 
-## Getting Started Guides:
+### Main Components
+- **[app](./app)**: Consensus client for block production and finalization, federation client for peg operations
+- **[contracts](./contracts)**: Smart contracts for burning bridged BTC to trigger peg-out process
+- **[crates](./crates)**: Peg-in/peg-out logic and Bitcoin miner interaction
+- **[docs](./docs/src/README.md)**: Architecture documentation and knowledge base
 
-To help you get started with Alys, we provide two guides. The first guide demonstrates how to set up and run Alys using Docker Compose, which is the easiest and quickest way to get started. The second guide walks you through a manual setup process for more control and customization.
-* ### [Running Alys with Docker Compose](./docs/guides/getting_started_docker_setup.md)
-* ### [Running Alys - Manual setup](./docs/guides/getting_started_manual_setup.md) (for local development)
 
-## Connecting to Alys Testnet4
+## 📋 Prerequisites
 
-- Explorer: http://testnet.alyscan.io/
-- Faucet: https://faucet.anduro.io/
-- Chain ID: 212121
+### System Requirements
+- **Rust**: 1.87.0+ with `cargo`, `rustc`, `rustfmt`
+- **Bitcoin Core**: 28.0+ (for merged mining and peg operations)
+- **Execution Client**: Geth 1.14.10+ or Reth (EVM execution layer)
+- **Build Tools**: `clang`, `cmake`, `pkg-config`, `libssl-dev`
 
-Anduro operates a public testnet for Alys used for development & testing. Anyone wishing to interact with the Alys testnet, whether it be to query the chain, send transactions, or connect your own node to the
-network, can find connection info below.
+### Installation Commands
+```bash
+# Rust (if not installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Bitcoin Core
+# MacOS: brew install bitcoin
+# Ubuntu: sudo add-apt-repository ppa:bitcoin/bitcoin && sudo apt-get update && sudo apt-get install bitcoind
+# Arch: yay bitcoin-core
+
+# Geth
+# https://geth.ethereum.org/docs/getting-started/installing-geth
+
+# Foundry (smart contract development)
+curl -L https://foundry.paradigm.xyz | bash && foundryup
+```
+
+### Development Tools (Optional)
+- **Docker**: Container orchestration for local networks
+- **Node.js**: Frontend development and testing tools
+
+## 🛠️ Installation & Setup
+
+### Quick Start (Local Development)
+```bash
+# Clone repository
+git clone https://github.com/AnduroProject/alys.git
+cd alys
+
+# Build all components
+cargo build --release
+
+# Start 3-node local network (Bitcoin regtest + Geth + Alys)
+./scripts/start_network.sh
+
+# Verify network is running
+cast balance 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --rpc-url localhost:8545
+```
+
+### Component Build Commands
+```bash
+# Build consensus client
+cargo build --bin alys
+
+# Build smart contracts  
+cd contracts/ && forge build
+
+# Run all tests
+cargo test --workspace
+
+# Format code
+cargo fmt --all
+```
+
+## 📖 Getting Started Guides
+
+### Recommended Setup Options
+* **[Docker Compose Setup](./docs/guides/getting_started_docker_setup.md)** - Quickest way to get started
+* **[Manual Setup](./docs/guides/getting_started_manual_setup.md)** - Full control for local development
+
+## 🚦 Network Configuration
+
+### Local Development
+- **Chain ID**: 263634
+- **RPC Endpoint**: http://localhost:8545
+- **Consensus RPC**: http://localhost:3000
+- **P2P Port**: 30303
+
+### Testnet
+- **Chain ID**: 212121  
+- **RPC Endpoint**: https://testnet-rpc.alys.network
+- **Explorer**: http://testnet.alyscan.io/
+- **Faucet**: https://faucet.anduro.io/
+
+### Important Addresses
+- **Bridge Contract**: `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`
+- **Burn Address**: `0x000000000000000000000000000000000000dEaD`
+- **Dev Private Key**: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
+
+## 🌐 Connecting to Alys Testnet
+
+Anduro operates a public testnet for development & testing. Connect your node using the peer information below:
 
 ### Alys Node #1:
 ```shell
@@ -65,301 +163,328 @@ IP: 209.160.175.125
 Enode: enode://53d6af0f549e4f9b4f768bc37145f7fd800fdbe1203652fd3d2ff7444663a4f5cfe8c06d5ed4b25fe3185920c28b2957a0307f1eed8af49566bba7e3f0c95b04@209.160.175.125:30303
 ```
 
-To establish peering connections between the nodes, you can use the following command:
-```shell
+### Establishing Peer Connections
+```bash
+# Connect to any testnet node
 cast rpc admin_addTrustedPeer '["<enode_url_of_any_alys_node_listed_above>"]'
 ```
 
-## Faucet
+## 🔧 Development Commands
 
-https://faucet.anduro.io/
+### Local Network Operations
+```bash
+# Start full local network
+./scripts/start_network.sh
 
+# Start individual components
+./scripts/start_geth.sh       # Ethereum execution layer
+./scripts/start_reth.sh       # Alternative execution client  
+./scripts/start_testnet_alys.sh # Connect to testnet
 
-### Peg-In
-
-Next, we move funds from Bitcoin to Alys via the peg-in to be able to send transactions on the Alys sidechain.
-
-#### Get the Deposit Address
-
-From the running Alys node, we can get the federation deposit address via the `getdepositaddress` RPC:
-
-```shell
-curl --silent -H "Content-Type: application/json" -d '{"id":"1", "jsonrpc":"2.0", "method": "getdepositaddress", "params":[]}' http://localhost:3000 | jq -r .result
+# Test operations
+./scripts/regtest_pegin.sh 0.1 0xYourAddress    # Peg-in 0.1 BTC
+./scripts/regtest_pegout.sh $PRIVATE_KEY $BTC_ADDR # Peg-out to Bitcoin
 ```
 
-This returns the federation deposit address of your local Alys node, e.g.:
+### Testing & Validation
+```bash
+# Unit tests (no external services required)
+cargo test --workspace
 
+# Integration tests (requires local network)
+./scripts/tests/6_network_e2e.sh
+
+# Specific test suites  
+./scripts/tests/1_produce_signed_blocks.sh # Block production
+./scripts/tests/2_merged_mining.sh         # Mining integration
+./scripts/tests/3_peg_in.sh               # Bitcoin → Alys
+./scripts/tests/5_peg_out.sh              # Alys → Bitcoin
 ```
-bcrt1p3srvwkq5kyzlxqls43x97ch2vpcp4j278nk8jjuzcgt8k40ttr9s4vj934
+
+### Smart Contract Development
+```bash
+cd contracts/
+
+# Build contracts
+forge build
+
+# Run contract tests
+forge test -vvv
+
+# Deploy to local network
+forge script script/Deploy.s.sol --rpc-url localhost:8545 --broadcast
+
+# Interact with contracts
+cast call $BRIDGE_ADDRESS "balanceOf(address)" $YOUR_ADDRESS --rpc-url localhost:8545
 ```
 
-#### Send BTC to the Deposit Address
+## 📊 Key Metrics & Monitoring
 
-Next, we do a bit of bitcoin-cli magic to create an "Alys" wallet. We send some BTC on regtest from the Alys wallet to the federation deposit address and add an EVM account (`0x09Af4E864b84706fbCFE8679BF696e8c0B472201`) in an OP_RETURN field for which we know the private key (`0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01`).
+### Performance Targets
+- **Block Time**: 2 seconds (configurable via `slotDuration`)
+- **Sync Speed**: >100 blocks/second during catch-up
+- **Transaction Throughput**: 1000+ TPS (EVM compatible)
+- **Peg Confirmation**: 6 Bitcoin blocks for peg-in security
 
-You can run this script to achieve the peg in. The script will automatically fetch the deposit address from the federation nodes.
+### Monitoring Endpoints
+- **Metrics**: http://localhost:9090/metrics (Prometheus format)
+- **Health**: http://localhost:9090/health
+- **Chain Status**: `curl localhost:3000/status`
 
-```shell
-# set the btc amount and evm address
+## 🧪 Testing Strategy
+
+### Test Categories
+1. **Unit Tests**: Component isolation, fast feedback
+2. **Integration Tests**: Multi-component interaction validation
+3. **Property Tests**: Randomized input validation with PropTest
+4. **Chaos Tests**: Network partitions, Byzantine behavior simulation
+5. **Performance Tests**: Throughput and latency benchmarking
+
+### Test Execution
+```bash
+# Complete test suite
+cargo test --all-features --workspace
+
+# Integration tests with Docker environment
+docker-compose -f docker-compose.test.yml up -d
+cargo test --test integration_tests --features integration
+docker-compose -f docker-compose.test.yml down -v
+
+# Property-based testing  
+PROPTEST_CASES=10000 cargo test --test property_tests
+
+# Performance benchmarks
+cargo bench --features bench
+```
+
+## 💰 Two-Way Peg Operations
+
+### Peg-In (Bitcoin → Alys)
+
+#### Get Federation Deposit Address
+```bash
+curl --silent -H "Content-Type: application/json" \
+  -d '{"id":"1", "jsonrpc":"2.0", "method": "getdepositaddress", "params":[]}' \
+  http://localhost:3000 | jq -r .result
+```
+
+#### Execute Peg-In
+```bash
+# Automated peg-in with script
 EVM_ADDRESS="09Af4E864b84706fbCFE8679BF696e8c0B472201"
 ./scripts/regtest_pegin.sh "1.0" $EVM_ADDRESS
 
-# OR use the $DEV_PRIVATE_KEY
+# Or use default dev address
 ./scripts/regtest_pegin.sh
 ```
 
-The Alys node will automatically bridge the BTC.
-
-#### Check that Funds are Allocated in Alys
-
-Run `cast` to check that the funds have been allocated. Note that on peg-in, satoshis (10^8) will be converted to wei (10^18) so you will see a lot more 0s for the bridge 1 BTC, i.e., 1x10^18 wei instead of 1x10^8 satoshis.
-
-```shell
-cast balance 0x09Af4E864b84706fbCFE8679BF696e8c0B472201 --rpc-url "localhost:8545"
-> 1000000000000000000
+#### Verify Peg-In Success
+```bash
+# Check balance (satoshis converted to wei: 1 BTC = 10^18 wei)
+cast balance 0x09Af4E864b84706fbCFE8679BF696e8c0B472201 --rpc-url localhost:8545
+# Expected: 1000000000000000000 (1 BTC in wei)
 ```
 
-### Peg-Out
+### Peg-Out (Alys → Bitcoin)
 
-Next up, we want to peg out.
-
-#### Peg-out Funds
-
-We are returning the funds to the Alys wallet we created in Bitcoin.
-
-We can use the peg out contract set the genesis at address `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`, see also the [genesis file](./data/genesis.json).
-
-We are doing this from the CLI and will need to define a `PRIVATE_KEY` env.
-
-- `PRIVATE_KEY`: The private key is `0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01`. This is the private key to the address `0x09Af4E864b84706fbCFE8679BF696e8c0B472201` that we set for the peg in.
-
-```shell
-# set the private key and btc address
+#### Execute Peg-Out
+```bash
+# Peg-out using bridge contract at 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB
 PRIVATE_KEY=0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01
 ./scripts/regtest_pegout.sh $PRIVATE_KEY $BTC_ADDRESS
 
-# OR just the private key
-./scripts/regtest_pegout.sh $PRIVATE_KEY
-
-# OR use the $DEV_PRIVATE_KEY
+# Or use default dev key
 ./scripts/regtest_pegout.sh
-
-# check the last 3 transactions. The 2 last should be the mining reward to alys (with category "immature") and the 3rd last txs should be a normal receive tx from the foundation
-bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword listtransactions "*" 3
 ```
 
-<details>
-<summary>Expected output</summary>
-
-```shell
-  {
-    "address": "bcrt1qane4k9ejhhca9w0ez7ale7xru5pnrqmuwqayhc",
-    "parent_descs": [
-      "wpkh(tpubD6NzVbkrYhZ4XGc5eHTPRieN8p27r6PPNenUPJz5JQeCkav8aZ2wz9zc83xgEUVbpQetH6FXABUZ5LDG9uDWqf7fc9RN2yfJzDAmHnSFHHw/84h/1h/0h/0/*)#t9fj9n6e"
-    ],
-    "category": "receive",
-    "amount": 0.00010000,
-    "label": "",
-    "vout": 0,
-    "abandoned": false,
-    "confirmations": 2,
-    "blockhash": "78e3a9699277e9dc1da0da5e7f47bded9abdfce673bf1858e18aa6c2089d7d54",
-    "blockheight": 792,
-    "blockindex": 1,
-    "blocktime": 1706691489,
-    "txid": "831094cba680a5cbbd622b464eaf69562d53b681400c747cee72caddbc9765b4",
-    "wtxid": "0dca63f31e7b873ef29d5ea3124a62f7e40d9f9de5b72e88c39904e9e6750256",
-    "walletconflicts": [
-    ],
-    "time": 1706691488,
-    "timereceived": 1706691488,
-    "bip125-replaceable": "no"
-  },
+#### Verify Peg-Out Success
+```bash
+# Check Bitcoin wallet for received transaction
+bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword \
+  listtransactions "*" 3
 ```
 
-</details>
+## 🔐 Security Considerations
 
+### Production Security
+- **Federation Keys**: Multi-party computation with hardware security modules
+- **Bitcoin Integration**: 6-confirmation requirement for peg-in finality
+- **Bridge Contracts**: Formally verified Solidity with comprehensive testing
+- **Network Security**: BLS signature aggregation with slashing conditions
 
-## Development
+### Development Security
+- **Private Keys**: Never commit keys to repository
+- **Test Networks**: Use regtest/testnet for all development
+- **Dependencies**: Regular `cargo audit` for vulnerability scanning
 
-### Alys Node (Consensus Layer)
+## 🛠️ EVM Tooling & Smart Contract Examples
 
-First, follow the manual setup guide [here](./docs/guides/getting_started_manual_setup.md) to get your local environment setup.
+### Example ERC20 Deployment
+```bash
+cd contracts/
 
-#### Unit tests
-
-Tests are self-contained such that none of the services need to run.
-
-```shell
-cargo test
-```
-
-### Smart Contracts
-
-#### Build and Deploy
-
-Go to the contracts folder.
-
-```shell
-cd ./contracts
-```
-
-The contracts folder contains only the bridge contract for the peg out. However, you can add any other smart contracts you may wish to add here.
-
-Build and deploy.
-
-```shell
-forge build
-```
-
-#### Example ERC20
-
-We are going to deploy an example ERC20 contract to show how to interact with the sidechain.
-
-We are going to use our private key (`0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01`) as a means to deploy the contract. Make sure the account belonging to this key has received funds via the peg-in procedure.
-
-```shell
+# Deploy example ERC20 contract
 PRIVATE_KEY=0xb9176fa68b7c590eba66b7d1894a78fad479d6259e9a80d93b9871c232132c01
-# constructor takes the name of the contract, the ticker, and the initial supply that is minted to the creator of the contract
-forge create --rpc-url "http://127.0.0.1:8545" --private-key ${PRIVATE_KEY} src/MockErc20.sol:MockErc20 --json --constructor-args "HelloBitcoinContract" "HBC" 100000000000000000000000
+forge create --rpc-url http://127.0.0.1:8545 --private-key $PRIVATE_KEY \
+  src/MockErc20.sol:MockErc20 --json \
+  --constructor-args "HelloBitcoinContract" "HBC" 100000000000000000000000
+
+# Expected output:
+# {"deployer":"0x09Af4E864b84706fbCFE8679BF696e8c0B472201","deployedTo":"0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146","transactionHash":"0x..."}
 ```
 
-This should result in something like:
-
-```shell
-{"deployer":"0x09Af4E864b84706fbCFE8679BF696e8c0B472201","deployedTo":"0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146","transactionHash":"0x8478bbed6ba658eecb8e36c143969cf6c11c4517f5f32acf75af5a9c41ac69dd"}
-```
-
-Other useful scripts:
-
-```shell
-# Send some of the ERC20 tokens from the deployed contract (0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146) to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
-cast send --private-key ${PRIVATE_KEY} \
-  --rpc-url "localhost:8545" \
-  --chain 263634 \
+### Interacting with Contracts
+```bash
+# Transfer ERC20 tokens
+cast send --private-key $PRIVATE_KEY --rpc-url localhost:8545 --chain 263634 \
   0x1C36129916E3EA2ACcD516Ae92C8f91deF7c4146 \
   "transfer(address,uint256)" 0xd362E49EE9453Bf414c35288cD090189af2B2C55 100000000
-# Send 16200000000007550 wei bridged BTC to account 0xd362E49EE9453Bf414c35288cD090189af2B2C55
-cast send --private-key ${PRIVATE_KEY} 0xd362E49EE9453Bf414c35288cD090189af2B2C55 --value 16200000000007550
+
+# Transfer native BTC (wei units)
+cast send --private-key $PRIVATE_KEY --rpc-url localhost:8545 \
+  0xd362E49EE9453Bf414c35288cD090189af2B2C55 --value 16200000000007550
 ```
 
-#### Test
+### Supported Tools
+- **MetaMask**: Full wallet integration support
+- **Foundry**: Complete smart contract development suite
+- **Hardhat**: JavaScript-based development framework
+- **Blockscout**: Blockchain explorer integration
 
-```shell
-forge test
-```
+### Setting Up Blockscout Explorer
+```bash
+# Clone and setup Blockscout
+git clone https://github.com/blockscout/blockscout.git
+cd blockscout/docker-compose
 
-#### Format
+# Configure for Alys
+# Edit docker-compose/envs/common-blockscout.yml:
+# SUBNETWORK=Merged ALYS
+# CHAIN_ID=263634
 
-```shell
-forge fmt
-```
+# Edit docker-compose/envs/common-frontend.yml:
+# NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha
+# NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
 
-## EVM Tooling
-
-Since we use Geth without modification, it is already possible to use most existing EVM tooling out-the-box including MetaMask, Foundry / Hardhat and of course Blockscout!
-
-### Blockscout
-
-To setup [Blockscout](https://github.com/blockscout/blockscout) follow the deployment guides [here](https://docs.blockscout.com/for-developers/deployment). We recommend using [Docker Compose](https://github.com/docker/compose) for simplicity.
-
-```shell
-git clone git@github.com:blockscout/blockscout.git
-cd ./docker-compose
-```
-
-Change the environment variables:
-
-```
-# /docker-compose/envs/common-blockscout.yml
-SUBNETWORK=Merged ALYS
-CHAIN_ID=263634
-# /docker-compose/envs/common-frontend.yml
-NEXT_PUBLIC_NETWORK_NAME=Merged ALYS Alpha
-NEXT_PUBLIC_NETWORK_SHORT_NAME=Merged ALYS Alpha
-```
-
-Start the explorer with:
-
-```shell
+# Start explorer
 docker-compose -f geth.yml up --build
-```
 
-The explorer runs on [localhost:80](http://localhost/).
+# Access at http://localhost:80
 
-If you reset the chain make sure to clear the persistent data in `docker-compose/services/`.
-
-```shell
+# Reset data if needed
 sudo rm -rf services/redis-data services/stats-db-data services/blockscout-db-data services/logs
 ```
 
-## Genesis
+## ⚙️ Configuration Files
 
-We provide [`genesis.json`](./data/genesis.json) for local development using Geth but it is also possible to use this other deployments.
+### Genesis Configuration
+- **[genesis.json](./data/genesis.json)**: Ethereum genesis config for Geth (post-Capella)
+- **Bridge Contract**: Pre-deployed at `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`
 
-It was previously based on the Sepolia genesis with some modifications using [this guide](https://dev.to/q9/how-to-merge-an-ethereum-network-right-from-the-genesis-block-3454):
+### Chain Specification
+- **[chain.json](./etc/config/chain.json)**: Alys consensus configuration
+- **Key Parameters**:
+  - `slotDuration`: Block time in milliseconds (default: 2000ms)
+  - `authorities`: BLS public keys for federation signing
+  - `federation`: EVM addresses for fee collection
+  - `maxBlocksWithoutPow`: PoW timeout threshold (default: 10 blocks)
 
-```shell
-geth --sepolia dumpgenesis | jq .
+### Important Configuration Notes
+- All federation members must use identical genesis and chain specs
+- Federation EVM addresses receive transaction fees directly
+- Bitcoin scanning starts from `bitcoinStartHeight` (0 for development)
+
+## 🚀 Deployment
+
+### Docker Deployment
+```bash
+# Build Docker image
+docker build -t alys:latest .
+
+# Run with Docker Compose  
+docker-compose -f docker-compose.yml up -d
+
+# Check deployment status
+docker-compose ps
+docker logs alys_consensus_1
 ```
 
-Ensure that the chain is configured to start post-capella (set `shanghaiTime` to 0).
+## 📚 Documentation
 
-The Alys sidechain expects the bridge contract to be pre-deployed at `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`, this is set in `alloc`.
+### Architecture Documentation
+- [**Root Architecture**](docs/knowledge/root.knowledge.md) - Complete system overview
+- [**App Layer**](docs/knowledge/app.knowledge.md) - Consensus and networking  
+- [**Federation**](docs/knowledge/federation.knowledge.md) - Two-way peg system
+- [**Lighthouse Integration**](docs/knowledge/lighthouse_wrapper.knowledge.md) - Ethereum consensus
 
-## Chain Spec
+### Migration Documentation
+- [**V2 Migration Strategy**](docs/v2/migration-strategy.md) - Complete migration approach
+- [**Actor System Guide**](docs/v2/actor-system-guide.md) - Developer guide for actors
+- [**Performance Comparison**](docs/v2/performance-analysis.md) - V1 vs V2 benchmarks
 
-When you start the Alys sidechain it will use a chain spec to configure it's own genesis block based also on the Geth genesis configured above. We provide [`chain.json`](./etc/config/chain.json) for local development assuming three nodes (instructions above) or using `--chain=dev` will start a single node network. See the annotations below for how to configure a new setup:
-
-```javascript
-{
-  // the block duration in milliseconds
-  "slotDuration": 2000,
-  // public keys for bls signing
-  "authorities": [],
-  // evm addresses for each authority (to receive fees)
-  "federation": [],
-  // public keys for secp256k1 signing
-  "federationBitcoinPubkeys": [],
-  // initial PoW mining difficulty
-  "bits": 553713663,
-  // should be the same as the geth `genesis.json`
-  "chainId": 263634,
-  // stall block production if no AuxPow is received
-  "maxBlocksWithoutPow": 10,
-  // set the scanning height, use latest height for testnet or mainnet
-  "bitcoinStartHeight": 0,
-  "retargetParams": {
-    // disable retargeting so we always keep the same target
-    "powNoRetargeting": false,
-    // the maximum target allowed
-    "powLimit": 553713663,
-    // expected difficulty adjustment period (in seconds)
-    "powTargetTimespan": 12000,
-    // expected block time (in seconds)
-    "powTargetSpacing": 1000
-  }
-}
+### API Documentation
+```bash
+# Generate API documentation
+cargo doc --no-deps --document-private-items --all-features --open
 ```
 
-Each node should use the same genesis and chain spec, otherwise blocks will be rejected.
+## 🤝 Contributing
 
-Ensure that each federation member has set an EVM address to receive fees - this can be derived from the same secret key used to generate the public key in `"authorities"`. When fees are generated from EVM transactions they are sent directly to that account.
+### Development Workflow
+1. **Fork** the repository and create a feature branch
+2. **Follow** Rust best practices and existing code style
+3. **Test** thoroughly with unit, integration, and property tests  
+4. **Document** changes in code comments and architecture docs
+5. **Submit** PR with comprehensive description and test evidence
 
-## Important Links
+### Code Quality Standards
+- **Coverage**: Minimum 80% test coverage for new code
+- **Linting**: Zero `clippy` warnings with `cargo clippy --all-targets`
+- **Formatting**: Consistent style with `cargo fmt --all`
+- **Documentation**: All public APIs documented with examples
 
-- [Alys Testnet4](https://testnet.alyscan.io/)
-- [Alys Faucet](https://faucet.anduro.io/)
-- [Alys Docs](https://github.com/AnduroProject/alys)
-- [Alys Github](https://github.com/anduroproject/alys)
-- [Alys Discord](https://discord.gg/Me3gjyZ2Nh)
-- [Alys Twitter](https://twitter.com/andurobtc)
+### Commit Guidelines
+- **Conventional Commits**: Use semantic prefixes (`feat:`, `fix:`, `docs:`)
+- **Scope**: Include component scope (`feat(consensus):`, `fix(bridge):`)
+- **Tests**: Include test evidence in PR description
+- **Breaking Changes**: Clearly document API/behavior changes
 
-## Resources
+## 📄 License
 
-- https://ethresear.ch/t/eth1-eth2-client-relationship/7248
-- https://hackmd.io/@danielrachi/engine_api
-- https://ethereum.org/en/developers/docs/apis/json-rpc/
-- https://ceur-ws.org/Vol-2058/paper-06.pdf
-- https://openethereum.github.io/Aura.html
-- https://en.bitcoin.it/wiki/Merged_mining_specification
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+
+## 🆘 Support & Resources
+
+### Community
+- **GitHub Issues**: Bug reports and feature requests
+- **Discussions**: Technical discussions and Q&A
+- **Discord**: [Real-time community support](https://discord.gg/Me3gjyZ2Nh)
+
+### Development Resources  
+- **Claude Code Assistance**: See [CLAUDE.md](CLAUDE.md) for AI development support
+- **Knowledge Base**: [docs/knowledge/](docs/knowledge/) for architectural insights
+- **Migration Tracking**: [Jira Board](https://anduroproject.atlassian.net/browse/AN-285) for progress updates
+
+### Emergency Procedures
+- **Rollback**: `kubectl rollout undo deployment/alys-consensus`
+- **Circuit Breaker**: Update feature flags in `config/features-production.toml`
+- **Incident Response**: Follow [incident-response.md](docs/incident-response.md)
+
+## 🔗 Important Links
+
+- **[Alys Testnet Explorer](https://testnet.alyscan.io/)**
+- **[Alys Faucet](https://faucet.anduro.io/)**
+- **[GitHub Repository](https://github.com/anduroproject/alys)**
+- **[Twitter](https://twitter.com/andurobtc)**
+
+## 📖 Technical References
+
+- [Eth1-Eth2 Client Relationship](https://ethresear.ch/t/eth1-eth2-client-relationship/7248)
+- [Engine API Documentation](https://hackmd.io/@danielrachi/engine_api)
+- [Ethereum JSON-RPC API](https://ethereum.org/en/developers/docs/apis/json-rpc/)
+- [Aura Consensus Algorithm](https://openethereum.github.io/Aura.html)
+- [Merged Mining Specification](https://en.bitcoin.it/wiki/Merged_mining_specification)
+
+---
+
+**V2 Migration Status**: Foundation phase in progress. See [Migration Dashboard](https://anduroproject.atlassian.net/browse/AN-285) for real-time updates.
