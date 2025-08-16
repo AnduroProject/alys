@@ -1,0 +1,50 @@
+[package]
+name = "lighthouse_wrapper_v2"
+version = "0.1.0"
+edition = "2021"
+description = "Enhanced Lighthouse integration wrapper for Alys V2 with v5 compatibility"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+anyhow = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+
+# Lighthouse dependencies (would be updated for v5 compatibility)
+lighthouse_types = { path = "../lighthouse_wrapper/lighthouse_types", optional = true }
+tree_hash = "0.5"
+tree_hash_derive = "0.5"
+ethereum_types = "0.14"
+ethereum_ssz = "0.5"
+ethereum_ssz_derive = "0.5"
+
+# BLS and cryptography
+bls = "0.4"
+milagro_bls = "1.5"
+
+# Networking and RPC
+reqwest = { version = "0.12", features = ["json"] }
+serde_yaml = "0.9"
+
+# Data structures
+dashmap = "5.5"
+parking_lot = "0.12"
+lru = "0.12"
+
+# Time and UUID
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+[features]
+default = ["lighthouse-integration"]
+lighthouse-integration = ["lighthouse_types"]
+standalone = []
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"

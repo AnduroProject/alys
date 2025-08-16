@@ -1,0 +1,53 @@
+[package]
+name = "sync_engine"
+version = "0.1.0"
+edition = "2021"
+description = "Advanced synchronization engine for Alys blockchain"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+async-trait = "0.1"
+
+# Networking
+libp2p = "0.53"
+libp2p-swarm = "0.44"
+libp2p-identify = "0.44"
+libp2p-kad = "0.45"
+libp2p-gossipsub = "0.46"
+libp2p-noise = "0.44"
+libp2p-tcp = "0.41"
+libp2p-dns = "0.41"
+libp2p-mdns = "0.45"
+
+# Data structures
+dashmap = "5.5"
+parking_lot = "0.12"
+crossbeam = "0.8"
+lru = "0.12"
+
+# Cryptography
+sha2 = "0.10"
+blake3 = "1.5"
+
+# Bitcoin integration
+bitcoin = "0.31"
+
+# Database
+rocksdb = "0.22"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = "0.5"
+tempfile = "3.8"
+
+[[bench]]
+name = "sync_benchmarks"
+harness = false
