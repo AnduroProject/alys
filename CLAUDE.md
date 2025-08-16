@@ -134,3 +134,4 @@ Located in `scripts/tests/`:
 - **PoW Timeout**: 10 blocks without PoW triggers halt (`maxBlocksWithoutPow`)
 - **Bridge Address**: `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`
 - **Burn Address**: `0x000000000000000000000000000000000000dEaD`
+- Never reference claude as an author, contributor, created by, etc. in git commits, jira issues, etc.

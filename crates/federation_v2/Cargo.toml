@@ -20,7 +20,7 @@ async-trait = "0.1"
 secp256k1 = "0.29"
 bitcoin = "0.31"
 sha2 = "0.10"
-bls = "0.4"
+# bls = "0.4"
 
 # Network and gRPC
 tonic = "0.12"

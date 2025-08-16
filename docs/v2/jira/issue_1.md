@@ -23,22 +23,22 @@ Establish foundational V2 codebase structure with actor system architecture, dir
 ## Detailed Implementation Subtasks (42 tasks across 7 phases)
 
 ### Phase 1: Architecture Planning & Design Review (6 tasks)
-- [ ] **ALYS-001-01**: Review V2 architecture documentation and validate actor system design patterns
-- [ ] **ALYS-001-02**: Design actor supervision hierarchy with restart strategies and fault isolation boundaries  
-- [ ] **ALYS-001-03**: Define message passing protocols and message envelope structure for typed communication
-- [ ] **ALYS-001-04**: Create actor lifecycle state machine with initialization, running, stopping, and recovery states
-- [ ] **ALYS-001-05**: Design configuration loading system with environment-specific overrides and validation
-- [ ] **ALYS-001-06**: Document actor interaction patterns and establish communication flow diagrams
+- [X] **ALYS-001-01**: Review V2 architecture documentation and validate actor system design patterns
+- [ ] **ALYS-001-02**: Design actor supervision hierarchy with restart strategies and fault isolation boundaries [https://marathondh.atlassian.net/browse/AN-287]
+- [ ] **ALYS-001-03**: Define message passing protocols and message envelope structure for typed communication [https://marathondh.atlassian.net/browse/AN-288]
+- [ ] **ALYS-001-04**: Create actor lifecycle state machine with initialization, running, stopping, and recovery states [https://marathondh.atlassian.net/browse/AN-289]
+- [ ] **ALYS-001-05**: Design configuration loading system with environment-specific overrides and validation [https://marathondh.atlassian.net/browse/AN-290]
+- [ ] **ALYS-001-06**: Document actor interaction patterns and establish communication flow diagrams [https://marathondh.atlassian.net/browse/AN-291]
 
 ### Phase 2: Directory Structure & Workspace Setup (8 tasks)
-- [ ] **ALYS-001-07**: Create complete directory structure for `app/src/actors/` with all actor implementations
-- [ ] **ALYS-001-08**: Create `app/src/messages/` directory with typed message definitions for each actor domain
-- [ ] **ALYS-001-09**: Create `app/src/workflows/` directory for business logic flows and state machines
-- [ ] **ALYS-001-10**: Create `app/src/types/` directory with actor-friendly data structures and message envelopes
-- [ ] **ALYS-001-11**: Create `app/src/config/` directory with comprehensive configuration management
-- [ ] **ALYS-001-12**: Create `app/src/integration/` directory for external system interfaces and client wrappers
-- [ ] **ALYS-001-13**: Create `crates/actor_system/` workspace crate with core actor framework implementation
-- [ ] **ALYS-001-14**: Update root `Cargo.toml` workspace configuration and dependency management
+- [ ] **ALYS-001-07**: Create complete directory structure for `app/src/actors/` with all actor implementations [https://marathondh.atlassian.net/browse/AN-292]
+- [ ] **ALYS-001-08**: Create `app/src/messages/` directory with typed message definitions for each actor domain [https://marathondh.atlassian.net/browse/AN-293]
+- [ ] **ALYS-001-09**: Create `app/src/workflows/` directory for business logic flows and state machines [https://marathondh.atlassian.net/browse/AN-294]
+- [ ] **ALYS-001-10**: Create `app/src/types/` directory with actor-friendly data structures and message envelopes [https://marathondh.atlassian.net/browse/AN-295]
+- [ ] **ALYS-001-11**: Create `app/src/config/` directory with comprehensive configuration management [https://marathondh.atlassian.net/browse/AN-296]
+- [ ] **ALYS-001-12**: Create `app/src/integration/` directory for external system interfaces and client wrappers [https://marathondh.atlassian.net/browse/AN-297]
+- [ ] **ALYS-001-13**: Create `crates/actor_system/` workspace crate with core actor framework implementation [https://marathondh.atlassian.net/browse/AN-298]
+- [ ] **ALYS-001-14**: Update root `Cargo.toml` workspace configuration and dependency management [https://marathondh.atlassian.net/browse/AN-299]
 
 ### Phase 3: Core Actor System Implementation (12 tasks)
 - [ ] **ALYS-001-15**: Implement `crates/actor_system/supervisor.rs` with supervision trees and restart strategies

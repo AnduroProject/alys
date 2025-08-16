@@ -15,6 +15,14 @@ mod signatures;
 mod spec;
 mod store;
 
+// V2 Actor System modules
+pub mod actors;
+pub mod config;
+pub mod integration;
+pub mod messages;
+pub mod types;
+pub mod workflows;
+
 // for main.rs
 pub use app::run;
 

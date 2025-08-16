@@ -23,6 +23,10 @@ lighthouse_wrapper = { package = "lighthouse_wrapper", path = "../crates/lightho
 
 # workspace
 bridge = { package = "federation", path = "../crates/federation" }
+actor_system = { path = "../crates/actor_system" }
+sync_engine = { path = "../crates/sync_engine" }
+federation_v2 = { path = "../crates/federation_v2" }
+lighthouse_wrapper_v2 = { path = "../crates/lighthouse_wrapper_v2" }
 
 # misc
 clap = { workspace = true }
@@ -52,7 +56,13 @@ futures-timer = "3.0.1"
 tokio = { workspace = true, features = ["time"] }
 tokio-util = { version = "0.6", features = ["codec", "compat", "time"] }
 tokio-io-timeout = "1"
-async-trait = "0.1"
+async-trait = { workspace = true }
+
+# V2 Actor System
+actix = { workspace = true }
+uuid = { workspace = true }
+num_cpus = { workspace = true }
+toml = { workspace = true }
 
 # storage
 leveldb = { version = "0.8" }

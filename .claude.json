@@ -1,0 +1,80 @@
+{
+  "name": "Alys Bitcoin Sidechain",
+  "description": "Merged mined Bitcoin sidechain with two-way peg system",
+  "mcpServers": {},
+  "commands": {
+    "build": "cargo build",
+    "test": "cargo test",
+    "format": "cargo fmt",
+    "check": "cargo check",
+    "start-network": "./scripts/start_network.sh",
+    "start-testnet": "./scripts/start_testnet_alys.sh",
+    "build-contracts": "cd contracts && forge build",
+    "test-contracts": "cd contracts && forge test",
+    "format-contracts": "cd contracts && forge fmt"
+  },
+  "testFrameworks": [
+    {
+      "name": "cargo-test",
+      "command": "cargo test",
+      "patterns": ["**/*test*.rs", "**/tests/**/*.rs"]
+    },
+    {
+      "name": "forge",
+      "command": "cd contracts && forge test",
+      "patterns": ["contracts/**/*.t.sol"]
+    }
+  ],
+  "lintCommands": {
+    "rust": "cargo fmt --check && cargo clippy",
+    "solidity": "cd contracts && forge fmt --check"
+  },
+  "filePatterns": {
+    "rust": ["**/*.rs"],
+    "solidity": ["contracts/**/*.sol"],
+    "config": ["**/*.toml", "**/*.json", "etc/config/**/*"],
+    "scripts": ["scripts/**/*.sh"]
+  },
+  "environment": {
+    "language": "rust",
+    "packageManager": "cargo",
+    "buildTool": "cargo",
+    "contractFramework": "foundry"
+  },
+  "documentation": {
+    "readme": "README.md",
+    "architecture": "docs/src/",
+    "guides": "docs/guides/",
+    "claude": "CLAUDE.md"
+  },
+  "ports": {
+    "evm-rpc": 8545,
+    "consensus-rpc": 3000,
+    "p2p": 30303
+  },
+  "chains": {
+    "local": {
+      "chainId": 263634,
+      "rpcUrl": "http://localhost:8545"
+    },
+    "testnet": {
+      "chainId": 212121,
+      "explorer": "http://testnet.alyscan.io/",
+      "faucet": "https://faucet.anduro.io/"
+    }
+  },
+  "jiraIntegration": {
+    "enabled": true,
+    "projectKey": "ALYS",
+    "localTicketsPath": "docs/v2/jira/",
+    "ticketPrefix": "ALYS-",
+    "defaultComponents": ["Infrastructure", "Consensus", "Federation", "Smart Contracts"],
+    "defaultLabels": ["migration", "phase-0", "foundation"],
+    "sprintPrefix": "Migration Sprint",
+    "defaults": {
+      "issueType": "Task",
+      "priority": "Medium",
+      "assignee": null
+    }
+  }
+}

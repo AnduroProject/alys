@@ -286,7 +286,7 @@ where
 pub struct HealthCheckMessage;
 
 impl Message for HealthCheckMessage {
-    type Result = ActorResult<crate::actor::HealthStatus>;
+    type Result = ActorResult<bool>;
 }
 
 impl AlysMessage for HealthCheckMessage {

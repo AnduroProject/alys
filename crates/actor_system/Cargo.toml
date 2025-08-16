@@ -27,6 +27,6 @@ once_cell = "1.19"
 tokio-test = "0.4"
 criterion = "0.5"
 
-[[bench]]
-name = "actor_benchmarks"
-harness = false
+# [[bench]]
+# name = "actor_benchmarks"
+# harness = false

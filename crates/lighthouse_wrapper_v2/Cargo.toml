@@ -16,16 +16,16 @@ thiserror = "1.0"
 async-trait = "0.1"
 
 # Lighthouse dependencies (would be updated for v5 compatibility)
-lighthouse_types = { path = "../lighthouse_wrapper/lighthouse_types", optional = true }
+# lighthouse_types = { path = "../lighthouse_wrapper/lighthouse_types", optional = true }
 tree_hash = "0.5"
 tree_hash_derive = "0.5"
-ethereum_types = "0.14"
+ethereum-types = "0.14"
 ethereum_ssz = "0.5"
 ethereum_ssz_derive = "0.5"
 
 # BLS and cryptography
-bls = "0.4"
-milagro_bls = "1.5"
+# bls = "0.4"
+# milagro_bls = "1.5"
 
 # Networking and RPC
 reqwest = { version = "0.12", features = ["json"] }
@@ -42,7 +42,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 
 [features]
 default = ["lighthouse-integration"]
-lighthouse-integration = ["lighthouse_types"]
+lighthouse-integration = []
 standalone = []
 
 [dev-dependencies]
