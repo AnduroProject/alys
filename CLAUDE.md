@@ -135,3 +135,4 @@ Located in `scripts/tests/`:
 - **Bridge Address**: `0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB`
 - **Burn Address**: `0x000000000000000000000000000000000000dEaD`
 - Never reference claude as an author, contributor, created by, etc. in git commits, jira issues, etc.
+- Never reference or list Claude as a contributor in any git commits, Pull Requests, and Issues, as well as Jira tickets.

@@ -12,6 +12,7 @@ pub mod chain_config;
 pub mod network_config;
 pub mod bridge_config;
 pub mod storage_config;
+pub mod hot_reload;
 
 // Re-exports for convenience
 pub use alys_config::*;
@@ -22,6 +23,7 @@ pub use chain_config::*;
 pub use network_config::*;
 pub use bridge_config::*;
 pub use storage_config::*;
+pub use hot_reload::*;
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -42,8 +44,8 @@ pub enum ConfigError {
     #[error("Environment variable error: {var} - {reason}")]
     EnvVarError { var: String, reason: String },
     
-    #[error("IO error: {reason}")]
-    IoError { reason: String },
+    #[error("IO error during {operation}: {error}")]
+    IoError { operation: String, error: String },
     
     #[error("Serialization error: {reason}")]
     SerializationError { reason: String },

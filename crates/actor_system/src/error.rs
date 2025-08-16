@@ -6,7 +6,7 @@ use thiserror::Error;
 /// Result type for actor operations
 pub type ActorResult<T> = Result<T, ActorError>;
 
-/// Actor system error types
+/// Actor system error types with enhanced context preservation and recovery recommendations
 #[derive(Debug, Error, Clone)]
 pub enum ActorError {
     /// Actor not found in registry
@@ -102,6 +102,373 @@ pub enum ActorError {
     Custom { message: String },
 }
 
+/// Blockchain-specific actor errors
+#[derive(Debug, Error, Clone)]
+pub enum BlockchainActorError {
+    /// Block validation failed
+    #[error("Block validation failed: {block_hash} - {reason}")]
+    BlockValidationFailed {
+        block_hash: String,
+        reason: String,
+        context: BlockchainErrorContext,
+    },
+    
+    /// Block sync failed
+    #[error("Block sync failed from peer {peer_id}: {reason}")]
+    BlockSyncFailed {
+        peer_id: String,
+        reason: String,
+        recovery_strategy: SyncRecoveryStrategy,
+    },
+    
+    /// Chain reorganization handling failed
+    #[error("Chain reorg handling failed at depth {depth}: {reason}")]
+    ReorgHandlingFailed {
+        depth: u32,
+        reason: String,
+        affected_blocks: Vec<String>,
+    },
+    
+    /// Consensus mechanism error
+    #[error("Consensus error: {consensus_type} - {reason}")]
+    ConsensusError {
+        consensus_type: String,
+        reason: String,
+        epoch: Option<u64>,
+    },
+    
+    /// State transition error
+    #[error("State transition error: {from_state} -> {to_state} - {reason}")]
+    StateTransitionError {
+        from_state: String,
+        to_state: String,
+        reason: String,
+        rollback_possible: bool,
+    },
+}
+
+/// Bridge/Peg operation specific errors
+#[derive(Debug, Error, Clone)]
+pub enum BridgeActorError {
+    /// Peg-in processing failed
+    #[error("Peg-in failed for Bitcoin tx {bitcoin_txid}: {reason}")]
+    PegInFailed {
+        bitcoin_txid: String,
+        reason: String,
+        retry_possible: bool,
+        recovery_actions: Vec<PegRecoveryAction>,
+    },
+    
+    /// Peg-out processing failed
+    #[error("Peg-out failed for burn tx {burn_tx_hash}: {reason}")]
+    PegOutFailed {
+        burn_tx_hash: String,
+        reason: String,
+        signature_status: SignatureCollectionStatus,
+        recovery_deadline: Option<std::time::SystemTime>,
+    },
+    
+    /// Federation signature collection failed
+    #[error("Signature collection failed: {collected}/{required} signatures")]
+    SignatureCollectionFailed {
+        collected: usize,
+        required: usize,
+        failed_members: Vec<String>,
+        timeout: std::time::Duration,
+    },
+    
+    /// Bitcoin node communication error
+    #[error("Bitcoin node error: {node_endpoint} - {reason}")]
+    BitcoinNodeError {
+        node_endpoint: String,
+        reason: String,
+        fallback_available: bool,
+    },
+    
+    /// Governance approval failed
+    #[error("Governance approval failed for operation {operation_id}: {reason}")]
+    GovernanceApprovalFailed {
+        operation_id: String,
+        reason: String,
+        appeal_possible: bool,
+        required_approvals: u32,
+        received_approvals: u32,
+    },
+}
+
+/// Networking actor specific errors
+#[derive(Debug, Error, Clone)]
+pub enum NetworkActorError {
+    /// Peer connection failed
+    #[error("Peer connection failed to {peer_id}: {reason}")]
+    PeerConnectionFailed {
+        peer_id: String,
+        reason: String,
+        retry_strategy: PeerRetryStrategy,
+    },
+    
+    /// Message broadcast failed
+    #[error("Message broadcast failed: {message_type} - {reason}")]
+    BroadcastFailed {
+        message_type: String,
+        reason: String,
+        failed_peers: Vec<String>,
+        successful_peers: Vec<String>,
+    },
+    
+    /// DHT operation failed
+    #[error("DHT operation failed: {operation} - {reason}")]
+    DHTOperationFailed {
+        operation: String,
+        reason: String,
+        retry_with_different_strategy: bool,
+    },
+    
+    /// Protocol version mismatch
+    #[error("Protocol version mismatch with {peer_id}: local={local_version}, remote={remote_version}")]
+    ProtocolVersionMismatch {
+        peer_id: String,
+        local_version: String,
+        remote_version: String,
+        compatibility_possible: bool,
+    },
+}
+
+/// Mining actor specific errors
+#[derive(Debug, Error, Clone)]
+pub enum MiningActorError {
+    /// Block template creation failed
+    #[error("Block template creation failed: {reason}")]
+    BlockTemplateCreationFailed {
+        reason: String,
+        retry_possible: bool,
+        fallback_template: Option<String>,
+    },
+    
+    /// Mining hardware communication failed
+    #[error("Mining hardware error: {hardware_id} - {reason}")]
+    MiningHardwareError {
+        hardware_id: String,
+        reason: String,
+        hardware_status: MiningHardwareStatus,
+    },
+    
+    /// Work distribution failed
+    #[error("Work distribution failed to {worker_count} workers: {reason}")]
+    WorkDistributionFailed {
+        worker_count: usize,
+        reason: String,
+        affected_workers: Vec<String>,
+    },
+    
+    /// Solution validation failed
+    #[error("Solution validation failed: {solution_hash} - {reason}")]
+    SolutionValidationFailed {
+        solution_hash: String,
+        reason: String,
+        solution_data: Option<Vec<u8>>,
+    },
+}
+
+/// Error context structures for specific domains
+#[derive(Debug, Clone)]
+pub struct BlockchainErrorContext {
+    pub block_height: Option<u64>,
+    pub chain_tip: Option<String>,
+    pub sync_status: Option<String>,
+    pub peer_count: Option<usize>,
+    pub validation_stage: Option<String>,
+}
+
+/// Recovery strategy for sync failures
+#[derive(Debug, Clone)]
+pub enum SyncRecoveryStrategy {
+    /// Retry with same peer
+    RetryWithSamePeer { delay: std::time::Duration },
+    /// Try different peer
+    TryDifferentPeer { exclude_peers: Vec<String> },
+    /// Reset sync state and restart
+    ResetAndRestart { checkpoint: Option<u64> },
+    /// Perform deep sync validation
+    DeepValidation { start_height: u64 },
+}
+
+/// Recovery actions for peg operations
+#[derive(Debug, Clone)]
+pub enum PegRecoveryAction {
+    /// Wait for more confirmations
+    WaitForConfirmations { current: u32, required: u32 },
+    /// Manual intervention required
+    ManualIntervention { reason: String, contact: String },
+    /// Retry with different federation member
+    RetryWithDifferentMember { exclude_members: Vec<String> },
+    /// Escalate to governance
+    EscalateToGovernance { priority: String },
+}
+
+/// Signature collection status
+#[derive(Debug, Clone)]
+pub enum SignatureCollectionStatus {
+    /// Still collecting
+    InProgress { collected: usize, required: usize },
+    /// Timed out
+    TimedOut { collected: usize, required: usize },
+    /// Threshold met
+    ThresholdMet { collected: usize },
+    /// Failed permanently
+    Failed { reason: String },
+}
+
+/// Peer retry strategy
+#[derive(Debug, Clone)]
+pub enum PeerRetryStrategy {
+    /// Exponential backoff
+    ExponentialBackoff { 
+        base_delay: std::time::Duration,
+        max_delay: std::time::Duration,
+        attempt: u32,
+    },
+    /// Fixed interval
+    FixedInterval { interval: std::time::Duration, max_attempts: u32 },
+    /// No retry
+    NoRetry,
+    /// Retry with different network path
+    DifferentPath { alternative_addresses: Vec<String> },
+}
+
+/// Mining hardware status
+#[derive(Debug, Clone)]
+pub enum MiningHardwareStatus {
+    /// Hardware is operational
+    Operational,
+    /// Hardware has degraded performance
+    Degraded { performance_percentage: f64 },
+    /// Hardware is offline
+    Offline { last_seen: std::time::SystemTime },
+    /// Hardware has errors
+    Error { error_count: u32, error_rate: f64 },
+}
+
+/// Comprehensive error context with recovery recommendations
+#[derive(Debug, Clone)]
+pub struct EnhancedErrorContext {
+    /// Basic error context
+    pub base_context: ErrorContext,
+    /// Error correlation ID for distributed tracing
+    pub correlation_id: Option<uuid::Uuid>,
+    /// Related errors that led to this one
+    pub causal_chain: Vec<String>,
+    /// Suggested recovery actions
+    pub recovery_recommendations: Vec<RecoveryRecommendation>,
+    /// Error impact assessment
+    pub impact_assessment: ErrorImpactAssessment,
+    /// Escalation path
+    pub escalation_path: Vec<EscalationLevel>,
+    /// Related metrics and measurements
+    pub metrics: std::collections::HashMap<String, f64>,
+}
+
+/// Recovery recommendation
+#[derive(Debug, Clone)]
+pub struct RecoveryRecommendation {
+    /// Recommended action
+    pub action: String,
+    /// Priority of this recommendation
+    pub priority: RecoveryPriority,
+    /// Estimated success probability
+    pub success_probability: f64,
+    /// Estimated recovery time
+    pub estimated_time: std::time::Duration,
+    /// Prerequisites for this recovery action
+    pub prerequisites: Vec<String>,
+    /// Side effects of this action
+    pub side_effects: Vec<String>,
+}
+
+/// Recovery priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RecoveryPriority {
+    /// Try as last resort
+    Low = 0,
+    /// Standard recovery action
+    Medium = 1,
+    /// High priority recovery action
+    High = 2,
+    /// Critical recovery action - try first
+    Critical = 3,
+}
+
+/// Error impact assessment
+#[derive(Debug, Clone)]
+pub struct ErrorImpactAssessment {
+    /// Affected components
+    pub affected_components: Vec<String>,
+    /// Performance impact (0.0 = no impact, 1.0 = complete failure)
+    pub performance_impact: f64,
+    /// Data integrity impact
+    pub data_integrity_impact: DataIntegrityImpact,
+    /// User experience impact
+    pub user_experience_impact: UserExperienceImpact,
+    /// System availability impact
+    pub availability_impact: AvailabilityImpact,
+    /// Estimated recovery time
+    pub estimated_recovery_time: std::time::Duration,
+}
+
+/// Data integrity impact levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataIntegrityImpact {
+    /// No data integrity issues
+    None,
+    /// Minor data inconsistency
+    Minor,
+    /// Significant data corruption possible
+    Significant,
+    /// Critical data loss possible
+    Critical,
+}
+
+/// User experience impact levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserExperienceImpact {
+    /// No user impact
+    None,
+    /// Minor delays or glitches
+    Minor,
+    /// Significant functionality impaired
+    Significant,
+    /// Service unavailable
+    Severe,
+}
+
+/// System availability impact
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvailabilityImpact {
+    /// System fully available
+    None,
+    /// Reduced performance
+    Degraded,
+    /// Partial service outage
+    PartialOutage,
+    /// Complete service outage
+    CompleteOutage,
+}
+
+/// Escalation levels
+#[derive(Debug, Clone)]
+pub enum EscalationLevel {
+    /// Handle within actor
+    ActorLevel { retry_count: u32, max_retries: u32 },
+    /// Escalate to supervisor
+    SupervisorLevel { supervisor_name: String },
+    /// Escalate to system level
+    SystemLevel { system_component: String },
+    /// Escalate to operations team
+    OperationsLevel { alert_channel: String, severity: String },
+    /// Emergency escalation
+    EmergencyLevel { contact_list: Vec<String> },
+}
+
 /// Error severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ErrorSeverity {
@@ -163,6 +530,140 @@ impl ErrorContext {
     pub fn with_metadata_map(mut self, metadata: std::collections::HashMap<String, String>) -> Self {
         self.metadata.extend(metadata);
         self
+    }
+}
+
+/// Enhanced error conversion from domain-specific errors to general ActorError
+impl From<BlockchainActorError> for ActorError {
+    fn from(err: BlockchainActorError) -> Self {
+        match err {
+            BlockchainActorError::BlockValidationFailed { block_hash, reason, .. } => {
+                ActorError::MessageHandlingFailed {
+                    message_type: "BlockValidation".to_string(),
+                    reason: format!("Block {} validation failed: {}", block_hash, reason),
+                }
+            }
+            BlockchainActorError::BlockSyncFailed { peer_id, reason, .. } => {
+                ActorError::ExternalDependency {
+                    service: format!("peer_{}", peer_id),
+                    reason,
+                }
+            }
+            BlockchainActorError::ReorgHandlingFailed { depth, reason, .. } => {
+                ActorError::InvalidStateTransition {
+                    from: "stable_chain".to_string(),
+                    to: format!("reorg_depth_{}", depth),
+                }
+            }
+            BlockchainActorError::ConsensusError { consensus_type, reason, .. } => {
+                ActorError::SystemFailure {
+                    reason: format!("{} consensus error: {}", consensus_type, reason),
+                }
+            }
+            BlockchainActorError::StateTransitionError { from_state, to_state, reason, .. } => {
+                ActorError::InvalidStateTransition { from: from_state, to: to_state }
+            }
+        }
+    }
+}
+
+impl From<BridgeActorError> for ActorError {
+    fn from(err: BridgeActorError) -> Self {
+        match err {
+            BridgeActorError::PegInFailed { bitcoin_txid, reason, .. } => {
+                ActorError::MessageHandlingFailed {
+                    message_type: "PegIn".to_string(),
+                    reason: format!("PegIn failed for {}: {}", bitcoin_txid, reason),
+                }
+            }
+            BridgeActorError::PegOutFailed { burn_tx_hash, reason, .. } => {
+                ActorError::MessageHandlingFailed {
+                    message_type: "PegOut".to_string(),
+                    reason: format!("PegOut failed for {}: {}", burn_tx_hash, reason),
+                }
+            }
+            BridgeActorError::SignatureCollectionFailed { collected, required, .. } => {
+                ActorError::Timeout {
+                    operation: "signature_collection".to_string(),
+                    timeout: std::time::Duration::from_secs(300), // Default timeout
+                }
+            }
+            BridgeActorError::BitcoinNodeError { node_endpoint, reason, .. } => {
+                ActorError::ExternalDependency {
+                    service: format!("bitcoin_node_{}", node_endpoint),
+                    reason,
+                }
+            }
+            BridgeActorError::GovernanceApprovalFailed { operation_id, reason, .. } => {
+                ActorError::PermissionDenied {
+                    operation: format!("governance_approval_{}", operation_id),
+                }
+            }
+        }
+    }
+}
+
+impl From<NetworkActorError> for ActorError {
+    fn from(err: NetworkActorError) -> Self {
+        match err {
+            NetworkActorError::PeerConnectionFailed { peer_id, reason, .. } => {
+                ActorError::ExternalDependency {
+                    service: format!("peer_{}", peer_id),
+                    reason,
+                }
+            }
+            NetworkActorError::BroadcastFailed { message_type, reason, .. } => {
+                ActorError::MessageDeliveryFailed {
+                    from: "broadcaster".to_string(),
+                    to: "network".to_string(),
+                    reason: format!("{} broadcast failed: {}", message_type, reason),
+                }
+            }
+            NetworkActorError::DHTOperationFailed { operation, reason, .. } => {
+                ActorError::ExternalDependency {
+                    service: "dht".to_string(),
+                    reason: format!("{} operation failed: {}", operation, reason),
+                }
+            }
+            NetworkActorError::ProtocolVersionMismatch { peer_id, local_version, remote_version, .. } => {
+                ActorError::ConfigurationError {
+                    parameter: "protocol_version".to_string(),
+                    reason: format!("Mismatch with {}: local={}, remote={}", peer_id, local_version, remote_version),
+                }
+            }
+        }
+    }
+}
+
+impl From<MiningActorError> for ActorError {
+    fn from(err: MiningActorError) -> Self {
+        match err {
+            MiningActorError::BlockTemplateCreationFailed { reason, .. } => {
+                ActorError::MessageHandlingFailed {
+                    message_type: "BlockTemplate".to_string(),
+                    reason,
+                }
+            }
+            MiningActorError::MiningHardwareError { hardware_id, reason, .. } => {
+                ActorError::ExternalDependency {
+                    service: format!("mining_hardware_{}", hardware_id),
+                    reason,
+                }
+            }
+            MiningActorError::WorkDistributionFailed { worker_count, reason, .. } => {
+                ActorError::MessageDeliveryFailed {
+                    from: "mining_coordinator".to_string(),
+                    to: format!("{}_workers", worker_count),
+                    reason,
+                }
+            }
+            MiningActorError::SolutionValidationFailed { solution_hash, reason, .. } => {
+                ActorError::MessageHandlingFailed {
+                    message_type: "SolutionValidation".to_string(),
+                    reason: format!("Solution {} validation failed: {}", solution_hash, reason),
+                }
+            }
+        }
     }
 }
 
@@ -250,6 +751,148 @@ impl ActorError {
             ActorError::RateLimitExceeded { .. } => "rate_limiting",
             ActorError::Custom { .. } => "custom",
         }
+    }
+    
+    /// Create enhanced error context with recovery recommendations
+    pub fn create_enhanced_context(
+        &self,
+        actor_name: String,
+        actor_type: String,
+    ) -> EnhancedErrorContext {
+        let base_context = ErrorContext::new(actor_name.clone(), actor_type.clone())
+            .with_severity(self.severity());
+        
+        let recovery_recommendations = self.generate_recovery_recommendations();
+        let impact_assessment = self.assess_impact();
+        let escalation_path = self.determine_escalation_path(&actor_type);
+        
+        EnhancedErrorContext {
+            base_context,
+            correlation_id: Some(uuid::Uuid::new_v4()),
+            causal_chain: Vec::new(),
+            recovery_recommendations,
+            impact_assessment,
+            escalation_path,
+            metrics: std::collections::HashMap::new(),
+        }
+    }
+    
+    /// Generate recovery recommendations based on error type
+    fn generate_recovery_recommendations(&self) -> Vec<RecoveryRecommendation> {
+        match self {
+            ActorError::MessageHandlingFailed { .. } => vec![
+                RecoveryRecommendation {
+                    action: "Restart actor with clean state".to_string(),
+                    priority: RecoveryPriority::High,
+                    success_probability: 0.8,
+                    estimated_time: std::time::Duration::from_secs(5),
+                    prerequisites: vec!["Actor supervision enabled".to_string()],
+                    side_effects: vec!["Message queue will be cleared".to_string()],
+                },
+                RecoveryRecommendation {
+                    action: "Retry message with exponential backoff".to_string(),
+                    priority: RecoveryPriority::Medium,
+                    success_probability: 0.6,
+                    estimated_time: std::time::Duration::from_secs(30),
+                    prerequisites: vec!["Message is retryable".to_string()],
+                    side_effects: vec!["Increased latency".to_string()],
+                },
+            ],
+            ActorError::NetworkError { .. } => vec![
+                RecoveryRecommendation {
+                    action: "Retry with different network peer".to_string(),
+                    priority: RecoveryPriority::High,
+                    success_probability: 0.7,
+                    estimated_time: std::time::Duration::from_secs(10),
+                    prerequisites: vec!["Alternative peers available".to_string()],
+                    side_effects: vec!["May cause temporary data inconsistency".to_string()],
+                },
+            ],
+            ActorError::ResourceExhausted { .. } => vec![
+                RecoveryRecommendation {
+                    action: "Trigger garbage collection".to_string(),
+                    priority: RecoveryPriority::Critical,
+                    success_probability: 0.5,
+                    estimated_time: std::time::Duration::from_secs(2),
+                    prerequisites: vec![],
+                    side_effects: vec!["Temporary performance degradation".to_string()],
+                },
+                RecoveryRecommendation {
+                    action: "Scale up resources".to_string(),
+                    priority: RecoveryPriority::Medium,
+                    success_probability: 0.9,
+                    estimated_time: std::time::Duration::from_secs(60),
+                    prerequisites: vec!["Auto-scaling enabled".to_string()],
+                    side_effects: vec!["Increased resource costs".to_string()],
+                },
+            ],
+            _ => vec![],
+        }
+    }
+    
+    /// Assess the impact of this error
+    fn assess_impact(&self) -> ErrorImpactAssessment {
+        match self.severity() {
+            ErrorSeverity::Fatal => ErrorImpactAssessment {
+                affected_components: vec!["entire_system".to_string()],
+                performance_impact: 1.0,
+                data_integrity_impact: DataIntegrityImpact::Critical,
+                user_experience_impact: UserExperienceImpact::Severe,
+                availability_impact: AvailabilityImpact::CompleteOutage,
+                estimated_recovery_time: std::time::Duration::from_secs(300),
+            },
+            ErrorSeverity::Critical => ErrorImpactAssessment {
+                affected_components: vec!["core_components".to_string()],
+                performance_impact: 0.8,
+                data_integrity_impact: DataIntegrityImpact::Significant,
+                user_experience_impact: UserExperienceImpact::Significant,
+                availability_impact: AvailabilityImpact::PartialOutage,
+                estimated_recovery_time: std::time::Duration::from_secs(120),
+            },
+            ErrorSeverity::Major => ErrorImpactAssessment {
+                affected_components: vec!["single_component".to_string()],
+                performance_impact: 0.4,
+                data_integrity_impact: DataIntegrityImpact::Minor,
+                user_experience_impact: UserExperienceImpact::Minor,
+                availability_impact: AvailabilityImpact::Degraded,
+                estimated_recovery_time: std::time::Duration::from_secs(30),
+            },
+            _ => ErrorImpactAssessment {
+                affected_components: vec![],
+                performance_impact: 0.1,
+                data_integrity_impact: DataIntegrityImpact::None,
+                user_experience_impact: UserExperienceImpact::None,
+                availability_impact: AvailabilityImpact::None,
+                estimated_recovery_time: std::time::Duration::from_secs(5),
+            },
+        }
+    }
+    
+    /// Determine escalation path based on error and actor type
+    fn determine_escalation_path(&self, actor_type: &str) -> Vec<EscalationLevel> {
+        let mut path = vec![
+            EscalationLevel::ActorLevel { retry_count: 0, max_retries: 3 },
+        ];
+        
+        if self.should_escalate() {
+            path.push(EscalationLevel::SupervisorLevel {
+                supervisor_name: format!("{}_supervisor", actor_type),
+            });
+        }
+        
+        if self.severity() >= ErrorSeverity::Critical {
+            path.push(EscalationLevel::SystemLevel {
+                system_component: "actor_system_manager".to_string(),
+            });
+            
+            if self.severity() == ErrorSeverity::Fatal {
+                path.push(EscalationLevel::EmergencyLevel {
+                    contact_list: vec!["oncall@example.com".to_string()],
+                });
+            }
+        }
+        
+        path
     }
 }
 
@@ -392,6 +1035,40 @@ impl ErrorReporter {
 impl Default for ErrorReporter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Default implementations for error context structures
+impl Default for BlockchainErrorContext {
+    fn default() -> Self {
+        Self {
+            block_height: None,
+            chain_tip: None,
+            sync_status: None,
+            peer_count: None,
+            validation_stage: None,
+        }
+    }
+}
+
+impl Default for EnhancedErrorContext {
+    fn default() -> Self {
+        Self {
+            base_context: ErrorContext::new("unknown".to_string(), "Unknown".to_string()),
+            correlation_id: None,
+            causal_chain: Vec::new(),
+            recovery_recommendations: Vec::new(),
+            impact_assessment: ErrorImpactAssessment {
+                affected_components: Vec::new(),
+                performance_impact: 0.0,
+                data_integrity_impact: DataIntegrityImpact::None,
+                user_experience_impact: UserExperienceImpact::None,
+                availability_impact: AvailabilityImpact::None,
+                estimated_recovery_time: std::time::Duration::from_secs(0),
+            },
+            escalation_path: Vec::new(),
+            metrics: std::collections::HashMap::new(),
+        }
     }
 }
 

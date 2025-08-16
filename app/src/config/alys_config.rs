@@ -2,9 +2,10 @@
 
 use super::*;
 use crate::types::blockchain::ChainId;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Master configuration structure for the entire Alys system
@@ -583,6 +584,235 @@ impl Validate for SystemConfig {
     }
 }
 
+impl AlysConfig {
+    /// Apply environment variable overrides with given prefix
+    fn apply_env_overrides(config: &mut AlysConfig, prefix: &str) -> Result<(), ConfigError> {
+        let prefix = format!("{}_", prefix.to_uppercase());
+        
+        // System overrides
+        if let Ok(name) = std::env::var(format!("{}SYSTEM_NAME", prefix)) {
+            config.system.name = name;
+        }
+        if let Ok(node_id) = std::env::var(format!("{}NODE_ID", prefix)) {
+            config.system.node_id = node_id;
+        }
+        if let Ok(data_dir) = std::env::var(format!("{}DATA_DIR", prefix)) {
+            config.system.data_dir = PathBuf::from(data_dir);
+        }
+        
+        // Network overrides
+        if let Ok(listen_addr) = std::env::var(format!("{}LISTEN_ADDR", prefix)) {
+            config.network.listen_address = listen_addr.parse()
+                .map_err(|e| ConfigError::ValidationError {
+                    field: "network.listen_address".to_string(),
+                    reason: format!("Invalid socket address: {}", e),
+                })?;
+        }
+        
+        // Database overrides
+        if let Ok(db_url) = std::env::var(format!("{}DATABASE_URL", prefix)) {
+            config.storage.database_url = db_url;
+        }
+        
+        // Security overrides
+        if let Ok(_) = std::env::var(format!("{}ENABLE_TLS", prefix)) {
+            config.system.security.enable_tls = true;
+        }
+        if let Ok(tls_cert) = std::env::var(format!("{}TLS_CERT_FILE", prefix)) {
+            config.system.security.tls_cert_file = Some(PathBuf::from(tls_cert));
+        }
+        if let Ok(tls_key) = std::env::var(format!("{}TLS_KEY_FILE", prefix)) {
+            config.system.security.tls_key_file = Some(PathBuf::from(tls_key));
+        }
+        
+        // Monitoring overrides
+        if let Ok(metrics_addr) = std::env::var(format!("{}METRICS_ADDR", prefix)) {
+            config.monitoring.bind_addr = metrics_addr.parse()
+                .map_err(|e| ConfigError::ValidationError {
+                    field: "monitoring.bind_addr".to_string(),
+                    reason: format!("Invalid metrics address: {}", e),
+                })?;
+        }
+        
+        // Thread pool overrides
+        if let Ok(core_threads) = std::env::var(format!("{}CORE_THREADS", prefix)) {
+            config.system.thread_pool.core_threads = core_threads.parse()
+                .map_err(|e| ConfigError::ValidationError {
+                    field: "system.thread_pool.core_threads".to_string(),
+                    reason: format!("Invalid core threads value: {}", e),
+                })?;
+        }
+        if let Ok(max_threads) = std::env::var(format!("{}MAX_THREADS", prefix)) {
+            config.system.thread_pool.max_threads = max_threads.parse()
+                .map_err(|e| ConfigError::ValidationError {
+                    field: "system.thread_pool.max_threads".to_string(),
+                    reason: format!("Invalid max threads value: {}", e),
+                })?;
+        }
+        
+        // Memory overrides
+        if let Ok(max_heap) = std::env::var(format!("{}MAX_HEAP_MB", prefix)) {
+            config.system.memory.max_heap_mb = Some(max_heap.parse()
+                .map_err(|e| ConfigError::ValidationError {
+                    field: "system.memory.max_heap_mb".to_string(),
+                    reason: format!("Invalid max heap value: {}", e),
+                })?);
+        }
+        
+        Ok(())
+    }
+    
+    /// Load configuration from multiple sources with priority order:
+    /// 1. Default values
+    /// 2. Configuration file
+    /// 3. Environment variables
+    /// 4. Command line arguments (future)
+    pub fn load_layered(
+        config_file: Option<&Path>,
+        env_prefix: Option<&str>,
+    ) -> Result<AlysConfig, ConfigError> {
+        let mut config = AlysConfig::default();
+        
+        // Load from file if provided
+        if let Some(file_path) = config_file {
+            if file_path.exists() {
+                config = Self::load_from_file(file_path)?;
+            } else {
+                tracing::warn!("Configuration file {:?} not found, using defaults", file_path);
+            }
+        }
+        
+        // Apply environment variable overrides
+        if let Some(prefix) = env_prefix {
+            Self::apply_env_overrides(&mut config, prefix)?;
+        }
+        
+        // Also apply standard environment variables without prefix
+        let env_config = Self::load_from_env()?;
+        Self::merge_configs(&mut config, env_config);
+        
+        config.validate()?;
+        Ok(config)
+    }
+    
+    /// Merge configuration values, with `override_config` taking precedence
+    fn merge_configs(base: &mut AlysConfig, override_config: AlysConfig) {
+        // Merge system config
+        if override_config.system.name != AlysConfig::default().system.name {
+            base.system.name = override_config.system.name;
+        }
+        if override_config.system.node_id != AlysConfig::default().system.node_id {
+            base.system.node_id = override_config.system.node_id;
+        }
+        if override_config.system.data_dir != AlysConfig::default().system.data_dir {
+            base.system.data_dir = override_config.system.data_dir;
+        }
+        
+        // Merge network config
+        if override_config.network.listen_address != AlysConfig::default().network.listen_address {
+            base.network.listen_address = override_config.network.listen_address;
+        }
+        if override_config.network.external_address.is_some() {
+            base.network.external_address = override_config.network.external_address;
+        }
+        
+        // Merge security config
+        if override_config.system.security.enable_tls != AlysConfig::default().system.security.enable_tls {
+            base.system.security.enable_tls = override_config.system.security.enable_tls;
+        }
+        if override_config.system.security.api_key.is_some() {
+            base.system.security.api_key = override_config.system.security.api_key;
+        }
+        
+        // Merge logging config
+        if override_config.logging.level as u8 != AlysConfig::default().logging.level as u8 {
+            base.logging.level = override_config.logging.level;
+        }
+    }
+    
+    /// Validate configuration and return detailed validation report
+    pub fn validate_detailed(&self) -> ConfigValidationReport {
+        let mut report = ConfigValidationReport {
+            is_valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        };
+        
+        // Validate system configuration
+        if self.system.name.is_empty() {
+            report.errors.push("System name cannot be empty".to_string());
+            report.is_valid = false;
+        }
+        
+        if self.system.thread_pool.core_threads == 0 {
+            report.errors.push("Core threads must be greater than 0".to_string());
+            report.is_valid = false;
+        }
+        
+        if self.system.thread_pool.max_threads < self.system.thread_pool.core_threads {
+            report.errors.push("Max threads cannot be less than core threads".to_string());
+            report.is_valid = false;
+        }
+        
+        // Validate network configuration
+        if self.network.max_peers == 0 {
+            report.warnings.push("Max peers is 0, node will not connect to network".to_string());
+        }
+        
+        // Validate memory configuration
+        if let Some(max_heap) = self.system.memory.max_heap_mb {
+            let total_cache = self.system.memory.caches.block_cache_mb +
+                             self.system.memory.caches.transaction_cache_mb +
+                             self.system.memory.caches.state_cache_mb;
+            
+            if total_cache > max_heap / 2 {
+                report.warnings.push(format!(
+                    "Cache sizes ({} MB) may be too large for max heap ({} MB)",
+                    total_cache, max_heap
+                ));
+            }
+        }
+        
+        // Validate TLS configuration
+        if self.system.security.enable_tls {
+            if self.system.security.tls_cert_file.is_none() {
+                report.errors.push("TLS certificate file required when TLS is enabled".to_string());
+                report.is_valid = false;
+            }
+            if self.system.security.tls_key_file.is_none() {
+                report.errors.push("TLS key file required when TLS is enabled".to_string());
+                report.is_valid = false;
+            }
+        }
+        
+        report
+    }
+    
+    /// Save configuration to file
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), ConfigError> {
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| ConfigError::SerializationError {
+                reason: e.to_string(),
+            })?;
+            
+        std::fs::write(path.as_ref(), content)
+            .map_err(|e| ConfigError::IoError {
+                operation: "write config file".to_string(),
+                error: e.to_string(),
+            })?;
+            
+        Ok(())
+    }
+}
+
+/// Configuration validation report
+#[derive(Debug, Clone)]
+pub struct ConfigValidationReport {
+    pub is_valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
 impl ConfigLoader<AlysConfig> for AlysConfig {
     fn load_from_file<P: AsRef<Path>>(path: P) -> Result<AlysConfig, ConfigError> {
         let content = std::fs::read_to_string(path.as_ref())
@@ -600,9 +830,60 @@ impl ConfigLoader<AlysConfig> for AlysConfig {
     }
     
     fn load_from_env() -> Result<AlysConfig, ConfigError> {
-        // Load configuration from environment variables
-        // This would implement environment variable parsing
-        Ok(AlysConfig::default())
+        let mut config = AlysConfig::default();
+        
+        // System configuration from environment
+        if let Ok(name) = std::env::var("ALYS_SYSTEM_NAME") {
+            config.system.name = name;
+        }
+        if let Ok(node_id) = std::env::var("ALYS_NODE_ID") {
+            config.system.node_id = node_id;
+        }
+        if let Ok(data_dir) = std::env::var("ALYS_DATA_DIR") {
+            config.system.data_dir = PathBuf::from(data_dir);
+        }
+        
+        // Network configuration from environment
+        if let Ok(listen_addr) = std::env::var("ALYS_LISTEN_ADDR") {
+            if let Ok(addr) = listen_addr.parse() {
+                config.network.listen_address = addr;
+            }
+        }
+        if let Ok(external_addr) = std::env::var("ALYS_EXTERNAL_ADDR") {
+            if let Ok(addr) = external_addr.parse() {
+                config.network.external_address = Some(addr);
+            }
+        }
+        
+        // Chain configuration from environment  
+        if let Ok(chain_id_str) = std::env::var("ALYS_CHAIN_ID") {
+            if let Ok(chain_id) = chain_id_str.parse::<u64>() {
+                config.chain.chain_id = ChainId::from(chain_id);
+            }
+        }
+        
+        // Security configuration from environment
+        if let Ok(_) = std::env::var("ALYS_ENABLE_TLS") {
+            config.system.security.enable_tls = true;
+        }
+        if let Ok(api_key) = std::env::var("ALYS_API_KEY") {
+            config.system.security.api_key = Some(api_key);
+        }
+        
+        // Logging configuration from environment
+        if let Ok(log_level) = std::env::var("ALYS_LOG_LEVEL") {
+            config.logging.level = match log_level.to_lowercase().as_str() {
+                "trace" => LogLevel::Trace,
+                "debug" => LogLevel::Debug,
+                "info" => LogLevel::Info,
+                "warn" => LogLevel::Warn,
+                "error" => LogLevel::Error,
+                _ => LogLevel::Info,
+            };
+        }
+        
+        config.validate()?;
+        Ok(config)
     }
     
     fn load_with_overrides<P: AsRef<Path>>(
@@ -613,8 +894,7 @@ impl ConfigLoader<AlysConfig> for AlysConfig {
         
         // Apply environment variable overrides
         if let Some(prefix) = env_prefix {
-            // Override configuration from environment variables
-            // This would implement env var override logic
+            Self::apply_env_overrides(&mut config, prefix)?;
         }
         
         config.validate()?;

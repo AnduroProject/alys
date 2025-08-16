@@ -41,38 +41,38 @@ Establish foundational V2 codebase structure with actor system architecture, dir
 - [X] **ALYS-001-14**: Update root `Cargo.toml` workspace configuration and dependency management [https://marathondh.atlassian.net/browse/AN-299]
 
 ### Phase 3: Core Actor System Implementation (12 tasks)
-- [ ] **ALYS-001-15**: Implement `crates/actor_system/supervisor.rs` with supervision trees and restart strategies [https://marathondh.atlassian.net/browse/AN-300]
-- [ ] **ALYS-001-16**: Implement `crates/actor_system/mailbox.rs` with message queuing, backpressure, and bounded channels [https://marathondh.atlassian.net/browse/AN-301]
-- [ ] **ALYS-001-17**: Implement `crates/actor_system/lifecycle.rs` with actor spawning, stopping, and graceful shutdown [https://marathondh.atlassian.net/browse/AN-302]
-- [ ] **ALYS-001-18**: Implement `crates/actor_system/metrics.rs` with actor performance monitoring and telemetry [https://marathondh.atlassian.net/browse/AN-303]
-- [ ] **ALYS-001-19**: Define `AlysActor` trait with standardized interface, configuration, and metrics support [https://marathondh.atlassian.net/browse/AN-304]
-- [ ] **ALYS-001-20**: Implement `AlysSystem` root supervisor with hierarchical supervision and system health monitoring [https://marathondh.atlassian.net/browse/AN-305]
-- [ ] **ALYS-001-21**: Create `ChainSupervisor` for consensus layer supervision with blockchain-specific restart policies [https://marathondh.atlassian.net/browse/AN-306]
-- [ ] **ALYS-001-22**: Create `NetworkSupervisor` for P2P and sync supervision with connection recovery strategies [https://marathondh.atlassian.net/browse/AN-307]
-- [ ] **ALYS-001-23**: Create `BridgeSupervisor` for peg operations supervision with transaction retry mechanisms [https://marathondh.atlassian.net/browse/AN-308]
-- [ ] **ALYS-001-24**: Create `StorageSupervisor` for database operations supervision with connection pooling [https://marathondh.atlassian.net/browse/AN-309]
-- [ ] **ALYS-001-25**: Implement actor registration system with health checks and dependency tracking [https://marathondh.atlassian.net/browse/AN-310]
-- [ ] **ALYS-001-26**: Create actor communication bus for system-wide messaging and event distribution [https://marathondh.atlassian.net/browse/AN-311]
+- [X] **ALYS-001-15**: Implement `crates/actor_system/supervisor.rs` with supervision trees and restart strategies [https://marathondh.atlassian.net/browse/AN-300]
+- [X] **ALYS-001-16**: Implement `crates/actor_system/mailbox.rs` with message queuing, backpressure, and bounded channels [https://marathondh.atlassian.net/browse/AN-301]
+- [X] **ALYS-001-17**: Implement `crates/actor_system/lifecycle.rs` with actor spawning, stopping, and graceful shutdown [https://marathondh.atlassian.net/browse/AN-302]
+- [X] **ALYS-001-18**: Implement `crates/actor_system/metrics.rs` with actor performance monitoring and telemetry [https://marathondh.atlassian.net/browse/AN-303]
+- [X] **ALYS-001-19**: Define `AlysActor` trait with standardized interface, configuration, and metrics support [https://marathondh.atlassian.net/browse/AN-304]
+- [X] **ALYS-001-20**: Implement `AlysSystem` root supervisor with hierarchical supervision and system health monitoring [https://marathondh.atlassian.net/browse/AN-305]
+- [X] **ALYS-001-21**: Create `ChainSupervisor` for consensus layer supervision with blockchain-specific restart policies [https://marathondh.atlassian.net/browse/AN-306]
+- [X] **ALYS-001-22**: Create `NetworkSupervisor` for P2P and sync supervision with connection recovery strategies [https://marathondh.atlassian.net/browse/AN-307]
+- [X] **ALYS-001-23**: Create `BridgeSupervisor` for peg operations supervision with transaction retry mechanisms [https://marathondh.atlassian.net/browse/AN-308]
+- [X] **ALYS-001-24**: Create `StorageSupervisor` for database operations supervision with connection pooling [https://marathondh.atlassian.net/browse/AN-309]
+- [X] **ALYS-001-25**: Implement actor registration system with health checks and dependency tracking [https://marathondh.atlassian.net/browse/AN-310]
+- [X] **ALYS-001-26**: Create actor communication bus for system-wide messaging and event distribution [https://marathondh.atlassian.net/browse/AN-311]
 
 ### Phase 4: Enhanced Data Structures & Types (6 tasks)
-- [ ] **ALYS-001-27**: Implement `ConsensusBlock` unified block representation with Lighthouse V5 compatibility
-- [ ] **ALYS-001-28**: Implement `SyncProgress` advanced sync state tracking with parallel download coordination
-- [ ] **ALYS-001-29**: Implement `PegOperation` enhanced peg tracking with governance integration and status workflow
-- [ ] **ALYS-001-30**: Implement `MessageEnvelope<T>` actor message wrapper with distributed tracing and correlation IDs
-- [ ] **ALYS-001-31**: Create actor-specific error types with context preservation and recovery recommendations
-- [ ] **ALYS-001-32**: Implement serialization/deserialization support for all actor messages and state structures
+- [X] **ALYS-001-27**: Implement `ConsensusBlock` unified block representation with Lighthouse V5 compatibility [https://marathondh.atlassian.net/browse/AN-312]
+- [X] **ALYS-001-28**: Implement `SyncProgress` advanced sync state tracking with parallel download coordination [https://marathondh.atlassian.net/browse/AN-313]
+- [X] **ALYS-001-29**: Implement `PegOperation` enhanced peg tracking with governance integration and status workflow [https://marathondh.atlassian.net/browse/AN-314]
+- [X] **ALYS-001-30**: Implement `MessageEnvelope<T>` actor message wrapper with distributed tracing and correlation IDs [https://marathondh.atlassian.net/browse/AN-315]
+- [ ] **ALYS-001-31**: Create actor-specific error types with context preservation and recovery recommendations [https://marathondh.atlassian.net/browse/AN-316]
+- [ ] **ALYS-001-32**: Implement serialization/deserialization support for all actor messages and state structures [https://marathondh.atlassian.net/browse/AN-317]
 
 ### Phase 5: Configuration & Integration Points (4 tasks)
-- [ ] **ALYS-001-33**: Implement `AlysConfig` master configuration structure with validation and environment overrides
-- [ ] **ALYS-001-34**: Implement `ActorConfig` system settings including restart strategies, mailbox capacity, and timeouts
-- [ ] **ALYS-001-35**: Create integration clients: `GovernanceClient` (gRPC streaming), `BitcoinClient` (RPC), `ExecutionClient` (Geth/Reth)
-- [ ] **ALYS-001-36**: Implement configuration hot-reload system with actor notification and state preservation
+- [ ] **ALYS-001-33**: Implement `AlysConfig` master configuration structure with validation and environment overrides [https://marathondh.atlassian.net/browse/AN-318]
+- [ ] **ALYS-001-34**: Implement `ActorConfig` system settings including restart strategies, mailbox capacity, and timeouts [https://marathondh.atlassian.net/browse/AN-319]
+- [ ] **ALYS-001-35**: Create integration clients: `GovernanceClient` (gRPC streaming), `BitcoinClient` (RPC), `ExecutionClient` (Geth/Reth) [https://marathondh.atlassian.net/browse/AN-320]
+- [ ] **ALYS-001-36**: Implement configuration hot-reload system with actor notification and state preservation [https://marathondh.atlassian.net/browse/AN-321]
 
 ### Phase 6: Testing Infrastructure (4 tasks)
-- [ ] **ALYS-001-37**: Create `ActorTestHarness` for integration testing with isolated actor environments
-- [ ] **ALYS-001-38**: Implement property-based testing framework for message ordering and actor state consistency
-- [ ] **ALYS-001-39**: Create chaos testing capabilities with network partitions, actor failures, and resource constraints
-- [ ] **ALYS-001-40**: Set up test utilities, mocks, and fixtures for external system integration testing
+- [ ] **ALYS-001-37**: Create `ActorTestHarness` for integration testing with isolated actor environments [https://marathondh.atlassian.net/browse/AN-322]
+- [ ] **ALYS-001-38**: Implement property-based testing framework for message ordering and actor state consistency [https://marathondh.atlassian.net/browse/AN-323]
+- [ ] **ALYS-001-39**: Create chaos testing capabilities with network partitions, actor failures, and resource constraints [https://marathondh.atlassian.net/browse/AN-324]
+- [ ] **ALYS-001-40**: Set up test utilities, mocks, and fixtures for external system integration testing [https://marathondh.atlassian.net/browse/AN-325]
 
 ### Phase 7: Documentation & Validation (2 tasks)
 - [ ] **ALYS-001-41**: Create comprehensive documentation including architecture guides, API references, and code examples

@@ -20,6 +20,7 @@ pub mod actors;
 pub mod config;
 pub mod integration;
 pub mod messages;
+pub mod serde_utils;
 pub mod types;
 pub mod workflows;
 

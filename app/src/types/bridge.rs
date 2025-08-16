@@ -3,6 +3,499 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
+/// Enhanced peg operation with governance integration and comprehensive tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegOperation {
+    /// Unique operation identifier
+    pub operation_id: uuid::Uuid,
+    /// Operation type (peg-in or peg-out)
+    pub operation_type: PegOperationType,
+    /// Current operation status
+    pub status: PegOperationStatus,
+    /// Operation workflow state
+    pub workflow: PegOperationWorkflow,
+    /// Governance integration
+    pub governance: GovernanceIntegration,
+    /// Actor system metadata
+    pub actor_metadata: PegOperationActorMetadata,
+    /// Performance tracking
+    pub performance: OperationPerformanceMetrics,
+    /// Error tracking and recovery
+    pub error_tracking: OperationErrorTracking,
+    /// Compliance and audit trail
+    pub compliance: ComplianceTracking,
+    /// Resource allocation
+    pub resource_allocation: ResourceAllocation,
+}
+
+/// Peg operation types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PegOperationType {
+    /// Peg-in from Bitcoin to Alys
+    PegIn {
+        bitcoin_txid: bitcoin::Txid,
+        bitcoin_output_index: u32,
+        amount_satoshis: u64,
+        recipient_address: Address,
+    },
+    /// Peg-out from Alys to Bitcoin
+    PegOut {
+        burn_tx_hash: H256,
+        amount_satoshis: u64,
+        bitcoin_recipient: bitcoin::Address,
+        fee_rate: Option<u64>,
+    },
+}
+
+/// Enhanced peg operation status with detailed workflow states
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PegOperationStatus {
+    /// Operation initiated
+    Initiated {
+        initiated_at: std::time::SystemTime,
+        initiator: OperationInitiator,
+    },
+    /// Validating initial conditions
+    Validating {
+        validation_started: std::time::SystemTime,
+        validations_completed: Vec<ValidationStep>,
+        validations_pending: Vec<ValidationStep>,
+    },
+    /// Waiting for governance approval
+    PendingGovernanceApproval {
+        submitted_to_governance: std::time::SystemTime,
+        governance_id: String,
+        required_approvals: u32,
+        current_approvals: u32,
+        approval_deadline: Option<std::time::SystemTime>,
+    },
+    /// Governance approved, ready for execution
+    Approved {
+        approved_at: std::time::SystemTime,
+        approved_by: Vec<GovernanceApproval>,
+        execution_window: Option<ExecutionWindow>,
+    },
+    /// Operation in progress
+    InProgress {
+        started_at: std::time::SystemTime,
+        progress_stages: Vec<ProgressStage>,
+        current_stage: String,
+        estimated_completion: Option<std::time::SystemTime>,
+    },
+    /// Waiting for confirmations
+    AwaitingConfirmations {
+        confirmations_started: std::time::SystemTime,
+        required_confirmations: u32,
+        current_confirmations: u32,
+        blockchain: ConfirmationBlockchain,
+    },
+    /// Operation completed successfully
+    Completed {
+        completed_at: std::time::SystemTime,
+        final_confirmations: u32,
+        completion_proof: CompletionProof,
+        gas_used: Option<u64>,
+    },
+    /// Operation failed
+    Failed {
+        failed_at: std::time::SystemTime,
+        failure_reason: FailureReason,
+        recovery_possible: bool,
+        recovery_options: Vec<RecoveryOption>,
+    },
+    /// Operation cancelled
+    Cancelled {
+        cancelled_at: std::time::SystemTime,
+        cancelled_by: OperationInitiator,
+        cancellation_reason: String,
+        refund_status: Option<RefundStatus>,
+    },
+    /// Operation suspended by governance
+    Suspended {
+        suspended_at: std::time::SystemTime,
+        suspended_by: String, // Governance decision ID
+        suspension_reason: String,
+        review_deadline: Option<std::time::SystemTime>,
+    },
+}
+
+/// Operation workflow state machine
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegOperationWorkflow {
+    /// Current workflow state
+    pub current_state: WorkflowState,
+    /// State transition history
+    pub state_history: Vec<StateTransition>,
+    /// Available next states
+    pub available_transitions: Vec<WorkflowTransition>,
+    /// Workflow configuration
+    pub workflow_config: WorkflowConfig,
+    /// State timeouts and deadlines
+    pub timeouts: WorkflowTimeouts,
+}
+
+/// Workflow states
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum WorkflowState {
+    /// Initial state after creation
+    Created,
+    /// Validation phase
+    Validating,
+    /// Governance review phase
+    GovernanceReview,
+    /// Execution phase
+    Executing,
+    /// Confirmation phase
+    Confirming,
+    /// Final state - completed
+    Completed,
+    /// Final state - failed
+    Failed,
+    /// Final state - cancelled
+    Cancelled,
+    /// Suspended state
+    Suspended,
+}
+
+/// State transition record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateTransition {
+    /// Previous state
+    pub from_state: WorkflowState,
+    /// New state
+    pub to_state: WorkflowState,
+    /// When transition occurred
+    pub transitioned_at: std::time::SystemTime,
+    /// Actor that triggered the transition
+    pub triggered_by: Option<String>,
+    /// Transition reason/context
+    pub reason: String,
+    /// Additional metadata
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+/// Available workflow transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTransition {
+    /// Target state
+    pub to_state: WorkflowState,
+    /// Transition name/action
+    pub action: String,
+    /// Required conditions
+    pub conditions: Vec<TransitionCondition>,
+    /// Estimated time for transition
+    pub estimated_duration: Option<std::time::Duration>,
+}
+
+/// Conditions required for state transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransitionCondition {
+    /// Requires governance approval
+    GovernanceApproval { required_votes: u32 },
+    /// Requires specific confirmations
+    ConfirmationThreshold { confirmations: u32, blockchain: ConfirmationBlockchain },
+    /// Requires timeout to expire
+    TimeoutExpired { timeout: std::time::Duration },
+    /// Requires specific actor action
+    ActorAction { actor: String, action: String },
+    /// Custom condition
+    Custom { condition_id: String, description: String },
+}
+
+/// Governance integration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceIntegration {
+    /// Governance system configuration
+    pub governance_config: GovernanceConfig,
+    /// Current governance status
+    pub governance_status: GovernanceStatus,
+    /// Governance history for this operation
+    pub governance_history: Vec<GovernanceEvent>,
+    /// Required governance actions
+    pub required_actions: Vec<RequiredGovernanceAction>,
+    /// Governance decision trail
+    pub decision_trail: Vec<GovernanceDecision>,
+}
+
+/// Governance configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceConfig {
+    /// Governance system endpoint
+    pub governance_endpoint: String,
+    /// Required approval threshold
+    pub approval_threshold: u32,
+    /// Governance timeout
+    pub governance_timeout: std::time::Duration,
+    /// Governance categories that apply
+    pub applicable_categories: Vec<String>,
+    /// Emergency bypass conditions
+    pub emergency_bypass: Option<EmergencyBypass>,
+}
+
+/// Current governance status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceStatus {
+    /// Not yet submitted to governance
+    NotSubmitted,
+    /// Submitted and pending review
+    PendingReview {
+        submitted_at: std::time::SystemTime,
+        governance_id: String,
+    },
+    /// Under active review
+    UnderReview {
+        review_started: std::time::SystemTime,
+        assigned_reviewers: Vec<String>,
+    },
+    /// Additional information requested
+    InformationRequested {
+        requested_at: std::time::SystemTime,
+        requested_by: String,
+        information_needed: String,
+        response_deadline: std::time::SystemTime,
+    },
+    /// Approved by governance
+    Approved {
+        approved_at: std::time::SystemTime,
+        approval_details: GovernanceApprovalDetails,
+    },
+    /// Rejected by governance
+    Rejected {
+        rejected_at: std::time::SystemTime,
+        rejection_reason: String,
+        appeal_possible: bool,
+    },
+    /// Suspended pending further review
+    Suspended {
+        suspended_at: std::time::SystemTime,
+        suspension_reason: String,
+    },
+}
+
+/// Governance events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceEvent {
+    /// Event type
+    pub event_type: GovernanceEventType,
+    /// When event occurred
+    pub timestamp: std::time::SystemTime,
+    /// Event source/actor
+    pub source: String,
+    /// Event details
+    pub details: String,
+    /// Related governance ID
+    pub governance_id: Option<String>,
+}
+
+/// Types of governance events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceEventType {
+    /// Submission to governance
+    Submitted,
+    /// Review assigned
+    ReviewAssigned,
+    /// Vote cast
+    VoteCast,
+    /// Information requested
+    InformationRequested,
+    /// Information provided
+    InformationProvided,
+    /// Decision made
+    DecisionMade,
+    /// Appeal filed
+    AppealFiled,
+    /// Emergency action
+    EmergencyAction,
+}
+
+/// Actor system metadata for peg operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegOperationActorMetadata {
+    /// Processing actor ID
+    pub processing_actor: Option<String>,
+    /// Actor that initiated the operation
+    pub initiating_actor: Option<String>,
+    /// Correlation ID for distributed tracing
+    pub correlation_id: Option<uuid::Uuid>,
+    /// Distributed tracing context
+    pub trace_context: crate::types::blockchain::TraceContext,
+    /// Operation priority
+    pub priority: OperationPriority,
+    /// Actor performance metrics
+    pub actor_metrics: ActorOperationMetrics,
+    /// Message routing information
+    pub routing_info: OperationRoutingInfo,
+}
+
+/// Operation priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum OperationPriority {
+    /// Low priority background operation
+    Low = 0,
+    /// Normal priority operation
+    Normal = 1,
+    /// High priority operation
+    High = 2,
+    /// Critical priority operation
+    Critical = 3,
+    /// Emergency operation
+    Emergency = 4,
+}
+
+/// Actor-specific operation metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorOperationMetrics {
+    /// Processing time in actor
+    pub processing_time_ms: Option<u64>,
+    /// Queue time before processing
+    pub queue_time_ms: Option<u64>,
+    /// Number of actor hops
+    pub actor_hops: u32,
+    /// Messages sent during processing
+    pub messages_sent: u32,
+    /// Messages received during processing
+    pub messages_received: u32,
+    /// Memory usage during processing
+    pub memory_usage_bytes: Option<u64>,
+}
+
+/// Operation routing information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationRoutingInfo {
+    /// Route taken through actor system
+    pub actor_route: Vec<String>,
+    /// Routing decisions made
+    pub routing_decisions: Vec<RoutingDecision>,
+    /// Load balancing information
+    pub load_balancing: Option<LoadBalancingInfo>,
+}
+
+/// Routing decisions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingDecision {
+    /// Decision point
+    pub decision_point: String,
+    /// Available options
+    pub available_options: Vec<String>,
+    /// Chosen option
+    pub chosen_option: String,
+    /// Decision criteria
+    pub decision_criteria: String,
+    /// Decision timestamp
+    pub decided_at: std::time::SystemTime,
+}
+
+/// Performance tracking for operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationPerformanceMetrics {
+    /// Operation start time
+    pub started_at: std::time::SystemTime,
+    /// Operation completion time
+    pub completed_at: Option<std::time::SystemTime>,
+    /// Total processing duration
+    pub total_duration: Option<std::time::Duration>,
+    /// Time spent in each stage
+    pub stage_durations: std::collections::HashMap<String, std::time::Duration>,
+    /// Throughput metrics
+    pub throughput: ThroughputMetrics,
+    /// Resource utilization
+    pub resource_utilization: OperationResourceUtilization,
+    /// Performance benchmarks
+    pub benchmarks: PerformanceBenchmarks,
+}
+
+/// Throughput metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThroughputMetrics {
+    /// Operations per second
+    pub operations_per_second: f64,
+    /// Bytes processed per second
+    pub bytes_per_second: u64,
+    /// Transactions per second
+    pub transactions_per_second: f64,
+    /// Average latency
+    pub average_latency: std::time::Duration,
+}
+
+/// Operation-specific resource utilization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationResourceUtilization {
+    /// CPU usage percentage
+    pub cpu_usage: f64,
+    /// Memory usage in bytes
+    pub memory_usage: u64,
+    /// Network bandwidth used
+    pub network_usage: u64,
+    /// Disk I/O operations
+    pub disk_io_operations: u64,
+    /// Gas usage (for Alys transactions)
+    pub gas_used: Option<u64>,
+    /// Bitcoin transaction fees
+    pub bitcoin_fees_satoshis: Option<u64>,
+}
+
+/// Performance benchmarks and comparisons
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceBenchmarks {
+    /// Expected duration for this operation type
+    pub expected_duration: std::time::Duration,
+    /// Historical average duration
+    pub historical_average: Option<std::time::Duration>,
+    /// Performance percentile (vs historical operations)
+    pub performance_percentile: Option<f64>,
+    /// Efficiency score (0.0 to 1.0)
+    pub efficiency_score: f64,
+}
+
+/// Error tracking and recovery for operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationErrorTracking {
+    /// Errors encountered during operation
+    pub errors: Vec<OperationError>,
+    /// Recovery attempts made
+    pub recovery_attempts: Vec<RecoveryAttempt>,
+    /// Current recovery strategy
+    pub recovery_strategy: Option<RecoveryStrategy>,
+    /// Error patterns detected
+    pub error_patterns: Vec<ErrorPattern>,
+    /// Escalation history
+    pub escalation_history: Vec<EscalationEvent>,
+}
+
+/// Operation-specific errors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationError {
+    /// Error type
+    pub error_type: OperationErrorType,
+    /// Error message
+    pub message: String,
+    /// When error occurred
+    pub occurred_at: std::time::SystemTime,
+    /// Error context
+    pub context: ErrorContext,
+    /// Recovery recommendations
+    pub recovery_recommendations: Vec<String>,
+    /// Error severity
+    pub severity: ErrorSeverity,
+}
+
+/// Types of operation errors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OperationErrorType {
+    /// Validation errors
+    Validation(ValidationErrorType),
+    /// Governance errors
+    Governance(GovernanceErrorType),
+    /// Blockchain errors
+    Blockchain(BlockchainErrorType),
+    /// Network errors
+    Network(NetworkErrorType),
+    /// System errors
+    System(SystemErrorType),
+    /// User errors
+    User(UserErrorType),
+}
+
 /// Peg-in operation status and tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PegInStatus {

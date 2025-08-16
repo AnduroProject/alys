@@ -1,14 +1,20 @@
-//! Anduro Governance Node integration interface
+//! Governance client for gRPC streaming communication with Anduro governance system
 //!
-//! Provides gRPC streaming integration with Anduro Governance Nodes for
-//! consensus coordination, federation management, and proposal voting.
+//! This module provides a high-level client interface for interacting with the Anduro
+//! governance system via gRPC streaming connections, handling proposals, votes, and
+//! real-time governance events.
 
+use crate::config::GovernanceConfig;
 use crate::types::*;
-use async_trait::async_trait;
+use actor_system::{ActorError, ActorResult, AlysMessage, SerializableMessage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
-use tonic::transport::{Channel, ClientTlsConfig};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::StreamExt;
+use tonic::{transport::Channel, Request, Response, Status, Streaming};
+use uuid::Uuid;
 
 /// Anduro Governance integration interface
 #[async_trait]

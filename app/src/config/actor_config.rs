@@ -1,6 +1,7 @@
-//! Actor system configuration
+//! Actor system configuration with comprehensive restart strategies, mailbox capacity, and timeout settings
 
 use super::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -523,6 +524,330 @@ impl Default for MessageBatchingConfig {
     }
 }
 
+impl ActorSystemConfig {
+    /// Create a configuration optimized for high throughput
+    pub fn high_throughput() -> Self {
+        Self {
+            runtime: RuntimeConfig {
+                worker_threads: Some(num_cpus::get() * 2),
+                enable_io: true,
+                enable_time: true,
+                thread_name_prefix: "alys-ht".to_string(),
+                thread_stack_size: Some(2 * 1024 * 1024), // 2MB
+                thread_keep_alive: Duration::from_secs(300),
+            },
+            supervision: SupervisionConfig {
+                default_restart_strategy: RestartStrategyConfig::CircuitBreaker {
+                    failure_threshold: 5,
+                    recovery_timeout: Duration::from_secs(30),
+                    success_threshold: 10,
+                },
+                max_restarts: 10,
+                restart_window: Duration::from_secs(600),
+                escalation_timeout: Duration::from_secs(60),
+                health_check_interval: Duration::from_secs(15),
+                auto_recovery: true,
+                recovery_strategies: HashMap::new(),
+            },
+            mailbox: MailboxConfig {
+                default_capacity: 10000,
+                backpressure_strategy: BackpressureStrategy::DropOldest,
+                message_timeout: Some(Duration::from_secs(60)),
+                priority_queue: Some(PriorityQueueConfig {
+                    levels: 5,
+                    default_priority: 2,
+                    algorithm: PriorityAlgorithm::WeightedFair,
+                }),
+                dead_letter: DeadLetterConfig {
+                    enabled: true,
+                    max_messages: 100000,
+                    retention_time: Duration::from_hours(6),
+                    handler: DeadLetterHandler::Log { level: LogLevel::Warn },
+                },
+            },
+            actors: ActorConfigurations::high_throughput(),
+            timeouts: SystemTimeouts {
+                startup_timeout: Duration::from_secs(60),
+                shutdown_timeout: Duration::from_secs(60),
+                initialization_timeout: Duration::from_secs(120),
+                health_check_timeout: Duration::from_secs(10),
+                config_reload_timeout: Duration::from_secs(30),
+            },
+            performance: PerformanceConfig {
+                monitoring: true,
+                metrics_interval: Duration::from_secs(15),
+                profiling: true,
+                memory_pool: MemoryPoolConfig {
+                    enabled: true,
+                    initial_size: 10000,
+                    max_size: 100000,
+                    growth_factor: 2.0,
+                    shrink_threshold: 0.2,
+                },
+                message_batching: MessageBatchingConfig {
+                    enabled: true,
+                    max_batch_size: 1000,
+                    batch_timeout: Duration::from_millis(5),
+                    compression: true,
+                },
+            },
+        }
+    }
+    
+    /// Create a configuration optimized for low latency
+    pub fn low_latency() -> Self {
+        Self {
+            runtime: RuntimeConfig {
+                worker_threads: Some(num_cpus::get()),
+                enable_io: true,
+                enable_time: true,
+                thread_name_prefix: "alys-ll".to_string(),
+                thread_stack_size: Some(1024 * 1024), // 1MB
+                thread_keep_alive: Duration::from_secs(30),
+            },
+            supervision: SupervisionConfig {
+                default_restart_strategy: RestartStrategyConfig::OneForOne {
+                    max_retries: 1,
+                    within_time: Duration::from_secs(10),
+                },
+                max_restarts: 3,
+                restart_window: Duration::from_secs(60),
+                escalation_timeout: Duration::from_secs(5),
+                health_check_interval: Duration::from_secs(5),
+                auto_recovery: true,
+                recovery_strategies: HashMap::new(),
+            },
+            mailbox: MailboxConfig {
+                default_capacity: 100,
+                backpressure_strategy: BackpressureStrategy::Fail,
+                message_timeout: Some(Duration::from_millis(100)),
+                priority_queue: Some(PriorityQueueConfig {
+                    levels: 3,
+                    default_priority: 1,
+                    algorithm: PriorityAlgorithm::Strict,
+                }),
+                dead_letter: DeadLetterConfig {
+                    enabled: true,
+                    max_messages: 1000,
+                    retention_time: Duration::from_minutes(15),
+                    handler: DeadLetterHandler::Log { level: LogLevel::Error },
+                },
+            },
+            actors: ActorConfigurations::low_latency(),
+            timeouts: SystemTimeouts {
+                startup_timeout: Duration::from_secs(5),
+                shutdown_timeout: Duration::from_secs(5),
+                initialization_timeout: Duration::from_secs(15),
+                health_check_timeout: Duration::from_secs(1),
+                config_reload_timeout: Duration::from_secs(3),
+            },
+            performance: PerformanceConfig {
+                monitoring: true,
+                metrics_interval: Duration::from_secs(5),
+                profiling: false,
+                memory_pool: MemoryPoolConfig {
+                    enabled: true,
+                    initial_size: 1000,
+                    max_size: 5000,
+                    growth_factor: 1.2,
+                    shrink_threshold: 0.1,
+                },
+                message_batching: MessageBatchingConfig {
+                    enabled: false,
+                    max_batch_size: 1,
+                    batch_timeout: Duration::from_millis(1),
+                    compression: false,
+                },
+            },
+        }
+    }
+    
+    /// Create a configuration optimized for resource conservation
+    pub fn resource_conservative() -> Self {
+        Self {
+            runtime: RuntimeConfig {
+                worker_threads: Some(2),
+                enable_io: true,
+                enable_time: true,
+                thread_name_prefix: "alys-rc".to_string(),
+                thread_stack_size: Some(512 * 1024), // 512KB
+                thread_keep_alive: Duration::from_secs(10),
+            },
+            supervision: SupervisionConfig {
+                default_restart_strategy: RestartStrategyConfig::ExponentialBackoff {
+                    initial_delay: Duration::from_secs(1),
+                    max_delay: Duration::from_secs(300),
+                    multiplier: 2.0,
+                    max_retries: 5,
+                },
+                max_restarts: 3,
+                restart_window: Duration::from_secs(900),
+                escalation_timeout: Duration::from_secs(120),
+                health_check_interval: Duration::from_secs(60),
+                auto_recovery: true,
+                recovery_strategies: HashMap::new(),
+            },
+            mailbox: MailboxConfig {
+                default_capacity: 100,
+                backpressure_strategy: BackpressureStrategy::Block,
+                message_timeout: Some(Duration::from_secs(300)),
+                priority_queue: None,
+                dead_letter: DeadLetterConfig {
+                    enabled: true,
+                    max_messages: 1000,
+                    retention_time: Duration::from_hours(1),
+                    handler: DeadLetterHandler::Log { level: LogLevel::Info },
+                },
+            },
+            actors: ActorConfigurations::resource_conservative(),
+            timeouts: SystemTimeouts {
+                startup_timeout: Duration::from_secs(15),
+                shutdown_timeout: Duration::from_secs(15),
+                initialization_timeout: Duration::from_secs(30),
+                health_check_timeout: Duration::from_secs(3),
+                config_reload_timeout: Duration::from_secs(5),
+            },
+            performance: PerformanceConfig {
+                monitoring: false,
+                metrics_interval: Duration::from_secs(300),
+                profiling: false,
+                memory_pool: MemoryPoolConfig {
+                    enabled: true,
+                    initial_size: 100,
+                    max_size: 1000,
+                    growth_factor: 1.1,
+                    shrink_threshold: 0.5,
+                },
+                message_batching: MessageBatchingConfig {
+                    enabled: true,
+                    max_batch_size: 50,
+                    batch_timeout: Duration::from_millis(100),
+                    compression: true,
+                },
+            },
+        }
+    }
+}
+
+impl ActorConfigurations {
+    /// High throughput actor configurations
+    pub fn high_throughput() -> Self {
+        let base_config = ActorConfig {
+            enabled: true,
+            mailbox_capacity: Some(10000),
+            restart_strategy: Some(RestartStrategyConfig::CircuitBreaker {
+                failure_threshold: 10,
+                recovery_timeout: Duration::from_secs(30),
+                success_threshold: 20,
+            }),
+            health_check: ActorHealthConfig {
+                enabled: true,
+                interval: Duration::from_secs(15),
+                timeout: Duration::from_secs(3),
+                failure_threshold: 5,
+                recovery_threshold: 3,
+            },
+            performance: ActorPerformanceConfig {
+                message_timeout: Some(Duration::from_secs(30)),
+                max_memory_mb: Some(1024),
+                cpu_limit_percent: Some(80.0),
+                monitoring: true,
+                metrics_interval: Duration::from_secs(30),
+            },
+            custom: HashMap::new(),
+        };
+        
+        Self {
+            chain_actor: base_config.clone(),
+            engine_actor: base_config.clone(),
+            bridge_actor: base_config.clone(),
+            network_actor: base_config.clone(),
+            sync_actor: base_config.clone(),
+            stream_actor: base_config.clone(),
+            storage_actor: base_config.clone(),
+            supervisor_actor: base_config,
+        }
+    }
+    
+    /// Low latency actor configurations
+    pub fn low_latency() -> Self {
+        let base_config = ActorConfig {
+            enabled: true,
+            mailbox_capacity: Some(100),
+            restart_strategy: Some(RestartStrategyConfig::OneForOne {
+                max_retries: 1,
+                within_time: Duration::from_secs(5),
+            }),
+            health_check: ActorHealthConfig {
+                enabled: true,
+                interval: Duration::from_secs(5),
+                timeout: Duration::from_millis(500),
+                failure_threshold: 2,
+                recovery_threshold: 1,
+            },
+            performance: ActorPerformanceConfig {
+                message_timeout: Some(Duration::from_millis(50)),
+                max_memory_mb: Some(256),
+                cpu_limit_percent: Some(50.0),
+                monitoring: true,
+                metrics_interval: Duration::from_secs(10),
+            },
+            custom: HashMap::new(),
+        };
+        
+        Self {
+            chain_actor: base_config.clone(),
+            engine_actor: base_config.clone(),
+            bridge_actor: base_config.clone(),
+            network_actor: base_config.clone(),
+            sync_actor: base_config.clone(),
+            stream_actor: base_config.clone(),
+            storage_actor: base_config.clone(),
+            supervisor_actor: base_config,
+        }
+    }
+    
+    /// Resource conservative actor configurations
+    pub fn resource_conservative() -> Self {
+        let base_config = ActorConfig {
+            enabled: true,
+            mailbox_capacity: Some(50),
+            restart_strategy: Some(RestartStrategyConfig::ExponentialBackoff {
+                initial_delay: Duration::from_secs(2),
+                max_delay: Duration::from_secs(120),
+                multiplier: 1.5,
+                max_retries: 3,
+            }),
+            health_check: ActorHealthConfig {
+                enabled: true,
+                interval: Duration::from_secs(60),
+                timeout: Duration::from_secs(5),
+                failure_threshold: 3,
+                recovery_threshold: 2,
+            },
+            performance: ActorPerformanceConfig {
+                message_timeout: Some(Duration::from_secs(120)),
+                max_memory_mb: Some(128),
+                cpu_limit_percent: Some(25.0),
+                monitoring: false,
+                metrics_interval: Duration::from_secs(300),
+            },
+            custom: HashMap::new(),
+        };
+        
+        Self {
+            chain_actor: base_config.clone(),
+            engine_actor: base_config.clone(),
+            bridge_actor: base_config.clone(),
+            network_actor: base_config.clone(),
+            sync_actor: base_config.clone(),
+            stream_actor: base_config.clone(),
+            storage_actor: base_config.clone(),
+            supervisor_actor: base_config,
+        }
+    }
+}
+
 impl Validate for ActorSystemConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         // Validate runtime configuration
@@ -533,6 +858,13 @@ impl Validate for ActorSystemConfig {
                     reason: "Worker threads must be greater than 0".to_string(),
                 });
             }
+            
+            if threads > 1000 {
+                return Err(ConfigError::ValidationError {
+                    field: "actors.runtime.worker_threads".to_string(),
+                    reason: "Worker threads should not exceed 1000".to_string(),
+                });
+            }
         }
         
         // Validate mailbox configuration
@@ -541,6 +873,150 @@ impl Validate for ActorSystemConfig {
                 field: "actors.mailbox.default_capacity".to_string(),
                 reason: "Mailbox capacity must be greater than 0".to_string(),
             });
+        }
+        
+        if self.mailbox.default_capacity > 1_000_000 {
+            return Err(ConfigError::ValidationError {
+                field: "actors.mailbox.default_capacity".to_string(),
+                reason: "Mailbox capacity should not exceed 1,000,000 messages".to_string(),
+            });
+        }
+        
+        // Validate supervision configuration
+        if self.supervision.max_restarts == 0 {
+            return Err(ConfigError::ValidationError {
+                field: "actors.supervision.max_restarts".to_string(),
+                reason: "Max restarts must be greater than 0".to_string(),
+            });
+        }
+        
+        if self.supervision.restart_window.as_secs() == 0 {
+            return Err(ConfigError::ValidationError {
+                field: "actors.supervision.restart_window".to_string(),
+                reason: "Restart window must be greater than 0".to_string(),
+            });
+        }
+        
+        // Validate individual actor configurations
+        self.actors.validate()?;
+        
+        // Validate performance configuration
+        if let Some(max_batch) = self.performance.message_batching.max_batch_size.into() {
+            if max_batch > 10000 {
+                return Err(ConfigError::ValidationError {
+                    field: "actors.performance.message_batching.max_batch_size".to_string(),
+                    reason: "Batch size should not exceed 10,000 messages".to_string(),
+                });
+            }
+        }
+        
+        // Validate memory pool configuration
+        if self.performance.memory_pool.initial_size > self.performance.memory_pool.max_size {
+            return Err(ConfigError::ValidationError {
+                field: "actors.performance.memory_pool".to_string(),
+                reason: "Initial pool size cannot be larger than max pool size".to_string(),
+            });
+        }
+        
+        if self.performance.memory_pool.growth_factor <= 1.0 {
+            return Err(ConfigError::ValidationError {
+                field: "actors.performance.memory_pool.growth_factor".to_string(),
+                reason: "Growth factor must be greater than 1.0".to_string(),
+            });
+        }
+        
+        if self.performance.memory_pool.shrink_threshold <= 0.0 || self.performance.memory_pool.shrink_threshold >= 1.0 {
+            return Err(ConfigError::ValidationError {
+                field: "actors.performance.memory_pool.shrink_threshold".to_string(),
+                reason: "Shrink threshold must be between 0.0 and 1.0".to_string(),
+            });
+        }
+        
+        Ok(())
+    }
+}
+
+impl Validate for ActorConfigurations {
+    fn validate(&self) -> Result<(), ConfigError> {
+        self.chain_actor.validate()?;
+        self.engine_actor.validate()?;
+        self.bridge_actor.validate()?;
+        self.network_actor.validate()?;
+        self.sync_actor.validate()?;
+        self.stream_actor.validate()?;
+        self.storage_actor.validate()?;
+        self.supervisor_actor.validate()?;
+        Ok(())
+    }
+}
+
+impl Validate for ActorConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        // Validate mailbox capacity
+        if let Some(capacity) = self.mailbox_capacity {
+            if capacity == 0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.mailbox_capacity".to_string(),
+                    reason: "Actor mailbox capacity must be greater than 0".to_string(),
+                });
+            }
+            
+            if capacity > 10_000_000 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.mailbox_capacity".to_string(),
+                    reason: "Actor mailbox capacity should not exceed 10,000,000 messages".to_string(),
+                });
+            }
+        }
+        
+        // Validate health check configuration
+        if self.health_check.enabled {
+            if self.health_check.interval.as_millis() == 0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.health_check.interval".to_string(),
+                    reason: "Health check interval must be greater than 0".to_string(),
+                });
+            }
+            
+            if self.health_check.timeout >= self.health_check.interval {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.health_check.timeout".to_string(),
+                    reason: "Health check timeout must be less than interval".to_string(),
+                });
+            }
+            
+            if self.health_check.failure_threshold == 0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.health_check.failure_threshold".to_string(),
+                    reason: "Health check failure threshold must be greater than 0".to_string(),
+                });
+            }
+            
+            if self.health_check.recovery_threshold == 0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.health_check.recovery_threshold".to_string(),
+                    reason: "Health check recovery threshold must be greater than 0".to_string(),
+                });
+            }
+        }
+        
+        // Validate performance configuration
+        if let Some(cpu_limit) = self.performance.cpu_limit_percent {
+            if cpu_limit <= 0.0 || cpu_limit > 100.0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.performance.cpu_limit_percent".to_string(),
+                    reason: "CPU limit must be between 0.0 and 100.0".to_string(),
+                });
+            }
+        }
+        
+        if let Some(memory_mb) = self.performance.max_memory_mb {
+            if memory_mb == 0 {
+                return Err(ConfigError::ValidationError {
+                    field: "actor.performance.max_memory_mb".to_string(),
+                    reason: "Memory limit must be greater than 0".to_string(),
+                });
+            }
         }
         
         Ok(())

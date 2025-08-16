@@ -2,36 +2,82 @@
 
 use crate::types::*;
 use actix::prelude::*;
+use actor_system::{AlysMessage, SerializableMessage};
+use serde::{Deserialize, Serialize};
 
 /// Message to register an actor with the supervisor
-#[derive(Message)]
-#[rtype(result = "Result<(), SystemError>")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterActorMessage {
     pub actor_name: String,
     pub actor_type: ActorType,
     pub restart_policy: RestartPolicy,
 }
 
+impl Message for RegisterActorMessage {
+    type Result = Result<(), SystemError>;
+}
+
+impl AlysMessage for RegisterActorMessage {}
+
+impl SerializableMessage for RegisterActorMessage {
+    fn schema_version() -> u32 {
+        1
+    }
+}
+
 /// Message to unregister an actor from the supervisor
-#[derive(Message)]
-#[rtype(result = "Result<(), SystemError>")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnregisterActorMessage {
     pub actor_name: String,
 }
 
+impl Message for UnregisterActorMessage {
+    type Result = Result<(), SystemError>;
+}
+
+impl AlysMessage for UnregisterActorMessage {}
+
+impl SerializableMessage for UnregisterActorMessage {
+    fn schema_version() -> u32 {
+        1
+    }
+}
+
 /// Message to report actor health status
-#[derive(Message)]
-#[rtype(result = "()")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthReportMessage {
     pub actor_name: String,
     pub health_status: ActorHealth,
     pub metrics: Option<ActorMetrics>,
 }
 
+impl Message for HealthReportMessage {
+    type Result = ();
+}
+
+impl AlysMessage for HealthReportMessage {}
+
+impl SerializableMessage for HealthReportMessage {
+    fn schema_version() -> u32 {
+        1
+    }
+}
+
 /// Message to request system status
-#[derive(Message)]
-#[rtype(result = "SystemStatus")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSystemStatusMessage;
+
+impl Message for GetSystemStatusMessage {
+    type Result = SystemStatus;
+}
+
+impl AlysMessage for GetSystemStatusMessage {}
+
+impl SerializableMessage for GetSystemStatusMessage {
+    fn schema_version() -> u32 {
+        1
+    }
+}
 
 /// Message to request actor restart
 #[derive(Message)]
@@ -57,7 +103,7 @@ pub struct UpdateConfigMessage {
 }
 
 /// Type of actor for registration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActorType {
     Chain,
     Engine,
@@ -69,7 +115,7 @@ pub enum ActorType {
 }
 
 /// Restart policy for actor failures
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RestartPolicy {
     Never,
     Always,
@@ -78,7 +124,7 @@ pub enum RestartPolicy {
 }
 
 /// Actor health status
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActorHealth {
     Healthy,
     Warning { message: String },
@@ -87,11 +133,13 @@ pub enum ActorHealth {
 }
 
 /// Generic actor metrics
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorMetrics {
     pub messages_processed: u64,
     pub errors_count: u64,
+    #[serde(with = "crate::serde_utils::duration_serde")]
     pub uptime: std::time::Duration,
+    #[serde(with = "crate::serde_utils::systemtime_serde")]
     pub last_activity: std::time::SystemTime,
 }
 

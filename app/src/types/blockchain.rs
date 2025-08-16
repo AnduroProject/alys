@@ -3,7 +3,8 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
-/// A complete block in the Alys blockchain (matches the actual Alys ConsensusBlock)
+/// A complete block in the Alys blockchain with Lighthouse V5 compatibility
+/// Enhanced with actor-friendly design and comprehensive metadata tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusBlock {
     /// The block hash of the parent
@@ -20,6 +21,14 @@ pub struct ConsensusBlock {
     pub pegout_payment_proposal: Option<bitcoin::Transaction>,
     /// Finalized bitcoin payments. Only non-empty if there is an auxpow.
     pub finalized_pegouts: Vec<bitcoin::Transaction>,
+    /// Lighthouse V5 compatibility fields
+    pub lighthouse_metadata: LighthouseMetadata,
+    /// Block production timing information
+    pub timing: BlockTiming,
+    /// Validation status and checkpoints
+    pub validation_info: ValidationInfo,
+    /// Actor system metadata for tracing and monitoring
+    pub actor_metadata: ActorBlockMetadata,
 }
 
 /// Auxiliary Proof of Work header
@@ -244,6 +253,249 @@ pub struct AccountState {
     pub storage_root: Hash256,
 }
 
+/// Lighthouse V5 compatibility metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LighthouseMetadata {
+    /// Beacon block root (for Ethereum compatibility)
+    pub beacon_block_root: Option<Hash256>,
+    /// State root from beacon chain
+    pub beacon_state_root: Option<Hash256>,
+    /// Randao reveal for randomness
+    pub randao_reveal: Option<Hash256>,
+    /// Graffiti from the proposer
+    pub graffiti: Option<[u8; 32]>,
+    /// Proposer index in the validator set
+    pub proposer_index: Option<u64>,
+    /// BLS aggregate signature for consensus
+    pub bls_aggregate_signature: Option<BLSSignature>,
+    /// Sync committee aggregate signature
+    pub sync_committee_signature: Option<BLSSignature>,
+    /// Sync committee participation bits
+    pub sync_committee_bits: Option<Vec<bool>>,
+}
+
+/// Block timing information for performance monitoring
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockTiming {
+    /// When block production started
+    pub production_started_at: std::time::SystemTime,
+    /// When block was finalized by producer
+    pub produced_at: std::time::SystemTime,
+    /// When block was received by this node
+    pub received_at: Option<std::time::SystemTime>,
+    /// When block validation started
+    pub validation_started_at: Option<std::time::SystemTime>,
+    /// When block validation completed
+    pub validation_completed_at: Option<std::time::SystemTime>,
+    /// When block was added to chain
+    pub import_completed_at: Option<std::time::SystemTime>,
+    /// Processing time in milliseconds
+    pub processing_duration_ms: Option<u64>,
+}
+
+/// Block validation information and checkpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationInfo {
+    /// Validation status
+    pub status: BlockValidationStatus,
+    /// Validation errors encountered
+    pub validation_errors: Vec<String>,
+    /// Checkpoints passed during validation
+    pub checkpoints: Vec<ValidationCheckpoint>,
+    /// Gas usage validation
+    pub gas_validation: GasValidation,
+    /// State transition validation
+    pub state_validation: StateValidation,
+    /// Consensus rules validation
+    pub consensus_validation: ConsensusValidation,
+}
+
+/// Block validation status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockValidationStatus {
+    /// Block is pending validation
+    Pending,
+    /// Block is currently being validated
+    Validating,
+    /// Block passed all validations
+    Valid,
+    /// Block failed validation
+    Invalid,
+    /// Block validation was skipped (trusted source)
+    Skipped,
+    /// Block validation timed out
+    TimedOut,
+}
+
+/// Validation checkpoint tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationCheckpoint {
+    /// Checkpoint name/type
+    pub checkpoint: String,
+    /// When checkpoint was reached
+    pub timestamp: std::time::SystemTime,
+    /// Whether checkpoint passed
+    pub passed: bool,
+    /// Duration to reach this checkpoint
+    pub duration_ms: u64,
+    /// Additional context
+    pub context: std::collections::HashMap<String, String>,
+}
+
+/// Gas usage validation details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasValidation {
+    /// Expected gas limit
+    pub expected_gas_limit: u64,
+    /// Actual gas used
+    pub actual_gas_used: u64,
+    /// Gas utilization percentage
+    pub utilization_percent: f64,
+    /// Whether gas usage is valid
+    pub is_valid: bool,
+    /// Gas price validation
+    pub base_fee_valid: bool,
+    /// Priority fee validation
+    pub priority_fee_valid: bool,
+}
+
+/// State transition validation details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateValidation {
+    /// Pre-state root
+    pub pre_state_root: Hash256,
+    /// Post-state root
+    pub post_state_root: Hash256,
+    /// Expected post-state root
+    pub expected_state_root: Hash256,
+    /// State root matches expected
+    pub state_root_valid: bool,
+    /// Storage proofs valid
+    pub storage_proofs_valid: bool,
+    /// Account state changes
+    pub account_changes: u32,
+    /// Storage slot changes
+    pub storage_changes: u32,
+}
+
+/// Consensus validation details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsensusValidation {
+    /// Signature validation
+    pub signature_valid: bool,
+    /// Proposer validation
+    pub proposer_valid: bool,
+    /// Slot validation
+    pub slot_valid: bool,
+    /// Parent relationship valid
+    pub parent_valid: bool,
+    /// Difficulty/target valid (for PoW)
+    pub difficulty_valid: bool,
+    /// Auxiliary PoW valid
+    pub auxpow_valid: Option<bool>,
+    /// Committee signatures valid
+    pub committee_signatures_valid: bool,
+}
+
+/// Actor system metadata for block processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorBlockMetadata {
+    /// Processing actor ID
+    pub processing_actor: Option<String>,
+    /// Correlation ID for distributed tracing
+    pub correlation_id: Option<uuid::Uuid>,
+    /// Trace span information
+    pub trace_context: TraceContext,
+    /// Processing priority
+    pub priority: BlockProcessingPriority,
+    /// Retry information
+    pub retry_info: RetryInfo,
+    /// Actor performance metrics
+    pub actor_metrics: ActorProcessingMetrics,
+}
+
+/// Distributed tracing context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceContext {
+    /// Trace ID for the entire block processing flow
+    pub trace_id: Option<String>,
+    /// Span ID for this specific operation
+    pub span_id: Option<String>,
+    /// Parent span ID
+    pub parent_span_id: Option<String>,
+    /// Baggage items for context propagation
+    pub baggage: std::collections::HashMap<String, String>,
+    /// Sampling decision
+    pub sampled: bool,
+}
+
+/// Block processing priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BlockProcessingPriority {
+    /// Low priority background processing
+    Low = 0,
+    /// Normal priority processing
+    Normal = 1,
+    /// High priority processing
+    High = 2,
+    /// Critical priority (chain tip, etc.)
+    Critical = 3,
+}
+
+/// Retry information for failed operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryInfo {
+    /// Current attempt number (0 = first attempt)
+    pub attempt: u32,
+    /// Maximum retry attempts allowed
+    pub max_attempts: u32,
+    /// Backoff strategy
+    pub backoff_strategy: BackoffStrategy,
+    /// Next retry time
+    pub next_retry_at: Option<std::time::SystemTime>,
+    /// Reason for last failure
+    pub last_failure_reason: Option<String>,
+}
+
+/// Backoff strategy for retries
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BackoffStrategy {
+    /// Fixed delay between retries
+    Fixed { delay_ms: u64 },
+    /// Exponential backoff
+    Exponential { base_ms: u64, multiplier: f64, max_ms: u64 },
+    /// Linear backoff
+    Linear { initial_ms: u64, increment_ms: u64 },
+}
+
+/// Actor processing performance metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorProcessingMetrics {
+    /// Queue time before processing started
+    pub queue_time_ms: Option<u64>,
+    /// Processing time in the actor
+    pub processing_time_ms: Option<u64>,
+    /// Memory usage during processing
+    pub memory_usage_bytes: Option<u64>,
+    /// CPU time used
+    pub cpu_time_ms: Option<u64>,
+    /// Number of messages sent during processing
+    pub messages_sent: u32,
+    /// Number of messages received during processing
+    pub messages_received: u32,
+}
+
+/// BLS signature for Lighthouse compatibility
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BLSSignature {
+    /// BLS signature bytes (96 bytes for BLS12-381)
+    pub signature: [u8; 96],
+    /// Aggregation info (which validators signed)
+    pub aggregation_bits: Option<Vec<bool>>,
+    /// Message that was signed
+    pub message_hash: Option<Hash256>,
+}
+
 /// Storage slot
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageSlot {
@@ -262,7 +514,7 @@ pub struct ValidationContext {
 }
 
 impl ConsensusBlock {
-    /// Create a new consensus block
+    /// Create a new consensus block with enhanced metadata
     pub fn new(
         slot: u64,
         execution_payload: ExecutionPayload,
@@ -272,6 +524,8 @@ impl ConsensusBlock {
         pegout_payment_proposal: Option<bitcoin::Transaction>,
         finalized_pegouts: Vec<bitcoin::Transaction>,
     ) -> Self {
+        let now = std::time::SystemTime::now();
+        
         Self {
             slot,
             parent_hash,
@@ -280,7 +534,40 @@ impl ConsensusBlock {
             pegins,
             pegout_payment_proposal,
             finalized_pegouts,
+            lighthouse_metadata: LighthouseMetadata::default(),
+            timing: BlockTiming {
+                production_started_at: now,
+                produced_at: now,
+                received_at: None,
+                validation_started_at: None,
+                validation_completed_at: None,
+                import_completed_at: None,
+                processing_duration_ms: None,
+            },
+            validation_info: ValidationInfo::default(),
+            actor_metadata: ActorBlockMetadata::default(),
         }
+    }
+
+    /// Create a new consensus block from legacy format (compatibility)
+    pub fn from_legacy(
+        slot: u64,
+        execution_payload: ExecutionPayload,
+        parent_hash: Hash256,
+        auxpow_header: Option<AuxPowHeader>,
+        pegins: Vec<(bitcoin::Txid, bitcoin::BlockHash)>,
+        pegout_payment_proposal: Option<bitcoin::Transaction>,
+        finalized_pegouts: Vec<bitcoin::Transaction>,
+    ) -> Self {
+        Self::new(
+            slot,
+            execution_payload,
+            parent_hash,
+            auxpow_header,
+            pegins,
+            pegout_payment_proposal,
+            finalized_pegouts,
+        )
     }
 
     /// Calculate the signing root of this block (used for signatures)
@@ -536,7 +823,7 @@ impl SignedConsensusBlock {
     }
 
     /// Add an individual approval to the aggregate
-    pub fn add_approval(&mut self, approval: IndividualApproval) -> Result<(), ChainError> {
+    pub fn add_approval(&mut self, approval: IndividualApproval) -> Result<(), String> {
         self.signature.add_approval(approval)
     }
 
@@ -610,7 +897,7 @@ impl AggregateApproval {
     }
 
     /// Add individual approval
-    pub fn add_approval(&mut self, approval: IndividualApproval) -> Result<(), ChainError> {
+    pub fn add_approval(&mut self, approval: IndividualApproval) -> Result<(), String> {
         let index = approval.authority_index as usize;
         
         // Ensure signers vec is large enough
@@ -682,5 +969,326 @@ impl AccountState {
     /// Check if account is a contract
     pub fn is_contract(&self) -> bool {
         !self.code_hash.is_zero()
+    }
+}
+
+impl Default for LighthouseMetadata {
+    fn default() -> Self {
+        Self {
+            beacon_block_root: None,
+            beacon_state_root: None,
+            randao_reveal: None,
+            graffiti: None,
+            proposer_index: None,
+            bls_aggregate_signature: None,
+            sync_committee_signature: None,
+            sync_committee_bits: None,
+        }
+    }
+}
+
+impl Default for ValidationInfo {
+    fn default() -> Self {
+        Self {
+            status: BlockValidationStatus::Pending,
+            validation_errors: Vec::new(),
+            checkpoints: Vec::new(),
+            gas_validation: GasValidation::default(),
+            state_validation: StateValidation::default(),
+            consensus_validation: ConsensusValidation::default(),
+        }
+    }
+}
+
+impl Default for GasValidation {
+    fn default() -> Self {
+        Self {
+            expected_gas_limit: 0,
+            actual_gas_used: 0,
+            utilization_percent: 0.0,
+            is_valid: true,
+            base_fee_valid: true,
+            priority_fee_valid: true,
+        }
+    }
+}
+
+impl Default for StateValidation {
+    fn default() -> Self {
+        Self {
+            pre_state_root: Hash256::zero(),
+            post_state_root: Hash256::zero(),
+            expected_state_root: Hash256::zero(),
+            state_root_valid: true,
+            storage_proofs_valid: true,
+            account_changes: 0,
+            storage_changes: 0,
+        }
+    }
+}
+
+impl Default for ConsensusValidation {
+    fn default() -> Self {
+        Self {
+            signature_valid: true,
+            proposer_valid: true,
+            slot_valid: true,
+            parent_valid: true,
+            difficulty_valid: true,
+            auxpow_valid: None,
+            committee_signatures_valid: true,
+        }
+    }
+}
+
+impl Default for ActorBlockMetadata {
+    fn default() -> Self {
+        Self {
+            processing_actor: None,
+            correlation_id: None,
+            trace_context: TraceContext::default(),
+            priority: BlockProcessingPriority::Normal,
+            retry_info: RetryInfo::default(),
+            actor_metrics: ActorProcessingMetrics::default(),
+        }
+    }
+}
+
+impl Default for TraceContext {
+    fn default() -> Self {
+        Self {
+            trace_id: None,
+            span_id: None,
+            parent_span_id: None,
+            baggage: std::collections::HashMap::new(),
+            sampled: false,
+        }
+    }
+}
+
+impl Default for RetryInfo {
+    fn default() -> Self {
+        Self {
+            attempt: 0,
+            max_attempts: 3,
+            backoff_strategy: BackoffStrategy::Exponential {
+                base_ms: 1000,
+                multiplier: 2.0,
+                max_ms: 30000,
+            },
+            next_retry_at: None,
+            last_failure_reason: None,
+        }
+    }
+}
+
+impl Default for ActorProcessingMetrics {
+    fn default() -> Self {
+        Self {
+            queue_time_ms: None,
+            processing_time_ms: None,
+            memory_usage_bytes: None,
+            cpu_time_ms: None,
+            messages_sent: 0,
+            messages_received: 0,
+        }
+    }
+}
+
+impl LighthouseMetadata {
+    /// Set Lighthouse V5 beacon metadata
+    pub fn set_beacon_metadata(
+        &mut self,
+        beacon_block_root: Hash256,
+        beacon_state_root: Hash256,
+        proposer_index: u64,
+    ) {
+        self.beacon_block_root = Some(beacon_block_root);
+        self.beacon_state_root = Some(beacon_state_root);
+        self.proposer_index = Some(proposer_index);
+    }
+
+    /// Set BLS signatures for consensus
+    pub fn set_consensus_signatures(
+        &mut self,
+        aggregate_signature: BLSSignature,
+        sync_committee_signature: Option<BLSSignature>,
+    ) {
+        self.bls_aggregate_signature = Some(aggregate_signature);
+        self.sync_committee_signature = sync_committee_signature;
+    }
+
+    /// Check if block has Lighthouse V5 compatibility
+    pub fn is_lighthouse_compatible(&self) -> bool {
+        self.beacon_block_root.is_some() && self.beacon_state_root.is_some()
+    }
+}
+
+impl BlockTiming {
+    /// Record when block was received
+    pub fn mark_received(&mut self) {
+        self.received_at = Some(std::time::SystemTime::now());
+    }
+
+    /// Record when validation started
+    pub fn mark_validation_started(&mut self) {
+        self.validation_started_at = Some(std::time::SystemTime::now());
+    }
+
+    /// Record when validation completed
+    pub fn mark_validation_completed(&mut self) {
+        self.validation_completed_at = Some(std::time::SystemTime::now());
+        self.calculate_processing_duration();
+    }
+
+    /// Record when import completed
+    pub fn mark_import_completed(&mut self) {
+        self.import_completed_at = Some(std::time::SystemTime::now());
+        self.calculate_processing_duration();
+    }
+
+    /// Calculate total processing duration
+    fn calculate_processing_duration(&mut self) {
+        if let Some(started) = self.validation_started_at {
+            if let Some(completed) = self.validation_completed_at.or(self.import_completed_at) {
+                if let Ok(duration) = completed.duration_since(started) {
+                    self.processing_duration_ms = Some(duration.as_millis() as u64);
+                }
+            }
+        }
+    }
+
+    /// Get total processing time
+    pub fn total_processing_time(&self) -> Option<std::time::Duration> {
+        self.processing_duration_ms
+            .map(|ms| std::time::Duration::from_millis(ms))
+    }
+
+    /// Get time from production to import
+    pub fn end_to_end_time(&self) -> Option<std::time::Duration> {
+        if let Some(import_time) = self.import_completed_at {
+            if let Ok(duration) = import_time.duration_since(self.production_started_at) {
+                return Some(duration);
+            }
+        }
+        None
+    }
+}
+
+impl ValidationInfo {
+    /// Add validation checkpoint
+    pub fn add_checkpoint(&mut self, checkpoint: String, passed: bool) {
+        let now = std::time::SystemTime::now();
+        let duration_ms = if let Some(last) = self.checkpoints.last() {
+            now.duration_since(last.timestamp)
+                .unwrap_or_default()
+                .as_millis() as u64
+        } else {
+            0
+        };
+
+        self.checkpoints.push(ValidationCheckpoint {
+            checkpoint,
+            timestamp: now,
+            passed,
+            duration_ms,
+            context: std::collections::HashMap::new(),
+        });
+
+        if !passed {
+            self.status = BlockValidationStatus::Invalid;
+        }
+    }
+
+    /// Add validation error
+    pub fn add_error(&mut self, error: String) {
+        self.validation_errors.push(error);
+        self.status = BlockValidationStatus::Invalid;
+    }
+
+    /// Mark validation as complete
+    pub fn mark_complete(&mut self, valid: bool) {
+        self.status = if valid {
+            BlockValidationStatus::Valid
+        } else {
+            BlockValidationStatus::Invalid
+        };
+    }
+
+    /// Check if all validations passed
+    pub fn all_validations_passed(&self) -> bool {
+        self.status == BlockValidationStatus::Valid
+            && self.validation_errors.is_empty()
+            && self.checkpoints.iter().all(|c| c.passed)
+    }
+}
+
+impl ActorBlockMetadata {
+    /// Set processing actor
+    pub fn set_processing_actor(&mut self, actor_id: String) {
+        self.processing_actor = Some(actor_id);
+    }
+
+    /// Set correlation ID for distributed tracing
+    pub fn set_correlation_id(&mut self, correlation_id: uuid::Uuid) {
+        self.correlation_id = Some(correlation_id);
+    }
+
+    /// Set trace context
+    pub fn set_trace_context(&mut self, trace_id: String, span_id: String) {
+        self.trace_context.trace_id = Some(trace_id);
+        self.trace_context.span_id = Some(span_id);
+        self.trace_context.sampled = true;
+    }
+
+    /// Record retry attempt
+    pub fn record_retry(&mut self, reason: String) {
+        self.retry_info.attempt += 1;
+        self.retry_info.last_failure_reason = Some(reason);
+        
+        // Calculate next retry time based on backoff strategy
+        let delay_ms = match &self.retry_info.backoff_strategy {
+            BackoffStrategy::Fixed { delay_ms } => *delay_ms,
+            BackoffStrategy::Exponential { base_ms, multiplier, max_ms } => {
+                let delay = (*base_ms as f64) * multiplier.powi(self.retry_info.attempt as i32);
+                (delay as u64).min(*max_ms)
+            }
+            BackoffStrategy::Linear { initial_ms, increment_ms } => {
+                initial_ms + (increment_ms * self.retry_info.attempt as u64)
+            }
+        };
+        
+        self.retry_info.next_retry_at = Some(
+            std::time::SystemTime::now() + std::time::Duration::from_millis(delay_ms)
+        );
+    }
+
+    /// Check if retry should be attempted
+    pub fn should_retry(&self) -> bool {
+        self.retry_info.attempt < self.retry_info.max_attempts
+            && self.retry_info.next_retry_at
+                .map(|time| std::time::SystemTime::now() >= time)
+                .unwrap_or(false)
+    }
+}
+
+impl BLSSignature {
+    /// Create new BLS signature
+    pub fn new(signature: [u8; 96], message_hash: Option<Hash256>) -> Self {
+        Self {
+            signature,
+            aggregation_bits: None,
+            message_hash,
+        }
+    }
+
+    /// Set aggregation info
+    pub fn set_aggregation_bits(&mut self, bits: Vec<bool>) {
+        self.aggregation_bits = Some(bits);
+    }
+
+    /// Check if signature is aggregated
+    pub fn is_aggregated(&self) -> bool {
+        self.aggregation_bits.is_some()
     }
 }

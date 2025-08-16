@@ -101,7 +101,7 @@ where
     pub routing: MessageRouting,
 }
 
-/// Message metadata
+/// Message metadata with enhanced distributed tracing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageMetadata {
     /// When the message was created
@@ -125,8 +125,222 @@ pub struct MessageMetadata {
     /// Correlation ID for message tracing
     pub correlation_id: Option<Uuid>,
     
+    /// Distributed tracing context
+    pub trace_context: TraceContext,
+    
+    /// Message causality information
+    pub causality: CausalityInfo,
+    
+    /// Performance tracking
+    pub performance: MessagePerformanceMetrics,
+    
+    /// Message lineage (parent messages)
+    pub lineage: MessageLineage,
+    
     /// Custom attributes
     pub attributes: HashMap<String, serde_json::Value>,
+}
+
+/// Distributed tracing context for messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceContext {
+    /// Trace ID for the entire operation flow
+    pub trace_id: Option<String>,
+    /// Span ID for this specific message
+    pub span_id: Option<String>,
+    /// Parent span ID
+    pub parent_span_id: Option<String>,
+    /// Trace flags (sampled, debug, etc.)
+    pub trace_flags: TraceFlags,
+    /// Baggage items for context propagation
+    pub baggage: HashMap<String, String>,
+    /// Sampling decision
+    pub sampling: SamplingDecision,
+    /// Trace state (vendor-specific)
+    pub trace_state: Option<String>,
+}
+
+impl Default for TraceContext {
+    fn default() -> Self {
+        Self {
+            trace_id: None,
+            span_id: None,
+            parent_span_id: None,
+            trace_flags: TraceFlags::default(),
+            baggage: HashMap::new(),
+            sampling: SamplingDecision::NotSampled,
+            trace_state: None,
+        }
+    }
+}
+
+/// Trace flags for distributed tracing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceFlags {
+    /// Whether this trace is sampled
+    pub sampled: bool,
+    /// Debug flag
+    pub debug: bool,
+    /// Deferred flag
+    pub deferred: bool,
+    /// Custom flags
+    pub custom: u8,
+}
+
+impl Default for TraceFlags {
+    fn default() -> Self {
+        Self {
+            sampled: false,
+            debug: false,
+            deferred: false,
+            custom: 0,
+        }
+    }
+}
+
+/// Sampling decision for traces
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SamplingDecision {
+    /// Not sampled
+    NotSampled,
+    /// Sampled for collection
+    Sampled,
+    /// Sampled for debug purposes
+    SampledDebug,
+    /// Sampled based on rate limit
+    SampledRateLimit { rate: f64 },
+}
+
+/// Message causality information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalityInfo {
+    /// Causal relationship type
+    pub relationship: CausalRelationship,
+    /// Vector clock for ordering
+    pub vector_clock: VectorClock,
+    /// Logical timestamp
+    pub logical_timestamp: u64,
+    /// Causal dependencies
+    pub dependencies: Vec<MessageCausalityReference>,
+}
+
+impl Default for CausalityInfo {
+    fn default() -> Self {
+        Self {
+            relationship: CausalRelationship::Root,
+            vector_clock: VectorClock::default(),
+            logical_timestamp: 0,
+            dependencies: Vec::new(),
+        }
+    }
+}
+
+/// Types of causal relationships
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CausalRelationship {
+    /// Root message (no parent)
+    Root,
+    /// Direct response to another message
+    Response { to_message_id: Uuid },
+    /// Triggered by another message
+    Triggered { by_message_id: Uuid },
+    /// Part of a saga/workflow
+    WorkflowStep { workflow_id: Uuid, step: u32 },
+    /// Broadcast/fan-out message
+    Broadcast { from_message_id: Uuid },
+    /// Aggregation/fan-in message
+    Aggregation { from_message_ids: Vec<Uuid> },
+}
+
+/// Vector clock for message ordering
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorClock {
+    /// Clock values per actor
+    pub clocks: HashMap<String, u64>,
+    /// Last updated timestamp
+    pub last_updated: SystemTime,
+}
+
+impl Default for VectorClock {
+    fn default() -> Self {
+        Self {
+            clocks: HashMap::new(),
+            last_updated: SystemTime::now(),
+        }
+    }
+}
+
+/// Reference to causally related message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageCausalityReference {
+    /// Referenced message ID
+    pub message_id: Uuid,
+    /// Actor that sent the referenced message
+    pub actor: String,
+    /// Relationship type
+    pub relationship: String,
+    /// When the dependency was established
+    pub established_at: SystemTime,
+}
+
+/// Message performance metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessagePerformanceMetrics {
+    /// Message size in bytes
+    pub size_bytes: Option<usize>,
+    /// Serialization time
+    pub serialization_time: Option<Duration>,
+    /// Queue time before processing
+    pub queue_time: Option<Duration>,
+    /// Processing time
+    pub processing_time: Option<Duration>,
+    /// Network transit time
+    pub transit_time: Option<Duration>,
+    /// Round-trip time (for request-response)
+    pub round_trip_time: Option<Duration>,
+    /// Memory usage during processing
+    pub memory_usage: Option<u64>,
+}
+
+impl Default for MessagePerformanceMetrics {
+    fn default() -> Self {
+        Self {
+            size_bytes: None,
+            serialization_time: None,
+            queue_time: None,
+            processing_time: None,
+            transit_time: None,
+            round_trip_time: None,
+            memory_usage: None,
+        }
+    }
+}
+
+/// Message lineage tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageLineage {
+    /// Root message ID in the chain
+    pub root_message_id: Option<Uuid>,
+    /// Immediate parent message ID
+    pub parent_message_id: Option<Uuid>,
+    /// Child message IDs spawned from this message
+    pub child_message_ids: Vec<Uuid>,
+    /// Generation number (depth from root)
+    pub generation: u32,
+    /// Branch ID for parallel processing
+    pub branch_id: Option<String>,
+}
+
+impl Default for MessageLineage {
+    fn default() -> Self {
+        Self {
+            root_message_id: None,
+            parent_message_id: None,
+            child_message_ids: Vec::new(),
+            generation: 0,
+            branch_id: None,
+        }
+    }
 }
 
 /// Message routing information
@@ -164,6 +378,10 @@ where
                 max_retries: payload.max_retries(),
                 retryable: payload.is_retryable(),
                 correlation_id: None,
+                trace_context: TraceContext::default(),
+                causality: CausalityInfo::default(),
+                performance: MessagePerformanceMetrics::default(),
+                lineage: MessageLineage::default(),
                 attributes: HashMap::new(),
             },
             routing: MessageRouting {
@@ -175,6 +393,131 @@ where
             },
             payload,
         }
+    }
+    
+    /// Start a new distributed trace
+    pub fn start_trace(&mut self) -> &mut Self {
+        self.metadata.trace_context.trace_id = Some(Uuid::new_v4().to_string());
+        self.metadata.trace_context.span_id = Some(Uuid::new_v4().to_string());
+        self.metadata.trace_context.trace_flags.sampled = true;
+        self
+    }
+    
+    /// Create child span for this message
+    pub fn create_child_span(&mut self, operation_name: &str) -> &mut Self {
+        let parent_span_id = self.metadata.trace_context.span_id.clone();
+        self.metadata.trace_context.parent_span_id = parent_span_id;
+        self.metadata.trace_context.span_id = Some(Uuid::new_v4().to_string());
+        
+        // Add operation name to baggage
+        self.metadata.trace_context.baggage.insert(
+            "operation".to_string(),
+            operation_name.to_string()
+        );
+        
+        self
+    }
+    
+    /// Add baggage item for trace context propagation
+    pub fn add_baggage(&mut self, key: &str, value: &str) -> &mut Self {
+        self.metadata.trace_context.baggage.insert(key.to_string(), value.to_string());
+        self
+    }
+    
+    /// Set causality relationship
+    pub fn set_causality(&mut self, relationship: CausalRelationship) -> &mut Self {
+        self.metadata.causality.relationship = relationship;
+        self
+    }
+    
+    /// Add causal dependency
+    pub fn add_causal_dependency(&mut self, dependency: MessageCausalityReference) -> &mut Self {
+        self.metadata.causality.dependencies.push(dependency);
+        self
+    }
+    
+    /// Update vector clock with actor timestamp
+    pub fn update_vector_clock(&mut self, actor_name: &str) -> &mut Self {
+        let current_time = self.metadata.causality.vector_clock
+            .clocks
+            .get(actor_name)
+            .unwrap_or(&0) + 1;
+        
+        self.metadata.causality.vector_clock.clocks.insert(
+            actor_name.to_string(),
+            current_time
+        );
+        self.metadata.causality.vector_clock.last_updated = SystemTime::now();
+        self.metadata.causality.logical_timestamp = current_time;
+        self
+    }
+    
+    /// Start performance timing
+    pub fn start_timing(&mut self, metric: &str) -> &mut Self {
+        match metric {
+            "queue" => {
+                // Queue time is from creation to now
+                if let Ok(elapsed) = self.metadata.created_at.elapsed() {
+                    self.metadata.performance.queue_time = Some(elapsed);
+                }
+            }
+            "processing" => {
+                // Start processing timer (will be calculated on finish)
+                self.metadata.performance.processing_time = Some(Duration::from_nanos(0));
+            }
+            _ => {}
+        }
+        self
+    }
+    
+    /// Record performance metric
+    pub fn record_metric(&mut self, metric: &str, duration: Duration) -> &mut Self {
+        match metric {
+            "serialization" => self.metadata.performance.serialization_time = Some(duration),
+            "processing" => self.metadata.performance.processing_time = Some(duration),
+            "transit" => self.metadata.performance.transit_time = Some(duration),
+            "round_trip" => self.metadata.performance.round_trip_time = Some(duration),
+            _ => {}
+        }
+        self
+    }
+    
+    /// Set memory usage
+    pub fn set_memory_usage(&mut self, bytes: u64) -> &mut Self {
+        self.metadata.performance.memory_usage = Some(bytes);
+        self
+    }
+    
+    /// Add child message to lineage
+    pub fn add_child_message(&mut self, child_id: Uuid) -> &mut Self {
+        self.metadata.lineage.child_message_ids.push(child_id);
+        self
+    }
+    
+    /// Create child envelope with proper lineage
+    pub fn create_child<U>(&self, payload: U) -> MessageEnvelope<U> 
+    where 
+        U: AlysMessage,
+    {
+        let mut child = MessageEnvelope::new(payload);
+        
+        // Set up lineage
+        child.metadata.lineage.root_message_id = self.metadata.lineage.root_message_id
+            .or(Some(self.id));
+        child.metadata.lineage.parent_message_id = Some(self.id);
+        child.metadata.lineage.generation = self.metadata.lineage.generation + 1;
+        child.metadata.lineage.branch_id = self.metadata.lineage.branch_id.clone();
+        
+        // Inherit trace context
+        child.metadata.trace_context.trace_id = self.metadata.trace_context.trace_id.clone();
+        child.metadata.trace_context.parent_span_id = self.metadata.trace_context.span_id.clone();
+        child.metadata.trace_context.span_id = Some(Uuid::new_v4().to_string());
+        child.metadata.trace_context.baggage = self.metadata.trace_context.baggage.clone();
+        
+        // Set correlation ID
+        child.metadata.correlation_id = self.metadata.correlation_id;
+        
+        child
     }
     
     /// Set correlation ID
@@ -247,6 +590,26 @@ where
     /// Get message age
     pub fn age(&self) -> Duration {
         self.metadata.created_at.elapsed().unwrap_or_default()
+    }
+    
+    /// Check if message is part of a trace
+    pub fn is_traced(&self) -> bool {
+        self.metadata.trace_context.trace_id.is_some()
+    }
+    
+    /// Get trace ID if available
+    pub fn trace_id(&self) -> Option<&str> {
+        self.metadata.trace_context.trace_id.as_deref()
+    }
+    
+    /// Get span ID if available
+    pub fn span_id(&self) -> Option<&str> {
+        self.metadata.trace_context.span_id.as_deref()
+    }
+    
+    /// Check if message is sampled for tracing
+    pub fn is_sampled(&self) -> bool {
+        self.metadata.trace_context.trace_flags.sampled
     }
 }
 
