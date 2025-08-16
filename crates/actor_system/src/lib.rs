@@ -6,15 +6,29 @@
 #![warn(missing_docs)]
 
 pub mod actor;
+pub mod bus;
 pub mod error;
+pub mod lifecycle;
+pub mod mailbox;
 pub mod message;
 pub mod metrics;
+pub mod registry;
+pub mod supervisor;
+pub mod supervisors;
+pub mod system;
 
 // Re-exports
 pub use actor::*;
+pub use bus::*;
 pub use error::*;
+pub use lifecycle::*;
+pub use mailbox::*;
 pub use message::*;
 pub use metrics::*;
+pub use registry::*;
+pub use supervisor::*;
+pub use supervisors::*;
+pub use system::*;
 
 // Actix re-exports for convenience
 pub use actix::{

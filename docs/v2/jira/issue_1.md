@@ -24,35 +24,35 @@ Establish foundational V2 codebase structure with actor system architecture, dir
 
 ### Phase 1: Architecture Planning & Design Review (6 tasks)
 - [X] **ALYS-001-01**: Review V2 architecture documentation and validate actor system design patterns
-- [ ] **ALYS-001-02**: Design actor supervision hierarchy with restart strategies and fault isolation boundaries [https://marathondh.atlassian.net/browse/AN-287]
-- [ ] **ALYS-001-03**: Define message passing protocols and message envelope structure for typed communication [https://marathondh.atlassian.net/browse/AN-288]
-- [ ] **ALYS-001-04**: Create actor lifecycle state machine with initialization, running, stopping, and recovery states [https://marathondh.atlassian.net/browse/AN-289]
-- [ ] **ALYS-001-05**: Design configuration loading system with environment-specific overrides and validation [https://marathondh.atlassian.net/browse/AN-290]
-- [ ] **ALYS-001-06**: Document actor interaction patterns and establish communication flow diagrams [https://marathondh.atlassian.net/browse/AN-291]
+- [X] **ALYS-001-02**: Design actor supervision hierarchy with restart strategies and fault isolation boundaries [https://marathondh.atlassian.net/browse/AN-287]
+- [X] **ALYS-001-03**: Define message passing protocols and message envelope structure for typed communication [https://marathondh.atlassian.net/browse/AN-288]
+- [X] **ALYS-001-04**: Create actor lifecycle state machine with initialization, running, stopping, and recovery states [https://marathondh.atlassian.net/browse/AN-289]
+- [X] **ALYS-001-05**: Design configuration loading system with environment-specific overrides and validation [https://marathondh.atlassian.net/browse/AN-290]
+- [X] **ALYS-001-06**: Document actor interaction patterns and establish communication flow diagrams [https://marathondh.atlassian.net/browse/AN-291]
 
 ### Phase 2: Directory Structure & Workspace Setup (8 tasks)
-- [ ] **ALYS-001-07**: Create complete directory structure for `app/src/actors/` with all actor implementations [https://marathondh.atlassian.net/browse/AN-292]
-- [ ] **ALYS-001-08**: Create `app/src/messages/` directory with typed message definitions for each actor domain [https://marathondh.atlassian.net/browse/AN-293]
-- [ ] **ALYS-001-09**: Create `app/src/workflows/` directory for business logic flows and state machines [https://marathondh.atlassian.net/browse/AN-294]
-- [ ] **ALYS-001-10**: Create `app/src/types/` directory with actor-friendly data structures and message envelopes [https://marathondh.atlassian.net/browse/AN-295]
-- [ ] **ALYS-001-11**: Create `app/src/config/` directory with comprehensive configuration management [https://marathondh.atlassian.net/browse/AN-296]
-- [ ] **ALYS-001-12**: Create `app/src/integration/` directory for external system interfaces and client wrappers [https://marathondh.atlassian.net/browse/AN-297]
-- [ ] **ALYS-001-13**: Create `crates/actor_system/` workspace crate with core actor framework implementation [https://marathondh.atlassian.net/browse/AN-298]
-- [ ] **ALYS-001-14**: Update root `Cargo.toml` workspace configuration and dependency management [https://marathondh.atlassian.net/browse/AN-299]
+- [X] **ALYS-001-07**: Create complete directory structure for `app/src/actors/` with all actor implementations [https://marathondh.atlassian.net/browse/AN-292]
+- [X] **ALYS-001-08**: Create `app/src/messages/` directory with typed message definitions for each actor domain [https://marathondh.atlassian.net/browse/AN-293]
+- [X] **ALYS-001-09**: Create `app/src/workflows/` directory for business logic flows and state machines [https://marathondh.atlassian.net/browse/AN-294]
+- [X] **ALYS-001-10**: Create `app/src/types/` directory with actor-friendly data structures and message envelopes [https://marathondh.atlassian.net/browse/AN-295]
+- [X] **ALYS-001-11**: Create `app/src/config/` directory with comprehensive configuration management [https://marathondh.atlassian.net/browse/AN-296]
+- [X] **ALYS-001-12**: Create `app/src/integration/` directory for external system interfaces and client wrappers [https://marathondh.atlassian.net/browse/AN-297]
+- [X] **ALYS-001-13**: Create `crates/actor_system/` workspace crate with core actor framework implementation [https://marathondh.atlassian.net/browse/AN-298]
+- [X] **ALYS-001-14**: Update root `Cargo.toml` workspace configuration and dependency management [https://marathondh.atlassian.net/browse/AN-299]
 
 ### Phase 3: Core Actor System Implementation (12 tasks)
-- [ ] **ALYS-001-15**: Implement `crates/actor_system/supervisor.rs` with supervision trees and restart strategies
-- [ ] **ALYS-001-16**: Implement `crates/actor_system/mailbox.rs` with message queuing, backpressure, and bounded channels
-- [ ] **ALYS-001-17**: Implement `crates/actor_system/lifecycle.rs` with actor spawning, stopping, and graceful shutdown
-- [ ] **ALYS-001-18**: Implement `crates/actor_system/metrics.rs` with actor performance monitoring and telemetry
-- [ ] **ALYS-001-19**: Define `AlysActor` trait with standardized interface, configuration, and metrics support
-- [ ] **ALYS-001-20**: Implement `AlysSystem` root supervisor with hierarchical supervision and system health monitoring
-- [ ] **ALYS-001-21**: Create `ChainSupervisor` for consensus layer supervision with blockchain-specific restart policies
-- [ ] **ALYS-001-22**: Create `NetworkSupervisor` for P2P and sync supervision with connection recovery strategies
-- [ ] **ALYS-001-23**: Create `BridgeSupervisor` for peg operations supervision with transaction retry mechanisms
-- [ ] **ALYS-001-24**: Create `StorageSupervisor` for database operations supervision with connection pooling
-- [ ] **ALYS-001-25**: Implement actor registration system with health checks and dependency tracking
-- [ ] **ALYS-001-26**: Create actor communication bus for system-wide messaging and event distribution
+- [ ] **ALYS-001-15**: Implement `crates/actor_system/supervisor.rs` with supervision trees and restart strategies [https://marathondh.atlassian.net/browse/AN-300]
+- [ ] **ALYS-001-16**: Implement `crates/actor_system/mailbox.rs` with message queuing, backpressure, and bounded channels [https://marathondh.atlassian.net/browse/AN-301]
+- [ ] **ALYS-001-17**: Implement `crates/actor_system/lifecycle.rs` with actor spawning, stopping, and graceful shutdown [https://marathondh.atlassian.net/browse/AN-302]
+- [ ] **ALYS-001-18**: Implement `crates/actor_system/metrics.rs` with actor performance monitoring and telemetry [https://marathondh.atlassian.net/browse/AN-303]
+- [ ] **ALYS-001-19**: Define `AlysActor` trait with standardized interface, configuration, and metrics support [https://marathondh.atlassian.net/browse/AN-304]
+- [ ] **ALYS-001-20**: Implement `AlysSystem` root supervisor with hierarchical supervision and system health monitoring [https://marathondh.atlassian.net/browse/AN-305]
+- [ ] **ALYS-001-21**: Create `ChainSupervisor` for consensus layer supervision with blockchain-specific restart policies [https://marathondh.atlassian.net/browse/AN-306]
+- [ ] **ALYS-001-22**: Create `NetworkSupervisor` for P2P and sync supervision with connection recovery strategies [https://marathondh.atlassian.net/browse/AN-307]
+- [ ] **ALYS-001-23**: Create `BridgeSupervisor` for peg operations supervision with transaction retry mechanisms [https://marathondh.atlassian.net/browse/AN-308]
+- [ ] **ALYS-001-24**: Create `StorageSupervisor` for database operations supervision with connection pooling [https://marathondh.atlassian.net/browse/AN-309]
+- [ ] **ALYS-001-25**: Implement actor registration system with health checks and dependency tracking [https://marathondh.atlassian.net/browse/AN-310]
+- [ ] **ALYS-001-26**: Create actor communication bus for system-wide messaging and event distribution [https://marathondh.atlassian.net/browse/AN-311]
 
 ### Phase 4: Enhanced Data Structures & Types (6 tasks)
 - [ ] **ALYS-001-27**: Implement `ConsensusBlock` unified block representation with Lighthouse V5 compatibility

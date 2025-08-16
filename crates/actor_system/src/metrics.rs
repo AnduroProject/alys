@@ -590,6 +590,39 @@ impl Default for AggregateStats {
     }
 }
 
+/// Mailbox-specific metrics
+#[derive(Debug)]
+pub struct MailboxMetrics {
+    /// Messages queued
+    pub messages_queued: AtomicU64,
+    /// Messages processed
+    pub messages_processed: AtomicU64,
+    /// Messages dropped due to backpressure
+    pub messages_dropped: AtomicU64,
+    /// Current mailbox size
+    pub current_size: std::sync::atomic::AtomicUsize,
+    /// Maximum size reached
+    pub max_size_reached: std::sync::atomic::AtomicUsize,
+    /// Total wait time for messages
+    pub total_wait_time: AtomicU64,
+    /// Processing times for calculating averages
+    pub processing_times: parking_lot::RwLock<Vec<Duration>>,
+}
+
+impl Default for MailboxMetrics {
+    fn default() -> Self {
+        Self {
+            messages_queued: AtomicU64::new(0),
+            messages_processed: AtomicU64::new(0),
+            messages_dropped: AtomicU64::new(0),
+            current_size: std::sync::atomic::AtomicUsize::new(0),
+            max_size_reached: std::sync::atomic::AtomicUsize::new(0),
+            total_wait_time: AtomicU64::new(0),
+            processing_times: parking_lot::RwLock::new(Vec::new()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
