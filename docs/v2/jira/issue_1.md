@@ -63,10 +63,10 @@ Establish foundational V2 codebase structure with actor system architecture, dir
 - [ ] **ALYS-001-32**: Implement serialization/deserialization support for all actor messages and state structures [https://marathondh.atlassian.net/browse/AN-317]
 
 ### Phase 5: Configuration & Integration Points (4 tasks)
-- [ ] **ALYS-001-33**: Implement `AlysConfig` master configuration structure with validation and environment overrides [https://marathondh.atlassian.net/browse/AN-318]
-- [ ] **ALYS-001-34**: Implement `ActorConfig` system settings including restart strategies, mailbox capacity, and timeouts [https://marathondh.atlassian.net/browse/AN-319]
-- [ ] **ALYS-001-35**: Create integration clients: `GovernanceClient` (gRPC streaming), `BitcoinClient` (RPC), `ExecutionClient` (Geth/Reth) [https://marathondh.atlassian.net/browse/AN-320]
-- [ ] **ALYS-001-36**: Implement configuration hot-reload system with actor notification and state preservation [https://marathondh.atlassian.net/browse/AN-321]
+- [X] **ALYS-001-33**: Implement `AlysConfig` master configuration structure with validation and environment overrides [https://marathondh.atlassian.net/browse/AN-318]
+- [X] **ALYS-001-34**: Implement `ActorConfig` system settings including restart strategies, mailbox capacity, and timeouts [https://marathondh.atlassian.net/browse/AN-319]
+- [X] **ALYS-001-35**: Create integration clients: `GovernanceClient` (gRPC streaming), `BitcoinClient` (RPC), `ExecutionClient` (Geth/Reth) [https://marathondh.atlassian.net/browse/AN-320]
+- [X] **ALYS-001-36**: Implement configuration hot-reload system with actor notification and state preservation [https://marathondh.atlassian.net/browse/AN-321]
 
 ### Phase 6: Testing Infrastructure (4 tasks)
 - [ ] **ALYS-001-37**: Create `ActorTestHarness` for integration testing with isolated actor environments [https://marathondh.atlassian.net/browse/AN-322]
