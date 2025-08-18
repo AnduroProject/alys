@@ -248,11 +248,13 @@ checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
 name = "alys-test-framework"
 version = "0.1.0"
 dependencies = [
+ "actix",
  "anyhow",
  "chrono",
  "criterion",
  "futures",
  "proptest",
+ "rand",
  "serde",
  "serde_json",
  "tempfile",
@@ -262,6 +264,7 @@ dependencies = [
  "toml 0.8.8",
  "tracing",
  "tracing-subscriber",
+ "uuid 1.12.1",
 ]
 
 [[package]]
