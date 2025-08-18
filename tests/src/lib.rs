@@ -5,6 +5,7 @@
 //! and migration phases, along with metrics collection, validation, and reporting.
 
 pub mod framework;
+pub mod property_tests;
 
 pub use framework::*;
 
