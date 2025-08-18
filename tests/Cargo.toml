@@ -29,6 +29,10 @@ tempfile = "3.8"
 
 # Time and duration utilities
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4"] }
+
+# Actor system dependencies
+actix = "0.13"
 
 # Development dependencies
 [dev-dependencies]
