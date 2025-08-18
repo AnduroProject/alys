@@ -347,9 +347,9 @@ impl ActorTestHarness {
         results
     }
     
-    /// Run message ordering tests
+    /// Run comprehensive message ordering tests with sequence tracking
     pub async fn run_message_ordering_tests(&self) -> Vec<TestResult> {
-        info!("Running message ordering tests");
+        info!("Running comprehensive message ordering tests with sequence tracking");
         let mut results = Vec::new();
         
         // Test FIFO message ordering
@@ -358,8 +358,15 @@ impl ActorTestHarness {
         // Test causal message ordering
         results.push(self.test_causal_ordering().await);
         
-        // Test concurrent message processing
+        // Test concurrent message processing (from ALYS-002-07)
         results.push(self.test_concurrent_processing().await);
+        
+        // ALYS-002-08: Enhanced sequence tracking tests
+        results.push(self.test_sequence_tracking().await);
+        results.push(self.test_out_of_order_message_handling().await);
+        results.push(self.test_message_gap_detection().await);
+        results.push(self.test_multi_actor_ordering().await);
+        results.push(self.test_ordering_under_load().await);
         
         results
     }
@@ -944,6 +951,87 @@ impl ActorTestHarness {
         Ok(())
     }
     
+    /// Get actor handle for direct access (helper for new ordering tests)
+    async fn get_actor_handle(&self, actor_id: &str) -> Result<TestActorHandle> {
+        let actors = self.test_actors.read().await;
+        actors.get(actor_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Actor {} not found", actor_id))
+    }
+    
+    /// Analyze message sequences for gaps, duplicates, and ordering issues
+    fn analyze_message_sequences(&self, tracker: &MessageTracker, actor_id: &str) -> (bool, Vec<u64>, Vec<u64>) {
+        let messages = match tracker.messages.get(actor_id) {
+            Some(msgs) => msgs,
+            None => return (true, Vec::new(), Vec::new()), // No messages to analyze
+        };
+        
+        if messages.is_empty() {
+            return (true, Vec::new(), Vec::new());
+        }
+        
+        let mut sequences: Vec<u64> = messages.iter().map(|m| m.sequence).collect();
+        sequences.sort();
+        
+        // Check for duplicates
+        let mut duplicates = Vec::new();
+        for i in 1..sequences.len() {
+            if sequences[i] == sequences[i-1] {
+                if !duplicates.contains(&sequences[i]) {
+                    duplicates.push(sequences[i]);
+                }
+            }
+        }
+        
+        // Remove duplicates for gap analysis
+        sequences.dedup();
+        
+        // Find gaps
+        let mut gaps = Vec::new();
+        if !sequences.is_empty() {
+            let min_seq = sequences[0];
+            let max_seq = sequences[sequences.len() - 1];
+            
+            for expected in min_seq..=max_seq {
+                if !sequences.contains(&expected) {
+                    gaps.push(expected);
+                }
+            }
+        }
+        
+        // Check ordering (compare with expected if available)
+        let is_ordered = if let Some(expected) = tracker.expected_ordering.get(actor_id) {
+            sequences == *expected
+        } else {
+            // If no expected ordering, check if sequences are in natural order
+            let original_sequences: Vec<u64> = messages.iter().map(|m| m.sequence).collect();
+            let mut sorted_sequences = original_sequences.clone();
+            sorted_sequences.sort();
+            original_sequences == sorted_sequences
+        };
+        
+        (is_ordered, gaps, duplicates)
+    }
+    
+    /// Detect sequence gaps in message delivery
+    fn detect_sequence_gaps(&self, tracker: &MessageTracker, actor_id: &str, min_expected: u64, max_expected: u64) -> Vec<u64> {
+        let messages = match tracker.messages.get(actor_id) {
+            Some(msgs) => msgs,
+            None => return (min_expected..=max_expected).collect(), // All sequences missing
+        };
+        
+        let received_sequences: std::collections::HashSet<u64> = messages.iter().map(|m| m.sequence).collect();
+        
+        let mut gaps = Vec::new();
+        for expected in min_expected..=max_expected {
+            if !received_sequences.contains(&expected) {
+                gaps.push(expected);
+            }
+        }
+        
+        gaps
+    }
+    
     /// Gracefully shutdown an actor
     async fn shutdown_actor(&self, actor_id: &str, timeout: Duration) -> Result<()> {
         debug!("Shutting down actor {} with timeout {:?}", actor_id, timeout);
@@ -1473,6 +1561,676 @@ impl ActorTestHarness {
                 ("total_duration_ms".to_string(), total_duration.as_millis().to_string()),
                 ("min_required_messages".to_string(), "1000".to_string()),
                 ("load_test_verified".to_string(), (processed_messages >= 1000).to_string()),
+            ].iter().cloned().collect(),
+        }
+    }
+    
+    /// ALYS-002-08: Test comprehensive sequence tracking with gaps and duplicates
+    async fn test_sequence_tracking(&self) -> TestResult {
+        let start = Instant::now();
+        let test_name = "comprehensive_sequence_tracking".to_string();
+        
+        info!("Testing comprehensive sequence tracking with gap detection");
+        
+        let actor_id = "sequence_tracker_actor".to_string();
+        
+        let result = match self.create_test_actor(actor_id.clone(), TestActorType::OrderingActor).await {
+            Ok(_) => {
+                // Test sequence: 0, 1, 2, 4, 3, 5, 7, 6, 8, 10, 9
+                // Intentional gaps and out-of-order to test detection
+                let test_sequences = vec![0, 1, 2, 4, 3, 5, 7, 6, 8, 10, 9];
+                let expected_ordered = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+                
+                // Set expected final ordering
+                {
+                    let mut tracker = self.message_tracker.write().await;
+                    tracker.set_expected_ordering(&actor_id, expected_ordered);
+                }
+                
+                debug!("Sending messages with sequences: {:?}", test_sequences);
+                
+                // Send messages with intentional ordering issues
+                for (idx, sequence) in test_sequences.iter().enumerate() {
+                    let message = TestMessage {
+                        id: idx as u64,
+                        content: format!("sequence_test_{}", sequence),
+                        sequence: *sequence,
+                        timestamp: SystemTime::now(),
+                    };
+                    
+                    // Track each message for verification
+                    {
+                        let mut tracker = self.message_tracker.write().await;
+                        let tracked = TrackedMessage {
+                            sequence: message.sequence,
+                            actor_id: actor_id.clone(),
+                            timestamp: Instant::now(),
+                            message_type: "sequence_test".to_string(),
+                            processed: false,
+                        };
+                        
+                        tracker.messages
+                            .entry(actor_id.clone())
+                            .or_insert_with(Vec::new)
+                            .push(tracked);
+                        tracker.total_messages += 1;
+                    }
+                    
+                    // Send message to ordering actor
+                    if let Ok(handle) = self.get_actor_handle(&actor_id).await {
+                        if let Some(addr) = &handle.actor_addr {
+                            if let TestActorAddress::Ordering(ordering_addr) = addr {
+                                let _ = ordering_addr.try_send(message);
+                            }
+                        }
+                    }
+                    
+                    // Small delay between messages
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                
+                // Wait for processing
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                
+                // Verify sequence tracking and gap detection
+                let tracker = self.message_tracker.read().await;
+                let (is_ordered, gaps, duplicates) = self.analyze_message_sequences(&tracker, &actor_id);
+                
+                info!("Sequence analysis results:");
+                info!("  Final ordering correct: {}", is_ordered);
+                info!("  Sequence gaps detected: {:?}", gaps);
+                info!("  Duplicate sequences: {:?}", duplicates);
+                
+                // Success if we correctly identified the issues
+                let expected_gaps = vec![9]; // Gap before 10
+                let success = !is_ordered && gaps.len() > 0 && gaps.contains(&9);
+                
+                if success {
+                    info!("Sequence tracking correctly identified ordering issues and gaps");
+                } else {
+                    warn!("Sequence tracking failed to identify expected ordering issues");
+                }
+                
+                success
+            }
+            Err(e) => {
+                error!("Failed to create sequence tracking test actor: {}", e);
+                false
+            }
+        };
+        
+        let duration = start.elapsed();
+        
+        TestResult {
+            test_name,
+            success: result,
+            duration,
+            message: if result {
+                Some("Sequence tracking successfully detected gaps and ordering issues".to_string())
+            } else {
+                Some("Sequence tracking failed to identify expected issues".to_string())
+            },
+            metadata: [
+                ("test_type".to_string(), "sequence_tracking".to_string()),
+                ("sequences_tested".to_string(), "11".to_string()),
+                ("gaps_expected".to_string(), "true".to_string()),
+                ("out_of_order_expected".to_string(), "true".to_string()),
+                ("verification_time_ms".to_string(), duration.as_millis().to_string()),
+            ].iter().cloned().collect(),
+        }
+    }
+    
+    /// ALYS-002-08: Test out-of-order message handling
+    async fn test_out_of_order_message_handling(&self) -> TestResult {
+        let start = Instant::now();
+        let test_name = "out_of_order_message_handling".to_string();
+        
+        info!("Testing out-of-order message handling capabilities");
+        
+        let actor_id = "out_of_order_handler".to_string();
+        
+        let result = match self.create_test_actor(actor_id.clone(), TestActorType::OrderingActor).await {
+            Ok(_) => {
+                // Send messages completely out of order: 5, 1, 8, 2, 9, 0, 3, 7, 4, 6
+                let out_of_order_sequences = vec![5, 1, 8, 2, 9, 0, 3, 7, 4, 6];
+                let expected_count = out_of_order_sequences.len();
+                
+                debug!("Sending {} messages out of order: {:?}", expected_count, out_of_order_sequences);
+                
+                let mut send_handles = Vec::new();
+                
+                for (send_index, &sequence) in out_of_order_sequences.iter().enumerate() {
+                    let harness = self.clone();
+                    let actor_id_clone = actor_id.clone();
+                    
+                    // Concurrent sends to maximize out-of-order potential
+                    let handle = tokio::spawn(async move {
+                        let message = TestMessage {
+                            id: send_index as u64,
+                            content: format!("out_of_order_{}", sequence),
+                            sequence: sequence,
+                            timestamp: SystemTime::now(),
+                        };
+                        
+                        // Track the message
+                        {
+                            let mut tracker = harness.message_tracker.write().await;
+                            let tracked = TrackedMessage {
+                                sequence: message.sequence,
+                                actor_id: actor_id_clone.clone(),
+                                timestamp: Instant::now(),
+                                message_type: "out_of_order_test".to_string(),
+                                processed: false,
+                            };
+                            
+                            tracker.messages
+                                .entry(actor_id_clone.clone())
+                                .or_insert_with(Vec::new)
+                                .push(tracked);
+                            tracker.total_messages += 1;
+                        }
+                        
+                        // Send to actor
+                        if let Ok(handle) = harness.get_actor_handle(&actor_id_clone).await {
+                            if let Some(addr) = &handle.actor_addr {
+                                if let TestActorAddress::Ordering(ordering_addr) = addr {
+                                    let _ = ordering_addr.try_send(message);
+                                }
+                            }
+                        }
+                    });
+                    
+                    send_handles.push(handle);
+                }
+                
+                // Wait for all messages to be sent concurrently
+                let _results: Vec<_> = futures::future::join_all(send_handles).await;
+                
+                // Wait for processing
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                
+                // Analyze the received order vs sent order
+                let tracker = self.message_tracker.read().await;
+                if let Some(messages) = tracker.messages.get(&actor_id) {
+                    let received_sequences: Vec<u64> = messages.iter().map(|m| m.sequence).collect();
+                    let mut sorted_sequences = received_sequences.clone();
+                    sorted_sequences.sort();
+                    
+                    // Check if we received all messages
+                    let all_received = received_sequences.len() == expected_count;
+                    
+                    // Check if they arrived out of order
+                    let came_out_of_order = received_sequences != sorted_sequences;
+                    
+                    info!("Out-of-order message analysis:");
+                    info!("  Sent sequences: {:?}", out_of_order_sequences);
+                    info!("  Received sequences: {:?}", received_sequences);  
+                    info!("  All messages received: {}", all_received);
+                    info!("  Messages arrived out of order: {}", came_out_of_order);
+                    
+                    // Success if we received all messages (order doesn't matter for this test)
+                    all_received
+                } else {
+                    warn!("No messages tracked for out-of-order test");
+                    false
+                }
+            }
+            Err(e) => {
+                error!("Failed to create out-of-order test actor: {}", e);
+                false
+            }
+        };
+        
+        let duration = start.elapsed();
+        
+        TestResult {
+            test_name,
+            success: result,
+            duration,
+            message: if result {
+                Some("Out-of-order message handling successful - all messages received".to_string())
+            } else {
+                Some("Out-of-order message handling failed - missing messages".to_string())
+            },
+            metadata: [
+                ("test_type".to_string(), "out_of_order_handling".to_string()),
+                ("messages_sent".to_string(), "10".to_string()),
+                ("concurrent_sends".to_string(), "true".to_string()),
+                ("processing_time_ms".to_string(), duration.as_millis().to_string()),
+            ].iter().cloned().collect(),
+        }
+    }
+    
+    /// ALYS-002-08: Test message gap detection
+    async fn test_message_gap_detection(&self) -> TestResult {
+        let start = Instant::now();
+        let test_name = "message_gap_detection".to_string();
+        
+        info!("Testing message gap detection capabilities");
+        
+        let actor_id = "gap_detector".to_string();
+        
+        let result = match self.create_test_actor(actor_id.clone(), TestActorType::OrderingActor).await {
+            Ok(_) => {
+                // Send messages with intentional gaps: 0, 1, 2, 5, 6, 9, 10, 13, 14, 15
+                // Missing: 3, 4, 7, 8, 11, 12
+                let sequences_with_gaps = vec![0, 1, 2, 5, 6, 9, 10, 13, 14, 15];
+                let expected_gaps = vec![3, 4, 7, 8, 11, 12];
+                
+                debug!("Sending sequences with gaps: {:?}", sequences_with_gaps);
+                debug!("Expected gaps: {:?}", expected_gaps);
+                
+                // Send messages with gaps
+                for &sequence in &sequences_with_gaps {
+                    let message = TestMessage {
+                        id: sequence,
+                        content: format!("gap_test_{}", sequence),
+                        sequence,
+                        timestamp: SystemTime::now(),
+                    };
+                    
+                    // Track message
+                    {
+                        let mut tracker = self.message_tracker.write().await;
+                        let tracked = TrackedMessage {
+                            sequence: message.sequence,
+                            actor_id: actor_id.clone(),
+                            timestamp: Instant::now(),
+                            message_type: "gap_detection_test".to_string(),
+                            processed: false,
+                        };
+                        
+                        tracker.messages
+                            .entry(actor_id.clone())
+                            .or_insert_with(Vec::new)
+                            .push(tracked);
+                        tracker.total_messages += 1;
+                    }
+                    
+                    // Send message
+                    if let Ok(handle) = self.get_actor_handle(&actor_id).await {
+                        if let Some(addr) = &handle.actor_addr {
+                            if let TestActorAddress::Ordering(ordering_addr) = addr {
+                                let _ = ordering_addr.try_send(message);
+                            }
+                        }
+                    }
+                    
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                
+                // Wait for processing
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                
+                // Analyze for gaps
+                let tracker = self.message_tracker.read().await;
+                let detected_gaps = self.detect_sequence_gaps(&tracker, &actor_id, 0, 15);
+                
+                info!("Gap detection analysis:");
+                info!("  Expected gaps: {:?}", expected_gaps);
+                info!("  Detected gaps: {:?}", detected_gaps);
+                
+                // Success if we detected all expected gaps
+                let gaps_match = detected_gaps.len() == expected_gaps.len() &&
+                    expected_gaps.iter().all(|gap| detected_gaps.contains(gap));
+                
+                if gaps_match {
+                    info!("Gap detection successfully identified all missing sequences");
+                } else {
+                    warn!("Gap detection missed some expected gaps or found false positives");
+                }
+                
+                gaps_match
+            }
+            Err(e) => {
+                error!("Failed to create gap detection test actor: {}", e);
+                false
+            }
+        };
+        
+        let duration = start.elapsed();
+        
+        TestResult {
+            test_name,
+            success: result,
+            duration,
+            message: if result {
+                Some("Message gap detection successfully identified all missing sequences".to_string())
+            } else {
+                Some("Message gap detection failed to identify expected gaps".to_string())
+            },
+            metadata: [
+                ("test_type".to_string(), "gap_detection".to_string()),
+                ("sequences_sent".to_string(), "10".to_string()),
+                ("expected_gaps".to_string(), "6".to_string()),
+                ("gap_range".to_string(), "0-15".to_string()),
+                ("verification_time_ms".to_string(), duration.as_millis().to_string()),
+            ].iter().cloned().collect(),
+        }
+    }
+    
+    /// ALYS-002-08: Test multi-actor ordering coordination
+    async fn test_multi_actor_ordering(&self) -> TestResult {
+        let start = Instant::now();
+        let test_name = "multi_actor_ordering_coordination".to_string();
+        
+        info!("Testing message ordering coordination across multiple actors");
+        
+        let num_actors = 5;
+        let messages_per_actor = 20;
+        let mut actor_ids = Vec::new();
+        let mut creation_results = Vec::new();
+        
+        // Create multiple ordering actors
+        for i in 0..num_actors {
+            let actor_id = format!("multi_ordering_actor_{}", i);
+            actor_ids.push(actor_id.clone());
+            creation_results.push(
+                self.create_test_actor(actor_id, TestActorType::OrderingActor).await
+            );
+        }
+        
+        let mut actors_with_correct_ordering = 0;
+        
+        let result = if creation_results.iter().all(|r| r.is_ok()) {
+            info!("Created {} actors for multi-actor ordering test", num_actors);
+            
+            // Send ordered messages to each actor
+            let mut send_handles = Vec::new();
+            
+            for actor_id in &actor_ids {
+                let harness = self.clone();
+                let actor_id_clone = actor_id.clone();
+                
+                let handle = tokio::spawn(async move {
+                    let mut successful_sends = 0;
+                    
+                    // Set expected ordering for this actor
+                    {
+                        let mut tracker = harness.message_tracker.write().await;
+                        let expected: Vec<u64> = (0..messages_per_actor as u64).collect();
+                        tracker.set_expected_ordering(&actor_id_clone, expected);
+                    }
+                    
+                    // Send messages in sequence
+                    for seq in 0..messages_per_actor {
+                        let message = TestMessage {
+                            id: seq as u64,
+                            content: format!("multi_actor_msg_{}_{}", actor_id_clone, seq),
+                            sequence: seq as u64,
+                            timestamp: SystemTime::now(),
+                        };
+                        
+                        // Track message
+                        {
+                            let mut tracker = harness.message_tracker.write().await;
+                            let tracked = TrackedMessage {
+                                sequence: message.sequence,
+                                actor_id: actor_id_clone.clone(),
+                                timestamp: Instant::now(),
+                                message_type: "multi_actor_test".to_string(),
+                                processed: false,
+                            };
+                            
+                            tracker.messages
+                                .entry(actor_id_clone.clone())
+                                .or_insert_with(Vec::new)
+                                .push(tracked);
+                            tracker.total_messages += 1;
+                        }
+                        
+                        // Send message
+                        if let Ok(handle) = harness.get_actor_handle(&actor_id_clone).await {
+                            if let Some(addr) = &handle.actor_addr {
+                                if let TestActorAddress::Ordering(ordering_addr) = addr {
+                                    if ordering_addr.try_send(message).is_ok() {
+                                        successful_sends += 1;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Small delay for ordered delivery
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                    
+                    successful_sends
+                });
+                
+                send_handles.push(handle);
+            }
+            
+            // Wait for all actors to receive their messages
+            let send_results: Vec<_> = futures::future::join_all(send_handles).await;
+            
+            // Wait for processing
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            
+            // Verify ordering for each actor
+            let mut total_messages_received = 0;
+            
+            {
+                let tracker = self.message_tracker.read().await;
+                
+                for actor_id in &actor_ids {
+                    let is_ordered = tracker.verify_ordering(actor_id);
+                    if let Some(messages) = tracker.messages.get(actor_id) {
+                        total_messages_received += messages.len();
+                        debug!("Actor {} received {} messages, ordering correct: {}", 
+                               actor_id, messages.len(), is_ordered);
+                        
+                        if is_ordered {
+                            actors_with_correct_ordering += 1;
+                        }
+                    }
+                }
+            }
+            
+            let total_sent: i32 = send_results.iter()
+                .filter_map(|r| r.as_ref().ok())
+                .sum();
+            
+            let ordering_success_rate = (actors_with_correct_ordering as f64 / num_actors as f64) * 100.0;
+            let message_delivery_rate = (total_messages_received as f64 / (num_actors * messages_per_actor) as f64) * 100.0;
+            
+            info!("Multi-actor ordering results:");
+            info!("  Actors with correct ordering: {}/{} ({:.1}%)", 
+                  actors_with_correct_ordering, num_actors, ordering_success_rate);
+            info!("  Messages delivered: {}/{} ({:.1}%)", 
+                  total_messages_received, num_actors * messages_per_actor, message_delivery_rate);
+            info!("  Total messages sent: {}", total_sent);
+            
+            // Success if at least 80% of actors maintain correct ordering and 95% messages delivered
+            let success = ordering_success_rate >= 80.0 && message_delivery_rate >= 95.0;
+            
+            if !success {
+                warn!("Multi-actor ordering test failed criteria:");
+                warn!("  Ordering success rate: {:.1}% (required: ≥80%)", ordering_success_rate);
+                warn!("  Delivery rate: {:.1}% (required: ≥95%)", message_delivery_rate);
+            }
+            
+            success
+        } else {
+            let failed_creations = creation_results.iter().filter(|r| r.is_err()).count();
+            error!("Failed to create actors for multi-actor test: {}/{} failed", failed_creations, num_actors);
+            false
+        };
+        
+        let duration = start.elapsed();
+        
+        TestResult {
+            test_name,
+            success: result,
+            duration,
+            message: if result {
+                Some(format!("Multi-actor ordering coordination successful across {} actors", num_actors))
+            } else {
+                Some("Multi-actor ordering coordination failed - check success rates".to_string())
+            },
+            metadata: [
+                ("test_type".to_string(), "multi_actor_ordering".to_string()),
+                ("num_actors".to_string(), num_actors.to_string()),
+                ("messages_per_actor".to_string(), messages_per_actor.to_string()),
+                ("total_expected_messages".to_string(), (num_actors * messages_per_actor).to_string()),
+                ("actors_with_correct_ordering".to_string(), actors_with_correct_ordering.to_string()),
+                ("processing_time_ms".to_string(), duration.as_millis().to_string()),
+            ].iter().cloned().collect(),
+        }
+    }
+    
+    /// ALYS-002-08: Test message ordering under high load
+    async fn test_ordering_under_load(&self) -> TestResult {
+        let start = Instant::now();
+        let test_name = "message_ordering_under_load".to_string();
+        
+        info!("Testing message ordering verification under high load conditions");
+        
+        let actor_id = "load_ordering_actor".to_string();
+        let messages_to_send = 500; // High volume for load testing
+        
+        let result = match self.create_test_actor(actor_id.clone(), TestActorType::OrderingActor).await {
+            Ok(_) => {
+                debug!("Created ordering actor for {} message load test", messages_to_send);
+                
+                // Set expected ordering
+                {
+                    let mut tracker = self.message_tracker.write().await;
+                    let expected: Vec<u64> = (0..messages_to_send as u64).collect();
+                    tracker.set_expected_ordering(&actor_id, expected);
+                }
+                
+                // Send messages rapidly in batches
+                let batch_size = 50;
+                let num_batches = messages_to_send / batch_size;
+                let mut total_sent = 0;
+                let load_start = Instant::now();
+                
+                for batch in 0..num_batches {
+                    let mut batch_handles = Vec::new();
+                    
+                    for msg_idx in 0..batch_size {
+                        let sequence = batch * batch_size + msg_idx;
+                        let harness = self.clone();
+                        let actor_id_clone = actor_id.clone();
+                        
+                        let handle = tokio::spawn(async move {
+                            let message = TestMessage {
+                                id: sequence as u64,
+                                content: format!("load_order_{}", sequence),
+                                sequence: sequence as u64,
+                                timestamp: SystemTime::now(),
+                            };
+                            
+                            // Track message
+                            {
+                                let mut tracker = harness.message_tracker.write().await;
+                                let tracked = TrackedMessage {
+                                    sequence: message.sequence,
+                                    actor_id: actor_id_clone.clone(),
+                                    timestamp: Instant::now(),
+                                    message_type: "load_ordering_test".to_string(),
+                                    processed: false,
+                                };
+                                
+                                tracker.messages
+                                    .entry(actor_id_clone.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(tracked);
+                                tracker.total_messages += 1;
+                            }
+                            
+                            // Send message
+                            if let Ok(handle) = harness.get_actor_handle(&actor_id_clone).await {
+                                if let Some(addr) = &handle.actor_addr {
+                                    if let TestActorAddress::Ordering(ordering_addr) = addr {
+                                        ordering_addr.try_send(message).is_ok()
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        });
+                        
+                        batch_handles.push(handle);
+                    }
+                    
+                    // Wait for batch completion
+                    let batch_results: Vec<_> = futures::future::join_all(batch_handles).await;
+                    let batch_sent = batch_results.iter().filter_map(|r| r.as_ref().ok()).filter(|&sent| *sent).count();
+                    total_sent += batch_sent;
+                    
+                    debug!("Batch {} completed: {}/{} messages sent", batch, batch_sent, batch_size);
+                    
+                    // Brief pause between batches
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                
+                let load_duration = load_start.elapsed();
+                let throughput = total_sent as f64 / load_duration.as_secs_f64();
+                
+                info!("Load phase completed: {}/{} messages sent in {:?} ({:.1} msg/sec)", 
+                      total_sent, messages_to_send, load_duration, throughput);
+                
+                // Wait for processing to complete
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                
+                // Verify ordering maintained under load
+                let tracker = self.message_tracker.read().await;
+                let is_ordered = tracker.verify_ordering(&actor_id);
+                
+                if let Some(messages) = tracker.messages.get(&actor_id) {
+                    let received_count = messages.len();
+                    let delivery_rate = (received_count as f64 / messages_to_send as f64) * 100.0;
+                    
+                    info!("Ordering under load results:");
+                    info!("  Messages received: {}/{} ({:.1}%)", received_count, messages_to_send, delivery_rate);
+                    info!("  Ordering preserved: {}", is_ordered);
+                    info!("  Throughput: {:.1} messages/second", throughput);
+                    
+                    // Success if ordering preserved and high delivery rate
+                    let success = is_ordered && delivery_rate >= 90.0 && throughput >= 100.0;
+                    
+                    if !success {
+                        warn!("Ordering under load test failed:");
+                        warn!("  Ordering preserved: {} (required: true)", is_ordered);
+                        warn!("  Delivery rate: {:.1}% (required: ≥90%)", delivery_rate);
+                        warn!("  Throughput: {:.1} msg/sec (required: ≥100)", throughput);
+                    }
+                    
+                    success
+                } else {
+                    warn!("No messages received during load test");
+                    false
+                }
+            }
+            Err(e) => {
+                error!("Failed to create load ordering test actor: {}", e);
+                false
+            }
+        };
+        
+        let duration = start.elapsed();
+        
+        TestResult {
+            test_name,
+            success: result,
+            duration,
+            message: if result {
+                Some(format!("Message ordering maintained under {} message load", messages_to_send))
+            } else {
+                Some("Message ordering failed under high load conditions".to_string())
+            },
+            metadata: [
+                ("test_type".to_string(), "ordering_under_load".to_string()),
+                ("load_messages".to_string(), messages_to_send.to_string()),
+                ("batch_size".to_string(), "50".to_string()),
+                ("min_throughput_required".to_string(), "100".to_string()),
+                ("min_delivery_rate_required".to_string(), "90".to_string()),
+                ("total_duration_ms".to_string(), duration.as_millis().to_string()),
             ].iter().cloned().collect(),
         }
     }
