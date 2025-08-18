@@ -24,18 +24,18 @@ Establish a comprehensive testing framework that will be used throughout the mig
 ## Detailed Implementation Subtasks (28 tasks across 7 phases)
 
 ### Phase 1: Test Infrastructure Foundation (4 tasks)
-- [ ] **ALYS-002-01**: Design and implement `MigrationTestFramework` core structure with runtime management and configuration [https://marathondh.atlassian.net/browse/AN-329]
-- [ ] **ALYS-002-02**: Create `TestConfig` system with environment-specific settings and validation [https://marathondh.atlassian.net/browse/AN-330]
-- [ ] **ALYS-002-03**: Implement `TestHarnesses` collection with specialized harnesses for each migration component [https://marathondh.atlassian.net/browse/AN-331]
-- [ ] **ALYS-002-04**: Set up test metrics collection system with `MetricsCollector` and reporting capabilities [https://marathondh.atlassian.net/browse/AN-332]
+- [X] **ALYS-002-01**: Design and implement `MigrationTestFramework` core structure with runtime management and configuration [https://marathondh.atlassian.net/browse/AN-329]
+- [X] **ALYS-002-02**: Create `TestConfig` system with environment-specific settings and validation [https://marathondh.atlassian.net/browse/AN-330]
+- [X] **ALYS-002-03**: Implement `TestHarnesses` collection with specialized harnesses for each migration component [https://marathondh.atlassian.net/browse/AN-331]
+- [X] **ALYS-002-04**: Set up test metrics collection system with `MetricsCollector` and reporting capabilities [https://marathondh.atlassian.net/browse/AN-332]
 
 ### Phase 2: Actor Testing Framework (6 tasks)
-- [ ] **ALYS-002-05**: Implement `ActorTestHarness` with actor lifecycle management and supervision testing [https://marathondh.atlassian.net/browse/AN-333]
-- [ ] **ALYS-002-06**: Create actor recovery testing with panic injection and supervisor restart validation [https://marathondh.atlassian.net/browse/AN-334]
-- [ ] **ALYS-002-07**: Implement concurrent message testing with 1000+ message load verification [https://marathondh.atlassian.net/browse/AN-335]
-- [ ] **ALYS-002-08**: Create message ordering verification system with sequence tracking [https://marathondh.atlassian.net/browse/AN-336]
-- [ ] **ALYS-002-09**: Implement mailbox overflow testing with backpressure validation [https://marathondh.atlassian.net/browse/AN-337]
-- [ ] **ALYS-002-10**: Create actor communication testing with cross-actor message flows [https://marathondh.atlassian.net/browse/AN-338]
+- [X] **ALYS-002-05**: Implement `ActorTestHarness` with actor lifecycle management and supervision testing [https://marathondh.atlassian.net/browse/AN-333]
+- [X] **ALYS-002-06**: Create actor recovery testing with panic injection and supervisor restart validation [https://marathondh.atlassian.net/browse/AN-334]
+- [X] **ALYS-002-07**: Implement concurrent message testing with 1000+ message load verification [https://marathondh.atlassian.net/browse/AN-335]
+- [X] **ALYS-002-08**: Create message ordering verification system with sequence tracking [https://marathondh.atlassian.net/browse/AN-336]
+- [X] **ALYS-002-09**: Implement mailbox overflow testing with backpressure validation [https://marathondh.atlassian.net/browse/AN-337]
+- [X] **ALYS-002-10**: Create actor communication testing with cross-actor message flows [https://marathondh.atlassian.net/browse/AN-338]
 
 ### Phase 3: Sync Testing Framework (5 tasks)
 - [ ] **ALYS-002-11**: Implement `SyncTestHarness` with mock P2P network and simulated blockchain [https://marathondh.atlassian.net/browse/AN-339]
