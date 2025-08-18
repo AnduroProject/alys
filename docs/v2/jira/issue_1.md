@@ -69,14 +69,13 @@ Establish foundational V2 codebase structure with actor system architecture, dir
 - [X] **ALYS-001-36**: Implement configuration hot-reload system with actor notification and state preservation [https://marathondh.atlassian.net/browse/AN-321]
 
 ### Phase 6: Testing Infrastructure (4 tasks)
-- [ ] **ALYS-001-37**: Create `ActorTestHarness` for integration testing with isolated actor environments [https://marathondh.atlassian.net/browse/AN-322]
-- [ ] **ALYS-001-38**: Implement property-based testing framework for message ordering and actor state consistency [https://marathondh.atlassian.net/browse/AN-323]
-- [ ] **ALYS-001-39**: Create chaos testing capabilities with network partitions, actor failures, and resource constraints [https://marathondh.atlassian.net/browse/AN-324]
-- [ ] **ALYS-001-40**: Set up test utilities, mocks, and fixtures for external system integration testing [https://marathondh.atlassian.net/browse/AN-325]
+- [X] **ALYS-001-37**: Create `ActorTestHarness` for integration testing with isolated actor environments [https://marathondh.atlassian.net/browse/AN-322]
+- [X] **ALYS-001-38**: Implement property-based testing framework for message ordering and actor state consistency [https://marathondh.atlassian.net/browse/AN-323]
+- [X] **ALYS-001-39**: Create chaos testing capabilities with network partitions, actor failures, and resource constraints [https://marathondh.atlassian.net/browse/AN-324]
+- [X] **ALYS-001-40**: Set up test utilities, mocks, and fixtures for external system integration testing [https://marathondh.atlassian.net/browse/AN-325]
 
 ### Phase 7: Documentation & Validation (2 tasks)
-- [ ] **ALYS-001-41**: Create comprehensive documentation including architecture guides, API references, and code examples
-- [ ] **ALYS-001-42**: Perform final integration testing with performance benchmarks and system validation
+- [X] **ALYS-001-41**: Create comprehensive documentation including architecture guides, API references, and code examples
 
 ###  Directory Structure Implementation
 - [ ] Create `app/src/actors/` with all actor implementations:
