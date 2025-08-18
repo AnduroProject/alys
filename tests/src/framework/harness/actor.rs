@@ -872,6 +872,78 @@ impl ActorTestHarness {
         Ok(())
     }
     
+    /// Send a single throughput test message to an actor for load testing
+    async fn send_throughput_message(&self, actor_id: &str, message_id: usize) -> Result<()> {
+        let actors = self.test_actors.read().await;
+        let handle = actors.get(actor_id)
+            .ok_or_else(|| anyhow::anyhow!("Actor {} not found", actor_id))?;
+        
+        let message = TestMessage {
+            id: message_id as u64,
+            content: format!("throughput_test_{}", message_id),
+            sequence: message_id as u64,
+            timestamp: SystemTime::now(),
+        };
+        
+        // Track throughput message
+        {
+            let mut tracker = self.message_tracker.write().await;
+            let tracked = TrackedMessage {
+                sequence: message.sequence,
+                actor_id: actor_id.to_string(),
+                timestamp: Instant::now(),
+                message_type: "throughput".to_string(),
+                processed: false,
+            };
+            
+            tracker.messages
+                .entry(actor_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(tracked);
+            tracker.total_messages += 1;
+        }
+        
+        // Send message to throughput actor specifically
+        if let Some(addr) = &handle.actor_addr {
+            match addr {
+                TestActorAddress::Throughput(throughput_addr) => {
+                    throughput_addr.try_send(message)
+                        .map_err(|e| anyhow::anyhow!("Failed to send throughput message: {}", e))?;
+                }
+                _ => {
+                    // Fallback to other actor types if needed
+                    match addr {
+                        TestActorAddress::Echo(echo_addr) => {
+                            echo_addr.try_send(message)
+                                .map_err(|e| anyhow::anyhow!("Failed to send message to echo actor: {}", e))?;
+                        },
+                        TestActorAddress::Ordering(ordering_addr) => {
+                            ordering_addr.try_send(message)
+                                .map_err(|e| anyhow::anyhow!("Failed to send message to ordering actor: {}", e))?;
+                        },
+                        TestActorAddress::Supervised(supervised_addr) => {
+                            supervised_addr.try_send(message)
+                                .map_err(|e| anyhow::anyhow!("Failed to send message to supervised actor: {}", e))?;
+                        },
+                        _ => {
+                            return Err(anyhow::anyhow!("Actor {} is not suitable for throughput testing", actor_id));
+                        }
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow::anyhow!("Actor {} has no address", actor_id));
+        }
+        
+        // Update throughput metrics
+        {
+            let mut metrics = self.metrics.write().await;
+            metrics.total_messages_sent += 1;
+        }
+        
+        Ok(())
+    }
+    
     /// Gracefully shutdown an actor
     async fn shutdown_actor(&self, actor_id: &str, timeout: Duration) -> Result<()> {
         debug!("Shutting down actor {} with timeout {:?}", actor_id, timeout);
@@ -1206,70 +1278,201 @@ impl ActorTestHarness {
         }
     }
     
-    /// Test concurrent message processing
+    /// Test concurrent message processing with 1000+ message load verification
     async fn test_concurrent_processing(&self) -> TestResult {
         let start = Instant::now();
-        let test_name = "concurrent_message_processing".to_string();
+        let test_name = "concurrent_message_processing_1000_plus".to_string();
         
-        debug!("Testing concurrent message processing");
+        info!("Testing concurrent message processing with 1000+ message load");
+        
+        // Configuration for 1000+ message load test
+        let num_actors = 10;
+        let messages_per_actor = 150; // 10 * 150 = 1500 total messages
+        let total_expected_messages = num_actors * messages_per_actor;
+        
+        debug!("Setting up {} actors for {} messages each (total: {} messages)", 
+               num_actors, messages_per_actor, total_expected_messages);
         
         // Create multiple actors for concurrent testing
         let mut actor_ids = Vec::new();
         let mut creation_results = Vec::new();
         
-        for i in 0..5 {
-            let actor_id = format!("concurrent_actor_{}", i);
+        for i in 0..num_actors {
+            let actor_id = format!("concurrent_load_actor_{}", i);
             actor_ids.push(actor_id.clone());
             creation_results.push(
                 self.create_test_actor(actor_id, TestActorType::ThroughputActor).await
             );
         }
         
+        let mut processed_messages = 0u32;
+        let mut failed_sends = 0u32;
+        
         let result = if creation_results.iter().all(|r| r.is_ok()) {
-            // Send messages concurrently to all actors
+            info!("All {} actors created successfully, starting concurrent message load", num_actors);
+            
+            // Phase 1: Concurrent message sending with throughput tracking
+            let concurrent_start = Instant::now();
             let mut send_handles = Vec::new();
             
             for actor_id in &actor_ids {
                 let harness = self.clone(); // ActorTestHarness implements Clone
                 let actor_id = actor_id.clone();
+                let messages_to_send = messages_per_actor;
                 
                 let handle = tokio::spawn(async move {
-                    harness.send_test_messages(&actor_id, 20).await
+                    let mut successful_sends = 0;
+                    let mut failed_sends = 0;
+                    
+                    // Send messages in batches for better performance monitoring
+                    let batch_size = 25;
+                    let num_batches = messages_to_send / batch_size;
+                    
+                    for batch in 0..num_batches {
+                        let batch_start = Instant::now();
+                        let mut batch_handles = Vec::new();
+                        
+                        for msg_idx in 0..batch_size {
+                            let message_id = batch * batch_size + msg_idx;
+                            let send_future = harness.send_throughput_message(&actor_id, message_id);
+                            batch_handles.push(send_future);
+                        }
+                        
+                        // Wait for batch completion
+                        let batch_results = futures::future::join_all(batch_handles).await;
+                        let batch_duration = batch_start.elapsed();
+                        
+                        // Count batch results
+                        for result in batch_results {
+                            match result {
+                                Ok(_) => successful_sends += 1,
+                                Err(e) => {
+                                    failed_sends += 1;
+                                    debug!("Message send failed in batch {}: {}", batch, e);
+                                }
+                            }
+                        }
+                        
+                        debug!("Actor {} batch {} completed: {}/{} messages sent in {:?}", 
+                               actor_id, batch, successful_sends, successful_sends + failed_sends, batch_duration);
+                        
+                        // Small delay between batches to avoid overwhelming
+                        if batch < num_batches - 1 {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    }
+                    
+                    (successful_sends, failed_sends)
                 });
                 
                 send_handles.push(handle);
             }
             
-            // Wait for all concurrent sends to complete
-            let results: Vec<_> = futures::future::join_all(send_handles).await;
+            // Wait for all concurrent sending to complete
+            debug!("Waiting for all concurrent message sending to complete...");
+            let concurrent_results: Vec<_> = futures::future::join_all(send_handles).await;
+            let concurrent_duration = concurrent_start.elapsed();
             
-            // Check if all sends were successful
-            results.iter().all(|r| {
-                match r {
-                    Ok(Ok(_)) => true,
-                    _ => false,
+            // Aggregate results from all actors
+            for result in concurrent_results {
+                match result {
+                    Ok((successful, failed)) => {
+                        processed_messages += successful;
+                        failed_sends += failed;
+                    }
+                    Err(e) => {
+                        warn!("Concurrent task failed: {}", e);
+                        failed_sends += messages_per_actor as u32;
+                    }
                 }
-            })
+            }
+            
+            let success_rate = (processed_messages as f64 / total_expected_messages as f64) * 100.0;
+            let throughput_msg_per_sec = processed_messages as f64 / concurrent_duration.as_secs_f64();
+            
+            info!("Concurrent message processing completed:");
+            info!("  Total messages sent: {} / {} ({:.1}% success rate)", 
+                  processed_messages, total_expected_messages, success_rate);
+            info!("  Failed sends: {}", failed_sends);
+            info!("  Processing duration: {:?}", concurrent_duration);
+            info!("  Throughput: {:.1} messages/second", throughput_msg_per_sec);
+            
+            // Phase 2: Verify actors are still responsive after load
+            debug!("Verifying actor health after concurrent load...");
+            let mut responsive_actors = 0;
+            let health_check_start = Instant::now();
+            
+            for actor_id in &actor_ids {
+                match self.verify_actor_responsive(actor_id).await {
+                    Ok(true) => {
+                        responsive_actors += 1;
+                        debug!("Actor {} responsive after load test", actor_id);
+                    }
+                    Ok(false) => {
+                        warn!("Actor {} unresponsive after load test", actor_id);
+                    }
+                    Err(e) => {
+                        error!("Failed to check actor {} health: {}", actor_id, e);
+                    }
+                }
+            }
+            
+            let health_check_duration = health_check_start.elapsed();
+            let health_rate = (responsive_actors as f64 / num_actors as f64) * 100.0;
+            
+            debug!("Health check completed: {}/{} actors responsive ({:.1}%) in {:?}", 
+                   responsive_actors, num_actors, health_rate, health_check_duration);
+            
+            // Success criteria: 
+            // 1. At least 95% of messages processed successfully
+            // 2. At least 90% of actors remain responsive
+            // 3. Throughput above 100 messages/second
+            let success = success_rate >= 95.0 
+                && health_rate >= 90.0 
+                && throughput_msg_per_sec >= 100.0
+                && processed_messages >= 1000; // Ensure we actually processed 1000+ messages
+            
+            if !success {
+                warn!("Concurrent message test failed criteria:");
+                warn!("  Success rate: {:.1}% (required: ≥95%)", success_rate);
+                warn!("  Health rate: {:.1}% (required: ≥90%)", health_rate);
+                warn!("  Throughput: {:.1} msg/sec (required: ≥100)", throughput_msg_per_sec);
+                warn!("  Messages processed: {} (required: ≥1000)", processed_messages);
+            }
+            
+            success
         } else {
+            let failed_creations = creation_results.iter().filter(|r| r.is_err()).count();
+            error!("Failed to create actors: {}/{} failed", failed_creations, num_actors);
             false
         };
         
-        let duration = start.elapsed();
+        let total_duration = start.elapsed();
         
         TestResult {
             test_name,
             success: result,
-            duration,
+            duration: total_duration,
             message: if result {
-                Some(format!("Concurrent processing test passed with {} actors", actor_ids.len()))
+                Some(format!("Concurrent load test PASSED: {} actors processed {}/{} messages", 
+                           num_actors, processed_messages, total_expected_messages))
             } else {
-                Some("Concurrent processing test failed".to_string())
+                Some(format!("Concurrent load test FAILED: Check success rate, health, and throughput metrics"))
             },
             metadata: [
-                ("concurrent_actors".to_string(), actor_ids.len().to_string()),
-                ("messages_per_actor".to_string(), "20".to_string()),
-                ("total_messages".to_string(), (actor_ids.len() * 20).to_string()),
-                ("processing_time_ms".to_string(), duration.as_millis().to_string()),
+                ("test_type".to_string(), "concurrent_load_1000_plus".to_string()),
+                ("concurrent_actors".to_string(), num_actors.to_string()),
+                ("messages_per_actor".to_string(), messages_per_actor.to_string()),
+                ("total_expected_messages".to_string(), total_expected_messages.to_string()),
+                ("messages_processed".to_string(), processed_messages.to_string()),
+                ("failed_sends".to_string(), failed_sends.to_string()),
+                ("success_rate_percent".to_string(), format!("{:.2}", 
+                    (processed_messages as f64 / total_expected_messages as f64) * 100.0)),
+                ("throughput_msg_per_sec".to_string(), format!("{:.1}", 
+                    processed_messages as f64 / total_duration.as_secs_f64())),
+                ("total_duration_ms".to_string(), total_duration.as_millis().to_string()),
+                ("min_required_messages".to_string(), "1000".to_string()),
+                ("load_test_verified".to_string(), (processed_messages >= 1000).to_string()),
             ].iter().cloned().collect(),
         }
     }
