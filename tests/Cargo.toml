@@ -1,0 +1,43 @@
+[package]
+name = "alys-test-framework"
+version = "0.1.0"
+edition = "2021"
+description = "Comprehensive testing framework for Alys V2 migration"
+
+[dependencies]
+# Core async runtime
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+
+# Error handling
+anyhow = "1.0"
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# Testing dependencies
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.8"
+
+# Time and duration utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+# Development dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+
+# Optional features
+[features]
+default = ["chaos", "performance", "coverage"]
+chaos = []
+performance = []
+coverage = []
+integration = []

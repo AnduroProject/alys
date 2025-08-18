@@ -24,46 +24,46 @@ Establish a comprehensive testing framework that will be used throughout the mig
 ## Detailed Implementation Subtasks (28 tasks across 7 phases)
 
 ### Phase 1: Test Infrastructure Foundation (4 tasks)
-- [ ] **ALYS-002-01**: Design and implement `MigrationTestFramework` core structure with runtime management and configuration
-- [ ] **ALYS-002-02**: Create `TestConfig` system with environment-specific settings and validation
-- [ ] **ALYS-002-03**: Implement `TestHarnesses` collection with specialized harnesses for each migration component
-- [ ] **ALYS-002-04**: Set up test metrics collection system with `MetricsCollector` and reporting capabilities
+- [ ] **ALYS-002-01**: Design and implement `MigrationTestFramework` core structure with runtime management and configuration [https://marathondh.atlassian.net/browse/AN-329]
+- [ ] **ALYS-002-02**: Create `TestConfig` system with environment-specific settings and validation [https://marathondh.atlassian.net/browse/AN-330]
+- [ ] **ALYS-002-03**: Implement `TestHarnesses` collection with specialized harnesses for each migration component [https://marathondh.atlassian.net/browse/AN-331]
+- [ ] **ALYS-002-04**: Set up test metrics collection system with `MetricsCollector` and reporting capabilities [https://marathondh.atlassian.net/browse/AN-332]
 
 ### Phase 2: Actor Testing Framework (6 tasks)
-- [ ] **ALYS-002-05**: Implement `ActorTestHarness` with actor lifecycle management and supervision testing
-- [ ] **ALYS-002-06**: Create actor recovery testing with panic injection and supervisor restart validation
-- [ ] **ALYS-002-07**: Implement concurrent message testing with 1000+ message load verification
-- [ ] **ALYS-002-08**: Create message ordering verification system with sequence tracking
-- [ ] **ALYS-002-09**: Implement mailbox overflow testing with backpressure validation
-- [ ] **ALYS-002-10**: Create actor communication testing with cross-actor message flows
+- [ ] **ALYS-002-05**: Implement `ActorTestHarness` with actor lifecycle management and supervision testing [https://marathondh.atlassian.net/browse/AN-333]
+- [ ] **ALYS-002-06**: Create actor recovery testing with panic injection and supervisor restart validation [https://marathondh.atlassian.net/browse/AN-334]
+- [ ] **ALYS-002-07**: Implement concurrent message testing with 1000+ message load verification [https://marathondh.atlassian.net/browse/AN-335]
+- [ ] **ALYS-002-08**: Create message ordering verification system with sequence tracking [https://marathondh.atlassian.net/browse/AN-336]
+- [ ] **ALYS-002-09**: Implement mailbox overflow testing with backpressure validation [https://marathondh.atlassian.net/browse/AN-337]
+- [ ] **ALYS-002-10**: Create actor communication testing with cross-actor message flows [https://marathondh.atlassian.net/browse/AN-338]
 
 ### Phase 3: Sync Testing Framework (5 tasks)
-- [ ] **ALYS-002-11**: Implement `SyncTestHarness` with mock P2P network and simulated blockchain
-- [ ] **ALYS-002-12**: Create full sync testing from genesis to tip with 10,000+ block validation
-- [ ] **ALYS-002-13**: Implement sync resilience testing with network failures and peer disconnections
-- [ ] **ALYS-002-14**: Create checkpoint consistency testing with configurable intervals
-- [ ] **ALYS-002-15**: Implement parallel sync testing with multiple peer scenarios
+- [ ] **ALYS-002-11**: Implement `SyncTestHarness` with mock P2P network and simulated blockchain [https://marathondh.atlassian.net/browse/AN-339]
+- [ ] **ALYS-002-12**: Create full sync testing from genesis to tip with 10,000+ block validation [https://marathondh.atlassian.net/browse/AN-340]
+- [ ] **ALYS-002-13**: Implement sync resilience testing with network failures and peer disconnections [https://marathondh.atlassian.net/browse/AN-341]
+- [ ] **ALYS-002-14**: Create checkpoint consistency testing with configurable intervals [https://marathondh.atlassian.net/browse/AN-342]
+- [ ] **ALYS-002-15**: Implement parallel sync testing with multiple peer scenarios [https://marathondh.atlassian.net/browse/AN-343]
 
 ### Phase 4: Property-Based Testing (4 tasks)
-- [ ] **ALYS-002-16**: Set up PropTest framework with custom generators for blockchain data structures
-- [ ] **ALYS-002-17**: Implement actor message ordering property tests with sequence verification
-- [ ] **ALYS-002-18**: Create sync checkpoint consistency property tests with failure injection
-- [ ] **ALYS-002-19**: Implement governance signature validation property tests with Byzantine scenarios
+- [ ] **ALYS-002-16**: Set up PropTest framework with custom generators for blockchain data structures [https://marathondh.atlassian.net/browse/AN-344]
+- [ ] **ALYS-002-17**: Implement actor message ordering property tests with sequence verification [https://marathondh.atlassian.net/browse/AN-345]
+- [ ] **ALYS-002-18**: Create sync checkpoint consistency property tests with failure injection [https://marathondh.atlassian.net/browse/AN-346]
+- [ ] **ALYS-002-19**: Implement governance signature validation property tests with Byzantine scenarios [https://marathondh.atlassian.net/browse/AN-347]
 
 ### Phase 5: Chaos Testing Framework (4 tasks)
-- [ ] **ALYS-002-20**: Implement `ChaosTestFramework` with configurable chaos injection strategies
-- [ ] **ALYS-002-21**: Create network chaos testing with partitions, latency, and message corruption
-- [ ] **ALYS-002-22**: Implement system resource chaos with memory pressure, CPU stress, and disk failures
-- [ ] **ALYS-002-23**: Create Byzantine behavior simulation with malicious actor injection
+- [ ] **ALYS-002-20**: Implement `ChaosTestFramework` with configurable chaos injection strategies [https://marathondh.atlassian.net/browse/AN-348]
+- [ ] **ALYS-002-21**: Create network chaos testing with partitions, latency, and message corruption [https://marathondh.atlassian.net/browse/AN-349]
+- [ ] **ALYS-002-22**: Implement system resource chaos with memory pressure, CPU stress, and disk failures [https://marathondh.atlassian.net/browse/AN-350]
+- [ ] **ALYS-002-23**: Create Byzantine behavior simulation with malicious actor injection [https://marathondh.atlassian.net/browse/AN-351]
 
 ### Phase 6: Performance Benchmarking (3 tasks)
-- [ ] **ALYS-002-24**: Set up Criterion.rs benchmarking suite with actor throughput measurements
-- [ ] **ALYS-002-25**: Implement sync performance benchmarks with block processing rate validation
-- [ ] **ALYS-002-26**: Create memory and CPU profiling integration with flamegraph generation
+- [ ] **ALYS-002-24**: Set up Criterion.rs benchmarking suite with actor throughput measurements [https://marathondh.atlassian.net/browse/AN-352]
+- [ ] **ALYS-002-25**: Implement sync performance benchmarks with block processing rate validation [https://marathondh.atlassian.net/browse/AN-353]
+- [ ] **ALYS-002-26**: Create memory and CPU profiling integration with flamegraph generation [https://marathondh.atlassian.net/browse/AN-354]
 
 ### Phase 7: CI/CD Integration & Reporting (2 tasks)
-- [ ] **ALYS-002-27**: Implement Docker Compose test environment with Bitcoin regtest, Postgres, and Geth
-- [ ] **ALYS-002-28**: Create test reporting system with coverage analysis, performance trending, and chaos test results
+- [ ] **ALYS-002-27**: Implement Docker Compose test environment with Bitcoin regtest and Reth [https://marathondh.atlassian.net/browse/AN-355]
+- [ ] **ALYS-002-28**: Create test reporting system with coverage analysis, performance trending, and chaos test results [https://marathondh.atlassian.net/browse/AN-356]
 
 ## Original Acceptance Criteria
 - [ ] Test harness structure created and documented
@@ -479,45 +479,117 @@ criterion_main!(benches);
 7. **Docker Compose Test Environment**
 ```yaml
 # docker-compose.test.yml
-version: '3.8'
-
 services:
-  test-bitcoin:
-    image: bitcoin:latest
-    command: -regtest -txindex
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    container_name: bitcoin-test
+    restart: unless-stopped
     ports:
+      - "18333:18333"
       - "18443:18443"
     volumes:
-      - ./test-data/bitcoin:/data
-  
-  test-postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_DB: alys_test
-      POSTGRES_USER: alys
-      POSTGRES_PASSWORD: test
+      - ./test-data/bitcoin:/home/bitcoin/.bitcoin
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+      - -txindex
+
+  execution:
+    container_name: execution-test
+    restart: unless-stopped
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
     ports:
-      - "5433:5432"
-  
-  test-geth:
-    image: ethereum/client-go:latest
-    command: --dev --http --http.addr 0.0.0.0
-    ports:
-      - "8546:8545"
-  
-  test-alys:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    depends_on:
-      - test-bitcoin
-      - test-postgres
-      - test-geth
-    environment:
-      - TEST_MODE=true
-      - RUST_LOG=debug
+      - '19001:19001' # metrics
+      - '30303:30303' # eth/66 peering
+      - '8545:8545' # rpc
+      - '8456:8456' # ws
+      - '8551:8551' # engine
     volumes:
-      - ./test-data/alys:/data
+      - ./test-data/execution/logs:/opt/alys/execution/logs
+      - ./test-data/execution/data:/opt/alys/execution/data
+      - ./test-config:/opt/alys/execution/config
+    pid: host
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+    command: > 
+      node
+      --dev
+      --log.file.directory /opt/alys/execution/logs
+      --datadir "/opt/alys/execution/data"
+      --metrics 0.0.0.0:9001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --http.corsdomain "*"
+      --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --ws
+      --ws.addr "0.0.0.0"
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+      --dev.block_time 2s
+
+  consensus:
+    container_name: consensus-test
+    restart: unless-stopped
+    build:
+      context: ../
+      dockerfile: etc/Dockerfile
+      target: builder
+    ports:
+      - "3000:3000"
+      - "55444:55444"
+      - '9002:9001' # metrics (different port to avoid conflicts)
+    volumes:
+      - ./test-data/alys/db:/lib/alys/data/db
+      - ./test-data/alys/wallet:/lib/alys/data/wallet
+      - ./test-config/chain-test.json:/lib/alys/config/chain.json:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TEST_MODE: "true"
+    command:
+      - /opt/alys/target/debug/app
+      - --dev
+      - --chain
+      - /lib/alys/config/chain.json
+      - --geth-url
+      - http://execution:8551/
+      - --db-path
+      - /lib/alys/data/db
+      - --wallet-path
+      - /lib/alys/data/wallet
+      - --bitcoin-rpc-url
+      - http://bitcoin-core:18443
+      - --bitcoin-rpc-user
+      - rpcuser
+      - --bitcoin-rpc-pass
+      - rpcpassword
+      - --geth-execution-url
+      - http://execution:8545
+      - --p2p-port
+      - "55444"
+    depends_on:
+      - execution
+      - bitcoin-core
+
+volumes:
+  test-logs:
+    driver: local
+  test-data:
+    driver: local
 ```
 
 ## Testing Plan
