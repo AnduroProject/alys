@@ -12,7 +12,69 @@ use futures;
 
 use crate::config::ActorSystemConfig;
 use crate::{TestResult, TestError};
+use crate::property_tests::OrderingTestActor;
 use super::TestHarness;
+
+// Missing message types and actor types for testing
+#[derive(Debug, Clone)]
+pub struct TestMessage {
+    pub id: u64,
+    pub content: String,
+}
+
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct PanicMessage {
+    pub reason: String,
+}
+
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "()")]
+pub struct ShutdownMessage {
+    pub timeout: Duration,
+}
+
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "bool")]
+pub struct HealthCheckMessage;
+
+// Missing actor types for testing
+#[derive(Debug)]
+pub struct EchoTestActor {
+    pub id: String,
+}
+
+impl Actor for EchoTestActor {
+    type Context = Context<Self>;
+}
+
+#[derive(Debug)]
+pub struct PanicTestActor {
+    pub id: String,
+}
+
+impl Actor for PanicTestActor {
+    type Context = Context<Self>;
+}
+
+#[derive(Debug)]
+pub struct ThroughputTestActor {
+    pub id: String,
+    pub message_count: u64,
+}
+
+impl Actor for ThroughputTestActor {
+    type Context = Context<Self>;
+}
+
+#[derive(Debug)]
+pub struct SupervisedTestActor {
+    pub id: String,
+}
+
+impl Actor for SupervisedTestActor {
+    type Context = Context<Self>;
+}
 
 // Test-specific actor system types (self-contained for testing)
 // We avoid the unstable actor_system crate and implement what we need for testing
@@ -3798,34 +3860,35 @@ impl LifecycleMonitor {
     /// Record a state transition
     pub fn record_transition(&mut self, actor_id: &str, from_state: TestActorState, to_state: TestActorState, reason: Option<String>) {
         let transition = StateTransition {
+            actor_id: actor_id.to_string(),
             from_state,
             to_state,
-            timestamp: SystemTime::now(),
+            timestamp: Instant::now(),
             reason,
         };
         
-        self.transitions.entry(actor_id.to_string())
+        self.state_transitions.entry(actor_id.to_string())
             .or_insert_with(Vec::new)
             .push(transition);
-        
-        self.current_states.insert(actor_id.to_string(), to_state);
     }
     
     /// Get current state of an actor
     pub fn current_state(&self, actor_id: &str) -> Option<TestActorState> {
-        self.current_states.get(actor_id).copied()
+        self.state_transitions.get(actor_id)
+            .and_then(|transitions| transitions.last())
+            .map(|transition| transition.to_state.clone())
     }
     
     /// Get all transitions for an actor
     pub fn get_transitions(&self, actor_id: &str) -> Vec<&StateTransition> {
-        self.transitions.get(actor_id)
+        self.state_transitions.get(actor_id)
             .map(|transitions| transitions.iter().collect())
             .unwrap_or_default()
     }
     
     /// Verify expected state transitions
     pub fn verify_transitions(&self, actor_id: &str, expected: &[(TestActorState, TestActorState)]) -> bool {
-        let transitions = match self.transitions.get(actor_id) {
+        let transitions = match self.state_transitions.get(actor_id) {
             Some(t) => t,
             None => return expected.is_empty(),
         };

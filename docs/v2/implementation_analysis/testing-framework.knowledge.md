@@ -1363,6 +1363,466 @@ Property tests use self-contained implementations that:
 4. **Shrinking Optimization**: Better test case shrinking for failure diagnosis
 5. **Coverage Analysis**: Property test coverage analysis and expansion
 
+## Phase 5: Chaos Testing Framework - Detailed Implementation
+
+### Overview
+
+Phase 5 implements comprehensive chaos engineering capabilities for testing system resilience under various failure conditions. The implementation provides chaos injection strategies for network failures, resource exhaustion, and Byzantine behavior simulation to validate system fault tolerance and recovery mechanisms.
+
+### Architecture
+
+The Phase 5 implementation centers around the comprehensive `ChaosTestFramework` with four major chaos testing categories:
+
+```mermaid
+graph TD
+    A[ChaosTestFramework] --> B[Configurable Chaos Injection]
+    A --> C[Network Chaos Testing]
+    A --> D[Resource Chaos Testing]
+    A --> E[Byzantine Behavior Simulation]
+    
+    B --> B1[Chaos Event Scheduling]
+    B --> B2[Health Monitoring]
+    B --> B3[Recovery Validation]
+    B --> B4[Reporting System]
+    
+    C --> C1[Network Partitions]
+    C --> C2[Latency Injection]
+    C --> C3[Message Corruption]
+    C --> C4[Peer Disconnections]
+    
+    D --> D1[Memory Pressure]
+    D --> D2[CPU Stress Testing]
+    D --> D3[Disk I/O Failures]
+    D --> D4[Resource Exhaustion]
+    
+    E --> E1[Malicious Actors]
+    E --> E2[Consensus Attacks]
+    E --> E3[Sybil Attacks]
+    E --> E4[Byzantine Tolerance]
+```
+
+### Implementation Details
+
+#### 1. ALYS-002-20: ChaosTestFramework Core Structure
+
+**Location:** `tests/src/framework/chaos.rs:22-43`
+
+```rust
+pub struct ChaosTestFramework {
+    /// Chaos testing configuration
+    pub config: ChaosConfig,
+    /// Network chaos injector
+    network_injector: Arc<Mutex<NetworkChaosInjector>>,
+    /// Resource chaos injector
+    resource_injector: Arc<Mutex<ResourceChaosInjector>>,
+    /// Byzantine behavior injector
+    byzantine_injector: Arc<Mutex<ByzantineChaosInjector>>,
+    /// Chaos event scheduler
+    event_scheduler: Arc<Mutex<ChaosEventScheduler>>,
+    /// System health monitor
+    health_monitor: Arc<RwLock<SystemHealthMonitor>>,
+    /// Chaos execution state
+    execution_state: Arc<RwLock<ChaosExecutionState>>,
+}
+```
+
+**Key Features:**
+- **Configurable Strategies**: 17 different chaos event types with customizable parameters
+- **Concurrent Injection**: Thread-safe chaos injection across multiple system components
+- **Health Monitoring**: Continuous system health tracking during chaos events
+- **Recovery Validation**: Automated recovery validation and resilience scoring
+- **Event Scheduling**: Sophisticated chaos event orchestration with timing controls
+
+#### 2. Chaos Event System
+
+**Location:** `tests/src/framework/chaos.rs:89-172`
+
+The framework provides 17 comprehensive chaos event types:
+
+**Network Chaos Events (ALYS-002-21):**
+```rust
+pub enum ChaosEvent {
+    NetworkPartition { 
+        partition_groups: Vec<Vec<String>>, 
+        duration: Duration 
+    },
+    NetworkLatencyInjection { 
+        target_peers: Vec<String>, 
+        latency: Duration, 
+        jitter: Duration 
+    },
+    MessageCorruption { 
+        corruption_rate: f64, 
+        target_message_types: Vec<String>, 
+        duration: Duration 
+    },
+    PeerDisconnection { 
+        target_peers: Vec<String>, 
+        reconnect_delay: Duration 
+    },
+    NetworkCongestion { 
+        congestion_level: f64, 
+        duration: Duration 
+    },
+}
+```
+
+**Resource Chaos Events (ALYS-002-22):**
+```rust
+    MemoryPressure { 
+        target_usage_percent: f64, 
+        duration: Duration 
+    },
+    CpuStress { 
+        target_usage_percent: f64, 
+        duration: Duration 
+    },
+    DiskIoFailure { 
+        failure_rate: f64, 
+        target_operations: Vec<String>, 
+        duration: Duration 
+    },
+    FileSystemCorruption { 
+        corruption_probability: f64, 
+        target_files: Vec<String> 
+    },
+```
+
+**Byzantine Chaos Events (ALYS-002-23):**
+```rust
+    MaliciousActorInjection { 
+        actor_count: u32, 
+        attack_patterns: Vec<AttackPattern> 
+    },
+    ConsensusAttack { 
+        attack_type: ConsensusAttackType, 
+        byzantine_ratio: f64 
+    },
+    SybilAttack { 
+        fake_node_count: u32, 
+        coordination_strategy: SybilStrategy 
+    },
+    DataCorruptionAttack { 
+        corruption_pattern: CorruptionPattern, 
+        target_data: Vec<String>, 
+        duration: Duration 
+    },
+```
+
+#### 3. ALYS-002-21: Network Chaos Testing Implementation
+
+**Location:** `tests/src/framework/chaos.rs:174-318`
+
+**NetworkChaosInjector Structure:**
+```rust
+pub struct NetworkChaosInjector {
+    /// Active network partitions
+    active_partitions: HashMap<String, NetworkPartition>,
+    /// Active latency injections
+    active_latency_injections: HashMap<String, LatencyInjection>,
+    /// Message corruption state
+    message_corruption: MessageCorruptionState,
+    /// Peer disconnect/reconnect state
+    peer_connection_state: HashMap<String, PeerConnectionState>,
+    /// Network chaos metrics
+    metrics: NetworkChaosMetrics,
+}
+```
+
+**Network Chaos Test Methods:**
+```rust
+// Network partition testing
+pub async fn inject_network_partition(&mut self, partition_groups: Vec<Vec<String>>, duration: Duration) -> Result<()>
+
+// Latency injection testing
+pub async fn inject_network_latency(&mut self, target_peers: Vec<String>, latency: Duration, jitter: Duration) -> Result<()>
+
+// Message corruption testing  
+pub async fn enable_message_corruption(&mut self, corruption_rate: f64, target_types: Vec<String>, duration: Duration) -> Result<()>
+
+// Peer disconnection testing
+pub async fn disconnect_peers(&mut self, target_peers: Vec<String>, reconnect_delay: Duration) -> Result<()>
+```
+
+**Key Features:**
+- **Network Partitioning**: Dynamic network partition creation with configurable groups
+- **Latency Injection**: Variable latency with jitter for realistic network conditions
+- **Message Corruption**: Selective message corruption with configurable rates and target types
+- **Peer Management**: Controlled peer disconnection and reconnection scenarios
+- **Recovery Validation**: Automatic network recovery and connectivity restoration testing
+
+#### 4. ALYS-002-22: System Resource Chaos Testing Implementation
+
+**Location:** `tests/src/framework/chaos.rs:320-401`
+
+**ResourceChaosInjector Structure:**
+```rust
+pub struct ResourceChaosInjector {
+    /// Memory pressure simulation
+    memory_pressure_state: MemoryPressureState,
+    /// CPU stress test state
+    cpu_stress_state: CpuStressState,
+    /// Disk I/O failure state
+    disk_io_state: DiskIoState,
+    /// File system corruption state  
+    filesystem_state: FilesystemState,
+    /// Resource chaos metrics
+    metrics: ResourceChaosMetrics,
+}
+```
+
+**Resource Chaos Test Methods:**
+```rust
+// Memory pressure testing
+pub async fn create_memory_pressure(&mut self, target_usage_percent: f64, duration: Duration) -> Result<()>
+
+// CPU stress testing
+pub async fn create_cpu_stress(&mut self, target_usage_percent: f64, duration: Duration) -> Result<()>
+
+// Disk I/O failure testing
+pub async fn simulate_disk_io_failures(&mut self, failure_rate: f64, target_ops: Vec<String>, duration: Duration) -> Result<()>
+
+// File system corruption testing
+pub async fn corrupt_filesystem_data(&mut self, corruption_prob: f64, target_files: Vec<String>) -> Result<()>
+```
+
+**Key Features:**
+- **Memory Pressure**: Controlled memory exhaustion simulation with configurable target percentages
+- **CPU Stress**: CPU utilization stress testing with sustained load generation
+- **Disk I/O Failures**: Selective disk operation failure simulation with configurable failure rates
+- **File System Corruption**: File system integrity testing with targeted corruption scenarios
+- **Resource Monitoring**: Real-time resource usage tracking during chaos injection
+
+#### 5. ALYS-002-23: Byzantine Behavior Simulation Implementation
+
+**Location:** `tests/src/framework/chaos.rs:403-696`
+
+**ByzantineChaosInjector Structure:**
+```rust
+pub struct ByzantineChaosInjector {
+    /// Active malicious actors
+    malicious_actors: Vec<MaliciousActor>,
+    /// Consensus attack simulations
+    consensus_attacks: Vec<ConsensusAttack>,
+    /// Sybil attack coordination
+    sybil_attacks: Vec<SybilAttack>,
+    /// Data corruption attacks
+    data_corruption_attacks: Vec<DataCorruptionAttack>,
+    /// Byzantine chaos metrics
+    metrics: ByzantineChaosMetrics,
+}
+```
+
+**Byzantine Attack Types:**
+```rust
+pub enum AttackPattern {
+    DoubleSigning,           // Sign conflicting blocks
+    VoteFlipping,            // Change vote after commitment
+    MessageWithholding,      // Withhold critical messages
+    FakeProposals,          // Submit invalid proposals
+    ConsensusDelay,         // Delay consensus participation
+    InvalidSignatures,      // Submit cryptographically invalid signatures
+}
+
+pub enum ConsensusAttackType {
+    NothingAtStake,         // Vote for multiple competing chains
+    LongRangeAttack,        // Attempt to rewrite historical blocks
+    FinalizationStall,      // Prevent consensus finalization
+    ValidatorCartels,       // Coordinated validator collusion
+}
+```
+
+**Byzantine Test Methods:**
+```rust
+// Malicious actor injection
+pub async fn inject_malicious_actors(&mut self, actor_count: u32, attack_patterns: Vec<AttackPattern>) -> Result<()>
+
+// Consensus attack simulation  
+pub async fn simulate_consensus_attacks(&mut self, attack_type: ConsensusAttackType, byzantine_ratio: f64) -> Result<()>
+
+// Sybil attack coordination
+pub async fn launch_sybil_attack(&mut self, fake_node_count: u32, coordination_strategy: SybilStrategy) -> Result<()>
+
+// Data corruption attacks
+pub async fn execute_data_corruption_attack(&mut self, corruption_pattern: CorruptionPattern, target_data: Vec<String>, duration: Duration) -> Result<()>
+```
+
+**Key Features:**
+- **Malicious Actor Simulation**: Dynamic injection of Byzantine actors with configurable attack patterns
+- **Consensus Attack Testing**: Comprehensive consensus-level attack simulation including nothing-at-stake and long-range attacks
+- **Sybil Attack Coordination**: Multi-node Sybil attack orchestration with identity management
+- **Data Corruption**: Targeted data corruption attacks with various corruption patterns
+- **Byzantine Tolerance Validation**: Automatic validation of system Byzantine fault tolerance thresholds
+
+#### 6. Chaos Event Scheduling and Orchestration
+
+**Location:** `tests/src/framework/chaos.rs:698-954`
+
+**ChaosEventScheduler Structure:**
+```rust
+pub struct ChaosEventScheduler {
+    /// Scheduled chaos events
+    scheduled_events: VecDeque<ScheduledChaosEvent>,
+    /// Event execution state
+    execution_state: HashMap<String, EventExecutionState>,
+    /// Scheduling configuration
+    config: ChaosSchedulingConfig,
+    /// Event execution metrics
+    metrics: SchedulingMetrics,
+}
+```
+
+**Scheduling Features:**
+- **Event Orchestration**: Complex event scheduling with dependencies and timing constraints
+- **Randomized Execution**: Configurable randomness in event timing and selection
+- **Event Dependencies**: Event execution based on system state and previous event outcomes
+- **Concurrent Execution**: Multiple chaos events executing simultaneously with coordination
+- **Recovery Delays**: Configurable recovery periods between chaos injections
+
+#### 7. System Health Monitoring and Recovery Validation
+
+**Location:** `tests/src/framework/chaos.rs:956-1197`
+
+**SystemHealthMonitor Structure:**
+```rust
+pub struct SystemHealthMonitor {
+    /// Health check configuration
+    config: HealthMonitoringConfig,
+    /// Health metrics collection
+    metrics: HealthMetrics,
+    /// System component statuses
+    component_status: HashMap<String, ComponentHealth>,
+    /// Health check history
+    health_history: VecDeque<HealthSnapshot>,
+}
+```
+
+**Health Monitoring Features:**
+- **Continuous Monitoring**: Real-time health tracking during chaos injection
+- **Component Health**: Individual component health status monitoring
+- **Recovery Detection**: Automatic detection of system recovery after chaos events
+- **Resilience Scoring**: Quantitative resilience scoring based on recovery performance
+- **Baseline Comparison**: Health metric comparison against pre-chaos baselines
+
+#### 8. TestHarness Integration and Execution
+
+**Location:** `tests/src/framework/chaos.rs:1799-2191`
+
+**ChaosTestFramework TestHarness Implementation:**
+```rust
+impl TestHarness for ChaosTestFramework {
+    fn name(&self) -> &str { "ChaosTestFramework" }
+    
+    async fn run_all_tests(&self) -> Vec<TestResult> {
+        let mut results = Vec::new();
+        
+        // ALYS-002-20: Configurable chaos injection strategies
+        if let Ok(chaos_result) = self.run_configurable_chaos_test().await {
+            results.push(TestResult {
+                test_name: "ALYS-002-20: Configurable Chaos Injection Strategies".to_string(),
+                success: chaos_result.failures_detected == 0,
+                duration: chaos_result.duration,
+                message: Some(format!("Events injected: {}, System recoveries: {}, Failures: {}", 
+                    chaos_result.events_injected, chaos_result.system_recoveries, chaos_result.failures_detected)),
+                metadata: HashMap::new(),
+            });
+        }
+        
+        // ALYS-002-21: Network chaos testing
+        results.extend(self.run_network_chaos_tests().await);
+        
+        // ALYS-002-22: Resource chaos testing
+        results.extend(self.run_resource_chaos_tests().await);
+        
+        // ALYS-002-23: Byzantine behavior simulation
+        results.extend(self.run_byzantine_chaos_tests().await);
+        
+        results
+    }
+}
+```
+
+**Test Execution Categories:**
+1. **Network Chaos Tests**: 3 specialized network failure scenario tests
+2. **Resource Chaos Tests**: 3 resource exhaustion and failure tests  
+3. **Byzantine Chaos Tests**: 3 Byzantine attack simulation tests
+4. **Integrated Chaos Tests**: 1 comprehensive multi-category chaos test
+
+### Performance Characteristics and Metrics
+
+#### Chaos Testing Execution Metrics
+
+- **Total Chaos Events**: 17 different chaos event types with configurable parameters
+- **Network Chaos**: Network partitions, latency injection, message corruption, peer disconnections
+- **Resource Chaos**: Memory pressure, CPU stress, disk I/O failures, filesystem corruption
+- **Byzantine Chaos**: Malicious actors, consensus attacks, Sybil attacks, data corruption
+- **Event Scheduling**: Complex event orchestration with timing and dependency management
+- **Health Monitoring**: Continuous health tracking with component-level status monitoring
+
+#### Success Criteria and Quality Gates
+
+- **Chaos Injection Success**: 95%+ successful chaos event injection and execution
+- **Recovery Validation**: 80%+ system recovery success rate after chaos events
+- **Health Monitoring**: Continuous health tracking with sub-second monitoring intervals
+- **Byzantine Tolerance**: Correct Byzantine fault tolerance threshold enforcement
+- **Network Resilience**: System functionality maintenance during network failures
+- **Resource Management**: Graceful degradation under resource pressure scenarios
+
+### Mock Implementation Strategy
+
+For development and CI environments, chaos tests use realistic mock implementations:
+
+- **Network Simulation**: Realistic network failure patterns without actual network disruption
+- **Resource Simulation**: Memory and CPU pressure simulation without system impact
+- **Byzantine Simulation**: Malicious behavior patterns without actual security threats
+- **Fast Execution**: Sub-second chaos test execution for rapid CI/CD feedback
+- **Deterministic Results**: Reproducible chaos scenarios with configurable randomness
+- **Safety First**: No actual system damage or security compromise during testing
+
+### Integration with Other Framework Components
+
+#### Configuration Integration
+
+**Location:** `tests/src/framework/config.rs:129-139`
+
+```rust
+pub struct ChaosConfig {
+    pub enabled: bool,
+    pub max_concurrent_events: u32,
+    pub event_scheduling_strategy: SchedulingStrategy,
+    pub health_monitoring_interval: Duration,
+    pub recovery_validation_timeout: Duration,
+    pub byzantine_tolerance_threshold: f64,
+    pub network_chaos_enabled: bool,
+    pub resource_chaos_enabled: bool,
+    pub byzantine_chaos_enabled: bool,
+}
+```
+
+#### Metrics Integration
+
+Chaos testing metrics are integrated with the main framework metrics collection:
+
+```rust
+pub struct ChaosTestMetrics {
+    pub total_chaos_events: u32,
+    pub successful_injections: u32,
+    pub recovery_successes: u32,
+    pub resilience_score: f64,
+    pub byzantine_tolerance_violations: u32,
+    pub network_partition_recoveries: u32,
+    pub resource_pressure_handlings: u32,
+}
+```
+
+### Next Steps for Phase 5
+
+1. **Real System Integration**: Replace mock implementations with actual system chaos injection
+2. **Extended Attack Scenarios**: Add more sophisticated Byzantine attack patterns
+3. **Long-Duration Testing**: Extended chaos testing with multi-hour scenarios
+4. **Automated Recovery**: Enhanced automatic recovery mechanism validation
+5. **Chaos Engineering Best Practices**: Integration with chaos engineering monitoring tools
+
 ## Property Test Categories Summary
 
 ### 1. Actor Message Ordering Properties
@@ -1380,9 +1840,11 @@ Property tests use self-contained implementations that:
 - **Test Range**: 3-15 federation members with attack simulation
 - **Key Invariants**: Attack detection, threshold compliance, Byzantine tolerance
 
-### Phase 5: Chaos Testing Framework (Pending)
-- Basic structure implemented
-- Full chaos injection planned for ALYS-002-20 through ALYS-002-23
+### Phase 5: Chaos Testing Framework ✅ COMPLETED
+- **ALYS-002-20**: ChaosTestFramework with configurable chaos injection strategies ✅
+- **ALYS-002-21**: Network chaos testing with partitions, latency, and message corruption ✅
+- **ALYS-002-22**: System resource chaos with memory pressure, CPU stress, and disk failures ✅
+- **ALYS-002-23**: Byzantine behavior simulation with malicious actor injection ✅
 
 ### Phase 6: Performance Benchmarking (Pending)
 - Framework structure in place
@@ -1482,8 +1944,8 @@ Phases 1, 2, and 3 of the Alys V2 Testing Framework have been successfully imple
 - ✅ **Phase 2**: Complete actor testing framework with 18 specialized test methods across 6 categories  
 - ✅ **Phase 3**: Complete sync testing framework with P2P network simulation, resilience testing, checkpoints, and parallel sync scenarios
 - ✅ **Phase 4**: Complete property-based testing framework with PropTest generators and 12 property tests across 3 categories
-- 🔄 **Phase 5**: Chaos testing framework (pending implementation)
-- 🔄 **Phase 6**: Performance benchmarking (pending implementation)
+- ✅ **Phase 5**: Complete chaos testing framework with 17 chaos event types across network, resource, and Byzantine categories
+- 🔄 **Phase 6**: Performance benchmarking (pending implementation)  
 - 🔄 **Phase 7**: CI/CD integration & reporting (pending implementation)
 
-The framework now provides comprehensive testing capabilities for the Alys V2 migration, with particular strength in actor system validation, blockchain synchronization testing, and property-based testing with randomized input validation. It includes full sync testing up to 10,000+ blocks, network resilience with failure scenarios, checkpoint consistency validation, parallel sync testing with multiple peer scenarios, and property-based testing with 50+ generators covering all major blockchain data structures. The framework validates critical system invariants including message ordering, checkpoint consistency, and governance signature validation under Byzantine scenarios. The framework is ready for integration with actual system components and expansion through the remaining phases.
+The framework now provides comprehensive testing capabilities for the Alys V2 migration, with particular strength in actor system validation, blockchain synchronization testing, property-based testing, and chaos engineering. It includes full sync testing up to 10,000+ blocks, network resilience with failure scenarios, checkpoint consistency validation, parallel sync testing with multiple peer scenarios, property-based testing with 50+ generators covering all major blockchain data structures, and comprehensive chaos testing with 17 chaos event types across network failures, resource exhaustion, and Byzantine behavior simulation. The framework validates critical system invariants including message ordering, checkpoint consistency, governance signature validation under Byzantine scenarios, and system resilience under chaos conditions. The framework is ready for integration with actual system components and expansion through the remaining phases.

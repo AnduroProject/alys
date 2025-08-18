@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use std::collections::{HashMap, VecDeque};
 use crate::framework::generators::*;
 use crate::framework::TestResult;
+use actix::prelude::*;
 
 // ALYS-002-17: Actor Message Ordering Property Tests with Sequence Verification
 
@@ -33,6 +34,10 @@ pub struct ProcessedMessage {
     pub processing_order: u64,
     pub received_at: SystemTime,
     pub processed_at: SystemTime,
+}
+
+impl Actor for OrderingTestActor {
+    type Context = Context<Self>;
 }
 
 impl OrderingTestActor {
