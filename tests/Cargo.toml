@@ -40,6 +40,19 @@ actix = "0.13"
 [dev-dependencies]
 tokio-test = "0.4"
 
+# Benchmark configuration
+[[bench]]
+name = "actor_benchmarks"
+harness = false
+
+[[bench]]
+name = "sync_benchmarks"
+harness = false
+
+[[bench]]
+name = "system_benchmarks"
+harness = false
+
 # Optional features
 [features]
 default = ["chaos", "performance", "coverage"]
