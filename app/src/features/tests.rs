@@ -3,6 +3,10 @@
 //! This module contains tests for all core components of the feature flag system,
 //! including evaluation logic, targeting, caching, and configuration loading.
 
+// Phase 4 (Logging & Metrics) Integration Tests
+#[cfg(test)]
+mod phase4_tests;
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
