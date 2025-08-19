@@ -47,6 +47,60 @@ impl SyncState {
     }
 }
 
+/// Transaction rejection reasons for ALYS-003-18
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionRejectionReason {
+    InsufficientFee,
+    InvalidNonce,
+    InsufficientBalance,
+    GasLimitExceeded,
+    InvalidSignature,
+    AccountNotFound,
+    PoolFull,
+    DuplicateTransaction,
+    InvalidTransaction,
+    NetworkCongestion,
+    RateLimited,
+    Other,
+}
+
+impl TransactionRejectionReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransactionRejectionReason::InsufficientFee => "insufficient_fee",
+            TransactionRejectionReason::InvalidNonce => "invalid_nonce", 
+            TransactionRejectionReason::InsufficientBalance => "insufficient_balance",
+            TransactionRejectionReason::GasLimitExceeded => "gas_limit_exceeded",
+            TransactionRejectionReason::InvalidSignature => "invalid_signature",
+            TransactionRejectionReason::AccountNotFound => "account_not_found",
+            TransactionRejectionReason::PoolFull => "pool_full",
+            TransactionRejectionReason::DuplicateTransaction => "duplicate_transaction",
+            TransactionRejectionReason::InvalidTransaction => "invalid_transaction",
+            TransactionRejectionReason::NetworkCongestion => "network_congestion",
+            TransactionRejectionReason::RateLimited => "rate_limited",
+            TransactionRejectionReason::Other => "other",
+        }
+    }
+    
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "insufficient_fee" => Some(TransactionRejectionReason::InsufficientFee),
+            "invalid_nonce" => Some(TransactionRejectionReason::InvalidNonce),
+            "insufficient_balance" => Some(TransactionRejectionReason::InsufficientBalance),
+            "gas_limit_exceeded" => Some(TransactionRejectionReason::GasLimitExceeded),
+            "invalid_signature" => Some(TransactionRejectionReason::InvalidSignature),
+            "account_not_found" => Some(TransactionRejectionReason::AccountNotFound),
+            "pool_full" => Some(TransactionRejectionReason::PoolFull),
+            "duplicate_transaction" => Some(TransactionRejectionReason::DuplicateTransaction),
+            "invalid_transaction" => Some(TransactionRejectionReason::InvalidTransaction),
+            "network_congestion" => Some(TransactionRejectionReason::NetworkCongestion),
+            "rate_limited" => Some(TransactionRejectionReason::RateLimited),
+            "other" => Some(TransactionRejectionReason::Other),
+            _ => None,
+        }
+    }
+}
+
 /// Block timer type for ALYS-003-17
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockTimerType {
@@ -885,6 +939,119 @@ impl MetricsCollector {
             bytes_per_second = %format!("{:.2}", bytes_per_second),
             "Block pipeline metrics recorded"
         );
+    }
+    
+    /// Update transaction pool size (ALYS-003-18)
+    pub fn update_transaction_pool_size(&self, size: usize) {
+        TRANSACTION_POOL_SIZE.set(size as i64);
+        
+        tracing::trace!(
+            txpool_size = size,
+            "Transaction pool size updated"
+        );
+    }
+    
+    /// Record transaction pool processing rate (ALYS-003-18)
+    pub fn record_transaction_processing_rate(&self, transactions_processed: u64, time_window: Duration) {
+        let rate = if time_window.as_secs() > 0 {
+            transactions_processed as f64 / time_window.as_secs() as f64
+        } else {
+            0.0
+        };
+        
+        TRANSACTION_POOL_PROCESSING_RATE.set(rate);
+        
+        tracing::debug!(
+            transactions_processed = transactions_processed,
+            time_window_secs = time_window.as_secs(),
+            processing_rate = %format!("{:.2}", rate),
+            "Transaction processing rate recorded"
+        );
+    }
+    
+    /// Record transaction rejection (ALYS-003-18)
+    pub fn record_transaction_rejection(&self, reason: TransactionRejectionReason) {
+        let reason_str = reason.as_str();
+        
+        TRANSACTION_POOL_REJECTIONS
+            .with_label_values(&[reason_str])
+            .inc();
+        
+        tracing::debug!(
+            rejection_reason = reason_str,
+            "Transaction rejection recorded"
+        );
+    }
+    
+    /// Record batch of transaction pool metrics (ALYS-003-18)
+    pub fn record_transaction_pool_metrics(
+        &self,
+        current_size: usize,
+        pending_count: usize,
+        queued_count: usize,
+        processing_rate: f64,
+        avg_fee: Option<u64>,
+        rejections_in_window: &[(TransactionRejectionReason, u32)],
+    ) {
+        // Update pool size
+        self.update_transaction_pool_size(current_size);
+        TRANSACTION_POOL_PROCESSING_RATE.set(processing_rate);
+        
+        // Record rejections
+        for (reason, count) in rejections_in_window {
+            let reason_str = reason.as_str();
+            TRANSACTION_POOL_REJECTIONS
+                .with_label_values(&[reason_str])
+                .inc_by(*count as u64);
+        }
+        
+        tracing::info!(
+            current_size = current_size,
+            pending_count = pending_count,
+            queued_count = queued_count,
+            processing_rate = %format!("{:.2}", processing_rate),
+            avg_fee = ?avg_fee,
+            rejection_count = rejections_in_window.len(),
+            "Transaction pool metrics updated"
+        );
+    }
+    
+    /// Calculate transaction pool health score (ALYS-003-18)
+    pub fn calculate_txpool_health_score(&self, max_size: usize, current_size: usize, rejection_rate: f64) -> f64 {
+        // Calculate pool utilization (0.0 to 1.0)
+        let utilization = if max_size > 0 {
+            current_size as f64 / max_size as f64
+        } else {
+            0.0
+        };
+        
+        // Calculate health score (higher is better)
+        // - Low utilization is good (< 80%)
+        // - Low rejection rate is good (< 5%)
+        let utilization_score = if utilization < 0.8 {
+            1.0 - utilization * 0.5  // Penalty increases with utilization
+        } else {
+            0.1  // Heavy penalty for high utilization
+        };
+        
+        let rejection_score = if rejection_rate < 0.05 {
+            1.0 - rejection_rate * 10.0  // Small penalty for low rejection rates
+        } else {
+            0.1  // Heavy penalty for high rejection rates
+        };
+        
+        let health_score = (utilization_score + rejection_score) / 2.0;
+        
+        tracing::debug!(
+            max_size = max_size,
+            current_size = current_size,
+            utilization = %format!("{:.1}%", utilization * 100.0),
+            rejection_rate = %format!("{:.2}%", rejection_rate * 100.0),
+            health_score = %format!("{:.2}", health_score),
+            "Transaction pool health calculated"
+        );
+        
+        health_score
     }
     
     /// Create a new MetricsCollector with actor bridge integration
