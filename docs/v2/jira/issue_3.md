@@ -43,9 +43,9 @@ Set up comprehensive metrics collection and monitoring infrastructure to track s
 - [X] **ALYS-003-19**: Implement peer connection metrics with count, quality, and geographic distribution
 
 ### Phase 4: System Resource & Collection (3 tasks)
-- [ ] **ALYS-003-20**: Create `MetricsCollector` with automated system resource monitoring (CPU, memory, disk)
-- [ ] **ALYS-003-21**: Implement custom metrics collection with 5-second intervals and failure recovery
-- [ ] **ALYS-003-22**: Add process-specific metrics with PID tracking and resource attribution
+- [X] **ALYS-003-20**: Create `MetricsCollector` with automated system resource monitoring (CPU, memory, disk)
+- [X] **ALYS-003-21**: Implement custom metrics collection with 5-second intervals and failure recovery
+- [X] **ALYS-003-22**: Add process-specific metrics with PID tracking and resource attribution
 
 ### Phase 5: Monitoring Infrastructure & Alerting (2 tasks)
 - [ ] **ALYS-003-23**: Set up Prometheus configuration with scraping targets, retention, and alert manager integration
