@@ -29,33 +29,25 @@ Set up comprehensive metrics collection and monitoring infrastructure to track s
 - [ ] **ALYS-003-03**: Create lazy static metrics initialization with proper error handling and registration
 - [ ] **ALYS-003-04**: Set up metric labeling strategy with consistent naming conventions and cardinality limits
 
-### Phase 2: Migration-Specific Metrics (6 tasks)
-- [ ] **ALYS-003-05**: Implement migration phase tracking with `MIGRATION_PHASE` gauge (0-10 phases)
-- [ ] **ALYS-003-06**: Create migration progress percentage tracking with `MIGRATION_PROGRESS` gauge
-- [ ] **ALYS-003-07**: Add migration error counting with `MIGRATION_ERRORS` counter and error categorization
-- [ ] **ALYS-003-08**: Implement migration rollback tracking with `MIGRATION_ROLLBACKS` counter and reason labels
-- [ ] **ALYS-003-09**: Create migration timing metrics with phase duration histograms
-- [ ] **ALYS-003-10**: Add migration validation metrics with success/failure rates per phase
-
-### Phase 3: Actor System Metrics (5 tasks)
+### Phase 2: Actor System Metrics (5 tasks)
 - [ ] **ALYS-003-11**: Implement actor message metrics with `ACTOR_MESSAGE_COUNT` counter and latency histograms
 - [ ] **ALYS-003-12**: Create mailbox size monitoring with `ACTOR_MAILBOX_SIZE` gauge per actor type
 - [ ] **ALYS-003-13**: Add actor restart tracking with `ACTOR_RESTARTS` counter and failure reason labels
 - [ ] **ALYS-003-14**: Implement actor lifecycle metrics with spawning, stopping, and recovery timings
 - [ ] **ALYS-003-15**: Create actor performance metrics with message processing rates and throughput
 
-### Phase 4: Sync & Performance Metrics (4 tasks)
+### Phase 3: Sync & Performance Metrics (4 tasks)
 - [ ] **ALYS-003-16**: Implement sync progress tracking with current height, target height, and sync speed
 - [ ] **ALYS-003-17**: Create block production and validation timing histograms with percentile buckets
 - [ ] **ALYS-003-18**: Add transaction pool metrics with size, processing rates, and rejection counts
 - [ ] **ALYS-003-19**: Implement peer connection metrics with count, quality, and geographic distribution
 
-### Phase 5: System Resource & Collection (3 tasks)
+### Phase 4: System Resource & Collection (3 tasks)
 - [ ] **ALYS-003-20**: Create `MetricsCollector` with automated system resource monitoring (CPU, memory, disk)
 - [ ] **ALYS-003-21**: Implement custom metrics collection with 5-second intervals and failure recovery
 - [ ] **ALYS-003-22**: Add process-specific metrics with PID tracking and resource attribution
 
-### Phase 6: Monitoring Infrastructure & Alerting (2 tasks)
+### Phase 5: Monitoring Infrastructure & Alerting (2 tasks)
 - [ ] **ALYS-003-23**: Set up Prometheus configuration with scraping targets, retention, and alert manager integration
 - [ ] **ALYS-003-24**: Create comprehensive alert rules for migration stalls, error rates, rollbacks, and system failures
 

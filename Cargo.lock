@@ -253,6 +253,7 @@ dependencies = [
  "chrono",
  "criterion",
  "futures",
+ "hex",
  "proptest",
  "rand",
  "serde",

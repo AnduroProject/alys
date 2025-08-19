@@ -38,32 +38,32 @@ Establish a comprehensive testing framework that will be used throughout the mig
 - [X] **ALYS-002-10**: Create actor communication testing with cross-actor message flows [https://marathondh.atlassian.net/browse/AN-338]
 
 ### Phase 3: Sync Testing Framework (5 tasks)
-- [ ] **ALYS-002-11**: Implement `SyncTestHarness` with mock P2P network and simulated blockchain [https://marathondh.atlassian.net/browse/AN-339]
-- [ ] **ALYS-002-12**: Create full sync testing from genesis to tip with 10,000+ block validation [https://marathondh.atlassian.net/browse/AN-340]
-- [ ] **ALYS-002-13**: Implement sync resilience testing with network failures and peer disconnections [https://marathondh.atlassian.net/browse/AN-341]
-- [ ] **ALYS-002-14**: Create checkpoint consistency testing with configurable intervals [https://marathondh.atlassian.net/browse/AN-342]
-- [ ] **ALYS-002-15**: Implement parallel sync testing with multiple peer scenarios [https://marathondh.atlassian.net/browse/AN-343]
+- [X] **ALYS-002-11**: Implement `SyncTestHarness` with mock P2P network and simulated blockchain [https://marathondh.atlassian.net/browse/AN-339]
+- [X] **ALYS-002-12**: Create full sync testing from genesis to tip with 10,000+ block validation [https://marathondh.atlassian.net/browse/AN-340]
+- [X] **ALYS-002-13**: Implement sync resilience testing with network failures and peer disconnections [https://marathondh.atlassian.net/browse/AN-341]
+- [X] **ALYS-002-14**: Create checkpoint consistency testing with configurable intervals [https://marathondh.atlassian.net/browse/AN-342]
+- [X] **ALYS-002-15**: Implement parallel sync testing with multiple peer scenarios [https://marathondh.atlassian.net/browse/AN-343]
 
 ### Phase 4: Property-Based Testing (4 tasks)
-- [ ] **ALYS-002-16**: Set up PropTest framework with custom generators for blockchain data structures [https://marathondh.atlassian.net/browse/AN-344]
-- [ ] **ALYS-002-17**: Implement actor message ordering property tests with sequence verification [https://marathondh.atlassian.net/browse/AN-345]
-- [ ] **ALYS-002-18**: Create sync checkpoint consistency property tests with failure injection [https://marathondh.atlassian.net/browse/AN-346]
-- [ ] **ALYS-002-19**: Implement governance signature validation property tests with Byzantine scenarios [https://marathondh.atlassian.net/browse/AN-347]
+- [X] **ALYS-002-16**: Set up PropTest framework with custom generators for blockchain data structures [https://marathondh.atlassian.net/browse/AN-344]
+- [X] **ALYS-002-17**: Implement actor message ordering property tests with sequence verification [https://marathondh.atlassian.net/browse/AN-345]
+- [X] **ALYS-002-18**: Create sync checkpoint consistency property tests with failure injection [https://marathondh.atlassian.net/browse/AN-346]
+- [X] **ALYS-002-19**: Implement governance signature validation property tests with Byzantine scenarios [https://marathondh.atlassian.net/browse/AN-347]
 
 ### Phase 5: Chaos Testing Framework (4 tasks)
-- [ ] **ALYS-002-20**: Implement `ChaosTestFramework` with configurable chaos injection strategies [https://marathondh.atlassian.net/browse/AN-348]
-- [ ] **ALYS-002-21**: Create network chaos testing with partitions, latency, and message corruption [https://marathondh.atlassian.net/browse/AN-349]
-- [ ] **ALYS-002-22**: Implement system resource chaos with memory pressure, CPU stress, and disk failures [https://marathondh.atlassian.net/browse/AN-350]
-- [ ] **ALYS-002-23**: Create Byzantine behavior simulation with malicious actor injection [https://marathondh.atlassian.net/browse/AN-351]
+- [X] **ALYS-002-20**: Implement `ChaosTestFramework` with configurable chaos injection strategies [https://marathondh.atlassian.net/browse/AN-348]
+- [X] **ALYS-002-21**: Create network chaos testing with partitions, latency, and message corruption [https://marathondh.atlassian.net/browse/AN-349]
+- [X] **ALYS-002-22**: Implement system resource chaos with memory pressure, CPU stress, and disk failures [https://marathondh.atlassian.net/browse/AN-350]
+- [X] **ALYS-002-23**: Create Byzantine behavior simulation with malicious actor injection [https://marathondh.atlassian.net/browse/AN-351]
 
 ### Phase 6: Performance Benchmarking (3 tasks)
-- [ ] **ALYS-002-24**: Set up Criterion.rs benchmarking suite with actor throughput measurements [https://marathondh.atlassian.net/browse/AN-352]
-- [ ] **ALYS-002-25**: Implement sync performance benchmarks with block processing rate validation [https://marathondh.atlassian.net/browse/AN-353]
-- [ ] **ALYS-002-26**: Create memory and CPU profiling integration with flamegraph generation [https://marathondh.atlassian.net/browse/AN-354]
+- [X] **ALYS-002-24**: Set up Criterion.rs benchmarking suite with actor throughput measurements [https://marathondh.atlassian.net/browse/AN-352]
+- [X] **ALYS-002-25**: Implement sync performance benchmarks with block processing rate validation [https://marathondh.atlassian.net/browse/AN-353]
+- [X] **ALYS-002-26**: Create memory and CPU profiling integration with flamegraph generation [https://marathondh.atlassian.net/browse/AN-354]
 
 ### Phase 7: CI/CD Integration & Reporting (2 tasks)
-- [ ] **ALYS-002-27**: Implement Docker Compose test environment with Bitcoin regtest and Reth [https://marathondh.atlassian.net/browse/AN-355]
-- [ ] **ALYS-002-28**: Create test reporting system with coverage analysis, performance trending, and chaos test results [https://marathondh.atlassian.net/browse/AN-356]
+- [X] **ALYS-002-27**: Implement Docker Compose test environment with Bitcoin regtest and Reth [https://marathondh.atlassian.net/browse/AN-355]
+- [X] **ALYS-002-28**: Create test reporting system with coverage analysis, performance trending, and chaos test results [https://marathondh.atlassian.net/browse/AN-356]
 
 ## Original Acceptance Criteria
 - [ ] Test harness structure created and documented

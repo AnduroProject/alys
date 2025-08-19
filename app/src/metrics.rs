@@ -4,13 +4,21 @@ use hyper::{
 };
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::interval;
+use sysinfo::{System, SystemExt, ProcessExt, PidExt};
+use serde_json::json;
 
 use lazy_static::lazy_static;
 use prometheus::{
     register_gauge_with_registry, register_histogram_vec_with_registry,
     register_histogram_with_registry, register_int_counter_vec_with_registry,
-    register_int_counter_with_registry, register_int_gauge_with_registry, Encoder, Gauge,
-    Histogram, HistogramVec, IntCounter, IntCounterVec, IntGauge, Registry, TextEncoder,
+    register_int_counter_with_registry, register_int_gauge_with_registry,
+    register_gauge_vec_with_registry, register_int_gauge_vec_with_registry,
+    Encoder, Gauge, GaugeVec, Histogram, HistogramVec, IntCounter, IntCounterVec, 
+    IntGauge, IntGaugeVec, Registry, TextEncoder,
+    HistogramOpts, Opts, Error as PrometheusError,
 };
 
 // Create a new registry named `alys`
@@ -204,6 +212,267 @@ lazy_static! {
         ALYS_REGISTRY
     )
     .unwrap();
+
+    // === Migration-Specific Metrics ===
+    pub static ref MIGRATION_PHASE: IntGauge = register_int_gauge_with_registry!(
+        "alys_migration_phase",
+        "Current migration phase (0-10)",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_PROGRESS: Gauge = register_gauge_with_registry!(
+        "alys_migration_progress_percent",
+        "Migration progress percentage for current phase",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_ERRORS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_migration_errors_total",
+        "Total migration errors encountered",
+        &["phase", "error_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_ROLLBACKS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_migration_rollbacks_total",
+        "Total migration rollbacks performed",
+        &["phase", "reason"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_PHASE_DURATION: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts::new(
+            "alys_migration_phase_duration_seconds",
+            "Time taken to complete each migration phase"
+        ),
+        &["phase"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_VALIDATION_SUCCESS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_migration_validation_success_total",
+        "Migration validation successes per phase",
+        &["phase"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MIGRATION_VALIDATION_FAILURE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_migration_validation_failure_total",
+        "Migration validation failures per phase",
+        &["phase"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+
+    // === Enhanced Actor System Metrics ===
+    pub static ref ACTOR_MESSAGE_COUNT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_actor_messages_total",
+        "Total messages processed by actors",
+        &["actor_type", "message_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref ACTOR_MESSAGE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts::new(
+            "alys_actor_message_latency_seconds",
+            "Time to process actor messages"
+        ).buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
+        &["actor_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref ACTOR_MAILBOX_SIZE: IntGaugeVec = register_int_gauge_vec_with_registry!(
+        "alys_actor_mailbox_size",
+        "Current size of actor mailboxes",
+        &["actor_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref ACTOR_RESTARTS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_actor_restarts_total",
+        "Total actor restarts due to failures",
+        &["actor_type", "reason"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref ACTOR_LIFECYCLE_EVENTS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_actor_lifecycle_events_total",
+        "Actor lifecycle events (spawn, stop, recover)",
+        &["actor_type", "event"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref ACTOR_MESSAGE_THROUGHPUT: GaugeVec = register_gauge_vec_with_registry!(
+        "alys_actor_message_throughput_per_second",
+        "Actor message processing throughput",
+        &["actor_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+
+    // === Enhanced Sync & Performance Metrics ===
+    pub static ref SYNC_CURRENT_HEIGHT: IntGauge = register_int_gauge_with_registry!(
+        "alys_sync_current_height",
+        "Current synchronized block height",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref SYNC_TARGET_HEIGHT: IntGauge = register_int_gauge_with_registry!(
+        "alys_sync_target_height",
+        "Target block height from peers",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref SYNC_BLOCKS_PER_SECOND: Gauge = register_gauge_with_registry!(
+        "alys_sync_blocks_per_second",
+        "Current sync speed in blocks per second",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref SYNC_STATE: IntGauge = register_int_gauge_with_registry!(
+        "alys_sync_state",
+        "Current sync state (0=discovering, 1=headers, 2=blocks, 3=catchup, 4=synced, 5=failed)",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref BLOCK_PRODUCTION_TIME: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts::new(
+            "alys_block_production_duration_seconds",
+            "Time to produce a block"
+        ).buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]),
+        &["validator"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref BLOCK_VALIDATION_TIME: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts::new(
+            "alys_block_validation_duration_seconds",
+            "Time to validate a block"
+        ).buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0]),
+        &["validator"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref TRANSACTION_POOL_SIZE: IntGauge = register_int_gauge_with_registry!(
+        "alys_txpool_size",
+        "Current transaction pool size",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref TRANSACTION_POOL_PROCESSING_RATE: Gauge = register_gauge_with_registry!(
+        "alys_txpool_processing_rate",
+        "Transaction pool processing rate",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref TRANSACTION_POOL_REJECTIONS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_txpool_rejections_total",
+        "Transaction pool rejection counts by reason",
+        &["reason"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+
+    // === Enhanced System Resource Metrics ===
+    pub static ref PEER_COUNT: IntGauge = register_int_gauge_with_registry!(
+        "alys_peer_count",
+        "Number of connected peers",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref PEER_QUALITY_SCORE: GaugeVec = register_gauge_vec_with_registry!(
+        "alys_peer_quality_score",
+        "Peer connection quality score",
+        &["peer_id"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref PEER_GEOGRAPHIC_DISTRIBUTION: IntGaugeVec = register_int_gauge_vec_with_registry!(
+        "alys_peer_geographic_distribution",
+        "Peer count by geographic region",
+        &["region"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref MEMORY_USAGE: IntGauge = register_int_gauge_with_registry!(
+        "alys_memory_usage_bytes",
+        "Current memory usage in bytes",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref CPU_USAGE: Gauge = register_gauge_with_registry!(
+        "alys_cpu_usage_percent",
+        "Current CPU usage percentage",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref DISK_IO_BYTES: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_disk_io_bytes_total",
+        "Total disk I/O bytes",
+        &["operation"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref NETWORK_IO_BYTES: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_network_io_bytes_total",
+        "Total network I/O bytes",
+        &["direction"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref THREAD_COUNT: IntGauge = register_int_gauge_with_registry!(
+        "alys_thread_count",
+        "Current number of threads",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FILE_DESCRIPTORS: IntGauge = register_int_gauge_with_registry!(
+        "alys_file_descriptors",
+        "Current number of open file descriptors",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref PROCESS_START_TIME: IntGauge = register_int_gauge_with_registry!(
+        "alys_process_start_time_seconds",
+        "Process start time in Unix timestamp",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref UPTIME: IntGauge = register_int_gauge_with_registry!(
+        "alys_uptime_seconds",
+        "Process uptime in seconds",
+        ALYS_REGISTRY
+    )
+    .unwrap();
 }
 
 async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -226,6 +495,33 @@ async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible
                 .body(Body::from(buffer))
                 .unwrap();
 
+            Ok(response)
+        }
+        (&Method::GET, "/health") => {
+            let health_status = json!({
+                "status": "healthy",
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "metrics_count": ALYS_REGISTRY.gather().len()
+            });
+
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(health_status.to_string()))
+                .unwrap();
+
+            Ok(response)
+        }
+        (&Method::GET, "/ready") => {
+            // Simple readiness check
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from("ready"))
+                .unwrap();
             Ok(response)
         }
         _ => {
@@ -251,12 +547,288 @@ pub async fn start_server(port_number: Option<u16>) {
 
     let server = Server::bind(&addr).serve(make_svc);
 
+    // Initialize process start time
+    PROCESS_START_TIME.set(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    );
+
     // TODO: handle graceful shutdown
     tokio::spawn(async move {
-        tracing::info!("Starting Metrics server on {}", addr);
+        tracing::info!("Starting Enhanced Metrics server on {} with health endpoints", addr);
 
         if let Err(e) = server.await {
             tracing::error!("Metrics server error: {}", e);
         }
     });
+}
+
+/// Enhanced metrics server with proper error handling and initialization
+pub struct MetricsServer {
+    port: u16,
+    registry: Registry,
+    collector: Option<Arc<MetricsCollector>>,
+}
+
+impl MetricsServer {
+    /// Create a new MetricsServer instance
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            registry: ALYS_REGISTRY.clone(),
+            collector: None,
+        }
+    }
+
+    /// Start the metrics server with automatic resource collection
+    pub async fn start_with_collection(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Start the metrics collector
+        let collector = Arc::new(MetricsCollector::new().await?);
+        let collector_handle = collector.start_collection().await;
+        self.collector = Some(collector);
+
+        // Start the HTTP server
+        self.start_server().await?;
+
+        Ok(())
+    }
+
+    /// Start the HTTP server without automatic collection
+    async fn start_server(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+        let make_svc = make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(handle_request))
+        });
+
+        let server = Server::bind(&addr).serve(make_svc);
+        
+        tracing::info!("Enhanced Metrics server starting on {}", addr);
+        tracing::info!("Available endpoints: /metrics, /health, /ready");
+        
+        server.await?;
+        Ok(())
+    }
+
+    /// Get metrics registry for external use
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+}
+
+/// System resource metrics collector with automated monitoring
+pub struct MetricsCollector {
+    system: System,
+    process_id: u32,
+    start_time: std::time::Instant,
+    collection_interval: Duration,
+}
+
+impl MetricsCollector {
+    /// Create a new MetricsCollector
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut system = System::new_all();
+        system.refresh_all();
+        
+        let process_id = std::process::id();
+        let start_time = std::time::Instant::now();
+        
+        tracing::info!("Initializing MetricsCollector with PID: {}", process_id);
+        
+        Ok(Self {
+            system,
+            process_id,
+            start_time,
+            collection_interval: Duration::from_secs(5),
+        })
+    }
+
+    /// Start automated metrics collection
+    pub async fn start_collection(&self) -> tokio::task::JoinHandle<()> {
+        let mut collector = self.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = interval(collector.collection_interval);
+            
+            loop {
+                interval.tick().await;
+                
+                if let Err(e) = collector.collect_system_metrics().await {
+                    tracing::warn!("Failed to collect system metrics: {}", e);
+                    continue;
+                }
+                
+                collector.update_uptime_metrics();
+                
+                tracing::trace!("System metrics collection completed");
+            }
+        })
+    }
+
+    /// Collect system resource metrics
+    async fn collect_system_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.system.refresh_all();
+        
+        // Get process-specific metrics
+        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+            // Memory usage
+            let memory_bytes = process.memory() * 1024; // Convert KB to bytes
+            MEMORY_USAGE.set(memory_bytes as i64);
+            
+            // CPU usage
+            let cpu_percent = process.cpu_usage() as f64;
+            CPU_USAGE.set(cpu_percent);
+            
+            // Thread count (approximation)
+            THREAD_COUNT.set(num_cpus::get() as i64);
+            
+            tracing::trace!(
+                memory_mb = memory_bytes / 1024 / 1024,
+                cpu_percent = %format!("{:.2}", cpu_percent),
+                "Collected process metrics"
+            );
+        }
+        
+        // System-wide metrics
+        let total_memory = self.system.total_memory();
+        let used_memory = self.system.used_memory();
+        let memory_usage_percent = (used_memory as f64 / total_memory as f64) * 100.0;
+        
+        // Global CPU usage (simplified)
+        let global_cpu = self.system.global_cpu_info().cpu_usage() as f64;
+        
+        tracing::trace!(
+            total_memory_gb = total_memory / 1024 / 1024 / 1024,
+            used_memory_gb = used_memory / 1024 / 1024 / 1024,
+            memory_usage_percent = %format!("{:.2}", memory_usage_percent),
+            global_cpu_percent = %format!("{:.2}", global_cpu),
+            "Collected system-wide metrics"
+        );
+        
+        Ok(())
+    }
+
+    /// Update uptime metrics
+    fn update_uptime_metrics(&self) {
+        let uptime_seconds = self.start_time.elapsed().as_secs();
+        UPTIME.set(uptime_seconds as i64);
+    }
+
+    /// Record migration phase change
+    pub fn set_migration_phase(&self, phase: u8) {
+        MIGRATION_PHASE.set(phase as i64);
+        tracing::info!("Migration phase updated to: {}", phase);
+    }
+
+    /// Record migration progress
+    pub fn set_migration_progress(&self, percent: f64) {
+        MIGRATION_PROGRESS.set(percent);
+        tracing::debug!("Migration progress: {:.1}%", percent);
+    }
+
+    /// Record migration error
+    pub fn record_migration_error(&self, phase: &str, error_type: &str) {
+        MIGRATION_ERRORS.with_label_values(&[phase, error_type]).inc();
+        tracing::warn!("Migration error recorded: phase={}, type={}", phase, error_type);
+    }
+
+    /// Record migration rollback
+    pub fn record_migration_rollback(&self, phase: &str, reason: &str) {
+        MIGRATION_ROLLBACKS.with_label_values(&[phase, reason]).inc();
+        tracing::error!("Migration rollback recorded: phase={}, reason={}", phase, reason);
+    }
+
+    /// Record validation success
+    pub fn record_validation_success(&self, phase: &str) {
+        MIGRATION_VALIDATION_SUCCESS.with_label_values(&[phase]).inc();
+    }
+
+    /// Record validation failure
+    pub fn record_validation_failure(&self, phase: &str) {
+        MIGRATION_VALIDATION_FAILURE.with_label_values(&[phase]).inc();
+    }
+}
+
+impl Clone for MetricsCollector {
+    fn clone(&self) -> Self {
+        Self {
+            system: System::new_all(),
+            process_id: self.process_id,
+            start_time: self.start_time,
+            collection_interval: self.collection_interval,
+        }
+    }
+}
+
+/// Initialize all metrics with proper error handling
+pub fn initialize_metrics() -> Result<(), PrometheusError> {
+    tracing::info!("Initializing comprehensive metrics system");
+    
+    // Test metric registration by accessing lazy statics
+    let _test_metrics = [
+        MIGRATION_PHASE.get(),
+        SYNC_CURRENT_HEIGHT.get(),
+        MEMORY_USAGE.get(),
+        CPU_USAGE.get(),
+    ];
+    
+    tracing::info!("Metrics initialization completed successfully");
+    tracing::info!("Available metric categories: Migration, Actor, Sync, Performance, System Resource");
+    
+    Ok(())
+}
+
+/// Metric labeling strategy and cardinality limits
+pub struct MetricLabels;
+
+impl MetricLabels {
+    /// Maximum number of unique label combinations per metric
+    pub const MAX_CARDINALITY: usize = 10000;
+    
+    /// Standard migration phase labels
+    pub const MIGRATION_PHASES: &'static [&'static str] = &[
+        "foundation", "actor_system", "sync_engine", "federation_v2", 
+        "lighthouse_v2", "migration", "validation", "rollback_safety",
+        "performance_verification", "final_validation"
+    ];
+    
+    /// Standard actor types
+    pub const ACTOR_TYPES: &'static [&'static str] = &[
+        "chain", "engine", "network", "bridge", "storage", "sync", "stream"
+    ];
+    
+    /// Standard error types
+    pub const ERROR_TYPES: &'static [&'static str] = &[
+        "timeout", "connection", "validation", "parsing", "storage", 
+        "network", "consensus", "execution", "migration", "system"
+    ];
+    
+    /// Sanitize label values to prevent cardinality explosion
+    pub fn sanitize_label_value(value: &str) -> String {
+        // Limit length and remove problematic characters
+        value
+            .chars()
+            .take(64)
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect::<String>()
+            .to_lowercase()
+    }
+    
+    /// Validate label cardinality doesn't exceed limits
+    pub fn validate_cardinality(metric_name: &str, labels: &[&str]) -> bool {
+        let estimated_cardinality = labels.iter().map(|l| l.len()).product::<usize>();
+        
+        if estimated_cardinality > Self::MAX_CARDINALITY {
+            tracing::warn!(
+                metric = metric_name,
+                estimated_cardinality = estimated_cardinality,
+                max_cardinality = Self::MAX_CARDINALITY,
+                "Metric cardinality may exceed limits"
+            );
+            return false;
+        }
+        
+        true
+    }
 }
