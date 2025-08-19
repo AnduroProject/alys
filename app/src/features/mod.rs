@@ -12,7 +12,9 @@ pub mod config;
 pub mod cache;
 pub mod watcher;
 pub mod validation;
+pub mod audit;
 pub mod performance;
+pub mod metrics;
 
 #[cfg(test)]
 mod tests;
@@ -25,7 +27,9 @@ pub use context::*;
 pub use config::*;
 pub use cache::*;
 pub use validation::*;
+pub use audit::*;
 pub use performance::*;
+pub use metrics::*;
 
 /// Feature flag system errors
 use thiserror::Error;

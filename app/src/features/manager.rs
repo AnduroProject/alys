@@ -10,7 +10,9 @@ use super::cache::*;
 use super::config::*;
 use super::watcher::*;
 use super::validation::*;
+use super::audit::*;
 use super::performance;
+use super::metrics::{FeatureFlagMetrics, TimedEvaluation};
 use super::{FeatureFlagResult, FeatureFlagError};
 
 use std::collections::HashMap;
@@ -44,7 +46,7 @@ pub struct FeatureFlagManager {
     hot_reload_task: Option<tokio::task::JoinHandle<()>>,
     
     /// Audit logger for flag changes
-    audit_logger: AuditLogger,
+    audit_logger: FeatureFlagAuditLogger,
     
     /// Global settings
     global_settings: FeatureFlagGlobalSettings,
@@ -67,7 +69,28 @@ impl FeatureFlagManager {
             collection.global_settings.max_evaluation_time_ms
         );
         
-        let audit_logger = AuditLogger::new(collection.global_settings.enable_audit_log);
+        let audit_config = AuditConfig {
+            enabled: collection.global_settings.enable_audit_log,
+            use_tracing: true,
+            include_metadata: false, // Security: don't log sensitive metadata
+            max_events_in_memory: 1000,
+            sync_writes: true,
+            ..Default::default()
+        };
+        let audit_logger = FeatureFlagAuditLogger::with_config(audit_config);
+        
+        // Log system startup
+        let startup_task = audit_logger.log_system_event(
+            &format!("Feature flag manager initialized with {} flags from {}", 
+                collection.flags.len(), 
+                config_path.display()),
+            "system_startup"
+        );
+        tokio::spawn(startup_task);
+        
+        // Initialize metrics for startup
+        FeatureFlagMetrics::record_config_reload("startup");
+        FeatureFlagMetrics::update_flag_counts(&collection.flags);
         
         Ok(Self {
             flags: Arc::new(RwLock::new(collection.flags)),
@@ -109,12 +132,21 @@ impl FeatureFlagManager {
         
         // Try cache first
         if let Some(cached_result) = self.cache.get(flag_name, context).await {
+            let evaluation_time_us = start_time.elapsed().as_micros() as u64;
+            
+            // Record metrics for cache hit
+            FeatureFlagMetrics::record_evaluation(flag_name, cached_result, evaluation_time_us, true);
+            FeatureFlagMetrics::record_cache_operation("hit", Some(flag_name));
+            
             self.update_stats(|s| {
                 s.cache_hits += 1;
                 s.total_evaluations += 1;
             }).await;
             return Ok(cached_result);
         }
+        
+        // Record cache miss
+        FeatureFlagMetrics::record_cache_operation("miss", Some(flag_name));
         
         // Get flag from storage
         let flags = self.flags.read().await;
@@ -123,13 +155,27 @@ impl FeatureFlagManager {
         })?;
         
         // Evaluate the flag
-        let enabled = self.evaluator.evaluate_flag(flag, context).await?;
+        let enabled = match self.evaluator.evaluate_flag(flag, context).await {
+            Ok(result) => result,
+            Err(e) => {
+                let evaluation_time_us = start_time.elapsed().as_micros() as u64;
+                FeatureFlagMetrics::record_evaluation_error(flag_name, &e.to_string());
+                return Err(e);
+            }
+        };
         
         // Cache the result
         self.cache.put(flag_name.to_string(), context.clone(), enabled).await;
+        FeatureFlagMetrics::record_cache_operation("store", Some(flag_name));
+        
+        // Calculate final timing
+        let evaluation_time = start_time.elapsed();
+        let evaluation_time_us = evaluation_time.as_micros() as u64;
+        
+        // Record metrics for cache miss evaluation
+        FeatureFlagMetrics::record_evaluation(flag_name, enabled, evaluation_time_us, false);
         
         // Update statistics
-        let evaluation_time = start_time.elapsed();
         self.update_stats(|s| {
             s.cache_misses += 1;
             s.total_evaluations += 1;
@@ -181,17 +227,29 @@ impl FeatureFlagManager {
             flags_guard.clone()
         };
         
+        // Calculate changes for audit logging
+        let (flags_changed, flags_added, flags_removed) = self.calculate_flag_changes(&old_flags, &collection.flags);
+        
         // Update flags
         {
             let mut flags_guard = self.flags.write().await;
-            *flags_guard = collection.flags;
+            *flags_guard = collection.flags.clone();
         }
         
         // Clear cache to ensure fresh evaluations
         self.cache.clear().await;
         
-        // Log changes
-        self.log_configuration_changes(&old_flags, &collection.flags).await;
+        // Log detailed configuration changes
+        self.log_detailed_configuration_changes(&old_flags, &collection.flags, "manual_reload").await;
+        
+        // Log overall configuration reload event
+        self.audit_logger.log_configuration_reload(
+            &self.config_path,
+            flags_changed,
+            flags_added,
+            flags_removed,
+            "manual_reload"
+        ).await;
         
         // Update stats
         self.update_stats(|s| s.config_reloads += 1).await;
@@ -282,12 +340,16 @@ impl FeatureFlagManager {
                                 if let Ok(mut stats_guard) = stats.write().await {
                                     stats_guard.hot_reload_errors += 1;
                                 }
+                                // Record metrics for hot reload error
+                                FeatureFlagMetrics::record_hot_reload_event("error");
                                 // Continue running despite errors to allow recovery
                             }
                         }
                     }
                     ConfigFileEvent::Deleted(_path) => {
                         error!("Configuration file was deleted! Hot-reload disabled until file is restored.");
+                        // Record metrics for file deletion
+                        FeatureFlagMetrics::record_hot_reload_event("file_deleted");
                         // Continue monitoring in case file is recreated
                     }
                     ConfigFileEvent::Error(error) => {
@@ -307,9 +369,12 @@ impl FeatureFlagManager {
         config_path: &PathBuf,
         flags: &Arc<RwLock<HashMap<String, FeatureFlag>>>,
         cache: &FeatureFlagCache,
-        audit_logger: &AuditLogger,
+        audit_logger: &FeatureFlagAuditLogger,
         stats: &Arc<RwLock<ManagerStats>>,
     ) -> FeatureFlagResult<()> {
+        // Log hot-reload trigger
+        audit_logger.log_hot_reload_triggered(config_path).await;
+        
         // Load new configuration
         let collection = config_loader.load_from_file(config_path)?;
         
@@ -319,23 +384,42 @@ impl FeatureFlagManager {
             flags_guard.clone()
         };
         
+        // Calculate changes for audit logging
+        let (flags_changed, flags_added, flags_removed) = Self::calculate_flag_changes_static(&old_flags, &collection.flags);
+        
         // Update flags
         {
             let mut flags_guard = flags.write().await;
-            *flags_guard = collection.flags;
+            *flags_guard = collection.flags.clone();
         }
         
         // Clear cache to ensure fresh evaluations
         cache.clear().await;
         
-        // Log changes
-        Self::log_configuration_changes_static(&old_flags, &collection.flags, audit_logger).await;
+        // Log detailed flag changes
+        Self::log_detailed_configuration_changes_static(&old_flags, &collection.flags, "hot_reload", audit_logger).await;
+        
+        // Log overall configuration reload event
+        audit_logger.log_configuration_reload(
+            config_path,
+            flags_changed,
+            flags_added,
+            flags_removed,
+            "hot_reload"
+        ).await;
         
         // Update stats
         if let Ok(mut stats_guard) = stats.write().await {
             stats_guard.config_reloads += 1;
             stats_guard.hot_reloads += 1;
         }
+        
+        // Record metrics for hot reload
+        FeatureFlagMetrics::record_hot_reload_event("success");
+        FeatureFlagMetrics::record_config_reload("hot_reload");
+        FeatureFlagMetrics::record_bulk_flag_changes(flags_changed, flags_added, flags_removed);
+        FeatureFlagMetrics::update_flag_counts(&collection.flags);
+        FeatureFlagMetrics::record_cache_operation("clear", None);
         
         Ok(())
     }
@@ -344,23 +428,23 @@ impl FeatureFlagManager {
     async fn log_configuration_changes_static(
         old_flags: &HashMap<String, FeatureFlag>,
         new_flags: &HashMap<String, FeatureFlag>,
-        audit_logger: &AuditLogger,
+        audit_logger: &FeatureFlagAuditLogger,
     ) {
         for (name, new_flag) in new_flags {
             if let Some(old_flag) = old_flags.get(name) {
                 if old_flag.enabled != new_flag.enabled 
                     || old_flag.rollout_percentage != new_flag.rollout_percentage {
-                    audit_logger.log_flag_change(name, "hot-reload", new_flag).await;
+                    audit_logger.log_flag_change(name, Some(old_flag), new_flag, "hot-reload").await;
                 }
             } else {
-                audit_logger.log_flag_change(name, "hot-reload-added", new_flag).await;
+                audit_logger.log_flag_change(name, None, new_flag, "hot-reload-added").await;
             }
         }
         
         // Check for removed flags
-        for (name, _) in old_flags {
+        for (name, old_flag) in old_flags {
             if !new_flags.contains_key(name) {
-                audit_logger.log_flag_removal(name).await;
+                audit_logger.log_flag_deleted(name, old_flag, "hot-reload-removed").await;
             }
         }
     }
@@ -381,8 +465,14 @@ impl FeatureFlagManager {
     pub async fn upsert_flag(&self, flag: FeatureFlag) -> FeatureFlagResult<()> {
         let flag_name = flag.name.clone();
         
+        // Get old flag for audit logging
+        let old_flag = {
+            let flags = self.flags.read().await;
+            flags.get(&flag_name).cloned()
+        };
+        
         // Log the change
-        self.audit_logger.log_flag_change(&flag_name, "upsert", &flag).await;
+        self.audit_logger.log_flag_change(&flag_name, old_flag.as_ref(), &flag, "programmatic_upsert").await;
         
         // Update flags
         {
@@ -404,12 +494,12 @@ impl FeatureFlagManager {
             flags.remove(name)
         };
         
-        if removed_flag.is_some() {
+        if let Some(ref flag) = removed_flag {
             // Clear cache for this flag
             self.cache.invalidate_flag(name).await;
             
             // Log the change
-            self.audit_logger.log_flag_removal(name).await;
+            self.audit_logger.log_flag_deleted(name, flag, "programmatic_removal").await;
             
             info!("Feature flag '{}' removed", name);
         }
@@ -717,6 +807,107 @@ impl FeatureFlagManager {
         // Use enhanced validation for more comprehensive checking
         validate_flag_quick(flag)
     }
+    
+    /// Calculate changes between old and new flag sets
+    fn calculate_flag_changes(
+        &self,
+        old_flags: &HashMap<String, FeatureFlag>,
+        new_flags: &HashMap<String, FeatureFlag>
+    ) -> (usize, usize, usize) {
+        Self::calculate_flag_changes_static(old_flags, new_flags)
+    }
+    
+    /// Static version of calculate_flag_changes for use in background task
+    fn calculate_flag_changes_static(
+        old_flags: &HashMap<String, FeatureFlag>,
+        new_flags: &HashMap<String, FeatureFlag>
+    ) -> (usize, usize, usize) {
+        let mut flags_changed = 0;
+        let mut flags_added = 0;
+        let flags_removed = old_flags.len().saturating_sub(
+            old_flags.keys().filter(|key| new_flags.contains_key(*key)).count()
+        );
+        
+        for (name, new_flag) in new_flags {
+            if let Some(old_flag) = old_flags.get(name) {
+                // Check if flag actually changed
+                if old_flag.enabled != new_flag.enabled ||
+                   old_flag.rollout_percentage != new_flag.rollout_percentage ||
+                   old_flag.targets != new_flag.targets ||
+                   old_flag.conditions != new_flag.conditions ||
+                   old_flag.metadata != new_flag.metadata {
+                    flags_changed += 1;
+                }
+            } else {
+                flags_added += 1;
+            }
+        }
+        
+        (flags_changed, flags_added, flags_removed)
+    }
+    
+    /// Log detailed configuration changes
+    async fn log_detailed_configuration_changes(
+        &self,
+        old_flags: &HashMap<String, FeatureFlag>,
+        new_flags: &HashMap<String, FeatureFlag>,
+        source: &str,
+    ) {
+        Self::log_detailed_configuration_changes_static(old_flags, new_flags, source, &self.audit_logger).await;
+    }
+    
+    /// Static version of log_detailed_configuration_changes for use in background task
+    async fn log_detailed_configuration_changes_static(
+        old_flags: &HashMap<String, FeatureFlag>,
+        new_flags: &HashMap<String, FeatureFlag>,
+        source: &str,
+        audit_logger: &FeatureFlagAuditLogger,
+    ) {
+        // Log individual flag changes
+        for (name, new_flag) in new_flags {
+            if let Some(old_flag) = old_flags.get(name) {
+                // Check if flag actually changed
+                if old_flag.enabled != new_flag.enabled ||
+                   old_flag.rollout_percentage != new_flag.rollout_percentage ||
+                   old_flag.targets != new_flag.targets ||
+                   old_flag.conditions != new_flag.conditions ||
+                   old_flag.metadata != new_flag.metadata {
+                    audit_logger.log_flag_change(name, Some(old_flag), new_flag, source).await;
+                }
+            } else {
+                // New flag
+                audit_logger.log_flag_change(name, None, new_flag, source).await;
+            }
+        }
+        
+        // Log removed flags
+        for (name, old_flag) in old_flags {
+            if !new_flags.contains_key(name) {
+                audit_logger.log_flag_deleted(name, old_flag, source).await;
+            }
+        }
+    }
+    
+    /// Get audit statistics (for monitoring and debugging)
+    pub async fn get_audit_stats(&self) -> AuditStats {
+        self.audit_logger.get_audit_stats().await
+    }
+    
+    /// Get recent audit events (for debugging and monitoring)
+    pub async fn get_recent_audit_events(&self, limit: Option<usize>) -> Vec<AuditEvent> {
+        self.audit_logger.get_recent_events(limit).await
+    }
+    
+    /// Get audit events for a specific flag (for debugging)
+    pub async fn get_audit_events_for_flag(&self, flag_name: &str, limit: Option<usize>) -> Vec<AuditEvent> {
+        self.audit_logger.get_events_for_flag(flag_name, limit).await
+    }
+    
+    /// Generate comprehensive audit report
+    pub async fn generate_audit_report(&self) -> String {
+        let stats = self.get_audit_stats().await;
+        stats.generate_summary()
+    }
 }
 
 /// Manager statistics
@@ -786,39 +977,6 @@ impl HealthStatus {
     }
 }
 
-/// Audit logger for flag changes
-#[derive(Debug, Clone)]
-pub struct AuditLogger {
-    enabled: bool,
-}
-
-impl AuditLogger {
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled }
-    }
-    
-    pub async fn log_flag_change(&self, name: &str, action: &str, flag: &FeatureFlag) {
-        if self.enabled {
-            info!(
-                action = action,
-                flag_name = name,
-                enabled = flag.enabled,
-                rollout_percentage = flag.rollout_percentage,
-                "Feature flag change"
-            );
-        }
-    }
-    
-    pub async fn log_flag_removal(&self, name: &str) {
-        if self.enabled {
-            info!(
-                action = "removed",
-                flag_name = name,
-                "Feature flag removed"
-            );
-        }
-    }
-}
 
 impl Drop for FeatureFlagManager {
     fn drop(&mut self) {
