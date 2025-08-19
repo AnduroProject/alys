@@ -1,0 +1,194 @@
+# ALYS V2 Monitoring Stack
+# Docker Compose configuration for Prometheus, Grafana, and Alertmanager
+# For ALYS-003-23: Complete monitoring infrastructure setup
+
+version: '3.8'
+
+services:
+  # Prometheus - Metrics collection and alerting
+  prometheus:
+    image: prom/prometheus:v2.47.2
+    container_name: alys-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--log.level=info'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./etc/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    depends_on:
+      - alertmanager
+    labels:
+      - "com.alys.service=prometheus"
+      - "com.alys.version=v2"
+
+  # Alertmanager - Alert routing and notification
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    container_name: alys-alertmanager
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--cluster.listen-address=0.0.0.0:9094'
+      - '--log.level=info'
+    ports:
+      - "9093:9093"
+      - "9094:9094"
+    volumes:
+      - ./etc/prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - monitoring
+    labels:
+      - "com.alys.service=alertmanager"  
+      - "com.alys.version=v2"
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana-oss:10.1.5
+    container_name: alys-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=alys-admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-polystat-panel
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+      - GF_SERVER_ROOT_URL=http://localhost:3000/
+      - GF_ALERTING_ENABLED=true
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./etc/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./etc/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    labels:
+      - "com.alys.service=grafana"
+      - "com.alys.version=v2"
+
+  # Node Exporter - System metrics collection
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: alys-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.netdev.device-exclude=^(veth|docker|br-).*'
+      - '--collector.processes'
+      - '--collector.systemd'
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /run/systemd/private:/run/systemd/private
+    pid: host
+    networks:
+      - monitoring
+    labels:
+      - "com.alys.service=node-exporter"
+      - "com.alys.version=v2"
+
+  # cAdvisor - Container metrics (optional for container monitoring)
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: alys-cadvisor
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    networks:
+      - monitoring
+    labels:
+      - "com.alys.service=cadvisor"
+      - "com.alys.version=v2"
+
+  # Pushgateway - For batch job metrics (optional)
+  pushgateway:
+    image: prom/pushgateway:v1.6.2
+    container_name: alys-pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    networks:
+      - monitoring
+    labels:
+      - "com.alys.service=pushgateway"
+      - "com.alys.version=v2"
+
+  # Webhook receiver for testing alerts (development only)
+  webhook-receiver:
+    image: webhook-receiver:latest
+    container_name: alys-webhook-receiver
+    restart: unless-stopped
+    environment:
+      - PORT=5001
+      - LOG_LEVEL=info
+    ports:
+      - "5001:5001"
+    networks:
+      - monitoring
+    labels:
+      - "com.alys.service=webhook-receiver"
+      - "com.alys.version=v2"
+    profiles:
+      - development
+
+# Networks
+networks:
+  monitoring:
+    driver: bridge
+    name: alys-monitoring
+    labels:
+      - "com.alys.network=monitoring"
+
+# Persistent volumes
+volumes:
+  prometheus_data:
+    driver: local
+    labels:
+      - "com.alys.volume=prometheus-data"
+  
+  grafana_data:
+    driver: local
+    labels:
+      - "com.alys.volume=grafana-data"
+  
+  alertmanager_data:
+    driver: local
+    labels:
+      - "com.alys.volume=alertmanager-data"
+
+# Health check configurations
+x-healthcheck-defaults: &healthcheck_defaults
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 60s

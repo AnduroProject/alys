@@ -1,11 +1,105 @@
+# Global configuration
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+          - localhost:9093
+
+# Rules configuration
+rule_files:
+  - "alerts/migration.yml"
+  - "alerts/actor.yml"
+  - "alerts/sync.yml"
+  - "alerts/system.yml"
+
+# Scrape configuration
 scrape_configs:
+  # ALYS Core Metrics
+  - job_name: 'alys-core'
+    scrape_interval: 5s
+    scrape_timeout: 5s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:9090', 'consensus:9090']
+        labels:
+          service: 'alys-core'
+          env: 'development'
+
+  # ALYS Migration Metrics  
+  - job_name: 'alys-migration'
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:9091', 'migration:9091']
+        labels:
+          service: 'alys-migration'
+          env: 'development'
+
+  # Actor System Metrics
+  - job_name: 'alys-actors'
+    scrape_interval: 5s
+    scrape_timeout: 5s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:9092', 'actors:9092']
+        labels:
+          service: 'alys-actors'
+          env: 'development'
+
+  # Existing Reth/Consensus Metrics
   - job_name: reth
     metrics_path: "/"
     scrape_interval: 5s
+    scrape_timeout: 4s
     static_configs:
       - targets: ['reth:9001', 'consensus:9001', 'localhost:9001', 'host.docker.internal:9001']
+        labels:
+          service: 'reth'
+          env: 'development'
+
+  # Ethereum Metrics Exporter
   - job_name: ethereum-metrics-exporter
     metrics_path: "/metrics"
     scrape_interval: 5s
+    scrape_timeout: 4s
     static_configs:
       - targets: ['metrics-exporter:9091']
+        labels:
+          service: 'ethereum-metrics'
+          env: 'development'
+
+  # System Node Exporter
+  - job_name: 'node-exporter'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['localhost:9100', 'node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          env: 'development'
+
+  # Prometheus Self-Monitoring
+  - job_name: 'prometheus'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          env: 'development'
+
+  # Alertmanager Monitoring
+  - job_name: 'alertmanager'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:9093', 'alertmanager:9093']
+        labels:
+          service: 'alertmanager'
+          env: 'development'

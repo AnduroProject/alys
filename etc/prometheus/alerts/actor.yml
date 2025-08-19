@@ -1,0 +1,183 @@
+# ALYS V2 Actor System Alert Rules
+# For ALYS-003-24: Comprehensive alert rules for actor system monitoring
+
+groups:
+  - name: actor_alerts
+    interval: 30s
+    rules:
+      # Critical Actor System Alerts
+      - alert: ActorRestartLoop
+        expr: rate(alys_actor_restarts_total[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: alys-actors
+          component: lifecycle
+        annotations:
+          summary: "Actor restart loop detected"
+          description: "Actor {{ $labels.actor_type }} is restarting at {{ $value | humanize }} restarts/second"
+          runbook_url: "https://docs.alys.dev/runbooks/actor-restart-loop"
+          dashboard_url: "http://grafana:3000/d/actors/actor-dashboard"
+
+      - alert: ActorMailboxFull
+        expr: alys_actor_mailbox_size > 10000
+        for: 5m
+        labels:
+          severity: critical
+          service: alys-actors
+          component: mailbox
+        annotations:
+          summary: "Actor mailbox is critically full"
+          description: "Actor {{ $labels.actor_type }} has {{ $value }} messages in mailbox, indicating potential deadlock"
+          runbook_url: "https://docs.alys.dev/runbooks/actor-mailbox-full"
+
+      - alert: ActorMessageProcessingStalled
+        expr: rate(alys_actor_messages_processed_total[10m]) == 0 and alys_actor_mailbox_size > 100
+        for: 10m
+        labels:
+          severity: critical
+          service: alys-actors
+          component: processing
+        annotations:
+          summary: "Actor message processing has stalled"
+          description: "Actor {{ $labels.actor_type }} has stopped processing messages with {{ $value }} messages queued"
+          runbook_url: "https://docs.alys.dev/runbooks/actor-processing-stall"
+
+      # Actor Performance Alerts
+      - alert: ActorHighLatency
+        expr: histogram_quantile(0.99, rate(alys_actor_message_latency_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: performance
+        annotations:
+          summary: "High actor message processing latency"
+          description: "P99 message processing latency for {{ $labels.actor_type }} is {{ $value | humanizeDuration }}"
+
+      - alert: ActorLowThroughput
+        expr: rate(alys_actor_messages_processed_total[5m]) < 1 and alys_actor_mailbox_size > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-actors  
+          component: performance
+        annotations:
+          summary: "Low actor message processing throughput"
+          description: "Actor {{ $labels.actor_type }} processing rate is {{ $value | humanize }} msg/sec with backlog"
+
+      - alert: ActorErrorRateHigh
+        expr: rate(alys_actor_message_errors_total[5m]) / rate(alys_actor_messages_processed_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: errors
+        annotations:
+          summary: "High actor message error rate"
+          description: "Actor {{ $labels.actor_type }} error rate is {{ $value | humanizePercentage }}"
+
+      # Actor Health and Lifecycle Alerts
+      - alert: ActorUnresponsive
+        expr: time() - alys_actor_last_activity_timestamp > 300
+        for: 1m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: health
+        annotations:
+          summary: "Actor appears unresponsive"
+          description: "Actor {{ $labels.actor_type }} has not shown activity for {{ $value | humanizeDuration }}"
+
+      - alert: ActorMemoryLeakSuspected
+        expr: increase(alys_actor_memory_usage_bytes[30m]) > 100000000 and rate(alys_actor_memory_usage_bytes[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: resources
+        annotations:
+          summary: "Suspected memory leak in actor"
+          description: "Actor {{ $labels.actor_type }} memory usage increased by {{ $value | humanizeBytes }} in 30 minutes"
+
+      - alert: ActorStateTransitionStuck
+        expr: time() - alys_actor_state_transition_timestamp > 600 and alys_actor_state != "Running"
+        for: 5m  
+        labels:
+          severity: warning
+          service: alys-actors
+          component: state
+        annotations:
+          summary: "Actor stuck in state transition"
+          description: "Actor {{ $labels.actor_type }} stuck in {{ $labels.state }} state for {{ $value | humanizeDuration }}"
+
+      # Actor System Resource Alerts
+      - alert: ActorSystemCPUHigh
+        expr: sum(rate(alys_actor_cpu_seconds_total[5m])) by (instance) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: resources
+        annotations:
+          summary: "High CPU usage by actor system"
+          description: "Actor system CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: ActorSystemMemoryHigh  
+        expr: sum(alys_actor_memory_usage_bytes) by (instance) / alys_system_memory_total_bytes > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: resources
+        annotations:
+          summary: "High memory usage by actor system"
+          description: "Actor system memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Actor Communication Alerts
+      - alert: ActorMessageDropped
+        expr: rate(alys_actor_messages_dropped_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: communication
+        annotations:
+          summary: "Actor messages being dropped"
+          description: "Actor {{ $labels.actor_type }} is dropping {{ $value | humanize }} messages/second"
+
+      - alert: ActorDeadLetterHigh
+        expr: rate(alys_actor_dead_letters_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-actors
+          component: communication
+        annotations:
+          summary: "High rate of dead letters in actor system"
+          description: "Dead letter rate is {{ $value | humanize }} messages/second for {{ $labels.actor_type }}"
+
+      # Supervision Tree Alerts
+      - alert: ActorSupervisionFailure
+        expr: rate(alys_actor_supervision_failures_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: alys-actors
+          component: supervision
+        annotations:
+          summary: "Actor supervision failures detected"
+          description: "Supervision failure rate is {{ $value | humanize }} failures/second"
+          runbook_url: "https://docs.alys.dev/runbooks/actor-supervision"
+
+      - alert: ActorSpawningFailure
+        expr: rate(alys_actor_spawn_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: alys-actors
+          component: lifecycle
+        annotations:
+          summary: "Actor spawning failures detected"
+          description: "Actor spawning failure rate: {{ $value | humanize }} failures/second"
+          runbook_url: "https://docs.alys.dev/runbooks/actor-spawn-failure"
