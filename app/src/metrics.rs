@@ -101,6 +101,90 @@ impl TransactionRejectionReason {
     }
 }
 
+/// Peer geographic regions for ALYS-003-19
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerRegion {
+    NorthAmerica,
+    Europe, 
+    Asia,
+    SouthAmerica,
+    Africa,
+    Oceania,
+    Unknown,
+}
+
+impl PeerRegion {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PeerRegion::NorthAmerica => "north_america",
+            PeerRegion::Europe => "europe",
+            PeerRegion::Asia => "asia", 
+            PeerRegion::SouthAmerica => "south_america",
+            PeerRegion::Africa => "africa",
+            PeerRegion::Oceania => "oceania",
+            PeerRegion::Unknown => "unknown",
+        }
+    }
+    
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "north_america" | "na" | "us" | "ca" => Some(PeerRegion::NorthAmerica),
+            "europe" | "eu" => Some(PeerRegion::Europe),
+            "asia" | "ap" => Some(PeerRegion::Asia),
+            "south_america" | "sa" => Some(PeerRegion::SouthAmerica),
+            "africa" | "af" => Some(PeerRegion::Africa),
+            "oceania" | "oc" | "au" => Some(PeerRegion::Oceania),
+            "unknown" => Some(PeerRegion::Unknown),
+            _ => None,
+        }
+    }
+    
+    /// Determine region from IP address (simplified implementation)
+    pub fn from_ip(ip: &str) -> Self {
+        // This is a simplified implementation. In practice, you'd use a GeoIP database
+        // like MaxMind's GeoLite2 or similar service
+        if ip.starts_with("192.168.") || ip.starts_with("10.") || ip.starts_with("172.") {
+            return PeerRegion::Unknown; // Private IP
+        }
+        
+        // Placeholder logic - in reality, you'd map IP ranges to regions
+        PeerRegion::Unknown
+    }
+}
+
+/// Peer connection statistics for ALYS-003-19
+#[derive(Debug, Clone, Default)]
+pub struct PeerConnectionStats {
+    pub successful_connections: u64,
+    pub failed_connections: u64,
+    pub connection_attempts: u64,
+    pub avg_connection_time: Duration,
+    pub active_connections: usize,
+    pub max_concurrent_connections: usize,
+}
+
+impl PeerConnectionStats {
+    /// Calculate connection success rate (0.0 to 1.0)
+    pub fn success_rate(&self) -> f64 {
+        let total_attempts = self.successful_connections + self.failed_connections;
+        if total_attempts == 0 {
+            0.0
+        } else {
+            self.successful_connections as f64 / total_attempts as f64
+        }
+    }
+    
+    /// Calculate connection failure rate (0.0 to 1.0)
+    pub fn failure_rate(&self) -> f64 {
+        1.0 - self.success_rate()
+    }
+    
+    /// Check if connection stats indicate healthy networking
+    pub fn is_healthy(&self, min_success_rate: f64) -> bool {
+        self.success_rate() >= min_success_rate && self.active_connections > 0
+    }
+}
+
 /// Block timer type for ALYS-003-17
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockTimerType {
@@ -1052,6 +1136,131 @@ impl MetricsCollector {
         );
         
         health_score
+    }
+    
+    /// Update peer count (ALYS-003-19)
+    pub fn update_peer_count(&self, count: usize) {
+        PEER_COUNT.set(count as i64);
+        
+        tracing::trace!(
+            peer_count = count,
+            "Peer count updated"
+        );
+    }
+    
+    /// Record peer quality score (ALYS-003-19)
+    pub fn record_peer_quality_score(&self, peer_id: &str, quality_score: f64) {
+        let sanitized_peer_id = MetricLabels::sanitize_label_value(peer_id);
+        
+        PEER_QUALITY_SCORE
+            .with_label_values(&[&sanitized_peer_id])
+            .set(quality_score);
+        
+        tracing::debug!(
+            peer_id = peer_id,
+            quality_score = %format!("{:.2}", quality_score),
+            "Peer quality score recorded"
+        );
+    }
+    
+    /// Update peer geographic distribution (ALYS-003-19)
+    pub fn update_peer_geographic_distribution(&self, region_counts: &[(PeerRegion, usize)]) {
+        // Reset all regions to 0 first (optional - depends on use case)
+        for (region, count) in region_counts {
+            let region_str = region.as_str();
+            
+            PEER_GEOGRAPHIC_DISTRIBUTION
+                .with_label_values(&[region_str])
+                .set(*count as i64);
+        }
+        
+        let total_peers: usize = region_counts.iter().map(|(_, count)| count).sum();
+        
+        tracing::debug!(
+            total_peers = total_peers,
+            regions = region_counts.len(),
+            "Peer geographic distribution updated"
+        );
+    }
+    
+    /// Record comprehensive peer connection metrics (ALYS-003-19)
+    pub fn record_peer_connection_metrics(
+        &self,
+        connected_peers: usize,
+        peer_qualities: &[(String, f64)],
+        region_distribution: &[(PeerRegion, usize)],
+        connection_stats: &PeerConnectionStats,
+    ) {
+        // Update peer count
+        self.update_peer_count(connected_peers);
+        
+        // Update quality scores for all peers
+        for (peer_id, quality) in peer_qualities {
+            self.record_peer_quality_score(peer_id, *quality);
+        }
+        
+        // Update geographic distribution
+        self.update_peer_geographic_distribution(region_distribution);
+        
+        // Calculate average quality score
+        let avg_quality = if !peer_qualities.is_empty() {
+            peer_qualities.iter().map(|(_, q)| q).sum::<f64>() / peer_qualities.len() as f64
+        } else {
+            0.0
+        };
+        
+        tracing::info!(
+            connected_peers = connected_peers,
+            tracked_peer_qualities = peer_qualities.len(),
+            avg_quality_score = %format!("{:.2}", avg_quality),
+            regions_with_peers = region_distribution.len(),
+            successful_connections = connection_stats.successful_connections,
+            failed_connections = connection_stats.failed_connections,
+            connection_success_rate = %format!("{:.1}%", connection_stats.success_rate() * 100.0),
+            "Peer connection metrics recorded"
+        );
+    }
+    
+    /// Calculate network health score based on peer metrics (ALYS-003-19)
+    pub fn calculate_network_health_score(
+        &self, 
+        connected_peers: usize, 
+        min_peers: usize, 
+        optimal_peers: usize,
+        avg_quality_score: f64,
+        geographic_diversity: usize
+    ) -> f64 {
+        // Peer count score (0.0 to 1.0)
+        let peer_count_score = if connected_peers >= optimal_peers {
+            1.0
+        } else if connected_peers >= min_peers {
+            0.5 + 0.5 * (connected_peers as f64 - min_peers as f64) / (optimal_peers as f64 - min_peers as f64)
+        } else {
+            connected_peers as f64 / min_peers as f64 * 0.5
+        };
+        
+        // Quality score (already 0.0 to 1.0)
+        let quality_score = avg_quality_score.min(1.0).max(0.0);
+        
+        // Diversity score (higher geographic diversity is better)
+        let diversity_score = (geographic_diversity as f64 / 6.0).min(1.0); // Assuming max 6 regions
+        
+        // Weighted average: peer count (40%), quality (40%), diversity (20%)
+        let network_health = 0.4 * peer_count_score + 0.4 * quality_score + 0.2 * diversity_score;
+        
+        tracing::info!(
+            connected_peers = connected_peers,
+            min_peers = min_peers,
+            optimal_peers = optimal_peers,
+            peer_count_score = %format!("{:.2}", peer_count_score),
+            avg_quality_score = %format!("{:.2}", avg_quality_score),
+            geographic_diversity = geographic_diversity,
+            diversity_score = %format!("{:.2}", diversity_score),
+            network_health_score = %format!("{:.2}", network_health),
+            "Network health score calculated"
+        );
+        
+        network_health
     }
     
     /// Create a new MetricsCollector with actor bridge integration
