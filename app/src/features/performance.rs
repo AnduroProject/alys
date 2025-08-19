@@ -6,6 +6,7 @@
 //! - Performance benchmarking with <1ms target per flag check
 
 use super::context::EvaluationContext;
+use super::metrics::FeatureFlagMetrics;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -124,6 +125,9 @@ pub mod macro_cache {
             // Valid cache hit - track performance
             let result = entry.access();
             let lookup_time = lookup_start.elapsed().as_nanos() as u64;
+            
+            // Record macro cache hit metrics
+            FeatureFlagMetrics::record_macro_cache_hit(flag_name);
             
             update_stats(|s| {
                 s.hits += 1;

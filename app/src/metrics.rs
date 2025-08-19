@@ -713,6 +713,107 @@ lazy_static! {
         ALYS_REGISTRY
     )
     .unwrap();
+    
+    // Feature Flag Metrics - ALYS-004-12: Flag usage tracking and evaluation performance
+    
+    pub static ref FF_EVALUATIONS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_evaluations_total",
+        "Total number of feature flag evaluations",
+        &["flag_name", "status", "result"],  // status: success/error, result: enabled/disabled
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_EVALUATION_DURATION: HistogramVec = register_histogram_vec_with_registry!(
+        HistogramOpts {
+            common_opts: Opts::new(
+                "alys_feature_flag_evaluation_duration_seconds",
+                "Time taken to evaluate feature flags in seconds"
+            ),
+            buckets: vec![0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
+        },
+        &["flag_name", "cache_status"], // cache_status: hit/miss
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_CACHE_OPERATIONS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_cache_operations_total",
+        "Total number of feature flag cache operations",
+        &["operation", "flag_name"], // operation: hit/miss/store/invalidate/cleanup
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_ACTIVE_FLAGS: IntGauge = register_int_gauge_with_registry!(
+        "alys_feature_flags_active_count",
+        "Current number of active feature flags",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_ENABLED_FLAGS: IntGauge = register_int_gauge_with_registry!(
+        "alys_feature_flags_enabled_count", 
+        "Current number of enabled feature flags",
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_HOT_RELOAD_EVENTS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_hot_reload_events_total",
+        "Total number of feature flag hot reload events",
+        &["status"], // status: success/error/file_deleted
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_CONFIG_RELOADS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_config_reloads_total",
+        "Total number of feature flag configuration reloads",
+        &["source"], // source: hot_reload/manual/startup
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_AUDIT_EVENTS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_audit_events_total",
+        "Total number of feature flag audit events",
+        &["event_type"], // event_type: flag_toggled/rollout_changed/config_reload/etc
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_FLAG_CHANGES_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_changes_total",
+        "Total number of feature flag changes",
+        &["flag_name", "change_type"], // change_type: enabled/disabled/rollout/targeting/conditions/metadata
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_VALIDATION_ERRORS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_validation_errors_total",
+        "Total number of feature flag validation errors",
+        &["error_type", "flag_name"], // error_type: invalid_config/missing_field/etc
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_MACRO_CACHE_HITS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_macro_cache_hits_total",
+        "Total number of feature flag macro cache hits (5-second TTL cache)",
+        &["flag_name"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+    
+    pub static ref FF_CONTEXT_BUILDS_TOTAL: IntCounterVec = register_int_counter_vec_with_registry!(
+        "alys_feature_flag_context_builds_total",
+        "Total number of evaluation context builds",
+        &["status"], // status: success/error
+        ALYS_REGISTRY
+    )
+    .unwrap();
 }
 
 async fn handle_request(req: Request<Body>) -> Result<Response<Body>, Infallible> {
