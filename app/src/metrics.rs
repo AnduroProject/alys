@@ -11,6 +11,9 @@ use sysinfo::{System, SystemExt, ProcessExt, PidExt};
 use serde_json::json;
 
 use lazy_static::lazy_static;
+
+pub mod actor_integration;
+pub use actor_integration::{ActorMetricsBridge, ActorType, MessageType};
 use prometheus::{
     register_gauge_with_registry, register_histogram_vec_with_registry,
     register_histogram_with_registry, register_int_counter_vec_with_registry,
@@ -623,6 +626,8 @@ pub struct MetricsCollector {
     process_id: u32,
     start_time: std::time::Instant,
     collection_interval: Duration,
+    /// Actor metrics bridge for Prometheus integration
+    actor_bridge: Option<Arc<ActorMetricsBridge>>,
 }
 
 impl MetricsCollector {
@@ -641,14 +646,40 @@ impl MetricsCollector {
             process_id,
             start_time,
             collection_interval: Duration::from_secs(5),
+            actor_bridge: None,
         })
+    }
+    
+    /// Create a new MetricsCollector with actor bridge integration
+    pub async fn new_with_actor_bridge() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut collector = Self::new().await?;
+        
+        // Initialize actor metrics bridge
+        let actor_bridge = Arc::new(ActorMetricsBridge::new(Duration::from_secs(5)));
+        collector.actor_bridge = Some(actor_bridge);
+        
+        tracing::info!("MetricsCollector initialized with actor bridge integration");
+        
+        Ok(collector)
+    }
+    
+    /// Get the actor metrics bridge for external registration
+    pub fn actor_bridge(&self) -> Option<Arc<ActorMetricsBridge>> {
+        self.actor_bridge.clone()
     }
 
     /// Start automated metrics collection
     pub async fn start_collection(&self) -> tokio::task::JoinHandle<()> {
         let mut collector = self.clone();
+        let actor_bridge = self.actor_bridge.clone();
         
         tokio::spawn(async move {
+            // Start actor bridge collection if available
+            if let Some(bridge) = &actor_bridge {
+                let _actor_handle = bridge.start_collection().await;
+                tracing::info!("Actor metrics bridge collection started");
+            }
+            
             let mut interval = interval(collector.collection_interval);
             
             loop {
@@ -660,6 +691,19 @@ impl MetricsCollector {
                 }
                 
                 collector.update_uptime_metrics();
+                
+                // Update actor system health if bridge is available
+                if let Some(bridge) = &actor_bridge {
+                    let is_healthy = bridge.is_system_healthy();
+                    let stats = bridge.get_aggregate_stats();
+                    
+                    tracing::trace!(
+                        actor_system_healthy = is_healthy,
+                        total_actors = stats.total_actors,
+                        healthy_actors = stats.healthy_actors,
+                        "Actor system health check completed"
+                    );
+                }
                 
                 tracing::trace!("System metrics collection completed");
             }
@@ -757,6 +801,7 @@ impl Clone for MetricsCollector {
             process_id: self.process_id,
             start_time: self.start_time,
             collection_interval: self.collection_interval,
+            actor_bridge: self.actor_bridge.clone(),
         }
     }
 }
