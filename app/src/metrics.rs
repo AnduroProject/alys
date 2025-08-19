@@ -47,6 +47,68 @@ impl SyncState {
     }
 }
 
+/// Block timer type for ALYS-003-17
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockTimerType {
+    Production,
+    Validation,
+}
+
+/// High-precision block timing utility for ALYS-003-17
+#[derive(Debug)]
+pub struct BlockTimer {
+    timer_type: BlockTimerType,
+    start_time: std::time::Instant,
+}
+
+impl BlockTimer {
+    /// Create a new block timer
+    pub fn new(timer_type: BlockTimerType) -> Self {
+        Self {
+            timer_type,
+            start_time: std::time::Instant::now(),
+        }
+    }
+    
+    /// Get the elapsed duration
+    pub fn elapsed(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+    
+    /// Finish timing and record to metrics
+    pub fn finish_and_record(self, metrics_collector: &MetricsCollector, validator: &str) -> Duration {
+        let elapsed = self.elapsed();
+        
+        match self.timer_type {
+            BlockTimerType::Production => {
+                metrics_collector.record_block_production_time(validator, elapsed);
+            }
+            BlockTimerType::Validation => {
+                metrics_collector.record_block_validation_time(validator, elapsed, true);
+            }
+        }
+        
+        elapsed
+    }
+    
+    /// Finish timing with success/failure and record to metrics
+    pub fn finish_with_result(self, metrics_collector: &MetricsCollector, validator: &str, success: bool) -> Duration {
+        let elapsed = self.elapsed();
+        
+        match self.timer_type {
+            BlockTimerType::Production => {
+                // Production timer doesn't have success/failure semantics, so just record normally
+                metrics_collector.record_block_production_time(validator, elapsed);
+            }
+            BlockTimerType::Validation => {
+                metrics_collector.record_block_validation_time(validator, elapsed, success);
+            }
+        }
+        
+        elapsed
+    }
+}
+
 use lazy_static::lazy_static;
 
 pub mod actor_integration;
@@ -740,6 +802,89 @@ impl MetricsCollector {
                 "Sync speed calculated"
             );
         }
+    }
+    
+    /// Record block production timing (ALYS-003-17)
+    pub fn record_block_production_time(&self, validator: &str, duration: Duration) {
+        let duration_secs = duration.as_secs_f64();
+        
+        BLOCK_PRODUCTION_TIME
+            .with_label_values(&[validator])
+            .observe(duration_secs);
+        
+        tracing::debug!(
+            validator = validator,
+            duration_ms = duration.as_millis(),
+            duration_secs = %format!("{:.3}", duration_secs),
+            "Block production timing recorded"
+        );
+    }
+    
+    /// Record block validation timing (ALYS-003-17)
+    pub fn record_block_validation_time(&self, validator: &str, duration: Duration, success: bool) {
+        let duration_secs = duration.as_secs_f64();
+        
+        BLOCK_VALIDATION_TIME
+            .with_label_values(&[validator])
+            .observe(duration_secs);
+        
+        tracing::debug!(
+            validator = validator,
+            duration_ms = duration.as_millis(),
+            duration_secs = %format!("{:.3}", duration_secs),
+            validation_success = success,
+            "Block validation timing recorded"
+        );
+    }
+    
+    /// Start block production timer (ALYS-003-17)
+    pub fn start_block_production_timer(&self) -> BlockTimer {
+        BlockTimer::new(BlockTimerType::Production)
+    }
+    
+    /// Start block validation timer (ALYS-003-17)  
+    pub fn start_block_validation_timer(&self) -> BlockTimer {
+        BlockTimer::new(BlockTimerType::Validation)
+    }
+    
+    /// Record block processing pipeline metrics (ALYS-003-17)
+    pub fn record_block_pipeline_metrics(
+        &self, 
+        validator: &str,
+        production_time: Duration, 
+        validation_time: Duration,
+        total_time: Duration,
+        block_size: u64,
+        transaction_count: u32
+    ) {
+        // Record individual timings
+        self.record_block_production_time(validator, production_time);
+        self.record_block_validation_time(validator, validation_time, true);
+        
+        // Calculate throughput metrics
+        let transactions_per_second = if total_time.as_secs_f64() > 0.0 {
+            transaction_count as f64 / total_time.as_secs_f64()
+        } else {
+            0.0
+        };
+        
+        let bytes_per_second = if total_time.as_secs_f64() > 0.0 {
+            block_size as f64 / total_time.as_secs_f64()
+        } else {
+            0.0
+        };
+        
+        tracing::info!(
+            validator = validator,
+            production_ms = production_time.as_millis(),
+            validation_ms = validation_time.as_millis(),
+            total_ms = total_time.as_millis(),
+            block_size_bytes = block_size,
+            transaction_count = transaction_count,
+            txs_per_second = %format!("{:.2}", transactions_per_second),
+            bytes_per_second = %format!("{:.2}", bytes_per_second),
+            "Block pipeline metrics recorded"
+        );
     }
     
     /// Create a new MetricsCollector with actor bridge integration
