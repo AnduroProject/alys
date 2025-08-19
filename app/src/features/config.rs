@@ -4,6 +4,7 @@
 //! validating the configuration, and providing type-safe access to flag definitions.
 
 use super::types::*;
+use super::validation::*;
 use super::{FeatureFlagResult, FeatureFlagError};
 use crate::config::{ConfigError, Environment, Validate};
 
@@ -18,6 +19,8 @@ use tracing::{info, warn, debug};
 pub struct FeatureFlagConfigLoader {
     /// Whether to validate configuration on load
     validate_on_load: bool,
+    /// Enhanced validation context
+    validation_context: Option<ValidationContext>,
 }
 
 impl FeatureFlagConfigLoader {
@@ -25,6 +28,7 @@ impl FeatureFlagConfigLoader {
     pub fn new() -> Self {
         Self {
             validate_on_load: true,
+            validation_context: None,
         }
     }
     
@@ -32,6 +36,15 @@ impl FeatureFlagConfigLoader {
     pub fn with_validation(validate_on_load: bool) -> Self {
         Self {
             validate_on_load,
+            validation_context: None,
+        }
+    }
+    
+    /// Create loader with enhanced validation context
+    pub fn with_enhanced_validation(context: ValidationContext) -> Self {
+        Self {
+            validate_on_load: true,
+            validation_context: Some(context),
         }
     }
     
@@ -79,11 +92,7 @@ impl FeatureFlagConfigLoader {
         }
         
         if self.validate_on_load {
-            collection.validate()
-                .map_err(|e| FeatureFlagError::ValidationError {
-                    flag: "configuration".to_string(),
-                    reason: e.to_string(),
-                })?;
+            self.perform_validation(&collection)?;
         }
         
         info!("Loaded {} feature flags from environment", collection.flags.len());
@@ -100,11 +109,7 @@ impl FeatureFlagConfigLoader {
         let collection = self.convert_raw_config(raw_config)?;
         
         if self.validate_on_load {
-            collection.validate()
-                .map_err(|e| FeatureFlagError::ValidationError {
-                    flag: "configuration".to_string(),
-                    reason: e.to_string(),
-                })?;
+            self.perform_validation(&collection)?;
         }
         
         info!("Loaded {} feature flags from TOML", collection.flags.len());
@@ -142,6 +147,42 @@ impl FeatureFlagConfigLoader {
         let default_config = Self::default_config();
         let loader = Self::new();
         loader.save_to_file(&default_config, path)
+    }
+    
+    /// Perform enhanced validation on configuration collection
+    pub fn perform_validation(&self, collection: &FeatureFlagCollection) -> FeatureFlagResult<()> {
+        if let Some(context) = &self.validation_context {
+            // Use enhanced validator with context
+            let validator = FeatureFlagValidator::with_context(context.clone());
+            if let Err(errors) = validator.validate_collection(collection) {
+                // Convert enhanced validation errors to feature flag errors
+                let error_messages: Vec<String> = errors.iter()
+                    .map(|e| format!("{}: {}", e.field_path, e.message))
+                    .collect();
+                
+                return Err(FeatureFlagError::ValidationError {
+                    flag: "configuration".to_string(),
+                    reason: error_messages.join("; "),
+                });
+            }
+        } else {
+            // Use basic validation
+            collection.validate()
+                .map_err(|e| FeatureFlagError::ValidationError {
+                    flag: "configuration".to_string(),
+                    reason: e.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+    
+    /// Validate configuration and return detailed report
+    pub fn validate_with_report(&self, collection: &FeatureFlagCollection) -> (bool, String) {
+        if let Some(context) = &self.validation_context {
+            validate_collection_with_report(collection, Some(context.clone()))
+        } else {
+            validate_collection_with_report(collection, None)
+        }
     }
     
     /// Get default configuration

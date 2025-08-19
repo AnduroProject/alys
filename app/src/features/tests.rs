@@ -572,4 +572,350 @@ updated_by = "test"
         
         println!("Consistent result for context: {}", result1);
     }
+
+    // Phase 3: Performance & Caching Tests
+
+    #[tokio::test]
+    async fn test_macro_cache_functionality() {
+        use super::super::performance::macro_cache;
+        
+        // Clear cache to start fresh
+        macro_cache::clear_cache().await;
+        
+        let context = create_test_context();
+        
+        // Test cache miss
+        let result = macro_cache::fast_cache_lookup("test_macro_flag", &context).await;
+        assert!(result.is_none());
+        
+        // Test cache store and hit
+        macro_cache::fast_cache_store("test_macro_flag", &context, true, 100).await;
+        let result = macro_cache::fast_cache_lookup("test_macro_flag", &context).await;
+        assert_eq!(result, Some(true));
+        
+        // Test cache statistics
+        let stats = macro_cache::get_cache_stats().await;
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.total_accesses, 2);
+        assert!(stats.hit_rate() > 0.0);
+    }
+    
+    #[tokio::test]
+    async fn test_macro_cache_expiration() {
+        use super::super::performance::macro_cache;
+        
+        macro_cache::clear_cache().await;
+        
+        let context = create_test_context();
+        
+        // Store in cache
+        macro_cache::fast_cache_store("test_expiry", &context, true, 50).await;
+        assert_eq!(macro_cache::fast_cache_lookup("test_expiry", &context).await, Some(true));
+        
+        // Wait for expiration (5 seconds + buffer)
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        
+        // Should be expired
+        assert!(macro_cache::fast_cache_lookup("test_expiry", &context).await.is_none());
+    }
+    
+    #[tokio::test]
+    async fn test_macro_cache_context_sensitivity() {
+        use super::super::performance::macro_cache;
+        
+        macro_cache::clear_cache().await;
+        
+        let context1 = create_test_context();
+        let context2 = EvaluationContext::new("different-node".to_string(), Environment::Development);
+        
+        // Store for context1
+        macro_cache::fast_cache_store("test_context", &context1, true, 100).await;
+        
+        // Should hit for same context
+        assert_eq!(macro_cache::fast_cache_lookup("test_context", &context1).await, Some(true));
+        
+        // Should miss for different context
+        assert!(macro_cache::fast_cache_lookup("test_context", &context2).await.is_none());
+        
+        // Store for context2
+        macro_cache::fast_cache_store("test_context", &context2, false, 100).await;
+        
+        // Both contexts should have their own cached values
+        assert_eq!(macro_cache::fast_cache_lookup("test_context", &context1).await, Some(true));
+        assert_eq!(macro_cache::fast_cache_lookup("test_context", &context2).await, Some(false));
+    }
+    
+    #[tokio::test]
+    async fn test_consistent_hashing_rollout() {
+        use super::super::performance::consistent_hashing;
+        
+        let context = create_test_context();
+        
+        // Test edge cases
+        assert!(!consistent_hashing::evaluate_consistent_percentage(0, &context, "test_flag"));
+        assert!(consistent_hashing::evaluate_consistent_percentage(100, &context, "test_flag"));
+        
+        // Test consistency - same inputs should always give same result
+        let result1 = consistent_hashing::evaluate_consistent_percentage(50, &context, "test_flag");
+        let result2 = consistent_hashing::evaluate_consistent_percentage(50, &context, "test_flag");
+        let result3 = consistent_hashing::evaluate_consistent_percentage(50, &context, "test_flag");
+        
+        assert_eq!(result1, result2);
+        assert_eq!(result2, result3);
+        
+        // Different flag names should potentially give different results
+        let result_diff_flag = consistent_hashing::evaluate_consistent_percentage(50, &context, "different_flag");
+        // Note: This might be the same by chance, but we're testing the deterministic nature
+        
+        println!("Consistent results: {} (same flag), {} (different flag)", result1, result_diff_flag);
+    }
+    
+    #[tokio::test]
+    async fn test_rollout_distribution_validation() {
+        use super::super::performance::consistent_hashing;
+        
+        // Test 25% rollout with 1000 samples
+        let samples: Vec<(String, Environment)> = (0..1000)
+            .map(|i| (format!("test-node-{}", i), Environment::Development))
+            .collect();
+            
+        let stats = consistent_hashing::verify_rollout_distribution(25, &samples, "test_flag");
+        
+        assert_eq!(stats.target_percentage, 25);
+        assert_eq!(stats.sample_size, 1000);
+        assert!(stats.is_within_tolerance, "Distribution deviation too high: {:.1}%", stats.deviation);
+        assert!(stats.actual_percentage > 20.0 && stats.actual_percentage < 30.0, 
+               "Actual percentage {} outside reasonable range", stats.actual_percentage);
+        
+        println!("Rollout distribution: target={}%, actual={:.1}%, deviation={:.1}%", 
+                stats.target_percentage, stats.actual_percentage, stats.deviation);
+    }
+    
+    #[tokio::test]
+    async fn test_performance_benchmarking() {
+        use super::super::performance::benchmarks;
+        
+        let temp_file = create_test_config_file();
+        let manager = FeatureFlagManager::new(temp_file.path().to_path_buf()).unwrap();
+        
+        // Run a small benchmark
+        let results = manager.run_performance_benchmark(100).await;
+        
+        assert_eq!(results.total_evaluations, 100);
+        assert!(results.avg_evaluation_time_us > 0);
+        assert!(results.max_evaluation_time_us >= results.avg_evaluation_time_us);
+        assert!(results.p95_evaluation_time_us >= results.avg_evaluation_time_us);
+        assert!(results.p99_evaluation_time_us >= results.p95_evaluation_time_us);
+        
+        // Performance targets
+        assert!(results.avg_evaluation_time_us < 10000, 
+               "Average evaluation time too high: {}μs", results.avg_evaluation_time_us);
+        
+        println!("Benchmark results: avg={}μs, p95={}μs, target_met={}", 
+                results.avg_evaluation_time_us, results.p95_evaluation_time_us, results.target_met);
+    }
+    
+    #[tokio::test]
+    async fn test_enhanced_feature_enabled_macro() {
+        let temp_file = create_test_config_file();
+        
+        // Initialize global feature flags for macro testing
+        crate::features::init_feature_flags(temp_file.path().to_str().unwrap()).unwrap();
+        
+        // Initialize context provider (normally done in app startup)
+        let context = create_test_context();
+        crate::features::set_evaluation_context_provider(Box::new(move || {
+            let ctx = context.clone();
+            Box::pin(async move { Ok(ctx) })
+        })).unwrap();
+        
+        // Test macro with automatic context
+        let result1 = feature_enabled!("test_enabled").await;
+        assert!(result1);
+        
+        // Test with cache hit (second call should be much faster)
+        let start = std::time::Instant::now();
+        let result2 = feature_enabled!("test_enabled").await;
+        let elapsed = start.elapsed();
+        
+        assert!(result2);
+        assert_eq!(result1, result2);
+        
+        // Should be very fast due to macro caching
+        assert!(elapsed.as_micros() < 1000, "Macro cache too slow: {}μs", elapsed.as_micros());
+        
+        println!("Macro cache lookup time: {}μs", elapsed.as_micros());
+    }
+    
+    #[tokio::test] 
+    async fn test_macro_cache_health_monitoring() {
+        use super::super::performance::macro_cache;
+        
+        macro_cache::clear_cache().await;
+        
+        // Perform some operations to generate statistics
+        let context = create_test_context();
+        for i in 0..10 {
+            let flag_name = format!("test_flag_{}", i % 3); // Create some hits and misses
+            
+            // Cache miss
+            let _ = macro_cache::fast_cache_lookup(&flag_name, &context).await;
+            
+            // Cache store
+            macro_cache::fast_cache_store(&flag_name, &context, i % 2 == 0, 100).await;
+            
+            // Cache hit
+            let _ = macro_cache::fast_cache_lookup(&flag_name, &context).await;
+        }
+        
+        // Check health status
+        let health = macro_cache::health_check().await;
+        println!("Macro cache health: {:?}", health);
+        
+        // Get detailed statistics
+        let stats = macro_cache::get_cache_stats().await;
+        println!("Cache stats: hits={}, misses={}, hit_rate={:.1}%", 
+                stats.hits, stats.misses, stats.hits as f64 / stats.total_accesses as f64 * 100.0);
+        
+        assert!(stats.total_accesses > 0);
+        assert!(stats.hits > 0);
+        assert!(stats.misses > 0);
+    }
+    
+    #[tokio::test]
+    async fn test_performance_maintenance_task() {
+        use super::super::performance;
+        
+        // Start background maintenance (short interval for testing)
+        let maintenance = performance::PerformanceMaintenance::new(1, 1000);
+        let task_handle = maintenance.start();
+        
+        // Let it run for a short time
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        
+        // Stop the task
+        task_handle.abort();
+        
+        // Task should have run at least once
+        let stats = performance::macro_cache::get_cache_stats().await;
+        println!("Maintenance task stats: cleanups={}", stats.cleanups);
+    }
+    
+    #[tokio::test]
+    async fn test_manager_performance_report() {
+        let temp_file = create_test_config_file();
+        let manager = FeatureFlagManager::new(temp_file.path().to_path_buf()).unwrap();
+        let context = create_test_context();
+        
+        // Perform some evaluations to generate statistics
+        for _ in 0..10 {
+            let _ = manager.is_enabled("test_enabled", &context).await;
+        }
+        
+        // Generate performance report
+        let report = manager.get_performance_report().await;
+        
+        assert!(report.contains("Feature Flag System Performance Report"));
+        assert!(report.contains("Manager Statistics"));
+        assert!(report.contains("Macro Cache"));
+        assert!(report.contains("Performance Target Status"));
+        
+        println!("Performance Report:\n{}", report);
+    }
+    
+    #[tokio::test]
+    async fn test_rollout_distribution_validation_manager() {
+        let temp_file = create_test_config_file();
+        let manager = FeatureFlagManager::new(temp_file.path().to_path_buf()).unwrap();
+        
+        // Add a flag with 30% rollout
+        let flag = FeatureFlag::with_percentage("rollout_test".to_string(), true, 30);
+        manager.upsert_flag(flag).await.unwrap();
+        
+        // Validate rollout distribution
+        let stats = manager.validate_rollout_distribution("rollout_test", 30, 1000).await.unwrap();
+        
+        assert_eq!(stats.target_percentage, 30);
+        assert_eq!(stats.sample_size, 1000);
+        assert!(stats.is_within_tolerance, 
+               "Rollout distribution validation failed: deviation={:.1}%", stats.deviation);
+        
+        println!("Manager rollout validation: target={}%, actual={:.1}%, tolerance_met={}", 
+                stats.target_percentage, stats.actual_percentage, stats.is_within_tolerance);
+    }
+    
+    #[tokio::test]
+    async fn test_macro_cache_memory_protection() {
+        use super::super::performance::macro_cache;
+        
+        macro_cache::clear_cache().await;
+        
+        let context = create_test_context();
+        
+        // Fill cache beyond normal limits (testing memory protection)
+        for i in 0..50 {
+            let flag_name = format!("memory_test_flag_{}", i);
+            macro_cache::fast_cache_store(&flag_name, &context, i % 2 == 0, 100).await;
+        }
+        
+        // Check cache size and statistics
+        let stats = macro_cache::get_cache_stats().await;
+        println!("Memory protection test: cache_size={}, max_size={}", 
+                stats.current_cache_size, stats.max_cache_size);
+        
+        // Cache should be managing memory appropriately
+        assert!(stats.current_cache_size > 0);
+        assert!(stats.max_cache_size >= stats.current_cache_size);
+        
+        // Trigger cleanup
+        let cleaned = macro_cache::cleanup_expired().await;
+        println!("Cleanup removed {} expired entries", cleaned);
+    }
+    
+    // Integration test for complete Phase 3 workflow
+    #[tokio::test]
+    async fn test_phase3_integration_workflow() {
+        // Initialize system
+        let temp_file = create_test_config_file();
+        let manager = FeatureFlagManager::new(temp_file.path().to_path_buf()).unwrap();
+        let context = create_test_context();
+        
+        // Clear macro cache for clean test
+        crate::features::performance::macro_cache::clear_cache().await;
+        
+        // Test Phase 3 features integration:
+        
+        // 1. Enhanced macro with 5-second caching (ALYS-004-08)
+        macro_cache::fast_cache_store("integration_test", &context, true, 150).await;
+        let cached_result = macro_cache::fast_cache_lookup("integration_test", &context).await;
+        assert_eq!(cached_result, Some(true));
+        
+        // 2. Consistent hashing for rollouts (ALYS-004-09)
+        let rollout_result1 = crate::features::performance::consistent_hashing::evaluate_consistent_percentage(
+            75, &context, "integration_rollout"
+        );
+        let rollout_result2 = crate::features::performance::consistent_hashing::evaluate_consistent_percentage(
+            75, &context, "integration_rollout"
+        );
+        assert_eq!(rollout_result1, rollout_result2); // Consistency guarantee
+        
+        // 3. Performance benchmarking (ALYS-004-10)
+        let benchmark = manager.run_performance_benchmark(50).await;
+        assert!(benchmark.total_evaluations > 0);
+        assert!(benchmark.avg_evaluation_time_us < 5000); // Should be well under 5ms
+        
+        // 4. Comprehensive performance report
+        let report = manager.get_performance_report().await;
+        assert!(report.contains("Feature Flag System Performance Report"));
+        
+        // 5. Rollout distribution validation
+        let distribution = manager.validate_rollout_distribution("integration_rollout", 75, 500).await.unwrap();
+        assert!(distribution.is_within_tolerance);
+        
+        println!("Phase 3 integration test completed successfully");
+        println!("Benchmark average: {}μs", benchmark.avg_evaluation_time_us);
+        println!("Distribution accuracy: {:.1}% (target: {}%)", 
+                distribution.actual_percentage, distribution.target_percentage);
+    }
 }

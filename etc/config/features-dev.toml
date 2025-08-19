@@ -1,0 +1,81 @@
+# ALYS V2 Feature Flags - Development Configuration
+# Minimal configuration for local development and testing
+
+version = "1.0"
+default_environment = "development"
+
+[global_settings]
+cache_ttl_seconds = 5
+enable_audit_log = true
+enable_metrics = true
+max_evaluation_time_ms = 1
+
+# Development flags - enabled for local testing
+[flags.parallel_validation]
+enabled = true
+rollout_percentage = 100
+description = "Enable parallel block validation for development"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "development"
+
+[flags.parallel_validation.metadata]
+risk = "low"
+owner = "development"
+
+[flags.enhanced_monitoring]
+enabled = true
+rollout_percentage = 100
+description = "Enhanced monitoring for development"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "development"
+
+[flags.enhanced_monitoring.metadata]
+risk = "low"
+owner = "development"
+
+[flags.debug_mode]
+enabled = true
+rollout_percentage = 100
+description = "Debug mode with verbose logging"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "development"
+
+[flags.debug_mode.metadata]
+risk = "low"
+owner = "development"
+debug_feature = true
+
+# Experimental flags - disabled by default
+[flags.actor_system_migration]
+enabled = false
+rollout_percentage = 0
+description = "V2 actor system migration - disabled for dev stability"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "development"
+
+[flags.actor_system_migration.metadata]
+risk = "high"
+owner = "development"
+experimental = true
+
+[flags.actor_system_migration.targets]
+environments = ["development"]
+
+[flags.improved_sync]
+enabled = false
+rollout_percentage = 25
+description = "Improved sync algorithm - partial rollout for testing"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "development"
+
+[flags.improved_sync.metadata]
+risk = "medium"
+owner = "development"
+
+[flags.improved_sync.targets]
+node_ids = ["dev-node-1", "dev-node-2"]

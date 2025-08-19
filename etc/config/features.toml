@@ -1,0 +1,362 @@
+# ALYS V2 Feature Flag Configuration
+# Comprehensive example showcasing all feature flag capabilities
+
+version = "1.0"
+default_environment = "development"
+
+# Global settings affecting all feature flags
+[global_settings]
+cache_ttl_seconds = 5
+enable_audit_log = true
+enable_metrics = true
+max_evaluation_time_ms = 1
+
+# ============================================================================
+# PRODUCTION MIGRATION FEATURES
+# ============================================================================
+
+[flags.actor_system_migration]
+enabled = false
+rollout_percentage = 0
+description = "Enable V2 actor-based architecture for core blockchain operations"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z" 
+updated_by = "platform-team"
+
+[flags.actor_system_migration.metadata]
+risk = "critical"
+owner = "platform-team"
+jira_ticket = "ALYS-001"
+documentation_url = "https://docs.alys.dev/v2/actor-system"
+rollback_plan = "Graceful fallback to V1 synchronous architecture"
+
+[flags.actor_system_migration.conditions]
+# Only enable after sufficient chain height for stability
+chain_height_above = 2000000
+# Require high sync progress
+sync_progress_above = 0.95
+# Only during low-traffic hours initially
+time_window = { start_hour = 2, end_hour = 6 }
+
+[flags.actor_system_migration.targets]
+# Start with specific validator nodes
+validator_keys = [
+    "0x1234567890abcdef1234567890abcdef12345678",
+    "0xabcdef1234567890abcdef1234567890abcdef12"
+]
+# Target specific environments first
+environments = ["development", "testing"]
+# Target specific regions
+custom_attributes = { region = "us-west", tier = "canary" }
+
+# ============================================================================
+# PERFORMANCE OPTIMIZATIONS
+# ============================================================================
+
+[flags.parallel_block_validation]
+enabled = true
+rollout_percentage = 100
+description = "Enable parallel validation of blocks for improved performance"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-15T12:00:00Z"
+updated_by = "performance-team"
+
+[flags.parallel_block_validation.metadata]
+risk = "low"
+owner = "performance-team"
+performance_impact = "30% faster block validation"
+tested_environments = ["testnet", "canary"]
+
+[flags.improved_sync_algorithm]
+enabled = false
+rollout_percentage = 25
+description = "Use improved sync algorithm with better peer selection"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-20T09:30:00Z"
+updated_by = "sync-team"
+
+[flags.improved_sync_algorithm.metadata]
+risk = "medium"
+owner = "sync-team"
+jira_ticket = "ALYS-045"
+expected_improvement = "50% faster sync times"
+
+[flags.improved_sync_algorithm.conditions]
+# Only enable for nodes with sufficient resources
+node_health = { min_peers = 10, max_memory_usage_mb = 8000, max_cpu_usage_percent = 80 }
+
+[flags.improved_sync_algorithm.targets]
+environments = ["testnet", "staging"]
+# Target nodes with good network connectivity
+ip_ranges = ["10.0.0.0/16", "192.168.1.0/24"]
+
+# ============================================================================
+# LIGHTHOUSE WRAPPER MIGRATION
+# ============================================================================
+
+[flags.lighthouse_v5_migration]
+enabled = false
+rollout_percentage = 0
+description = "Migrate from Lighthouse v4 to v5 consensus client"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "consensus-team"
+
+[flags.lighthouse_v5_migration.metadata]
+risk = "critical"
+owner = "consensus-team" 
+breaking_changes = true
+requires_coordinated_upgrade = true
+documentation_url = "https://docs.alys.dev/lighthouse-v5-migration"
+
+[flags.lighthouse_v5_migration.conditions]
+# Only after specific date for coordination
+after = "2024-03-01T00:00:00Z"
+# Require full sync
+sync_progress_above = 0.99
+# Require minimum chain height
+chain_height_above = 2500000
+
+[flags.lighthouse_v5_migration.targets]
+# Staged rollout by environment
+environments = ["development"]
+# Specific validator nodes for coordination
+validator_keys = ["0xvalidator1", "0xvalidator2"]
+
+# ============================================================================
+# FEDERATION ENHANCEMENTS  
+# ============================================================================
+
+[flags.enhanced_bridge_validation]
+enabled = true
+rollout_percentage = 50
+description = "Enhanced validation for bridge operations with additional security checks"
+created_at = "2024-01-10T00:00:00Z"
+updated_at = "2024-01-25T14:20:00Z"
+updated_by = "security-team"
+
+[flags.enhanced_bridge_validation.metadata]
+risk = "medium"
+owner = "security-team"
+security_enhancement = true
+audit_status = "pending"
+
+[flags.enhanced_bridge_validation.conditions]
+# Only during business hours for monitoring
+time_window = { start_hour = 8, end_hour = 18 }
+
+[flags.taproot_multisig_optimization]
+enabled = false
+rollout_percentage = 0
+description = "Optimized taproot multisig implementation for better performance"
+created_at = "2024-01-15T00:00:00Z"
+updated_at = "2024-01-15T00:00:00Z"
+updated_by = "bitcoin-team"
+
+[flags.taproot_multisig_optimization.metadata]
+risk = "high"
+owner = "bitcoin-team"
+requires_bitcoin_core_upgrade = true
+performance_improvement = "20% faster signing"
+
+# ============================================================================
+# GOVERNANCE INTEGRATION
+# ============================================================================
+
+[flags.anduro_governance_integration]
+enabled = false
+rollout_percentage = 0
+description = "Enable integration with Anduro governance system"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "governance-team"
+
+[flags.anduro_governance_integration.metadata]
+risk = "critical"
+owner = "governance-team"
+external_dependency = "Anduro governance contracts"
+legal_review_required = true
+documentation_url = "https://docs.alys.dev/governance"
+
+[flags.anduro_governance_integration.conditions]
+# Only after specific activation date
+after = "2024-06-01T00:00:00Z"
+# Require full network stability
+sync_progress_above = 0.999
+chain_height_above = 3000000
+
+[flags.anduro_governance_integration.targets]
+# Initially only for specific governance nodes
+custom_attributes = { node_type = "governance", security_clearance = "high" }
+
+# ============================================================================
+# EXPERIMENTAL FEATURES
+# ============================================================================
+
+[flags.experimental_sharding]
+enabled = false
+rollout_percentage = 0
+description = "Experimental sharding implementation for horizontal scaling"
+created_at = "2024-01-20T00:00:00Z"
+updated_at = "2024-01-20T00:00:00Z"
+updated_by = "research-team"
+
+[flags.experimental_sharding.metadata]
+risk = "experimental"
+owner = "research-team"
+experimental = true
+not_production_ready = true
+research_phase = "proof-of-concept"
+
+[flags.experimental_sharding.conditions]
+# Only for research environments
+custom = "environment == 'research' && node_type == 'experimental'"
+
+[flags.experimental_sharding.targets]
+environments = ["development"]
+custom_attributes = { node_type = "experimental", research_track = "sharding" }
+
+# ============================================================================
+# MONITORING AND DEBUGGING
+# ============================================================================
+
+[flags.enhanced_monitoring]
+enabled = true
+rollout_percentage = 100
+description = "Enhanced monitoring and metrics collection"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-30T10:15:00Z"
+updated_by = "monitoring-team"
+
+[flags.enhanced_monitoring.metadata]
+risk = "low"
+owner = "monitoring-team"
+performance_overhead = "minimal"
+prometheus_integration = true
+
+[flags.debug_mode]
+enabled = false
+rollout_percentage = 0
+description = "Enable debug mode with verbose logging and additional telemetry"
+created_at = "2024-01-25T00:00:00Z"
+updated_at = "2024-01-25T00:00:00Z"
+updated_by = "debug-team"
+
+[flags.debug_mode.metadata]
+risk = "low"
+owner = "debug-team"
+performance_impact = "high logging overhead"
+not_for_production = true
+
+[flags.debug_mode.targets]
+environments = ["development"]
+custom_attributes = { debug_enabled = "true" }
+
+# ============================================================================
+# NETWORK LAYER ENHANCEMENTS
+# ============================================================================
+
+[flags.libp2p_optimization]
+enabled = true
+rollout_percentage = 75
+description = "Optimized libp2p networking with improved peer discovery"
+created_at = "2024-01-12T00:00:00Z"
+updated_at = "2024-02-01T16:45:00Z"
+updated_by = "network-team"
+
+[flags.libp2p_optimization.metadata]
+risk = "medium"
+owner = "network-team"
+network_performance = "15% improvement in peer connectivity"
+tested_load = "1000+ peers"
+
+[flags.libp2p_optimization.conditions]
+# Require stable network conditions
+node_health = { min_peers = 5, max_cpu_usage_percent = 90 }
+
+[flags.enhanced_gossipsub]
+enabled = false
+rollout_percentage = 10
+description = "Enhanced gossipsub protocol with better message propagation"
+created_at = "2024-01-18T00:00:00Z"
+updated_at = "2024-02-05T11:20:00Z"
+updated_by = "network-team"
+
+[flags.enhanced_gossipsub.metadata]
+risk = "medium"
+owner = "network-team"
+message_efficiency = "30% reduction in duplicate messages"
+bandwidth_optimization = true
+
+# ============================================================================
+# EMERGENCY AND SAFETY FEATURES  
+# ============================================================================
+
+[flags.emergency_mode]
+enabled = false
+rollout_percentage = 0
+description = "Emergency mode for critical system protection"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "security-team"
+
+[flags.emergency_mode.metadata]
+risk = "system-override"
+owner = "security-team"
+emergency_use_only = true
+requires_manual_activation = true
+incident_response = true
+
+[flags.emergency_mode.conditions]
+# Only activate under extreme conditions
+node_health = { max_cpu_usage_percent = 95, min_peers = 1 }
+
+[flags.circuit_breaker]
+enabled = true
+rollout_percentage = 100
+description = "Circuit breaker for automatic protection against cascading failures"
+created_at = "2024-01-08T00:00:00Z"
+updated_at = "2024-01-08T00:00:00Z"
+updated_by = "reliability-team"
+
+[flags.circuit_breaker.metadata]
+risk = "low"
+owner = "reliability-team"
+reliability_feature = true
+prevents_cascading_failures = true
+
+# ============================================================================
+# TESTING AND VALIDATION
+# ============================================================================
+
+[flags.canary_deployment]
+enabled = false
+rollout_percentage = 1
+description = "Canary deployment testing for new features"
+created_at = "2024-02-01T00:00:00Z"
+updated_at = "2024-02-01T00:00:00Z"
+updated_by = "deployment-team"
+
+[flags.canary_deployment.metadata]
+risk = "testing"
+owner = "deployment-team"
+deployment_strategy = "canary"
+monitoring_required = true
+
+[flags.canary_deployment.targets]
+custom_attributes = { deployment_tier = "canary", monitoring = "enhanced" }
+
+[flags.a_b_test_example]
+enabled = false
+rollout_percentage = 50
+description = "Example A/B test for algorithm comparison"
+created_at = "2024-02-03T00:00:00Z"
+updated_at = "2024-02-03T00:00:00Z"
+updated_by = "data-team"
+
+[flags.a_b_test_example.metadata]
+risk = "testing"
+owner = "data-team"
+ab_test = true
+metrics_tracking = "conversion_rate,performance_metrics"
+test_duration = "30 days"

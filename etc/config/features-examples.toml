@@ -1,0 +1,229 @@
+# ALYS V2 Feature Flags - Example Configuration
+# Comprehensive examples showcasing all features and validation scenarios
+
+version = "1.0"
+default_environment = "testing"
+
+[global_settings]
+cache_ttl_seconds = 10
+enable_audit_log = true
+enable_metrics = true
+max_evaluation_time_ms = 5
+
+# Example 1: Basic feature flag with metadata
+[flags.basic_example]
+enabled = true
+rollout_percentage = 100
+description = "Basic example flag demonstrating required fields"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "system"
+
+[flags.basic_example.metadata]
+owner = "platform-team"
+risk = "low"
+category = "example"
+
+# Example 2: Gradual rollout with targeting
+[flags.gradual_rollout]
+enabled = true
+rollout_percentage = 25
+description = "Example of gradual feature rollout with node targeting"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-15T10:30:00Z"
+updated_by = "alice"
+
+[flags.gradual_rollout.metadata]
+owner = "backend-team"
+risk = "medium"
+experiment = true
+ticket = "ALYS-123"
+
+[flags.gradual_rollout.targets]
+node_ids = ["node-1", "node-2", "dev-validator-1"]
+environments = ["development", "testing"]
+
+# Example 3: Complex conditional logic
+[flags.conditional_feature]
+enabled = true
+rollout_percentage = 50
+description = "Feature with complex conditional activation rules"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-20T14:45:00Z"
+updated_by = "bob"
+
+[flags.conditional_feature.metadata]
+owner = "consensus-team"
+risk = "high"
+requires_monitoring = true
+
+[flags.conditional_feature.targets]
+environments = ["testing"]
+ip_ranges = ["192.168.1.0/24", "10.0.0.0/8"]
+
+[[flags.conditional_feature.conditions]]
+type = "SyncProgressAbove"
+value = 0.95
+
+[[flags.conditional_feature.conditions]]
+type = "TimeWindow"
+start_hour = 9
+end_hour = 17
+
+[[flags.conditional_feature.conditions]]
+type = "NodeHealth"
+max_cpu_usage_percent = 80
+min_memory_mb = 2048
+max_load_average = 1.5
+
+# Example 4: Migration flag with security considerations
+[flags.database_migration_v2]
+enabled = false
+rollout_percentage = 5
+description = "Database schema migration to V2 format - requires careful monitoring"
+created_at = "2024-02-01T00:00:00Z"
+updated_at = "2024-02-01T00:00:00Z"
+updated_by = "system"
+
+[flags.database_migration_v2.metadata]
+owner = "data-team"
+risk = "critical"
+migration = true
+rollback_plan = "documented"
+monitoring_dashboard = "https://monitoring.alys.com/database"
+
+[flags.database_migration_v2.targets]
+node_ids = ["migration-test-node"]
+environments = ["testing"]
+
+[[flags.database_migration_v2.conditions]]
+type = "SyncProgressAbove"
+value = 0.99
+
+[[flags.database_migration_v2.conditions]]
+type = "NodeHealth"
+max_cpu_usage_percent = 50
+min_memory_mb = 8192
+max_load_average = 0.5
+
+# Example 5: Performance optimization flag
+[flags.parallel_block_validation]
+enabled = true
+rollout_percentage = 75
+description = "Enable parallel validation of blocks to improve sync performance"
+created_at = "2024-01-15T00:00:00Z"
+updated_at = "2024-01-25T09:15:00Z"
+updated_by = "charlie"
+
+[flags.parallel_block_validation.metadata]
+owner = "performance-team"
+risk = "medium"
+performance_impact = "positive"
+benchmark_results = "25% faster validation"
+
+[flags.parallel_block_validation.targets]
+environments = ["development", "testing", "production"]
+
+[[flags.parallel_block_validation.conditions]]
+type = "NodeHealth"
+max_cpu_usage_percent = 70
+min_memory_mb = 4096
+
+# Example 6: Network optimization with validator targeting
+[flags.improved_gossip_protocol]
+enabled = false
+rollout_percentage = 10
+description = "Improved gossip protocol with better bandwidth utilization"
+created_at = "2024-02-10T00:00:00Z"
+updated_at = "2024-02-10T00:00:00Z"
+updated_by = "network-team"
+
+[flags.improved_gossip_protocol.metadata]
+owner = "networking-team"
+risk = "high"
+protocol_version = "2.1"
+backwards_compatible = false
+
+[flags.improved_gossip_protocol.targets]
+validator_keys = [
+    "0x1234567890abcdef1234567890abcdef12345678901234567890abcdef12345678",
+    "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
+]
+environments = ["testing"]
+
+[[flags.improved_gossip_protocol.conditions]]
+type = "ChainHeightAbove"
+value = 1000000
+
+# Example 7: Emergency killswitch
+[flags.emergency_sync_pause]
+enabled = false
+rollout_percentage = 0
+description = "Emergency flag to pause sync operations if critical issues detected"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "system"
+
+[flags.emergency_sync_pause.metadata]
+owner = "sre-team"
+risk = "critical"
+emergency_use_only = true
+incident_response = true
+
+# Example 8: A/B testing flag
+[flags.new_ui_layout]
+enabled = true
+rollout_percentage = 50
+description = "A/B test for new user interface layout in management dashboard"
+created_at = "2024-02-15T00:00:00Z"
+updated_at = "2024-02-15T00:00:00Z"
+updated_by = "frontend-team"
+
+[flags.new_ui_layout.metadata]
+owner = "frontend-team"
+risk = "low"
+ab_test = true
+experiment_duration = "2 weeks"
+success_metric = "user_engagement"
+
+[flags.new_ui_layout.targets]
+environments = ["production"]
+
+# Example 9: Resource optimization with time-based activation
+[flags.memory_optimization]
+enabled = true
+rollout_percentage = 30
+description = "Memory usage optimization during low-activity periods"
+created_at = "2024-02-20T00:00:00Z"
+updated_at = "2024-02-20T00:00:00Z"
+updated_by = "optimization-team"
+
+[flags.memory_optimization.metadata]
+owner = "performance-team"
+risk = "medium"
+memory_savings = "15-20%"
+
+[[flags.memory_optimization.conditions]]
+type = "TimeWindow"
+start_hour = 2
+end_hour = 6
+
+[[flags.memory_optimization.conditions]]
+type = "NodeHealth"
+min_memory_mb = 4096
+
+# Example 10: Feature with deprecation warning
+[flags.legacy_rpc_compatibility]
+enabled = true
+rollout_percentage = 100
+description = "Legacy RPC compatibility layer - scheduled for removal in V3"
+created_at = "2023-06-01T00:00:00Z"
+updated_at = "2023-06-01T00:00:00Z"
+updated_by = "legacy-team"
+
+[flags.legacy_rpc_compatibility.metadata]
+owner = "api-team"
+risk = "low"
+deprecated = true
+removal_date = "2024-12-31"
+replacement = "new_rpc_v2"

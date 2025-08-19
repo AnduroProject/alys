@@ -224,31 +224,22 @@ impl FeatureFlagEvaluator {
         }
     }
     
-    /// Evaluate percentage-based rollout using consistent hashing
+    /// Evaluate percentage-based rollout using consistent hashing (ALYS-004-09)
+    /// Uses enhanced hash-based context evaluation for guaranteed consistency
     fn evaluate_percentage_rollout(
         &self,
         percentage: u8,
         context: &EvaluationContext,
         flag_name: &str,
     ) -> bool {
-        if percentage == 0 {
-            return false;
-        }
-        if percentage >= 100 {
-            return true;
-        }
-        
-        // Create a hash combining context and flag name for consistency
-        let hash_input = format!("{}:{}", context.stable_id(), flag_name);
-        let hash = self.hash_string(&hash_input);
-        
-        // Convert percentage to threshold (0-100 -> 0-u64::MAX)
-        let threshold = (percentage as f64 / 100.0 * u64::MAX as f64) as u64;
-        
-        hash < threshold
+        // Use the enhanced consistent hashing from performance module
+        crate::features::performance::consistent_hashing::evaluate_consistent_percentage(
+            percentage, context, flag_name
+        )
     }
     
     /// Hash a string to u64 for consistent evaluation
+    /// Note: Prefer using consistent_hashing module for percentage rollouts
     fn hash_string(&self, input: &str) -> u64 {
         use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;

@@ -54,6 +54,7 @@ sysinfo = "0.30"
 # feature flags
 chrono = { workspace = true, features = ["serde"] }
 ipnetwork = "0.20"
+notify = "6.1"
 
 # async
 futures = { workspace = true }

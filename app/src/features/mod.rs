@@ -10,6 +10,9 @@ pub mod evaluation;
 pub mod context;
 pub mod config;
 pub mod cache;
+pub mod watcher;
+pub mod validation;
+pub mod performance;
 
 #[cfg(test)]
 mod tests;
@@ -21,6 +24,8 @@ pub use evaluation::*;
 pub use context::*;
 pub use config::*;
 pub use cache::*;
+pub use validation::*;
+pub use performance::*;
 
 /// Feature flag system errors
 use thiserror::Error;
@@ -79,14 +84,35 @@ pub fn global_feature_flags() -> Option<Arc<FeatureFlagManager>> {
     GLOBAL_FEATURE_FLAGS.get().cloned()
 }
 
-/// Convenience macro for checking feature flags with caching
+/// High-performance feature flag macro with 5-second caching
+/// Implements ALYS-004-08: feature_enabled! macro with 5-second caching
+/// 
+/// This macro provides ultra-fast feature flag checks with:
+/// - 5-second TTL cache for maximum performance
+/// - Context validation to prevent stale data
+/// - Automatic fallback to manager on cache miss
+/// - Target: <50μs for cache hits, <500μs for cache misses
 #[macro_export]
 macro_rules! feature_enabled {
     ($flag:expr) => {{
-        async {
-            if let Some(manager) = $crate::features::global_feature_flags() {
-                if let Ok(context) = $crate::features::get_evaluation_context().await {
-                    manager.is_enabled($flag, &context).await
+        async move {
+            // Get evaluation context first
+            if let Ok(context) = $crate::features::get_evaluation_context().await {
+                // Try ultra-fast macro cache first (5-second TTL)
+                if let Some(cached_result) = $crate::features::performance::macro_cache::fast_cache_lookup($flag, &context).await {
+                    return cached_result;
+                }
+                
+                // Cache miss - evaluate through manager with timing
+                if let Some(manager) = $crate::features::global_feature_flags() {
+                    let evaluation_start = std::time::Instant::now();
+                    let result = manager.is_enabled($flag, &context).await;
+                    let evaluation_time_us = evaluation_start.elapsed().as_micros() as u64;
+                    
+                    // Store in high-performance cache for next evaluation
+                    $crate::features::performance::macro_cache::fast_cache_store($flag, &context, result, evaluation_time_us).await;
+                    
+                    result
                 } else {
                     false
                 }
@@ -95,13 +121,37 @@ macro_rules! feature_enabled {
             }
         }
     }};
+    
     ($flag:expr, $context:expr) => {{
-        async {
+        async move {
+            // Try ultra-fast macro cache first (5-second TTL)
+            if let Some(cached_result) = $crate::features::performance::macro_cache::fast_cache_lookup($flag, &$context).await {
+                return cached_result;
+            }
+            
+            // Cache miss - evaluate through manager with timing
             if let Some(manager) = $crate::features::global_feature_flags() {
-                manager.is_enabled($flag, &$context).await
+                let evaluation_start = std::time::Instant::now();
+                let result = manager.is_enabled($flag, &$context).await;
+                let evaluation_time_us = evaluation_start.elapsed().as_micros() as u64;
+                
+                // Store in high-performance cache for next evaluation  
+                $crate::features::performance::macro_cache::fast_cache_store($flag, &$context, result, evaluation_time_us).await;
+                
+                result
             } else {
                 false
             }
         }
     }};
+}
+
+/// Initialize performance monitoring and maintenance
+pub async fn init_performance_monitoring() -> tokio::task::JoinHandle<()> {
+    // Start background maintenance for macro cache cleanup
+    let maintenance = performance::PerformanceMaintenance::new(
+        30, // Clean up every 30 seconds
+        10000 // Keep 10k performance samples
+    );
+    maintenance.start()
 }
