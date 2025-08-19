@@ -18,6 +18,7 @@ mod store;
 // V2 Actor System modules
 pub mod actors;
 pub mod config;
+pub mod features;
 pub mod integration;
 pub mod messages;
 pub mod serde_utils;
