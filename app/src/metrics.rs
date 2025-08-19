@@ -10,6 +10,43 @@ use tokio::time::interval;
 use sysinfo::{System, SystemExt, ProcessExt, PidExt};
 use serde_json::json;
 
+/// Sync state enumeration for ALYS-003-16
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SyncState {
+    Discovering = 0,
+    Headers = 1,
+    Blocks = 2,
+    Catchup = 3,
+    Synced = 4,
+    Failed = 5,
+}
+
+impl SyncState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncState::Discovering => "discovering",
+            SyncState::Headers => "headers",
+            SyncState::Blocks => "blocks", 
+            SyncState::Catchup => "catchup",
+            SyncState::Synced => "synced",
+            SyncState::Failed => "failed",
+        }
+    }
+    
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(SyncState::Discovering),
+            1 => Some(SyncState::Headers),
+            2 => Some(SyncState::Blocks),
+            3 => Some(SyncState::Catchup),
+            4 => Some(SyncState::Synced),
+            5 => Some(SyncState::Failed),
+            _ => None,
+        }
+    }
+}
+
 use lazy_static::lazy_static;
 
 pub mod actor_integration;
@@ -648,6 +685,61 @@ impl MetricsCollector {
             collection_interval: Duration::from_secs(5),
             actor_bridge: None,
         })
+    }
+    
+    /// Update sync progress metrics (ALYS-003-16)
+    pub fn update_sync_progress(&self, current_height: u64, target_height: u64, sync_speed: f64, sync_state: SyncState) {
+        SYNC_CURRENT_HEIGHT.set(current_height as i64);
+        SYNC_TARGET_HEIGHT.set(target_height as i64);
+        SYNC_BLOCKS_PER_SECOND.set(sync_speed);
+        SYNC_STATE.set(sync_state as i64);
+        
+        // Calculate sync completion percentage
+        let sync_percentage = if target_height > 0 {
+            (current_height as f64 / target_height as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        tracing::debug!(
+            current_height = current_height,
+            target_height = target_height,
+            sync_speed = %format!("{:.2}", sync_speed),
+            sync_state = ?sync_state,
+            sync_percentage = %format!("{:.1}%", sync_percentage),
+            "Sync progress metrics updated"
+        );
+    }
+    
+    /// Record sync state change (ALYS-003-16)
+    pub fn record_sync_state_change(&self, from_state: SyncState, to_state: SyncState) {
+        tracing::info!(
+            from_state = ?from_state,
+            to_state = ?to_state,
+            "Sync state transition recorded"
+        );
+        
+        // Update sync state metric
+        SYNC_STATE.set(to_state as i64);
+    }
+    
+    /// Calculate and update sync metrics automatically (ALYS-003-16)
+    pub fn calculate_sync_metrics(&self, previous_height: u64, current_height: u64, time_elapsed: Duration) {
+        if time_elapsed.as_secs() > 0 && current_height > previous_height {
+            let blocks_synced = current_height.saturating_sub(previous_height);
+            let sync_speed = blocks_synced as f64 / time_elapsed.as_secs() as f64;
+            
+            SYNC_BLOCKS_PER_SECOND.set(sync_speed);
+            
+            tracing::trace!(
+                previous_height = previous_height,
+                current_height = current_height,
+                blocks_synced = blocks_synced,
+                time_elapsed_secs = time_elapsed.as_secs(),
+                sync_speed = %format!("{:.2}", sync_speed),
+                "Sync speed calculated"
+            );
+        }
     }
     
     /// Create a new MetricsCollector with actor bridge integration
