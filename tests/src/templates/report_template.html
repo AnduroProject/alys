@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{report_name} - Alys V2 Test Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f8f9fa;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .header .meta {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-left: 4px solid #007bff;
+            transition: transform 0.2s ease;
+        }
+
+        .summary-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .summary-card h3 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .summary-card .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .summary-card .metric:last-child {
+            border-bottom: none;
+        }
+
+        .metric-label {
+            font-weight: 500;
+            color: #6c757d;
+        }
+
+        .metric-value {
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .success { color: #28a745; }
+        .warning { color: #ffc107; }
+        .danger { color: #dc3545; }
+        .info { color: #17a2b8; }
+
+        .section {
+            background: white;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .section-header {
+            background: #f8f9fa;
+            padding: 20px 25px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .section-header h2 {
+            color: #495057;
+            font-size: 1.5rem;
+            font-weight: 500;
+        }
+
+        .section-content {
+            padding: 25px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+
+        .progress-fill.warning {
+            background: linear-gradient(90deg, #ffc107, #fd7e14);
+        }
+
+        .progress-fill.danger {
+            background: linear-gradient(90deg, #dc3545, #e74c3c);
+        }
+
+        .test-categories {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .category-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+
+        .category-card h4 {
+            color: #495057;
+            margin-bottom: 10px;
+            font-size: 1rem;
+        }
+
+        .category-stats {
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .chart-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .chart-placeholder {
+            width: 100%;
+            height: 300px;
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6c757d;
+            font-size: 1.1rem;
+        }
+
+        .recommendations {
+            margin-top: 20px;
+        }
+
+        .recommendation {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+
+        .recommendation.critical {
+            background: #f8d7da;
+            border-color: #f1aeb5;
+        }
+
+        .recommendation.high {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+
+        .recommendation h5 {
+            color: #721c24;
+            margin-bottom: 8px;
+        }
+
+        .recommendation.high h5 {
+            color: #856404;
+        }
+
+        .artifacts {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .artifact {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+            text-align: center;
+        }
+
+        .footer {
+            text-align: center;
+            color: #6c757d;
+            margin-top: 40px;
+            padding: 20px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .summary-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{report_name}</h1>
+            <div class="meta">
+                <strong>Report ID:</strong> {report_id} | 
+                <strong>Generated:</strong> {timestamp} | 
+                <strong>Duration:</strong> {duration:.2} seconds
+            </div>
+        </div>
+
+        <div class="summary-grid">
+            <div class="summary-card">
+                <h3>📊 Test Summary</h3>
+                <div class="metric">
+                    <span class="metric-label">Total Tests</span>
+                    <span class="metric-value">{total_tests}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Passed</span>
+                    <span class="metric-value success">{passed_tests}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Failed</span>
+                    <span class="metric-value danger">{failed_tests}</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Success Rate</span>
+                    <span class="metric-value">{success_rate:.1}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {success_rate}%"></div>
+                </div>
+            </div>
+
+            <div class="summary-card">
+                <h3>🎯 Code Coverage</h3>
+                <div class="metric">
+                    <span class="metric-label">Overall Coverage</span>
+                    <span class="metric-value">{coverage_percentage:.1}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {coverage_percentage}%"></div>
+                </div>
+            </div>
+
+            <div class="summary-card">
+                <h3>⚡ Performance</h3>
+                <div class="metric">
+                    <span class="metric-label">Summary</span>
+                    <span class="metric-value">{performance_summary}</span>
+                </div>
+            </div>
+
+            <div class="summary-card">
+                <h3>🔥 Chaos Testing</h3>
+                <div class="metric">
+                    <span class="metric-label">Summary</span>
+                    <span class="metric-value">{chaos_summary}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>📈 Test Results Overview</h2>
+            </div>
+            <div class="section-content">
+                <div class="chart-container">
+                    <div class="chart-placeholder">
+                        Test Results Visualization<br>
+                        <small>(Charts would be rendered here with a JavaScript library like Chart.js or D3.js)</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>📋 Test Categories</h2>
+            </div>
+            <div class="section-content">
+                <div class="test-categories">
+                    <div class="category-card">
+                        <h4>Unit Tests</h4>
+                        <div class="category-stats">Sample category stats would appear here</div>
+                    </div>
+                    <div class="category-card">
+                        <h4>Integration Tests</h4>
+                        <div class="category-stats">Sample category stats would appear here</div>
+                    </div>
+                    <div class="category-card">
+                        <h4>Performance Tests</h4>
+                        <div class="category-stats">Sample category stats would appear here</div>
+                    </div>
+                    <div class="category-card">
+                        <h4>Chaos Tests</h4>
+                        <div class="category-stats">Sample category stats would appear here</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>🎯 Coverage Analysis</h2>
+            </div>
+            <div class="section-content">
+                <div class="chart-container">
+                    <div class="chart-placeholder">
+                        Coverage Trend Analysis<br>
+                        <small>(Coverage trends over time would be displayed here)</small>
+                    </div>
+                </div>
+                <p>Detailed coverage analysis including file-level coverage, uncovered lines, and trend analysis would be displayed here.</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>⚡ Performance Analysis</h2>
+            </div>
+            <div class="section-content">
+                <div class="chart-container">
+                    <div class="chart-placeholder">
+                        Performance Benchmarks & Trends<br>
+                        <small>(Performance metrics and regression analysis would be shown here)</small>
+                    </div>
+                </div>
+                <p>Performance benchmarking results, regression detection, and trend analysis would be displayed in this section.</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>🔥 Chaos Engineering Results</h2>
+            </div>
+            <div class="section-content">
+                <div class="chart-container">
+                    <div class="chart-placeholder">
+                        System Resilience & Recovery Analysis<br>
+                        <small>(Chaos test results and system stability metrics would be visualized here)</small>
+                    </div>
+                </div>
+                
+                <div class="recommendations">
+                    <h4>🎯 Resilience Recommendations</h4>
+                    <div class="recommendation critical">
+                        <h5>Critical Priority</h5>
+                        <p>Sample critical recommendation would appear here based on chaos test results.</p>
+                    </div>
+                    <div class="recommendation high">
+                        <h5>High Priority</h5>
+                        <p>Sample high priority recommendation would appear here.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>📁 Test Artifacts</h2>
+            </div>
+            <div class="section-content">
+                <div class="artifacts">
+                    <div class="artifact">
+                        <strong>Coverage Reports</strong><br>
+                        <small>HTML & JSON formats</small>
+                    </div>
+                    <div class="artifact">
+                        <strong>Performance Benchmarks</strong><br>
+                        <small>Flamegraphs & metrics</small>
+                    </div>
+                    <div class="artifact">
+                        <strong>Test Logs</strong><br>
+                        <small>Detailed execution logs</small>
+                    </div>
+                    <div class="artifact">
+                        <strong>Chaos Results</strong><br>
+                        <small>Fault injection reports</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Generated by Alys V2 Testing Framework | Report ID: {report_id}</p>
+            <p>This report provides comprehensive analysis of test results, code coverage, performance benchmarks, and system resilience testing.</p>
+        </div>
+    </div>
+
+    <script>
+        // Add any JavaScript for interactive features here
+        // This could include Chart.js or D3.js visualizations
+        console.log('Alys V2 Test Report loaded');
+        
+        // Example: Add click handlers for expandable sections
+        document.querySelectorAll('.section-header').forEach(header => {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                const content = header.nextElementSibling;
+                content.style.display = content.style.display === 'none' ? 'block' : 'none';
+            });
+        });
+
+        // Example: Progress bar animations
+        document.querySelectorAll('.progress-fill').forEach(bar => {
+            const width = bar.style.width;
+            bar.style.width = '0%';
+            setTimeout(() => {
+                bar.style.width = width;
+            }, 500);
+        });
+    </script>
+</body>
+</html>

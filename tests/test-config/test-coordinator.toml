@@ -1,0 +1,77 @@
+# Test Coordinator Configuration for Alys V2 Testing Framework
+# Manages test execution, reporting, and artifact collection
+
+[server]
+# API server settings
+host = "0.0.0.0"
+port = 8080
+# Report server settings
+report_host = "0.0.0.0"
+report_port = 8081
+
+[database]
+# SQLite database for test results and metrics
+path = "/opt/test-artifacts/test-results.db"
+connection_pool_size = 10
+
+[services]
+# Service endpoints for test coordination
+bitcoin_rpc_url = "http://bitcoin-core:18443"
+bitcoin_rpc_user = "rpcuser"
+bitcoin_rpc_password = "rpcpassword"
+execution_rpc_url = "http://execution:8545"
+consensus_rpc_url = "http://consensus:3000"
+prometheus_url = "http://prometheus-test:9090"
+
+[test_execution]
+# Test execution settings
+max_parallel_tests = 4
+default_timeout_seconds = 300
+retry_attempts = 3
+cleanup_after_test = true
+
+[reporting]
+# Report generation settings
+output_directory = "/opt/test-reports"
+artifact_directory = "/opt/test-artifacts"
+generate_html_reports = true
+generate_json_reports = true
+generate_coverage_reports = true
+retention_days = 30
+
+[performance]
+# Performance benchmarking settings
+benchmark_output_directory = "/opt/test-artifacts/benchmarks"
+flamegraph_enabled = true
+memory_profiling_enabled = true
+cpu_profiling_enabled = true
+benchmark_iterations = 100
+
+[chaos]
+# Chaos testing settings
+chaos_output_directory = "/opt/test-artifacts/chaos"
+enable_network_faults = true
+enable_disk_faults = true
+enable_memory_pressure = true
+fault_injection_rate = 0.1
+
+[coverage]
+# Code coverage settings
+coverage_output_directory = "/opt/test-artifacts/coverage"
+coverage_format = ["html", "json", "lcov"]
+minimum_coverage_threshold = 80.0
+exclude_patterns = ["tests/*", "target/*", "benches/*"]
+
+[notifications]
+# Notification settings (for CI/CD integration)
+slack_webhook_url = ""
+email_enabled = false
+failure_notifications_only = true
+
+[logging]
+# Logging configuration
+level = "debug"
+log_file = "/opt/test-artifacts/test-coordinator.log"
+max_log_size_mb = 100
+max_log_files = 5
+json_format = false

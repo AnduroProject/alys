@@ -6,6 +6,7 @@
 
 pub mod framework;
 pub mod property_tests;
+pub mod reporting;
 
 pub use framework::*;
 

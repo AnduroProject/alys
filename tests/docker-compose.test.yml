@@ -1,0 +1,251 @@
+# Docker Compose Test Environment for Alys V2 Testing Framework
+# 
+# This environment provides a complete testing setup with:
+# - Bitcoin Core in regtest mode for blockchain testing
+# - Reth execution client for Ethereum compatibility
+# - Alys consensus client for complete system testing
+# - Isolated test data volumes for clean test runs
+
+services:
+  # Bitcoin Core in regtest mode for peg-in/peg-out testing
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    container_name: bitcoin-test
+    restart: unless-stopped
+    ports:
+      - "18333:18333"  # P2P port
+      - "18443:18443"  # RPC port
+    volumes:
+      - bitcoin-test-data:/home/bitcoin/.bitcoin
+      - ./test-config/bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf:ro
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_RPC_USER: rpcuser
+      BITCOIN_RPC_PASSWORD: rpcpassword
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+      - -txindex
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "-rpcconnect=127.0.0.1", "-rpcport=18443", "getblockchaininfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Reth execution client for EVM compatibility testing
+  execution:
+    container_name: execution-test
+    restart: unless-stopped
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    ports:
+      - '19001:19001'  # metrics
+      - '30304:30303'  # eth/66 peering (different port to avoid conflicts)
+      - '8546:8545'    # rpc (different port for tests)
+      - '8457:8456'    # ws (different port for tests)
+      - '8552:8551'    # engine (different port for tests)
+    volumes:
+      - execution-test-logs:/opt/alys/execution/logs
+      - execution-test-data:/opt/alys/execution/data
+      - ./test-config:/opt/alys/execution/config:ro
+      - ./test-config/jwt.hex:/opt/alys/execution/config/jwt.hex:ro
+    pid: host
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TEST_MODE: "true"
+    command: >
+      node
+      --dev
+      --log.file.directory /opt/alys/execution/logs
+      --datadir "/opt/alys/execution/data"
+      --metrics 0.0.0.0:19001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --http.corsdomain "*"
+      --ws.api "admin,debug,eth,net,trace,txpool,web3,rpc,reth"
+      --ws
+      --ws.addr "0.0.0.0"
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+      --dev.block_time 2s
+      --full
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545", "-d", '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}', "-H", "Content-Type: application/json"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Alys consensus client for complete system testing
+  consensus:
+    container_name: consensus-test
+    restart: unless-stopped
+    build:
+      context: ../
+      dockerfile: etc/Dockerfile
+      target: builder
+    ports:
+      - "3001:3000"    # consensus RPC (different port for tests)
+      - "55445:55444"  # P2P port (different port for tests)
+      - '9003:9001'    # metrics (different port to avoid conflicts)
+    volumes:
+      - consensus-test-db:/lib/alys/data/db
+      - consensus-test-wallet:/lib/alys/data/wallet
+      - ./test-config/chain-test.json:/lib/alys/config/chain.json:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TEST_MODE: "true"
+      CONSENSUS_TEST_CONFIG: "/lib/alys/config/chain.json"
+    command:
+      - /opt/alys/target/debug/app
+      - --dev
+      - --chain
+      - /lib/alys/config/chain.json
+      - --geth-url
+      - http://execution:8551/
+      - --db-path
+      - /lib/alys/data/db
+      - --wallet-path
+      - /lib/alys/data/wallet
+      - --bitcoin-rpc-url
+      - http://bitcoin-core:18443
+      - --bitcoin-rpc-user
+      - rpcuser
+      - --bitcoin-rpc-pass
+      - rpcpassword
+      - --geth-execution-url
+      - http://execution:8545
+      - --p2p-port
+      - "55444"
+      - --rpc-port
+      - "3000"
+    depends_on:
+      execution:
+        condition: service_healthy
+      bitcoin-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Test coordinator service for managing test execution
+  test-coordinator:
+    container_name: test-coordinator
+    build:
+      context: ../
+      dockerfile: tests/Dockerfile.test-coordinator
+    ports:
+      - "8080:8080"    # Test coordinator API
+      - "8081:8081"    # Test reports server
+    volumes:
+      - test-reports:/opt/test-reports
+      - test-artifacts:/opt/test-artifacts
+      - ./test-config:/opt/test-config:ro
+      - ../target:/opt/target:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TEST_MODE: "true"
+      BITCOIN_RPC_URL: "http://bitcoin-core:18443"
+      EXECUTION_RPC_URL: "http://execution:8545"
+      CONSENSUS_RPC_URL: "http://consensus:3000"
+      REPORT_OUTPUT_DIR: "/opt/test-reports"
+      ARTIFACT_OUTPUT_DIR: "/opt/test-artifacts"
+    command:
+      - /opt/alys/target/debug/test-coordinator
+      - --config
+      - /opt/test-config/test-coordinator.toml
+    depends_on:
+      consensus:
+        condition: service_healthy
+      execution:
+        condition: service_healthy
+      bitcoin-core:
+        condition: service_healthy
+
+  # Metrics and monitoring for test runs
+  prometheus-test:
+    image: prom/prometheus:latest
+    container_name: prometheus-test
+    ports:
+      - "9091:9090"    # Different port to avoid conflicts
+    volumes:
+      - prometheus-test-data:/prometheus
+      - ./test-config/prometheus-test.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=24h'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - consensus
+      - execution
+
+  # Grafana for test metrics visualization
+  grafana-test:
+    image: grafana/grafana:latest
+    container_name: grafana-test
+    ports:
+      - "3004:3000"    # Different port to avoid conflicts
+    volumes:
+      - grafana-test-data:/var/lib/grafana
+      - ./test-config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./test-config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: testadmin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: "grafana-piechart-panel"
+    depends_on:
+      - prometheus-test
+
+# Test-specific volumes for isolated test runs
+volumes:
+  bitcoin-test-data:
+    driver: local
+  execution-test-logs:
+    driver: local
+  execution-test-data:
+    driver: local
+  consensus-test-db:
+    driver: local
+  consensus-test-wallet:
+    driver: local
+  test-reports:
+    driver: local
+  test-artifacts:
+    driver: local
+  prometheus-test-data:
+    driver: local
+  grafana-test-data:
+    driver: local
+
+# Test-specific network for isolation
+networks:
+  default:
+    name: alys-test-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,61 @@
+# Test Coordinator Dockerfile
+# Manages test execution, reporting, and artifact collection for Alys V2 Testing Framework
+
+FROM rust:1.82-slim-bookworm as builder
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    build-essential \
+    clang \
+    cmake \
+    git \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /opt/alys
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY tests/Cargo.toml ./tests/
+COPY crates ./crates
+COPY app ./app
+
+# Copy test coordinator source
+COPY tests/src ./tests/src
+
+# Build the test coordinator
+RUN cd tests && cargo build --release --bin test-coordinator
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    jq \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /opt/test-reports /opt/test-artifacts /opt/test-config
+
+# Copy binary from builder
+COPY --from=builder /opt/alys/target/release/test-coordinator /usr/local/bin/
+
+# Set permissions
+RUN chmod +x /usr/local/bin/test-coordinator
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Expose ports
+EXPOSE 8080 8081
+
+# Default command
+CMD ["test-coordinator"]
