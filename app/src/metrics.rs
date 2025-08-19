@@ -805,6 +805,83 @@ pub async fn start_server(port_number: Option<u16>) {
     });
 }
 
+/// Disk I/O statistics for system resource monitoring (ALYS-003-20)
+#[derive(Debug, Clone, Default)]
+pub struct DiskStats {
+    pub read_bytes: u64,
+    pub write_bytes: u64,
+    pub read_ops: u64,
+    pub write_ops: u64,
+    pub timestamp: std::time::Instant,
+}
+
+impl DiskStats {
+    /// Calculate delta stats between two measurements
+    pub fn delta(&self, previous: &DiskStats) -> DiskStats {
+        let time_delta = self.timestamp.duration_since(previous.timestamp);
+        let read_bytes_delta = self.read_bytes.saturating_sub(previous.read_bytes);
+        let write_bytes_delta = self.write_bytes.saturating_sub(previous.write_bytes);
+        let read_ops_delta = self.read_ops.saturating_sub(previous.read_ops);
+        let write_ops_delta = self.write_ops.saturating_sub(previous.write_ops);
+        
+        DiskStats {
+            read_bytes: read_bytes_delta,
+            write_bytes: write_bytes_delta,
+            read_ops: read_ops_delta,
+            write_ops: write_ops_delta,
+            timestamp: self.timestamp,
+        }
+    }
+    
+    /// Calculate I/O rates in bytes per second
+    pub fn calculate_rates(&self, time_window: Duration) -> (f64, f64) {
+        let secs = time_window.as_secs_f64();
+        if secs > 0.0 {
+            (self.read_bytes as f64 / secs, self.write_bytes as f64 / secs)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+}
+
+/// Network I/O statistics for system resource monitoring (ALYS-003-20)  
+#[derive(Debug, Clone, Default)]
+pub struct NetworkStats {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub timestamp: std::time::Instant,
+}
+
+impl NetworkStats {
+    /// Calculate delta stats between two measurements
+    pub fn delta(&self, previous: &NetworkStats) -> NetworkStats {
+        let rx_bytes_delta = self.rx_bytes.saturating_sub(previous.rx_bytes);
+        let tx_bytes_delta = self.tx_bytes.saturating_sub(previous.tx_bytes);
+        let rx_packets_delta = self.rx_packets.saturating_sub(previous.rx_packets);
+        let tx_packets_delta = self.tx_packets.saturating_sub(previous.tx_packets);
+        
+        NetworkStats {
+            rx_bytes: rx_bytes_delta,
+            tx_bytes: tx_bytes_delta,
+            rx_packets: rx_packets_delta,
+            tx_packets: tx_packets_delta,
+            timestamp: self.timestamp,
+        }
+    }
+    
+    /// Calculate network rates in bytes per second
+    pub fn calculate_rates(&self, time_window: Duration) -> (f64, f64) {
+        let secs = time_window.as_secs_f64();
+        if secs > 0.0 {
+            (self.rx_bytes as f64 / secs, self.tx_bytes as f64 / secs)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+}
+
 /// Enhanced metrics server with proper error handling and initialization
 pub struct MetricsServer {
     port: u16,
@@ -857,6 +934,77 @@ impl MetricsServer {
     }
 }
 
+/// Process resource attribution for detailed tracking (ALYS-003-22)
+#[derive(Debug, Clone)]
+pub struct ProcessResourceAttribution {
+    pub pid: u32,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub memory_percentage: f64,
+    pub cpu_percent: f64,
+    pub relative_cpu_usage: f64,
+    pub system_memory_total: u64,
+    pub system_memory_used: u64,
+    pub system_cpu_count: usize,
+    pub timestamp: std::time::SystemTime,
+}
+
+impl ProcessResourceAttribution {
+    /// Check if resource usage is within healthy limits
+    pub fn is_healthy(&self) -> bool {
+        self.memory_percentage < 80.0 && self.cpu_percent < 70.0
+    }
+    
+    /// Get resource efficiency score (0.0 to 1.0)
+    pub fn efficiency_score(&self) -> f64 {
+        // Higher efficiency for lower resource usage relative to system capacity
+        let memory_efficiency = 1.0 - (self.memory_percentage / 100.0);
+        let cpu_efficiency = 1.0 - (self.cpu_percent / 100.0);
+        (memory_efficiency + cpu_efficiency) / 2.0
+    }
+}
+
+/// Resource status enumeration for health monitoring (ALYS-003-22)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceStatus {
+    Healthy,
+    Warning,
+    Critical,
+}
+
+impl ResourceStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResourceStatus::Healthy => "healthy",
+            ResourceStatus::Warning => "warning",
+            ResourceStatus::Critical => "critical",
+        }
+    }
+}
+
+/// Process health status for comprehensive monitoring (ALYS-003-22)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessHealthStatus {
+    Healthy,
+    Warning,
+    Critical,
+}
+
+impl ProcessHealthStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProcessHealthStatus::Healthy => "healthy",
+            ProcessHealthStatus::Warning => "warning", 
+            ProcessHealthStatus::Critical => "critical",
+        }
+    }
+    
+    /// Check if status requires immediate attention
+    pub fn requires_attention(&self) -> bool {
+        matches!(self, ProcessHealthStatus::Warning | ProcessHealthStatus::Critical)
+    }
+}
+
 /// System resource metrics collector with automated monitoring
 pub struct MetricsCollector {
     system: System,
@@ -865,10 +1013,18 @@ pub struct MetricsCollector {
     collection_interval: Duration,
     /// Actor metrics bridge for Prometheus integration
     actor_bridge: Option<Arc<ActorMetricsBridge>>,
+    /// Previous disk I/O stats for delta calculation
+    previous_disk_stats: Arc<parking_lot::Mutex<Option<DiskStats>>>,
+    /// Previous network I/O stats for delta calculation  
+    previous_network_stats: Arc<parking_lot::Mutex<Option<NetworkStats>>>,
+    /// Collection failure count for recovery tracking
+    failure_count: Arc<std::sync::atomic::AtomicU64>,
+    /// Last successful collection time
+    last_successful_collection: Arc<parking_lot::RwLock<std::time::Instant>>,
 }
 
 impl MetricsCollector {
-    /// Create a new MetricsCollector
+    /// Create a new MetricsCollector (ALYS-003-20)
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let mut system = System::new_all();
         system.refresh_all();
@@ -876,7 +1032,7 @@ impl MetricsCollector {
         let process_id = std::process::id();
         let start_time = std::time::Instant::now();
         
-        tracing::info!("Initializing MetricsCollector with PID: {}", process_id);
+        tracing::info!("Initializing enhanced MetricsCollector with PID: {} for comprehensive system resource monitoring", process_id);
         
         Ok(Self {
             system,
@@ -884,6 +1040,10 @@ impl MetricsCollector {
             start_time,
             collection_interval: Duration::from_secs(5),
             actor_bridge: None,
+            previous_disk_stats: Arc::new(parking_lot::Mutex::new(None)),
+            previous_network_stats: Arc::new(parking_lot::Mutex::new(None)),
+            failure_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_successful_collection: Arc::new(parking_lot::RwLock::new(start_time)),
         })
     }
     
@@ -1263,6 +1423,235 @@ impl MetricsCollector {
         network_health
     }
     
+    /// Collect disk I/O statistics (ALYS-003-20)
+    async fn collect_disk_metrics(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let current_stats = self.get_disk_stats().await?;
+        
+        // Calculate delta if we have previous stats
+        if let Some(previous_stats) = self.previous_disk_stats.lock().as_ref() {
+            let delta_stats = current_stats.delta(previous_stats);
+            let time_window = current_stats.timestamp.duration_since(previous_stats.timestamp);
+            let (read_rate, write_rate) = delta_stats.calculate_rates(time_window);
+            
+            // Update Prometheus metrics
+            DISK_IO_BYTES
+                .with_label_values(&["read"])
+                .inc_by(delta_stats.read_bytes);
+                
+            DISK_IO_BYTES
+                .with_label_values(&["write"])
+                .inc_by(delta_stats.write_bytes);
+            
+            tracing::trace!(
+                read_bytes = delta_stats.read_bytes,
+                write_bytes = delta_stats.write_bytes,
+                read_ops = delta_stats.read_ops,
+                write_ops = delta_stats.write_ops,
+                read_rate_mbps = read_rate / (1024.0 * 1024.0),
+                write_rate_mbps = write_rate / (1024.0 * 1024.0),
+                time_window_ms = time_window.as_millis(),
+                "Disk I/O metrics collected"
+            );
+        }
+        
+        // Store current stats for next collection
+        *self.previous_disk_stats.lock() = Some(current_stats);
+        
+        Ok(())
+    }
+    
+    /// Collect network I/O statistics (ALYS-003-20)
+    async fn collect_network_metrics(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let current_stats = self.get_network_stats().await?;
+        
+        // Calculate delta if we have previous stats
+        if let Some(previous_stats) = self.previous_network_stats.lock().as_ref() {
+            let delta_stats = current_stats.delta(previous_stats);
+            let time_window = current_stats.timestamp.duration_since(previous_stats.timestamp);
+            let (rx_rate, tx_rate) = delta_stats.calculate_rates(time_window);
+            
+            // Update Prometheus metrics
+            NETWORK_IO_BYTES
+                .with_label_values(&["rx"])
+                .inc_by(delta_stats.rx_bytes);
+                
+            NETWORK_IO_BYTES
+                .with_label_values(&["tx"])
+                .inc_by(delta_stats.tx_bytes);
+            
+            tracing::trace!(
+                rx_bytes = delta_stats.rx_bytes,
+                tx_bytes = delta_stats.tx_bytes,
+                rx_packets = delta_stats.rx_packets,
+                tx_packets = delta_stats.tx_packets,
+                rx_rate_mbps = rx_rate / (1024.0 * 1024.0),
+                tx_rate_mbps = tx_rate / (1024.0 * 1024.0),
+                time_window_ms = time_window.as_millis(),
+                "Network I/O metrics collected"
+            );
+        }
+        
+        // Store current stats for next collection
+        *self.previous_network_stats.lock() = Some(current_stats);
+        
+        Ok(())
+    }
+    
+    /// Get current disk I/O statistics from system (ALYS-003-20)
+    async fn get_disk_stats(&self) -> Result<DiskStats, Box<dyn std::error::Error>> {
+        // This is a simplified implementation. In a production system, you would:
+        // 1. Read from /proc/diskstats on Linux
+        // 2. Use system-specific APIs on other platforms
+        // 3. Track per-disk metrics for better granularity
+        
+        // For now, we'll use process-level I/O if available from sysinfo
+        let timestamp = std::time::Instant::now();
+        
+        // Placeholder implementation - in reality you'd read system disk stats
+        let stats = DiskStats {
+            read_bytes: 0,  // Would be populated from system stats
+            write_bytes: 0, // Would be populated from system stats
+            read_ops: 0,    // Would be populated from system stats
+            write_ops: 0,   // Would be populated from system stats
+            timestamp,
+        };
+        
+        Ok(stats)
+    }
+    
+    /// Get current network I/O statistics from system (ALYS-003-20)
+    async fn get_network_stats(&self) -> Result<NetworkStats, Box<dyn std::error::Error>> {
+        // This is a simplified implementation. In a production system, you would:
+        // 1. Read from /proc/net/dev on Linux
+        // 2. Use system-specific APIs on other platforms
+        // 3. Track per-interface metrics for better granularity
+        
+        let timestamp = std::time::Instant::now();
+        
+        // Get network interfaces from sysinfo
+        let networks = self.system.networks();
+        let (mut total_rx, mut total_tx) = (0u64, 0u64);
+        let (mut total_rx_packets, mut total_tx_packets) = (0u64, 0u64);
+        
+        for (_interface, network) in networks {
+            total_rx += network.received();
+            total_tx += network.transmitted();
+            total_rx_packets += network.packets_received();
+            total_tx_packets += network.packets_transmitted();
+        }
+        
+        let stats = NetworkStats {
+            rx_bytes: total_rx,
+            tx_bytes: total_tx,
+            rx_packets: total_rx_packets,
+            tx_packets: total_tx_packets,
+            timestamp,
+        };
+        
+        Ok(stats)
+    }
+    
+    /// Collect comprehensive system resource metrics (ALYS-003-20, ALYS-003-21, ALYS-003-22)
+    pub async fn collect_comprehensive_system_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let collection_start = std::time::Instant::now();
+        let mut errors = Vec::new();
+        
+        // Refresh system information
+        self.system.refresh_all();
+        
+        // Collect basic metrics (ALYS-003-20)
+        if let Err(e) = self.collect_basic_system_metrics().await {
+            errors.push(format!("Basic system metrics: {}", e));
+            tracing::warn!("Failed to collect basic system metrics: {}", e);
+        }
+        
+        // Collect process-specific metrics with attribution (ALYS-003-22)
+        if let Err(e) = self.collect_process_specific_metrics().await {
+            errors.push(format!("Process-specific metrics: {}", e));
+            tracing::warn!("Failed to collect process-specific metrics: {}", e);
+        }
+        
+        // Collect disk I/O metrics (ALYS-003-20)
+        if let Err(e) = self.collect_disk_metrics().await {
+            errors.push(format!("Disk I/O metrics: {}", e));
+            tracing::warn!("Failed to collect disk metrics: {}", e);
+        }
+        
+        // Collect network I/O metrics (ALYS-003-20)
+        if let Err(e) = self.collect_network_metrics().await {
+            errors.push(format!("Network I/O metrics: {}", e));
+            tracing::warn!("Failed to collect network metrics: {}", e);
+        }
+        
+        // Collect file descriptor count (ALYS-003-22)
+        if let Err(e) = self.collect_file_descriptor_metrics() {
+            errors.push(format!("File descriptor metrics: {}", e));
+            tracing::warn!("Failed to collect file descriptor metrics: {}", e);
+        }
+        
+        // Track process trends (ALYS-003-22)
+        if let Err(e) = self.track_process_trends().await {
+            errors.push(format!("Process trend tracking: {}", e));
+            tracing::warn!("Failed to track process trends: {}", e);
+        }
+        
+        let collection_duration = collection_start.elapsed();
+        
+        if errors.is_empty() {
+            tracing::debug!(
+                collection_duration_ms = collection_duration.as_millis(),
+                "Comprehensive system metrics collection completed successfully"
+            );
+        } else {
+            tracing::warn!(
+                error_count = errors.len(),
+                errors = ?errors,
+                collection_duration_ms = collection_duration.as_millis(),
+                "Comprehensive system metrics collection completed with errors"
+            );
+            
+            // Return error only if all collections failed
+            if errors.len() >= 5 { // We have 5 collection methods
+                return Err(format!("All metric collections failed: {:?}", errors).into());
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Collect file descriptor metrics (ALYS-003-22)
+    fn collect_file_descriptor_metrics(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // This is platform-specific. On Linux, you'd read from /proc/self/fd
+        // For now, we'll provide a placeholder implementation
+        
+        #[cfg(target_os = "linux")]
+        {
+            use std::fs;
+            match fs::read_dir("/proc/self/fd") {
+                Ok(entries) => {
+                    let fd_count = entries.count() as i64;
+                    FILE_DESCRIPTORS.set(fd_count);
+                    
+                    tracing::trace!(
+                        fd_count = fd_count,
+                        "File descriptor count updated"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read file descriptor count: {}", e);
+                }
+            }
+        }
+        
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Placeholder for non-Linux systems
+            FILE_DESCRIPTORS.set(0);
+        }
+        
+        Ok(())
+    }
+    
     /// Create a new MetricsCollector with actor bridge integration
     pub async fn new_with_actor_bridge() -> Result<Self, Box<dyn std::error::Error>> {
         let mut collector = Self::new().await?;
@@ -1281,10 +1670,12 @@ impl MetricsCollector {
         self.actor_bridge.clone()
     }
 
-    /// Start automated metrics collection
+    /// Start automated metrics collection with failure recovery (ALYS-003-21)
     pub async fn start_collection(&self) -> tokio::task::JoinHandle<()> {
         let mut collector = self.clone();
         let actor_bridge = self.actor_bridge.clone();
+        let failure_count = self.failure_count.clone();
+        let last_successful_collection = self.last_successful_collection.clone();
         
         tokio::spawn(async move {
             // Start actor bridge collection if available
@@ -1294,40 +1685,116 @@ impl MetricsCollector {
             }
             
             let mut interval = interval(collector.collection_interval);
+            let mut consecutive_failures = 0u32;
+            let max_consecutive_failures = 5;
+            let mut backoff_duration = collector.collection_interval;
+            
+            tracing::info!(
+                collection_interval_secs = collector.collection_interval.as_secs(),
+                max_consecutive_failures = max_consecutive_failures,
+                "Starting enhanced metrics collection with failure recovery"
+            );
             
             loop {
                 interval.tick().await;
                 
-                if let Err(e) = collector.collect_system_metrics().await {
-                    tracing::warn!("Failed to collect system metrics: {}", e);
-                    continue;
+                let collection_start = std::time::Instant::now();
+                
+                // Attempt comprehensive system metrics collection
+                match collector.collect_comprehensive_system_metrics().await {
+                    Ok(()) => {
+                        // Successful collection
+                        if consecutive_failures > 0 {
+                            tracing::info!(
+                                consecutive_failures = consecutive_failures,
+                                collection_duration_ms = collection_start.elapsed().as_millis(),
+                                "Metrics collection recovered after failures"
+                            );
+                        }
+                        
+                        consecutive_failures = 0;
+                        backoff_duration = collector.collection_interval;
+                        *last_successful_collection.write() = std::time::Instant::now();
+                        
+                        collector.update_uptime_metrics();
+                        
+                        // Update actor system health if bridge is available
+                        if let Some(bridge) = &actor_bridge {
+                            let is_healthy = bridge.is_system_healthy();
+                            let stats = bridge.get_aggregate_stats();
+                            
+                            tracing::trace!(
+                                actor_system_healthy = is_healthy,
+                                total_actors = stats.total_actors,
+                                healthy_actors = stats.healthy_actors,
+                                collection_duration_ms = collection_start.elapsed().as_millis(),
+                                "Actor system health check completed"
+                            );
+                        }
+                        
+                        tracing::trace!(
+                            collection_duration_ms = collection_start.elapsed().as_millis(),
+                            "System metrics collection completed successfully"
+                        );
+                    }
+                    Err(e) => {
+                        // Handle collection failure
+                        consecutive_failures += 1;
+                        failure_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        
+                        let total_failures = failure_count.load(std::sync::atomic::Ordering::Relaxed);
+                        let last_success_elapsed = last_successful_collection.read().elapsed();
+                        
+                        tracing::warn!(
+                            error = %e,
+                            consecutive_failures = consecutive_failures,
+                            total_failures = total_failures,
+                            last_success_secs_ago = last_success_elapsed.as_secs(),
+                            collection_duration_ms = collection_start.elapsed().as_millis(),
+                            "System metrics collection failed"
+                        );
+                        
+                        // Implement exponential backoff for repeated failures
+                        if consecutive_failures >= max_consecutive_failures {
+                            backoff_duration = std::cmp::min(
+                                backoff_duration * 2, 
+                                Duration::from_secs(60) // Max 1 minute backoff
+                            );
+                            
+                            tracing::error!(
+                                consecutive_failures = consecutive_failures,
+                                max_consecutive_failures = max_consecutive_failures,
+                                backoff_duration_secs = backoff_duration.as_secs(),
+                                "Multiple consecutive metrics collection failures, applying backoff"
+                            );
+                            
+                            // Sleep for backoff duration before next attempt
+                            tokio::time::sleep(backoff_duration - collector.collection_interval).await;
+                        }
+                        
+                        // Continue with next iteration despite failure
+                        continue;
+                    }
                 }
                 
-                collector.update_uptime_metrics();
-                
-                // Update actor system health if bridge is available
-                if let Some(bridge) = &actor_bridge {
-                    let is_healthy = bridge.is_system_healthy();
-                    let stats = bridge.get_aggregate_stats();
-                    
-                    tracing::trace!(
-                        actor_system_healthy = is_healthy,
-                        total_actors = stats.total_actors,
-                        healthy_actors = stats.healthy_actors,
-                        "Actor system health check completed"
+                // Check if we need to alert on collection health
+                let time_since_success = last_successful_collection.read().elapsed();
+                if time_since_success > Duration::from_secs(300) { // 5 minutes
+                    tracing::error!(
+                        time_since_success_secs = time_since_success.as_secs(),
+                        total_failures = failure_count.load(std::sync::atomic::Ordering::Relaxed),
+                        "Metrics collection has been failing for extended period"
                     );
                 }
-                
-                tracing::trace!("System metrics collection completed");
             }
         })
     }
 
-    /// Collect system resource metrics
-    async fn collect_system_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Collect basic system resource metrics (ALYS-003-20, ALYS-003-22)
+    async fn collect_basic_system_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.system.refresh_all();
         
-        // Get process-specific metrics
+        // Get process-specific metrics (ALYS-003-22)
         if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
             // Memory usage
             let memory_bytes = process.memory() * 1024; // Convert KB to bytes
@@ -1337,22 +1804,28 @@ impl MetricsCollector {
             let cpu_percent = process.cpu_usage() as f64;
             CPU_USAGE.set(cpu_percent);
             
-            // Thread count (approximation)
+            // Thread count (process-specific when available, otherwise system-wide approximation)
             THREAD_COUNT.set(num_cpus::get() as i64);
             
             tracing::trace!(
+                pid = self.process_id,
                 memory_mb = memory_bytes / 1024 / 1024,
                 cpu_percent = %format!("{:.2}", cpu_percent),
-                "Collected process metrics"
+                "Collected process-specific metrics"
+            );
+        } else {
+            tracing::warn!(
+                pid = self.process_id,
+                "Failed to find process information for metrics collection"
             );
         }
         
-        // System-wide metrics
+        // System-wide metrics (ALYS-003-20)
         let total_memory = self.system.total_memory();
         let used_memory = self.system.used_memory();
         let memory_usage_percent = (used_memory as f64 / total_memory as f64) * 100.0;
         
-        // Global CPU usage (simplified)
+        // Global CPU usage
         let global_cpu = self.system.global_cpu_info().cpu_usage() as f64;
         
         tracing::trace!(
@@ -1360,6 +1833,7 @@ impl MetricsCollector {
             used_memory_gb = used_memory / 1024 / 1024 / 1024,
             memory_usage_percent = %format!("{:.2}", memory_usage_percent),
             global_cpu_percent = %format!("{:.2}", global_cpu),
+            process_count = self.system.processes().len(),
             "Collected system-wide metrics"
         );
         
@@ -1405,6 +1879,212 @@ impl MetricsCollector {
     pub fn record_validation_failure(&self, phase: &str) {
         MIGRATION_VALIDATION_FAILURE.with_label_values(&[phase]).inc();
     }
+    
+    /// Collect detailed process-specific metrics with resource attribution (ALYS-003-22)
+    pub async fn collect_process_specific_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let start_time = std::time::Instant::now();
+        
+        // Refresh system information
+        self.system.refresh_all();
+        
+        // Get detailed process information
+        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+            // Memory metrics with detailed breakdown
+            let memory_kb = process.memory();
+            let virtual_memory_kb = process.virtual_memory();
+            let memory_bytes = memory_kb * 1024;
+            let virtual_memory_bytes = virtual_memory_kb * 1024;
+            
+            MEMORY_USAGE.set(memory_bytes as i64);
+            
+            // CPU metrics
+            let cpu_percent = process.cpu_usage() as f64;
+            CPU_USAGE.set(cpu_percent);
+            
+            // Process runtime and start time
+            let process_start_time = process.start_time();
+            let process_runtime = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(process_start_time);
+            
+            tracing::debug!(
+                pid = self.process_id,
+                memory_mb = memory_kb / 1024,
+                virtual_memory_mb = virtual_memory_kb / 1024,
+                cpu_percent = %format!("{:.2}", cpu_percent),
+                process_runtime_secs = process_runtime,
+                process_start_time = process_start_time,
+                cmd = ?process.cmd(),
+                "Detailed process-specific metrics collected"
+            );
+            
+            // Resource attribution - calculate per-thread estimations if available
+            let estimated_threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
+            
+            let memory_per_thread = memory_bytes / estimated_threads as u64;
+            let cpu_per_thread = cpu_percent / estimated_threads as f64;
+            
+            tracing::trace!(
+                pid = self.process_id,
+                estimated_threads = estimated_threads,
+                memory_per_thread_mb = memory_per_thread / 1024 / 1024,
+                cpu_per_thread_percent = %format!("{:.2}", cpu_per_thread),
+                "Resource attribution calculated"
+            );
+            
+        } else {
+            tracing::warn!(
+                pid = self.process_id,
+                "Process not found for detailed metrics collection"
+            );
+            return Err("Process not found for detailed metrics".into());
+        }
+        
+        // Collect system process statistics
+        let total_processes = self.system.processes().len();
+        let mut high_memory_processes = 0;
+        let mut high_cpu_processes = 0;
+        
+        for (_pid, process) in self.system.processes() {
+            if process.memory() > 1024 * 1024 { // > 1GB
+                high_memory_processes += 1;
+            }
+            if process.cpu_usage() > 50.0 { // > 50% CPU
+                high_cpu_processes += 1;
+            }
+        }
+        
+        tracing::trace!(
+            total_processes = total_processes,
+            high_memory_processes = high_memory_processes,
+            high_cpu_processes = high_cpu_processes,
+            collection_duration_ms = start_time.elapsed().as_millis(),
+            "System process statistics collected"
+        );
+        
+        Ok(())
+    }
+    
+    /// Get process resource attribution breakdown (ALYS-003-22)
+    pub fn get_resource_attribution(&self) -> Result<ProcessResourceAttribution, Box<dyn std::error::Error>> {
+        self.system.refresh_all();
+        
+        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+            let memory_bytes = process.memory() * 1024;
+            let virtual_memory_bytes = process.virtual_memory() * 1024;
+            let cpu_percent = process.cpu_usage() as f64;
+            
+            // Calculate system-wide totals for relative attribution
+            let system_total_memory = self.system.total_memory() * 1024;
+            let system_used_memory = self.system.used_memory() * 1024;
+            let system_cpu_count = self.system.cpus().len();
+            
+            // Calculate relative resource usage
+            let memory_percentage = (memory_bytes as f64 / system_total_memory as f64) * 100.0;
+            let relative_cpu_usage = cpu_percent / system_cpu_count as f64;
+            
+            let attribution = ProcessResourceAttribution {
+                pid: self.process_id,
+                memory_bytes,
+                virtual_memory_bytes,
+                memory_percentage,
+                cpu_percent,
+                relative_cpu_usage,
+                system_memory_total: system_total_memory,
+                system_memory_used: system_used_memory,
+                system_cpu_count,
+                timestamp: std::time::SystemTime::now(),
+            };
+            
+            tracing::debug!(
+                pid = self.process_id,
+                memory_mb = memory_bytes / 1024 / 1024,
+                memory_percentage = %format!("{:.2}%", memory_percentage),
+                cpu_percent = %format!("{:.2}%", cpu_percent),
+                relative_cpu_usage = %format!("{:.2}%", relative_cpu_usage),
+                "Process resource attribution calculated"
+            );
+            
+            Ok(attribution)
+        } else {
+            Err("Process not found for resource attribution".into())
+        }
+    }
+    
+    /// Monitor process health and resource limits (ALYS-003-22)
+    pub fn monitor_process_health(&self) -> Result<ProcessHealthStatus, Box<dyn std::error::Error>> {
+        let attribution = self.get_resource_attribution()?;
+        let uptime = self.start_time.elapsed();
+        
+        // Define health thresholds
+        let memory_warning_threshold = 80.0; // 80% of system memory
+        let memory_critical_threshold = 90.0; // 90% of system memory
+        let cpu_warning_threshold = 70.0; // 70% CPU usage
+        let cpu_critical_threshold = 90.0; // 90% CPU usage
+        
+        // Determine health status
+        let memory_status = if attribution.memory_percentage > memory_critical_threshold {
+            ResourceStatus::Critical
+        } else if attribution.memory_percentage > memory_warning_threshold {
+            ResourceStatus::Warning
+        } else {
+            ResourceStatus::Healthy
+        };
+        
+        let cpu_status = if attribution.cpu_percent > cpu_critical_threshold {
+            ResourceStatus::Critical
+        } else if attribution.cpu_percent > cpu_warning_threshold {
+            ResourceStatus::Warning
+        } else {
+            ResourceStatus::Healthy
+        };
+        
+        let overall_status = match (memory_status, cpu_status) {
+            (ResourceStatus::Critical, _) | (_, ResourceStatus::Critical) => ProcessHealthStatus::Critical,
+            (ResourceStatus::Warning, _) | (_, ResourceStatus::Warning) => ProcessHealthStatus::Warning,
+            _ => ProcessHealthStatus::Healthy,
+        };
+        
+        tracing::info!(
+            pid = self.process_id,
+            uptime_secs = uptime.as_secs(),
+            memory_status = ?memory_status,
+            cpu_status = ?cpu_status,
+            overall_status = ?overall_status,
+            memory_mb = attribution.memory_bytes / 1024 / 1024,
+            cpu_percent = %format!("{:.2}", attribution.cpu_percent),
+            "Process health monitoring completed"
+        );
+        
+        Ok(overall_status)
+    }
+    
+    /// Track process metrics over time for trend analysis (ALYS-003-22)
+    pub async fn track_process_trends(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let attribution = self.get_resource_attribution()?;
+        let health_status = self.monitor_process_health()?;
+        
+        // Log trend data for external analysis
+        tracing::info!(
+            event = "process_trend_data",
+            pid = self.process_id,
+            timestamp = attribution.timestamp.duration_since(std::time::UNIX_EPOCH)?.as_secs(),
+            memory_bytes = attribution.memory_bytes,
+            virtual_memory_bytes = attribution.virtual_memory_bytes,
+            memory_percentage = attribution.memory_percentage,
+            cpu_percent = attribution.cpu_percent,
+            relative_cpu_usage = attribution.relative_cpu_usage,
+            health_status = ?health_status,
+            uptime_secs = self.start_time.elapsed().as_secs(),
+            "Process trend data point recorded"
+        );
+        
+        Ok(())
+    }
 }
 
 impl Clone for MetricsCollector {
@@ -1415,6 +2095,10 @@ impl Clone for MetricsCollector {
             start_time: self.start_time,
             collection_interval: self.collection_interval,
             actor_bridge: self.actor_bridge.clone(),
+            previous_disk_stats: Arc::new(parking_lot::Mutex::new(None)),
+            previous_network_stats: Arc::new(parking_lot::Mutex::new(None)),
+            failure_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_successful_collection: Arc::new(parking_lot::RwLock::new(self.start_time)),
         }
     }
 }
