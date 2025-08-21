@@ -22,8 +22,20 @@ Core Architecture
 
 Implement the ChainActor that will replace the monolithic Chain struct with a message-driven actor. This actor will handle consensus operations, block production, and chain state management using the actor model, eliminating shared mutable state issues.
 
-## Acceptance Criteria
+## Subtasks
 
+- [ ] Create ALYS-007-1: Design ChainActor message protocol with comprehensive message definitions [https://marathondh.atlassian.net/browse/AN-393]
+- [ ] Create ALYS-007-2: Implement ChainActor core structure with consensus integration [https://marathondh.atlassian.net/browse/AN-394]
+- [ ] Create ALYS-007-3: Implement block production logic with timing constraints [https://marathondh.atlassian.net/browse/AN-395]
+- [ ] Create ALYS-007-4: Implement block import and validation pipeline [https://marathondh.atlassian.net/browse/AN-396]
+- [ ] Create ALYS-007-5: Implement chain state management and reorganization [https://marathondh.atlassian.net/browse/AN-397]
+- [ ] Create ALYS-007-6: Implement finalization logic with AuxPoW integration [https://marathondh.atlassian.net/browse/AN-398]
+- [ ] Create ALYS-007-7: Create migration adapter for gradual legacy transition [https://marathondh.atlassian.net/browse/AN-399]
+- [ ] Create ALYS-007-8: Implement comprehensive test suite (unit, integration, performance) [https://marathondh.atlassian.net/browse/AN-401]
+- [ ] Create ALYS-007-9: Integration with actor supervision system [https://marathondh.atlassian.net/browse/AN-402]
+- [ ] Create ALYS-007-10: Performance benchmarking and optimization [https://marathondh.atlassian.net/browse/AN-403]
+
+## Acceptance Criteria
 - [ ] ChainActor implements all Chain functionality
 - [ ] Message protocol defined for all chain operations
 - [ ] State isolation - no Arc<RwLock<>> usage
@@ -737,12 +749,4 @@ None
 
 ## Notes
 
-- Consider implementing chain actor sharding for scalability
 - Add support for checkpoint sync
-- Implement pruning strategy for old blocks
-- Consider adding read-only replicas for query load
-
-## Time Tracking
-
-- Estimated: 5 days
-- Actual: _To be filled_

@@ -1,26 +1,21 @@
 # ALYS-008: Implement EngineActor
 
-## Issue Type
-Task
-
-## Priority
-Critical
-
-## Story Points
-8
-
-## Sprint
-Migration Sprint 2
-
-## Component
-Core Architecture
-
-## Labels
-`migration`, `phase-1`, `actor-system`, `engine`, `execution-layer`
-
 ## Description
 
-Implement the EngineActor to replace the current Engine struct with a message-driven actor. This actor manages all interactions with the execution layer (Geth/Reth), handling block building, payload validation, and finalization without shared mutable state.
+Implement the EngineActor to replace the current Engine struct with a message-driven actor. This actor manages all interactions with the execution layer (Reth), handling block building, payload validation, and finalization without shared mutable state.
+
+## Subtasks
+
+- [ ] Create ALYS-008-1: Design EngineActor message protocol with execution layer operations [https://marathondh.atlassian.net/browse/AN-414]
+- [ ] Create ALYS-008-2: Implement EngineActor core structure with JWT authentication [https://marathondh.atlassian.net/browse/AN-415]
+- [ ] Create ALYS-008-3: Implement block building logic with payload generation [https://marathondh.atlassian.net/browse/AN-416]
+- [ ] Create ALYS-008-4: Implement block commit and forkchoice update pipeline [https://marathondh.atlassian.net/browse/AN-417]
+- [ ] Create ALYS-008-5: Implement block finalization and state management [https://marathondh.atlassian.net/browse/AN-418]
+- [ ] Create ALYS-008-6: Implement execution client abstraction layer (Geth/Reth support) [https://marathondh.atlassian.net/browse/AN-419]
+- [ ] Create ALYS-008-7: Implement caching system for payloads and blocks [https://marathondh.atlassian.net/browse/AN-420]
+- [ ] Create ALYS-008-8: Create migration adapter for gradual Engine to EngineActor transition [https://marathondh.atlassian.net/browse/AN-421]
+- [ ] Create ALYS-008-9: Implement comprehensive test suite (unit, integration, client compatibility) [https://marathondh.atlassian.net/browse/AN-423]
+- [ ] Create ALYS-008-10: Performance benchmarking and optimization for execution operations [https://marathondh.atlassian.net/browse/AN-424]
 
 ## Acceptance Criteria
 
@@ -33,6 +28,331 @@ Implement the EngineActor to replace the current Engine struct with a message-dr
 - [ ] Fork choice updates handled correctly
 - [ ] Performance metrics collected
 - [ ] Backward compatibility maintained
+
+## Subtask Implementation Details
+
+### ALYS-008-1: Design EngineActor Message Protocol
+**Objective**: Define comprehensive message types for execution layer operations  
+**TDD Approach**: Start with message contracts and mock responses
+```rust
+// Test-first development
+#[test]
+fn test_build_block_message_structure() {
+    let msg = BuildExecutionPayload {
+        timestamp: Duration::from_secs(1000),
+        parent_hash: Some(Hash256::zero()),
+        withdrawals: vec![],
+        fee_recipient: None,
+    };
+    assert!(msg.timestamp.as_secs() > 0);
+}
+
+// Implementation
+#[derive(Message)]
+#[rtype(result = "Result<ExecutionPayload<MainnetEthSpec>, EngineError>")]
+pub struct BuildExecutionPayload {
+    pub timestamp: Duration,
+    pub parent_hash: Option<ExecutionBlockHash>,
+    pub withdrawals: Vec<Withdrawal>,
+    pub fee_recipient: Option<Address>,
+}
+```
+**Acceptance Criteria**: 
+- [ ] All engine operations have message types
+- [ ] Message validation implemented
+- [ ] Error handling for invalid messages
+
+### ALYS-008-2: Implement EngineActor Core Structure
+**Objective**: Create actor with JWT auth, no shared state  
+**TDD Approach**: Test actor lifecycle and authentication
+```rust
+#[actix::test]
+async fn test_engine_actor_startup_with_jwt() {
+    let config = EngineActorConfig {
+        jwt_secret_path: PathBuf::from("test.jwt"),
+        execution_endpoint: "http://localhost:8545".to_string(),
+        // ...
+    };
+    let actor = EngineActor::new(config).await.unwrap().start();
+    
+    // Test auth connection
+    let status = actor.send(GetSyncStatus).await.unwrap().unwrap();
+    assert!(matches!(status, SyncStatus::Synced));
+}
+```
+**Acceptance Criteria**: 
+- [ ] Actor starts with valid JWT authentication
+- [ ] Connection to execution client established
+- [ ] State isolated within actor (no Arc<RwLock>)
+- [ ] Health monitoring implemented
+
+### ALYS-008-3: Implement Block Building Logic
+**Objective**: Build execution payloads with withdrawals (peg-ins)  
+**TDD Approach**: Test payload building with various inputs
+```rust
+#[actix::test]
+async fn test_build_payload_with_withdrawals() {
+    let actor = create_test_engine_actor().await;
+    
+    let withdrawals = vec![
+        Withdrawal {
+            index: 0,
+            validator_index: 0,
+            address: Address::from_low_u64_be(1),
+            amount: 1000000000000000000u64, // 1 ETH in wei
+        }
+    ];
+    
+    let payload = actor.send(BuildExecutionPayload {
+        timestamp: Duration::from_secs(1000),
+        parent_hash: None,
+        withdrawals,
+        fee_recipient: None,
+    }).await.unwrap().unwrap();
+    
+    assert_eq!(payload.withdrawals().len(), 1);
+    assert!(payload.gas_limit() > 0);
+}
+```
+**Acceptance Criteria**: 
+- [ ] Payload building with parent hash
+- [ ] Withdrawals properly included (peg-ins)
+- [ ] Gas limit and fee recipient handling
+- [ ] Error handling for invalid parameters
+
+### ALYS-008-4: Implement Block Commit Pipeline
+**Objective**: Commit blocks and update forkchoice state  
+**TDD Approach**: Test commit workflow and forkchoice updates
+```rust
+#[actix::test]
+async fn test_commit_block_and_forkchoice() {
+    let actor = create_test_engine_actor().await;
+    
+    // Build payload first
+    let payload = build_test_payload();
+    
+    // Commit the block
+    let block_hash = actor.send(CommitExecutionPayload {
+        payload: payload.clone(),
+    }).await.unwrap().unwrap();
+    
+    assert_eq!(block_hash, payload.block_hash());
+    
+    // Verify forkchoice was updated
+    let status = actor.send(GetForkchoiceState).await.unwrap().unwrap();
+    assert_eq!(status.head_block_hash, block_hash);
+}
+```
+**Acceptance Criteria**: 
+- [ ] Payload validation before commit
+- [ ] Forkchoice state updates correctly
+- [ ] Invalid payload rejection
+- [ ] State consistency after commit
+
+### ALYS-008-5: Implement Block Finalization
+**Objective**: Finalize blocks and maintain finalized state  
+**TDD Approach**: Test finalization workflow and state updates
+```rust
+#[actix::test]
+async fn test_block_finalization_workflow() {
+    let actor = create_test_engine_actor().await;
+    
+    let block_hash = commit_test_block(&actor).await;
+    
+    // Finalize the block
+    actor.send(FinalizeExecutionBlock {
+        block_hash,
+    }).await.unwrap().unwrap();
+    
+    // Verify finalized state
+    let status = actor.send(GetForkchoiceState).await.unwrap().unwrap();
+    assert_eq!(status.finalized_block_hash, block_hash);
+    assert_eq!(status.safe_block_hash, block_hash);
+}
+```
+**Acceptance Criteria**: 
+- [ ] Finalization updates forkchoice state
+- [ ] Safe and finalized pointers updated
+- [ ] Finalization of non-existent blocks handled
+- [ ] State persistence after finalization
+
+### ALYS-008-6: Implement Client Abstraction Layer
+**Objective**: Support multiple execution clients (Geth/Reth)  
+**TDD Approach**: Test client detection and compatibility
+```rust
+#[test]
+fn test_client_type_detection() {
+    assert_eq!(
+        ExecutionClientType::from_version("Geth/v1.13.0"),
+        ExecutionClientType::Geth
+    );
+    assert_eq!(
+        ExecutionClientType::from_version("reth/0.1.0"),
+        ExecutionClientType::Reth
+    );
+}
+
+#[actix::test]
+async fn test_geth_specific_operations() {
+    let geth_client = GethExecutionClient::new(config).await.unwrap();
+    let payload = geth_client.build_payload(params).await.unwrap();
+    // Test Geth-specific behavior
+}
+```
+**Acceptance Criteria**: 
+- [ ] Auto-detection of execution client type
+- [ ] Geth-specific optimizations
+- [ ] Reth-specific optimizations
+- [ ] Consistent API across client types
+
+### ALYS-008-7: Implement Caching System
+**Objective**: Cache payloads and blocks for performance  
+**TDD Approach**: Test cache behavior and eviction
+```rust
+#[test]
+fn test_payload_cache_operations() {
+    let mut cache = PayloadCache::new(100, Duration::from_secs(60));
+    let payload_id = PayloadId([1, 2, 3, 4, 5, 6, 7, 8]);
+    let payload = create_test_payload();
+    
+    cache.insert(payload_id, payload.clone());
+    assert_eq!(cache.get(&payload_id), Some(&payload));
+    
+    // Test TTL expiration
+    std::thread::sleep(Duration::from_secs(61));
+    cache.cleanup();
+    assert_eq!(cache.get(&payload_id), None);
+}
+```
+**Acceptance Criteria**: 
+- [ ] LRU eviction for payload cache
+- [ ] TTL-based cache expiration
+- [ ] Block cache for frequently accessed blocks
+- [ ] Cache hit/miss metrics
+
+### ALYS-008-8: Create Migration Adapter
+**Objective**: Gradual migration from legacy Engine  
+**TDD Approach**: Test parallel execution and fallback
+```rust
+#[actix::test]
+async fn test_migration_parallel_mode() {
+    let adapter = EngineMigrationAdapter::new(
+        Some(legacy_engine),
+        Some(engine_actor),
+        MigrationMode::Parallel,
+    );
+    
+    let payload = adapter.build_block(params).await.unwrap();
+    
+    // Verify both implementations were called
+    assert_eq!(adapter.get_metrics().parallel_calls, 1);
+}
+```
+**Acceptance Criteria**: 
+- [ ] Parallel execution mode with result comparison
+- [ ] Fallback from actor to legacy on errors
+- [ ] Migration metrics collection
+- [ ] Gradual rollout configuration
+
+### ALYS-008-9: Comprehensive Test Suite
+**Objective**: >90% test coverage with multiple test types  
+**TDD Approach**: Property-based and integration testing
+```rust
+// Property-based testing
+proptest! {
+    #[test]
+    fn test_payload_building_properties(
+        timestamp in 1u64..u64::MAX,
+        withdrawal_count in 0usize..100,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let actor = create_test_engine_actor().await;
+            let withdrawals = create_test_withdrawals(withdrawal_count);
+            
+            let result = actor.send(BuildExecutionPayload {
+                timestamp: Duration::from_secs(timestamp),
+                parent_hash: None,
+                withdrawals,
+                fee_recipient: None,
+            }).await;
+            
+            // Properties that should always hold
+            if let Ok(Ok(payload)) = result {
+                prop_assert!(payload.timestamp() == timestamp);
+                prop_assert!(payload.gas_limit() > 0);
+            }
+        });
+    }
+}
+
+// Integration test with real clients
+#[tokio::test]
+#[ignore] // Run with --ignored for integration tests
+async fn test_real_geth_integration() {
+    let config = EngineActorConfig {
+        execution_endpoint: "http://localhost:8545".to_string(),
+        execution_endpoint_auth: "http://localhost:8551".to_string(),
+        jwt_secret_path: PathBuf::from("test.jwt"),
+        client_type: ExecutionClientType::Geth,
+        // ...
+    };
+    
+    let actor = EngineActor::new(config).await.unwrap().start();
+    
+    // Test real operations
+    let payload = actor.send(BuildExecutionPayload {
+        timestamp: Duration::from_secs(1000),
+        parent_hash: None,
+        withdrawals: vec![],
+        fee_recipient: None,
+    }).await.unwrap().unwrap();
+    
+    assert!(!payload.transactions().is_empty() || payload.transactions().is_empty()); // May be empty
+}
+```
+**Acceptance Criteria**: 
+- [ ] Unit tests for all message handlers
+- [ ] Integration tests with real Geth/Reth
+- [ ] Property-based tests for edge cases
+- [ ] Performance tests under load
+- [ ] Error handling and recovery tests
+
+### ALYS-008-10: Performance Benchmarking
+**Objective**: Optimize execution operations for performance targets  
+**TDD Approach**: Benchmark-driven optimization
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_block_building(c: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let actor = runtime.block_on(create_test_engine_actor());
+    
+    c.bench_function("build_execution_payload", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let result = actor.send(BuildExecutionPayload {
+                    timestamp: Duration::from_secs(1000),
+                    parent_hash: None,
+                    withdrawals: black_box(vec![]),
+                    fee_recipient: None,
+                }).await.unwrap();
+                
+                black_box(result)
+            })
+        })
+    });
+}
+
+criterion_group!(benches, bench_block_building);
+criterion_main!(benches);
+```
+**Acceptance Criteria**: 
+- [ ] Block building <200ms (target)
+- [ ] Block commit <100ms (target)
+- [ ] Cache hit ratio >80%
+- [ ] Memory usage <256MB under load
+- [ ] Concurrent request handling
 
 ## Technical Details
 
@@ -756,12 +1076,4 @@ None
 
 ## Notes
 
-- Consider implementing request batching for efficiency
-- Add support for other execution clients (Besu, Nethermind)
 - Implement engine API v2 for Cancun support
-- Add metrics for gas usage and MEV
-
-## Time Tracking
-
-- Estimated: 5 days
-- Actual: _To be filled_

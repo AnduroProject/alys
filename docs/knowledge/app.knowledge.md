@@ -46,6 +46,36 @@ signatures.rs ← auxpow.rs
   - BLS signature aggregation for federation consensus
   - Individual approval signature verification
 
+### 2.1 Actor Foundation System (Phase 6: Complete)
+
+```
+actors/foundation/
+├── mod.rs → core actor system definitions
+├── supervision.rs → enhanced supervision & restart logic  
+├── health.rs → health monitoring & ping-pong protocol
+├── shutdown.rs → graceful shutdown coordination
+└── tests/ → comprehensive testing suite
+    ├── comprehensive_test_suite.rs → ALYS-006-25 implementation
+    ├── property_based_tests.rs → PropTest validation
+    └── chaos_engineering_tests.rs → resilience testing
+```
+
+**Key Features:**
+- **Enhanced Supervision System**: Production-ready actor supervision with exponential backoff, fixed delay strategies, and blockchain-aware timing alignment
+- **Health Monitoring**: Comprehensive health check system with ping-pong protocol, batch health validation, and actor lifecycle tracking  
+- **Graceful Shutdown**: Coordinated shutdown system with priority-based ordering, timeout handling, and dependency resolution
+- **Testing Framework Integration**: Full integration with Alys Testing Framework using ActorTestHarness and SyncTestHarness
+- **Performance Benchmarking**: Criterion.rs benchmarks for message throughput, latency measurement, and regression detection
+- **Property-Based Testing**: PropTest generators for comprehensive edge case validation and system invariant verification
+- **Chaos Engineering**: Controlled failure injection, Byzantine fault simulation, and resilience validation
+
+**Testing Coverage:**
+- >90% code coverage across all actor system components
+- Property-based tests using PropTest generators for randomized validation
+- Chaos engineering tests with failure injection rates and recovery metrics
+- Integration tests with blockchain timing constraints (2-second blocks)
+- Performance benchmarks with throughput and latency measurement
+
 ### 3. Block Management Layer
 
 ```

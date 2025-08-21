@@ -24,42 +24,42 @@ Implement the root actor supervisor that will manage the lifecycle of all actors
 ## Detailed Implementation Subtasks (26 tasks across 6 phases)
 
 ### Phase 1: Actor System Foundation (5 tasks)
-- [ ] **ALYS-006-01**: Design `ActorSystemConfig` with supervision settings, mailbox capacity, restart strategies, and metrics
-- [ ] **ALYS-006-02**: Implement `RestartStrategy` enum with Always, Never, ExponentialBackoff, and FixedDelay variants
-- [ ] **ALYS-006-03**: Create `RootSupervisor` structure with system management, configuration, and supervised actor tracking
-- [ ] **ALYS-006-04**: Implement actor system startup with arbiter creation, metrics initialization, and health monitoring
-- [ ] **ALYS-006-05**: Add system-wide constants and utility functions for backoff calculations and timing
+- [X] **ALYS-006-01**: Design `ActorSystemConfig` with supervision settings, mailbox capacity, restart strategies, and metrics
+- [X] **ALYS-006-02**: Implement `RestartStrategy` enum with Always, Never, ExponentialBackoff, and FixedDelay variants
+- [X] **ALYS-006-03**: Create `RootSupervisor` structure with system management, configuration, and supervised actor tracking
+- [X] **ALYS-006-04**: Implement actor system startup with arbiter creation, metrics initialization, and health monitoring
+- [X] **ALYS-006-05**: Add system-wide constants and utility functions for backoff calculations and timing
 
 ### Phase 2: Supervision & Restart Logic (6 tasks)
-- [ ] **ALYS-006-06**: Implement `spawn_supervised` with actor factory pattern, registry integration, and mailbox configuration
-- [ ] **ALYS-006-07**: Create actor failure handling with error classification, restart counting, and metrics tracking
-- [ ] **ALYS-006-08**: Implement exponential backoff restart with configurable parameters, delay calculation, and max attempts
-- [ ] **ALYS-006-09**: Add fixed delay restart strategy with timing controls and failure counting
-- [ ] **ALYS-006-10**: Create restart attempt tracking with timestamps, success rates, and failure patterns
-- [ ] **ALYS-006-11**: Implement supervisor escalation for repeated failures and cascade prevention
+- [X] **ALYS-006-06**: Implement `spawn_supervised` with actor factory pattern, registry integration, and mailbox configuration
+- [X] **ALYS-006-07**: Create actor failure handling with error classification, restart counting, and metrics tracking
+- [X] **ALYS-006-08**: Implement exponential backoff restart with configurable parameters, delay calculation, and max attempts
+- [X] **ALYS-006-09**: Add fixed delay restart strategy with timing controls and failure counting
+- [X] **ALYS-006-10**: Create restart attempt tracking with timestamps, success rates, and failure patterns
+- [X] **ALYS-006-11**: Implement supervisor escalation for repeated failures and cascade prevention
 
 ### Phase 3: Actor Registry & Discovery (4 tasks)
-- [ ] **ALYS-006-12**: Implement `ActorRegistry` with name-based and type-based actor lookup capabilities
-- [ ] **ALYS-006-13**: Create actor registration system with unique name enforcement, type indexing, and lifecycle tracking
-- [ ] **ALYS-006-14**: Add actor discovery methods with type-safe address retrieval and batch operations
-- [ ] **ALYS-006-15**: Implement actor unregistration with cleanup, index maintenance, and orphan prevention
+- [X] **ALYS-006-12**: Implement `ActorRegistry` with name-based and type-based actor lookup capabilities
+- [X] **ALYS-006-13**: Create actor registration system with unique name enforcement, type indexing, and lifecycle tracking
+- [X] **ALYS-006-14**: Add actor discovery methods with type-safe address retrieval and batch operations
+- [X] **ALYS-006-15**: Implement actor unregistration with cleanup, index maintenance, and orphan prevention
 
-### Phase 4: Legacy Integration & Adapters (5 tasks)
-- [ ] **ALYS-006-16**: Design `LegacyAdapter` pattern for gradual migration from `Arc<RwLock<T>>` to actor model
-- [ ] **ALYS-006-17**: Implement `ChainAdapter` with feature flag integration and dual-path execution
-- [ ] **ALYS-006-18**: Create `EngineAdapter` for EVM execution layer transition with backward compatibility
-- [ ] **ALYS-006-19**: Add adapter testing framework with feature flag switching and performance comparison
-- [ ] **ALYS-006-20**: Implement adapter metrics collection with latency comparison and migration progress tracking
+### Phase 4: Legacy Integration & Adapters (5 tasks) - ✅ **COMPLETE** (2024-01-20)
+- [X] **ALYS-006-16**: Design `LegacyAdapter` pattern for gradual migration from `Arc<RwLock<T>>` to actor model - ✅ COMPLETE
+- [X] **ALYS-006-17**: Implement `ChainAdapter` with feature flag integration and dual-path execution - ✅ COMPLETE
+- [X] **ALYS-006-18**: Create `EngineAdapter` for EVM execution layer transition with backward compatibility - ✅ COMPLETE
+- [X] **ALYS-006-19**: Add adapter testing framework with feature flag switching and performance comparison - ✅ COMPLETE
+- [X] **ALYS-006-20**: Implement adapter metrics collection with latency comparison and migration progress tracking - ✅ COMPLETE
 
 ### Phase 5: Health Monitoring & Shutdown (4 tasks)
-- [ ] **ALYS-006-21**: Implement `HealthMonitor` actor with periodic health checks, failure detection, and recovery triggering
-- [ ] **ALYS-006-22**: Create actor health check protocol with ping/pong messaging and response time tracking
-- [ ] **ALYS-006-23**: Implement graceful shutdown with timeout handling, actor coordination, and cleanup procedures
-- [ ] **ALYS-006-24**: Add shutdown monitoring with progress tracking, forced termination, and resource cleanup
+- [X] **ALYS-006-21**: Implement `HealthMonitor` actor with periodic health checks, failure detection, and recovery triggering
+- [X] **ALYS-006-22**: Create actor health check protocol with ping/pong messaging and response time tracking
+- [X] **ALYS-006-23**: Implement graceful shutdown with timeout handling, actor coordination, and cleanup procedures
+- [X] **ALYS-006-24**: Add shutdown monitoring with progress tracking, forced termination, and resource cleanup
 
 ### Phase 6: Testing & Performance (2 tasks)
-- [ ] **ALYS-006-25**: Create comprehensive test suite with supervision testing, restart scenarios, and failure simulation
-- [ ] **ALYS-006-26**: Implement performance benchmarks with message throughput, latency measurement, and regression detection
+- [X] **ALYS-006-25**: Create comprehensive test suite with supervision testing, restart scenarios, and failure simulation
+- [X] **ALYS-006-26**: Implement performance benchmarks with message throughput, latency measurement, and regression detection
 
 ## Original Acceptance Criteria
 - [ ] Actor supervisor implemented with supervision tree
@@ -706,21 +706,3 @@ fn bench_actor_message_throughput(b: &mut Bencher) {
 - Implement circuit breakers for failing actors
 - Add distributed tracing support
 - Consider actor persistence for stateful actors
-
-## Time Tracking
-
-**Time Estimate**: 4.5-5 days (36-40 hours total) with detailed breakdown:
-- Phase 1 - Actor system foundation: 6-7 hours (includes config design, system structure, startup logic)
-- Phase 2 - Supervision & restart logic: 8-10 hours (includes failure handling, restart strategies, escalation)
-- Phase 3 - Actor registry & discovery: 6-7 hours (includes registration system, type indexing, cleanup)
-- Phase 4 - Legacy integration & adapters: 8-9 hours (includes adapter patterns, feature flag integration, testing)
-- Phase 5 - Health monitoring & shutdown: 5-6 hours (includes health checks, graceful shutdown, cleanup)
-- Phase 6 - Testing & performance: 3-4 hours (includes comprehensive testing, benchmarking, regression detection)
-
-**Critical Path Dependencies**: Phase 1 → Phase 2 → Phase 3 → (Phase 4,5 in parallel) → Phase 6
-**Resource Requirements**: 1 senior Rust developer with Actix framework experience
-**Risk Buffer**: 25% additional time for complex supervision logic and adapter integration
-**Prerequisites**: ALYS-001 (foundation), ALYS-002 (testing), ALYS-003 (metrics), ALYS-004 (feature flags)
-**Performance Target**: No regression vs Arc<RwLock<>> pattern, <1ms message routing overhead
-
-- Actual: _To be filled_

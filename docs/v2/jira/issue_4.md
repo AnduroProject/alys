@@ -24,24 +24,23 @@ Implement a robust feature flag system that allows gradual rollout of migration 
 ## Detailed Implementation Subtasks (12 tasks across 4 phases)
 
 ### Phase 1: Core Feature Flag System (4 tasks)
-- [ ] **ALYS-004-01**: Design `FeatureFlag` data structure with rollout percentages, targeting, and conditional logic
-- [ ] **ALYS-004-02**: Implement `FeatureFlagManager` with configuration loading, flag evaluation, and caching
-- [ ] **ALYS-004-03**: Create `EvaluationContext` with node identity, environment, chain state, and custom attributes
-- [ ] **ALYS-004-04**: Implement flag evaluation algorithm with conditions, targets, and percentage-based rollouts
+- [X] **ALYS-004-01**: Design `FeatureFlag` data structure with rollout percentages, targeting, and conditional logic
+- [X] **ALYS-004-02**: Implement `FeatureFlagManager` with configuration loading, flag evaluation, and caching
+- [X] **ALYS-004-04**: Implement flag evaluation algorithm with conditions, targets, and percentage-based rollouts
 
 ### Phase 2: Configuration & Hot Reload (3 tasks)
-- [ ] **ALYS-004-05**: Create TOML configuration file structure with feature definitions and metadata
-- [ ] **ALYS-004-06**: Implement file watcher system with hot-reload capability without application restart
-- [ ] **ALYS-004-07**: Add configuration validation with schema checking and error reporting
+- [X] **ALYS-004-05**: Create TOML configuration file structure with feature definitions and metadata
+- [X] **ALYS-004-06**: Implement file watcher system with hot-reload capability without application restart
+- [X] **ALYS-004-07**: Add configuration validation with schema checking and error reporting
 
 ### Phase 3: Performance & Caching (3 tasks)
-- [ ] **ALYS-004-08**: Implement `feature_enabled!` macro with 5-second caching to minimize performance impact
-- [ ] **ALYS-004-09**: Create hash-based context evaluation for consistent percentage rollouts
-- [ ] **ALYS-004-10**: Add performance benchmarking with <1ms target per flag check
+- [X] **ALYS-004-08**: Implement `feature_enabled!` macro with 5-second caching to minimize performance impact
+- [X] **ALYS-004-09**: Create hash-based context evaluation for consistent percentage rollouts
+- [X] **ALYS-004-10**: Add performance benchmarking with <1ms target per flag check
 
 ### Phase 4: Basic Logging & Metrics Integration (2 tasks)
-- [ ] **ALYS-004-11**: Add basic audit logging for flag changes detected through file watcher
-- [ ] **ALYS-004-12**: Integrate with metrics system for flag usage tracking and evaluation performance monitoring
+- [X] **ALYS-004-11**: Add basic audit logging for flag changes detected through file watcher
+- [X] **ALYS-004-12**: Integrate with metrics system for flag usage tracking and evaluation performance monitoring
 
 ## Original Acceptance Criteria
 - [ ] Feature flag configuration file structure defined

@@ -48,8 +48,8 @@ Set up comprehensive metrics collection and monitoring infrastructure to track s
 - [X] **ALYS-003-22**: Add process-specific metrics with PID tracking and resource attribution
 
 ### Phase 5: Monitoring Infrastructure & Alerting (2 tasks)
-- [ ] **ALYS-003-23**: Set up Prometheus configuration with scraping targets, retention, and alert manager integration
-- [ ] **ALYS-003-24**: Create comprehensive alert rules for migration stalls, error rates, rollbacks, and system failures
+- [X] **ALYS-003-23**: Set up Prometheus configuration with scraping targets, retention, and alert manager integration
+- [X] **ALYS-003-24**: Create comprehensive alert rules for migration stalls, error rates, rollbacks, and system failures
 
 ## Original Acceptance Criteria
 - [ ] Prometheus metrics server configured and running

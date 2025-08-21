@@ -731,9 +731,6 @@ fn bench_message_throughput(b: &mut Bencher) {
 ### Blockers
 - ALYS-009: BridgeActor for signature application
 
-### Blocked By
-None
-
 ### Related Issues
 - ALYS-013: Governance signature collection
 - ALYS-014: Federation management
@@ -753,12 +750,5 @@ None
 
 ## Notes
 
-- Consider implementing message compression
 - Add support for multiple governance endpoints
 - Implement circuit breaker pattern
-- Consider using WebSockets as fallback
-
-## Time Tracking
-
-- Estimated: 5 days
-- Actual: _To be filled_
