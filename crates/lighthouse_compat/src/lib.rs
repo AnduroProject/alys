@@ -71,6 +71,7 @@
 // Core modules
 pub mod compat;
 pub mod config;
+pub mod config_migration;
 pub mod error;
 pub mod types;
 
@@ -114,6 +115,7 @@ pub mod prelude {
         health::{HealthMonitor, HealthStatus},
         metrics::{CompatMetrics, MetricsCollector},
         engine::{CompatibleEngine, EngineConfig},
+        config_migration::{ConfigurationMigrator, ValidationReport},
     };
 }
 
