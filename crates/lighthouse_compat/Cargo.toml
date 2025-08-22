@@ -1,0 +1,92 @@
+[package]
+name = "lighthouse_compat"
+version = "0.1.0"
+edition = "2021"
+authors = ["Alys Development Team"]
+description = "Lighthouse V4 to V5 compatibility layer for Alys sidechain"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AnduroProject/alys"
+documentation = "https://docs.rs/lighthouse_compat"
+
+[features]
+default = ["v4", "migration-tools"]
+v4 = ["lighthouse_wrapper"]
+v5 = ["lighthouse_wrapper_v5"]
+migration-tools = ["ab-testing", "metrics"]
+ab-testing = ["rand", "siphasher"]
+metrics = ["prometheus", "tokio-metrics"]
+simd = ["sha2/asm"]
+testing = ["proptest", "mockall"]
+
+[dependencies]
+# Workspace dependencies
+actix = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync", "signal"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Lighthouse dependencies
+lighthouse_wrapper = { path = "../lighthouse_wrapper", optional = true }
+lighthouse_wrapper_v5 = { git = "https://github.com/sigp/lighthouse", tag = "v5.0.0", optional = true, package = "lighthouse" }
+
+# Ethereum types (version compatibility layer)
+ethereum-types = { workspace = true }
+ssz_types = "0.5"
+tree_hash = "0.5"
+tree_hash_derive = "0.5"
+
+# Networking and HTTP
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+hyper = { version = "0.14", features = ["full"] }
+
+# Serialization
+rmp-serde = "1.1"
+bincode = "1.3"
+
+# Crypto
+sha2 = { version = "0.10", features = ["asm"] }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16", optional = true }
+
+# Migration and A/B testing
+rand = { version = "0.8", optional = true }
+siphasher = { version = "0.3", optional = true }
+
+# Metrics
+prometheus = { workspace = true, optional = true }
+tokio-metrics = { version = "0.3", optional = true }
+
+# Error handling
+anyhow = "1.0"
+eyre = { workspace = true }
+
+# Configuration
+config = "0.14"
+toml = { workspace = true }
+
+# Utilities
+once_cell = "1.19"
+parking_lot = "0.12"
+arc-swap = "1.6"
+
+[dev-dependencies]
+proptest = { version = "1.0", optional = true }
+mockall = { version = "0.11", optional = true }
+tempfile = "3.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+test-log = "0.2"
+env_logger = "0.10"
+
+[[bench]]
+name = "lighthouse_compat_benchmarks"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
