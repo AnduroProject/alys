@@ -54,7 +54,7 @@ sha2 = { version = "0.10", features = ["asm"] }
 # bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16", optional = true }
 
 # Migration and A/B testing
-rand = { version = "0.8", optional = true }
+rand = "0.8"
 siphasher = { version = "0.3", optional = true }
 
 # Metrics

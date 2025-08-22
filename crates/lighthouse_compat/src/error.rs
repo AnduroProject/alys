@@ -142,6 +142,91 @@ pub enum CompatError {
     
     #[error("Unrecoverable error: {reason}")]
     Unrecoverable { reason: String },
+    
+    /// Recovery system errors
+    #[error("Circuit breaker open for operation: {operation}")]
+    CircuitBreakerOpen { operation: String },
+    
+    #[error("Operation failed: {operation} - {reason}")]
+    OperationFailed { operation: String, reason: String },
+    
+    #[error("Network error: {reason}")]
+    NetworkError { reason: String },
+    
+    #[error("Configuration error: {reason}")]
+    ConfigurationError { reason: String },
+    
+    #[error("Type conversion error: {reason}")]
+    TypeConversionError { reason: String },
+    
+    #[error("Engine API error: {reason}")]
+    EngineApiError { reason: String },
+    
+    #[error("Consensus failure: {reason}")]
+    ConsensusFailure { reason: String },
+    
+    #[error("Sync failure: {reason}")]
+    SyncFailure { reason: String },
+    
+    #[error("Invalid payload: {reason}")]
+    InvalidPayload { reason: String },
+    
+    #[error("Invalid block hash")]
+    InvalidBlockHash,
+    
+    #[error("Payload ID unavailable")]
+    PayloadIdUnavailable,
+    
+    #[error("Block not found: {identifier}")]
+    BlockNotFound { identifier: String },
+    
+    #[error("Invalid block data: {reason}")]
+    InvalidBlockData { reason: String },
+    
+    #[error("Feature not implemented: {feature}")]
+    NotImplemented { feature: String },
+    
+    #[error("Batching disabled")]
+    BatchingDisabled,
+    
+    #[error("Batch too large: requested {requested}, max allowed {max_allowed}")]
+    BatchTooLarge { requested: usize, max_allowed: usize },
+    
+    #[error("Batch request failed: {reason}")]
+    BatchRequestFailed { reason: String },
+    
+    #[error("Invalid traffic split: total percentage {total_percentage}")]
+    InvalidTrafficSplit { total_percentage: f64 },
+    
+    #[error("A/B test not found: {test_id}")]
+    ABTestNotFound { test_id: String },
+    
+    #[error("A/B test invalid config: {reason}")]
+    ABTestInvalidConfig { reason: String },
+    
+    #[error("A/B test conflict: existing {existing_test}, new {new_test} - {reason}")]
+    ABTestConflict { existing_test: String, new_test: String, reason: String },
+    
+    #[error("A/B test insufficient data: {reason}")]
+    ABTestInsufficientData { reason: String },
+    
+    #[error("Migration phase not found: {phase_id}")]
+    MigrationPhaseNotFound { phase_id: String },
+    
+    #[error("Prerequisite not met: {prerequisite} - {reason}")]
+    PrerequisiteNotMet { prerequisite: String, reason: String },
+    
+    #[error("Phase timeout: {phase_id} exceeded {timeout_duration:?}")]
+    PhaseTimeout { phase_id: String, timeout_duration: Duration },
+    
+    #[error("Rollback criterion met: {phase_id} - {criterion}")]
+    RollbackCriterionMet { phase_id: String, criterion: String },
+    
+    #[error("No rollback point available")]
+    NoRollbackPointAvailable,
+    
+    #[error("Rollback point not found: {rollback_point_id}")]
+    RollbackPointNotFound { rollback_point_id: String },
 }
 
 impl CompatError {

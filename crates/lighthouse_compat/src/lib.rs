@@ -83,6 +83,7 @@ pub mod migration;
 pub mod ab_test;
 pub mod health;
 pub mod metrics;
+pub mod recovery;
 
 // Type conversion modules
 pub mod conversion;
@@ -116,6 +117,7 @@ pub mod prelude {
         metrics::{CompatMetrics, MetricsCollector},
         engine::{CompatibleEngine, EngineConfig},
         config_migration::{ConfigurationMigrator, ValidationReport},
+        recovery::{RecoverySystem, SystemHealthAssessment},
     };
 }
 
