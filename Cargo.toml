@@ -5,6 +5,7 @@ members = [
     "crates/federation_v2",
     "crates/lighthouse_wrapper", 
     "crates/lighthouse_wrapper_v2",
+    "crates/lighthouse_compat",
     "crates/miner",
     "crates/actor_system",
     "crates/sync_engine",

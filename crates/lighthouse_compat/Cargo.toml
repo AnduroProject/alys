@@ -9,9 +9,9 @@ repository = "https://github.com/AnduroProject/alys"
 documentation = "https://docs.rs/lighthouse_compat"
 
 [features]
-default = ["v4", "migration-tools"]
-v4 = ["lighthouse_wrapper"]
-v5 = ["lighthouse_wrapper_v5"]
+default = []
+# v4 = ["lighthouse_wrapper"]
+# v5 = ["lighthouse_wrapper_v5"]
 migration-tools = ["ab-testing", "metrics"]
 ab-testing = ["rand", "siphasher"]
 metrics = ["prometheus", "tokio-metrics"]
@@ -31,9 +31,9 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-# Lighthouse dependencies
-lighthouse_wrapper = { path = "../lighthouse_wrapper", optional = true }
-lighthouse_wrapper_v5 = { git = "https://github.com/sigp/lighthouse", tag = "v5.0.0", optional = true, package = "lighthouse" }
+# Lighthouse dependencies (temporarily disabled due to SQLite conflicts)
+# lighthouse_wrapper = { path = "../lighthouse_wrapper", optional = true }
+# lighthouse_wrapper_v5 = { git = "https://github.com/sigp/lighthouse", tag = "v5.0.0", optional = true, package = "lighthouse" }
 
 # Ethereum types (version compatibility layer)
 ethereum-types = { workspace = true }
@@ -51,7 +51,7 @@ bincode = "1.3"
 
 # Crypto
 sha2 = { version = "0.10", features = ["asm"] }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16", optional = true }
+# bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16", optional = true }
 
 # Migration and A/B testing
 rand = { version = "0.8", optional = true }
@@ -74,18 +74,19 @@ once_cell = "1.19"
 parking_lot = "0.12"
 arc-swap = "1.6"
 
-[dev-dependencies]
+# Testing utilities (optional)
 proptest = { version = "1.0", optional = true }
 mockall = { version = "0.11", optional = true }
+
+[dev-dependencies]
+proptest = "1.0"
+mockall = "0.11"
 tempfile = "3.8"
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio-test = "0.4"
 test-log = "0.2"
 env_logger = "0.10"
 
-[[bench]]
-name = "lighthouse_compat_benchmarks"
-harness = false
 
 [package.metadata.docs.rs]
 all-features = true
