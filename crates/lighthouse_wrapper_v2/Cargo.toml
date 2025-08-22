@@ -15,6 +15,10 @@ anyhow = "1.0"
 thiserror = "1.0"
 async-trait = "0.1"
 
+# Prometheus metrics
+prometheus = "0.13"
+lazy_static = "1.4"
+
 # Lighthouse dependencies (would be updated for v5 compatibility)
 # lighthouse_types = { path = "../lighthouse_wrapper/lighthouse_types", optional = true }
 tree_hash = "0.5"

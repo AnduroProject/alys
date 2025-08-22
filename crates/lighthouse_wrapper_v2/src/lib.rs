@@ -7,15 +7,61 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod metrics;
+pub mod compatibility;
+pub mod testing;
+pub mod migration;
 
 // Re-exports for convenience
 pub use error::*;
+pub use metrics::MetricsRecorder;
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 /// Lighthouse wrapper version
 pub const LIGHTHOUSE_WRAPPER_VERSION: &str = "2.0.0";
 
 /// Compatible Lighthouse versions
 pub const COMPATIBLE_LIGHTHOUSE_VERSIONS: &[&str] = &["v5.0.0", "v4.6.0", "v4.5.0"];
+
+#[derive(Debug, Clone)]
+pub enum LighthouseVersion {
+    V4,
+    V5,
+}
+
+#[derive(Debug, Clone)]
+pub enum MigrationMode {
+    V4Only,
+    V5Only,
+    Parallel,      // Run both, compare results
+    V4Primary,     // V4 primary, V5 shadow
+    V5Primary,     // V5 primary, V4 fallback
+    Canary(u8),    // Percentage to V5
+}
+
+#[derive(Debug, Clone)]
+pub struct CompatConfig {
+    pub enable_v4: bool,
+    pub enable_v5: bool,
+    pub default_version: LighthouseVersion,
+    pub migration_mode: MigrationMode,
+    pub enable_metrics: bool,
+}
+
+impl Default for CompatConfig {
+    fn default() -> Self {
+        Self {
+            enable_v4: true,
+            enable_v5: false,
+            default_version: LighthouseVersion::V4,
+            migration_mode: MigrationMode::V4Only,
+            enable_metrics: true,
+        }
+    }
+}
 
 /// Default configuration placeholder
 pub fn default_config() -> LighthouseConfig {
