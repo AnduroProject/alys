@@ -3,21 +3,6 @@
 ## Issue Type
 Task
 
-## Priority
-Critical
-
-## Story Points
-10
-
-## Sprint
-Migration Sprint 3
-
-## Component
-Sync System
-
-## Labels
-`migration`, `phase-2`, `sync`, `actor-system`, `performance`
-
 ## Description
 
 Implement the SyncActor to replace the problematic sync implementation with a robust, actor-based solution. This includes parallel block validation, intelligent peer selection, checkpoint-based recovery, and the ability to produce blocks when 99.5% synced.
@@ -819,6 +804,368 @@ fn bench_parallel_validation(b: &mut Bencher) {
 }
 ```
 
+## Subtasks
+
+### Phase 1: Foundation and Core Architecture (2 days)
+
+#### ALYS-010-1: Design SyncActor Message Protocol and State Machine
+**Priority**: Highest  
+**Effort**: 4 hours  
+**Dependencies**: ALYS-006 (Actor supervisor)
+
+**Implementation Steps**:
+1. **Test-First Design**:
+   - Write failing tests for message handling (`test_sync_messages.rs`)
+   - Define expected behavior for each message type
+   - Test state transitions and validation
+
+2. **Core Implementation**:
+   - Create `messages.rs` with comprehensive message types
+   - Implement `SyncState` enum with detailed state tracking
+   - Design `SyncStatus` and `SyncProgress` structures
+   - Add message validation and error handling
+
+3. **Acceptance Criteria**:
+   - [ ] All message types defined with proper Actix Message derive
+   - [ ] State machine transitions tested and documented
+   - [ ] Message validation prevents invalid state changes
+   - [ ] Error types cover all failure scenarios
+   - [ ] Unit tests achieve >95% coverage
+
+#### ALYS-010-2: Implement SyncActor Core Structure and Lifecycle
+**Priority**: High  
+**Effort**: 6 hours  
+**Dependencies**: ALYS-010-1
+
+**Implementation Steps**:
+1. **TDD Approach**:
+   - Write tests for actor lifecycle (`test_sync_lifecycle.rs`)
+   - Test actor startup, shutdown, and restart scenarios
+   - Mock external dependencies (ChainActor, PeerManager)
+
+2. **Core Implementation**:
+   - Implement `SyncActor` struct with all required fields
+   - Add actor lifecycle methods (`started`, `stopped`)
+   - Create periodic tasks (metrics, checkpoints)
+   - Implement basic message handlers
+
+3. **Acceptance Criteria**:
+   - [ ] Actor starts and stops cleanly
+   - [ ] Periodic tasks execute correctly
+   - [ ] External actor addresses properly managed
+   - [ ] Memory usage remains bounded
+   - [ ] Integration tests with actor system pass
+
+#### ALYS-010-3: Implement Configuration and Metrics System
+**Priority**: Medium  
+**Effort**: 4 hours  
+**Dependencies**: ALYS-010-2
+
+**Implementation Steps**:
+1. **Configuration Design**:
+   - Write tests for configuration validation
+   - Test different environment configs (dev, test, prod)
+   - Validate configuration parameter ranges
+
+2. **Metrics Implementation**:
+   - Create comprehensive Prometheus metrics
+   - Test metric collection and updates
+   - Implement metric aggregation logic
+
+3. **Acceptance Criteria**:
+   - [ ] Configuration validation prevents invalid settings
+   - [ ] All metrics properly registered with Prometheus
+   - [ ] Metric values accurately reflect sync state
+   - [ ] Configuration hot-reloading supported
+   - [ ] Performance impact of metrics < 1%
+
+### Phase 2: Peer Management and Network Layer (1.5 days)
+
+#### ALYS-010-4: Implement Intelligent Peer Selection and Scoring
+**Priority**: High  
+**Effort**: 5 hours  
+**Dependencies**: ALYS-010-2
+
+**Implementation Steps**:
+1. **Test-Driven Design**:
+   - Write tests for peer scoring algorithms (`test_peer_scoring.rs`)
+   - Test peer selection under various network conditions
+   - Mock different peer behaviors (fast, slow, malicious)
+
+2. **Implementation**:
+   - Create `PeerSyncInfo` with comprehensive scoring
+   - Implement adaptive peer selection algorithms
+   - Add peer performance tracking
+   - Implement peer blacklisting and recovery
+
+3. **Acceptance Criteria**:
+   - [ ] Peer scores accurately reflect performance
+   - [ ] Best peers selected for critical operations
+   - [ ] Malicious peers quickly identified and excluded
+   - [ ] Peer selection adapts to changing conditions
+   - [ ] Property-based tests verify scoring invariants
+
+#### ALYS-010-5: Implement Adaptive Batch Size Calculation
+**Priority**: Medium  
+**Effort**: 3 hours  
+**Dependencies**: ALYS-010-4
+
+**Implementation Steps**:
+1. **Algorithm Testing**:
+   - Test batch size adaptation under different network conditions
+   - Verify optimal batch sizes for various scenarios
+   - Test edge cases (very slow/fast networks)
+
+2. **Implementation**:
+   - Create network condition assessment methods
+   - Implement adaptive batch size algorithm
+   - Add bandwidth and latency estimation
+   - Implement batch size bounds checking
+
+3. **Acceptance Criteria**:
+   - [ ] Batch size adapts to network conditions
+   - [ ] Performance improves with optimal batch sizes
+   - [ ] Batch size stays within configured bounds
+   - [ ] Algorithm handles edge cases gracefully
+   - [ ] Benchmarks show >20% improvement in throughput
+
+### Phase 3: Block Processing and Validation (1.5 days)
+
+#### ALYS-010-6: Implement Parallel Block Validation System
+**Priority**: Highest  
+**Effort**: 6 hours  
+**Dependencies**: ALYS-007 (ChainActor), ALYS-010-2
+
+**Implementation Steps**:
+1. **Parallel Architecture Design**:
+   - Write tests for parallel validation (`test_parallel_validation.rs`)
+   - Test validation worker pool management
+   - Verify parallel processing maintains order
+
+2. **Implementation**:
+   - Create `BlockProcessorActor` with worker pool
+   - Implement `ValidationWorker` actors
+   - Add parallel validation pipeline
+   - Implement result aggregation and ordering
+
+3. **Acceptance Criteria**:
+   - [ ] Validation scales with CPU cores
+   - [ ] Block order preserved during parallel processing
+   - [ ] Validation errors properly handled and reported
+   - [ ] Worker failures don't block entire pipeline
+   - [ ] Performance tests show >3x speedup with 4+ cores
+
+#### ALYS-010-7: Implement Block Download and Processing Pipeline
+**Priority**: High  
+**Effort**: 5 hours  
+**Dependencies**: ALYS-010-6
+
+**Implementation Steps**:
+1. **Pipeline Testing**:
+   - Write integration tests for download pipeline
+   - Test error handling and retry mechanisms
+   - Mock various network failure scenarios
+
+2. **Implementation**:
+   - Create parallel block download system
+   - Implement download coordination and scheduling
+   - Add progress tracking and reporting
+   - Implement error recovery and peer fallback
+
+3. **Acceptance Criteria**:
+   - [ ] Multiple peers used simultaneously for downloads
+   - [ ] Failed downloads automatically retried with different peers
+   - [ ] Download progress accurately tracked and reported
+   - [ ] Pipeline handles peer disconnections gracefully
+   - [ ] Stress tests handle 1000+ concurrent block requests
+
+### Phase 4: Checkpoint System (1 day)
+
+#### ALYS-010-8: Implement Checkpoint Creation and Management
+**Priority**: High  
+**Effort**: 4 hours  
+**Dependencies**: ALYS-013 (StorageActor), ALYS-010-2
+
+**Implementation Steps**:
+1. **Checkpoint Design**:
+   - Write tests for checkpoint creation and validation
+   - Test checkpoint recovery scenarios
+   - Verify checkpoint data integrity
+
+2. **Implementation**:
+   - Create `CheckpointManager` with storage integration
+   - Implement periodic checkpoint creation
+   - Add checkpoint verification and validation
+   - Implement checkpoint cleanup and pruning
+
+3. **Acceptance Criteria**:
+   - [ ] Checkpoints created at regular intervals
+   - [ ] Checkpoint data includes all necessary state
+   - [ ] Old checkpoints automatically pruned
+   - [ ] Checkpoint corruption detected and handled
+   - [ ] Recovery from checkpoint faster than full sync
+
+#### ALYS-010-9: Implement Checkpoint Recovery System
+**Priority**: High  
+**Effort**: 4 hours  
+**Dependencies**: ALYS-010-8
+
+**Implementation Steps**:
+1. **Recovery Testing**:
+   - Test recovery from various checkpoint states
+   - Test recovery failure scenarios
+   - Verify sync continues correctly after recovery
+
+2. **Implementation**:
+   - Implement checkpoint discovery and loading
+   - Add checkpoint verification before recovery
+   - Create fallback mechanisms for corrupted checkpoints
+   - Implement progress tracking during recovery
+
+3. **Acceptance Criteria**:
+   - [ ] Automatic recovery from latest valid checkpoint
+   - [ ] Recovery handles corrupted checkpoints gracefully
+   - [ ] Progress tracking continues seamlessly after recovery
+   - [ ] Recovery time proportional to blocks since checkpoint
+   - [ ] Integration tests verify end-to-end recovery
+
+### Phase 5: Advanced Features and Optimization (1 day)
+
+#### ALYS-010-10: Implement 99.5% Sync Threshold for Block Production
+**Priority**: Critical  
+**Effort**: 3 hours  
+**Dependencies**: ALYS-010-7, ALYS-007 (ChainActor)
+
+**Implementation Steps**:
+1. **Threshold Logic Testing**:
+   - Write tests for production threshold calculation
+   - Test edge cases around threshold boundary
+   - Verify integration with block production system
+
+2. **Implementation**:
+   - Add sync progress calculation methods
+   - Implement production eligibility checks
+   - Create threshold monitoring and alerting
+   - Add safety mechanisms to prevent premature production
+
+3. **Acceptance Criteria**:
+   - [ ] Block production enabled exactly at 99.5% sync
+   - [ ] Threshold calculation accounts for network height changes
+   - [ ] Safety mechanisms prevent production during sync issues
+   - [ ] Monitoring alerts when threshold crossed
+   - [ ] End-to-end tests verify production starts correctly
+
+#### ALYS-010-11: Implement Network Partition Recovery
+**Priority**: Medium  
+**Effort**: 4 hours  
+**Dependencies**: ALYS-010-4, ALYS-010-8
+
+**Implementation Steps**:
+1. **Partition Simulation**:
+   - Write chaos engineering tests for network partitions
+   - Test recovery from various partition scenarios
+   - Simulate slow/intermittent network conditions
+
+2. **Implementation**:
+   - Add network condition detection
+   - Implement adaptive retry mechanisms
+   - Create partition recovery strategies
+   - Add network health monitoring
+
+3. **Acceptance Criteria**:
+   - [ ] Automatic detection of network partitions
+   - [ ] Recovery strategies adapt to partition type
+   - [ ] Sync continues when network connectivity restored
+   - [ ] No data corruption during partition events
+   - [ ] Chaos engineering tests pass consistently
+
+#### ALYS-010-12: Performance Optimization and Benchmarking
+**Priority**: Medium  
+**Effort**: 3 hours  
+**Dependencies**: All previous subtasks
+
+**Implementation Steps**:
+1. **Performance Testing**:
+   - Create comprehensive benchmark suite
+   - Measure sync performance under various conditions
+   - Compare performance to baseline implementation
+
+2. **Optimization**:
+   - Profile and optimize critical paths
+   - Implement memory and CPU optimizations
+   - Add performance monitoring and alerting
+
+3. **Acceptance Criteria**:
+   - [ ] Sync speed improved by >2x compared to baseline
+   - [ ] Memory usage remains bounded during large syncs
+   - [ ] CPU utilization efficiently distributed across cores
+   - [ ] Benchmark results consistently meet performance targets
+   - [ ] Performance regression tests integrated into CI
+
+### Phase 6: Integration and Documentation (0.5 days)
+
+#### ALYS-010-13: Integration Testing and System Validation
+**Priority**: High  
+**Effort**: 3 hours  
+**Dependencies**: All implementation subtasks
+
+**Implementation Steps**:
+1. **End-to-End Testing**:
+   - Create comprehensive integration test suite
+   - Test interaction with all dependent actors
+   - Validate system behavior under realistic conditions
+
+2. **System Validation**:
+   - Run extended sync tests with real network data
+   - Validate all acceptance criteria
+   - Perform security and stability testing
+
+3. **Acceptance Criteria**:
+   - [ ] All integration tests pass consistently
+   - [ ] System handles realistic workloads
+   - [ ] No memory leaks or resource exhaustion
+   - [ ] All original acceptance criteria validated
+   - [ ] Performance targets achieved in production environment
+
+#### ALYS-010-14: Documentation and Knowledge Transfer
+**Priority**: Medium  
+**Effort**: 2 hours  
+**Dependencies**: ALYS-010-13
+
+**Implementation Steps**:
+1. **Technical Documentation**:
+   - Create architecture documentation
+   - Document configuration options and tuning
+   - Add troubleshooting guides
+
+2. **Knowledge Transfer**:
+   - Conduct code review sessions
+   - Create operational runbooks
+   - Update system architecture documentation
+
+3. **Acceptance Criteria**:
+   - [ ] Complete API documentation
+   - [ ] Architecture diagrams updated
+   - [ ] Configuration guide complete
+   - [ ] Troubleshooting guide available
+   - [ ] Team knowledge transfer sessions completed
+
+### Testing Strategy by Phase
+
+**Unit Testing**: Each subtask includes comprehensive unit tests with >90% coverage
+**Integration Testing**: Cross-actor communication and workflow testing
+**Performance Testing**: Benchmarks and performance regression prevention
+**Chaos Engineering**: Network partition, peer failure, and resource exhaustion testing
+**Property Testing**: Invariant verification using PropTest generators
+
+### Quality Gates
+
+1. **Code Review**: All code reviewed by senior team members
+2. **Testing**: All tests pass with >90% coverage before merge
+3. **Performance**: Benchmarks meet >2x improvement target
+4. **Documentation**: Architecture and API docs complete
+5. **Security**: Security review for network-facing components
+
 ## Dependencies
 
 ### Blockers
@@ -830,7 +1177,7 @@ None
 
 ### Related Issues
 - ALYS-011: PeerManagerActor
-- ALYS-012: NetworkActor
+- ALYS-012: NetworkActor  
 - ALYS-013: StorageActor for checkpoints
 
 ## Definition of Done
@@ -848,11 +1195,6 @@ None
 ## Notes
 
 - Consider implementing snap sync for faster initial sync
-- Add support for light client sync
-- Implement state sync for even faster sync
+- Consider adding support for light client sync
+- Consider implementing state sync for even faster sync
 - Consider pruning old checkpoints
-
-## Time Tracking
-
-- Estimated: 6 days
-- Actual: _To be filled_

@@ -6,16 +6,16 @@ Implement the EngineActor to replace the current Engine struct with a message-dr
 
 ## Subtasks
 
-- [ ] Create ALYS-008-1: Design EngineActor message protocol with execution layer operations [https://marathondh.atlassian.net/browse/AN-414]
-- [ ] Create ALYS-008-2: Implement EngineActor core structure with JWT authentication [https://marathondh.atlassian.net/browse/AN-415]
-- [ ] Create ALYS-008-3: Implement block building logic with payload generation [https://marathondh.atlassian.net/browse/AN-416]
-- [ ] Create ALYS-008-4: Implement block commit and forkchoice update pipeline [https://marathondh.atlassian.net/browse/AN-417]
-- [ ] Create ALYS-008-5: Implement block finalization and state management [https://marathondh.atlassian.net/browse/AN-418]
-- [ ] Create ALYS-008-6: Implement execution client abstraction layer (Geth/Reth support) [https://marathondh.atlassian.net/browse/AN-419]
-- [ ] Create ALYS-008-7: Implement caching system for payloads and blocks [https://marathondh.atlassian.net/browse/AN-420]
-- [ ] Create ALYS-008-8: Create migration adapter for gradual Engine to EngineActor transition [https://marathondh.atlassian.net/browse/AN-421]
-- [ ] Create ALYS-008-9: Implement comprehensive test suite (unit, integration, client compatibility) [https://marathondh.atlassian.net/browse/AN-423]
-- [ ] Create ALYS-008-10: Performance benchmarking and optimization for execution operations [https://marathondh.atlassian.net/browse/AN-424]
+- [X] Create ALYS-008-1: Design EngineActor message protocol with execution layer operations [https://marathondh.atlassian.net/browse/AN-414]
+- [X] Create ALYS-008-2: Implement EngineActor core structure with JWT authentication [https://marathondh.atlassian.net/browse/AN-415]
+- [X] Create ALYS-008-3: Implement block building logic with payload generation [https://marathondh.atlassian.net/browse/AN-416]
+- [X] Create ALYS-008-4: Implement block commit and forkchoice update pipeline [https://marathondh.atlassian.net/browse/AN-417]
+- [X] Create ALYS-008-5: Implement block finalization and state management [https://marathondh.atlassian.net/browse/AN-418]
+- [X] Create ALYS-008-6: Implement execution client abstraction layer (Geth/Reth support) [https://marathondh.atlassian.net/browse/AN-419]
+- [X] Create ALYS-008-7: Implement caching system for payloads and blocks [https://marathondh.atlassian.net/browse/AN-420]
+- [X] Create ALYS-008-8: Create migration adapter for gradual Engine to EngineActor transition [https://marathondh.atlassian.net/browse/AN-421]
+- [X] Create ALYS-008-9: Implement comprehensive test suite (unit, integration, client compatibility) [https://marathondh.atlassian.net/browse/AN-423]
+- [X] Create ALYS-008-10: Performance benchmarking and optimization for execution operations [https://marathondh.atlassian.net/browse/AN-424]
 
 ## Acceptance Criteria
 
