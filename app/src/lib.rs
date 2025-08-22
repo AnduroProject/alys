@@ -7,6 +7,7 @@ mod block_candidate;
 mod block_hash_cache;
 mod chain;
 mod engine;
+mod engine_v2; // Enhanced engine with Lighthouse compatibility
 mod error;
 mod metrics;
 mod network;

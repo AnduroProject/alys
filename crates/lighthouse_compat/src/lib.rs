@@ -74,6 +74,9 @@ pub mod config;
 pub mod error;
 pub mod types;
 
+// Engine modules
+pub mod engine;
+
 // Migration modules
 pub mod migration;
 pub mod ab_test;
@@ -110,6 +113,7 @@ pub mod prelude {
         migration::{MigrationController, MigrationState},
         health::{HealthMonitor, HealthStatus},
         metrics::{CompatMetrics, MetricsCollector},
+        engine::{CompatibleEngine, EngineConfig},
     };
 }
 
