@@ -1,0 +1,135 @@
+# Governance Stream Configuration
+# Configuration for ALYS-012 StreamActor integration with Anduro Governance
+
+[governance]
+enabled = true
+
+[governance.grpc]
+connect_timeout = "10s"
+request_timeout = "30s"
+keep_alive_interval = "30s"
+keep_alive_timeout = "5s"
+enable_tls = true
+max_message_size = 4194304  # 4MB
+
+[governance.grpc.tls]
+ca_cert_file = "./certs/governance-ca.pem"
+client_cert_file = "./certs/governance-client.pem"
+client_key_file = "./certs/governance-client.key"
+server_name = "governance.anduro.io"
+skip_verification = false
+
+[[governance.endpoints]]
+name = "primary"
+url = "https://governance.anduro.io:443"
+priority = 1
+weight = 100
+enabled = true
+
+[governance.endpoints.health_check]
+enabled = true
+interval = "30s"
+timeout = "5s"
+failure_threshold = 3
+recovery_threshold = 2
+
+[[governance.endpoints]]
+name = "secondary"
+url = "https://governance-backup.anduro.io:443"
+priority = 2
+weight = 50
+enabled = true
+
+[governance.endpoints.health_check]
+enabled = true
+interval = "60s"
+timeout = "5s"
+failure_threshold = 5
+recovery_threshold = 3
+
+[governance.auth]
+method = { type = "jwt", token = "${GOVERNANCE_JWT_TOKEN}", header = "authorization" }
+
+[governance.auth.token_refresh]
+enabled = true
+interval = "3600s"  # 1 hour
+endpoint = "https://governance.anduro.io/auth/refresh"
+credentials = "${GOVERNANCE_REFRESH_TOKEN}"
+
+[governance.streaming]
+enabled = true
+keep_alive_interval = "30s"
+stream_timeout = "300s"
+buffer_size = 1000
+compression = true
+
+[governance.streaming.reconnection]
+enabled = true
+initial_delay = "1s"
+max_delay = "60s"
+backoff_multiplier = 2.0
+max_attempts = 10
+jitter = 0.1
+
+[governance.federation]
+federation_id = "alys_federation"
+member_id = "${ALYS_NODE_ID}"
+signature_threshold = 2
+max_members = 5
+
+[governance.federation.voting]
+timeout = "300s"  # 5 minutes
+min_quorum = 0.67  # 2/3 majority
+super_majority = 0.75  # 3/4 for critical decisions
+weighted_voting = false
+
+[governance.federation.consensus]
+algorithm = "bft"
+timeout = "30s"
+max_rounds = 10
+round_timeout = "3s"
+
+# Development overrides
+[dev]
+[dev.governance]
+enabled = true
+
+[dev.governance.grpc]
+connect_timeout = "30s"
+request_timeout = "60s"
+
+[dev.governance.grpc.tls]
+skip_verification = true
+
+[[dev.governance.endpoints]]
+name = "dev-local"
+url = "http://localhost:9090"
+priority = 1
+weight = 100
+enabled = true
+
+[dev.governance.endpoints.health_check]
+enabled = false
+
+[dev.governance.auth]
+method = { type = "none" }
+
+[dev.governance.streaming.reconnection]
+initial_delay = "100ms"
+max_delay = "5s"
+max_attempts = 3
+
+# Production overrides
+[production]
+[production.governance.grpc]
+connect_timeout = "5s"
+request_timeout = "10s"
+keep_alive_timeout = "2s"
+
+[production.governance.streaming]
+buffer_size = 5000
+stream_timeout = "180s"
+
+[production.governance.streaming.reconnection]
+max_attempts = 50
+jitter = 0.05

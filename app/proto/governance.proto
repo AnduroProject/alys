@@ -1,0 +1,586 @@
+syntax = "proto3";
+
+package governance.v1;
+
+// Anduro Governance Stream Service
+// Provides bi-directional streaming communication for governance operations
+service GovernanceStream {
+    // Establish bi-directional streaming connection
+    rpc Stream(stream StreamRequest) returns (stream StreamResponse);
+    
+    // Health check endpoint
+    rpc Health(HealthRequest) returns (HealthResponse);
+    
+    // Get governance node capabilities
+    rpc GetCapabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+}
+
+// Stream request message
+message StreamRequest {
+    // Request metadata
+    RequestMetadata metadata = 1;
+    
+    // Request payload
+    oneof payload {
+        // Node registration
+        NodeRegistration node_registration = 10;
+        
+        // Signature requests
+        SignatureRequest signature_request = 20;
+        
+        // Peg-in notifications
+        PeginNotification pegin_notification = 30;
+        
+        // Status updates
+        StatusUpdate status_update = 40;
+        
+        // Heartbeat
+        Heartbeat heartbeat = 50;
+    }
+}
+
+// Stream response message
+message StreamResponse {
+    // Response metadata
+    ResponseMetadata metadata = 1;
+    
+    // Response payload
+    oneof payload {
+        // Registration acknowledgment
+        NodeRegistrationAck registration_ack = 10;
+        
+        // Signature responses
+        SignatureResponse signature_response = 20;
+        
+        // Federation updates
+        FederationUpdate federation_update = 30;
+        
+        // Proposal notifications
+        ProposalNotification proposal_notification = 40;
+        
+        // Error responses
+        ErrorResponse error_response = 50;
+        
+        // Heartbeat acknowledgment
+        HeartbeatAck heartbeat_ack = 60;
+    }
+}
+
+// Request metadata
+message RequestMetadata {
+    // Unique request ID
+    string request_id = 1;
+    
+    // Timestamp (Unix epoch seconds)
+    int64 timestamp = 2;
+    
+    // Node ID
+    string node_id = 3;
+    
+    // Protocol version
+    string protocol_version = 4;
+    
+    // Request priority
+    RequestPriority priority = 5;
+    
+    // Request timeout (seconds)
+    optional int32 timeout = 6;
+}
+
+// Response metadata
+message ResponseMetadata {
+    // Corresponding request ID
+    string request_id = 1;
+    
+    // Response timestamp
+    int64 timestamp = 2;
+    
+    // Responding node ID
+    string node_id = 3;
+    
+    // Status code
+    StatusCode status = 4;
+    
+    // Optional message
+    optional string message = 5;
+}
+
+// Request priority levels
+enum RequestPriority {
+    REQUEST_PRIORITY_UNSPECIFIED = 0;
+    REQUEST_PRIORITY_LOW = 1;
+    REQUEST_PRIORITY_NORMAL = 2;
+    REQUEST_PRIORITY_HIGH = 3;
+    REQUEST_PRIORITY_CRITICAL = 4;
+}
+
+// Response status codes
+enum StatusCode {
+    STATUS_CODE_UNSPECIFIED = 0;
+    STATUS_CODE_SUCCESS = 1;
+    STATUS_CODE_ERROR = 2;
+    STATUS_CODE_TIMEOUT = 3;
+    STATUS_CODE_UNAUTHORIZED = 4;
+    STATUS_CODE_RATE_LIMITED = 5;
+    STATUS_CODE_SERVICE_UNAVAILABLE = 6;
+}
+
+// Node registration request
+message NodeRegistration {
+    // Node information
+    NodeInfo node_info = 1;
+    
+    // Supported capabilities
+    repeated string capabilities = 2;
+    
+    // Network endpoints
+    repeated NetworkEndpoint endpoints = 3;
+    
+    // Authentication credentials
+    AuthCredentials auth = 4;
+}
+
+// Node registration acknowledgment
+message NodeRegistrationAck {
+    // Registration status
+    bool accepted = 1;
+    
+    // Assigned node ID
+    string assigned_node_id = 2;
+    
+    // Session token
+    optional string session_token = 3;
+    
+    // Registration expiry
+    optional int64 expires_at = 4;
+}
+
+// Signature request
+message SignatureRequest {
+    // Transaction hex
+    string tx_hex = 1;
+    
+    // Input indices to sign
+    repeated uint32 input_indices = 2;
+    
+    // Input amounts (satoshis)
+    repeated uint64 amounts = 3;
+    
+    // Transaction type
+    TransactionType tx_type = 4;
+    
+    // Required signatures
+    uint32 required_signatures = 5;
+    
+    // Timeout for signature collection
+    optional int32 timeout_seconds = 6;
+}
+
+// Signature response
+message SignatureResponse {
+    // Signature collection status
+    SignatureStatus status = 1;
+    
+    // Collected signatures
+    repeated WitnessData signatures = 2;
+    
+    // Failure reason (if applicable)
+    optional string failure_reason = 3;
+    
+    // Partial signature details
+    repeated PartialSignature partial_signatures = 4;
+}
+
+// Peg-in notification
+message PeginNotification {
+    // Bitcoin transaction hash
+    string btc_txid = 1;
+    
+    // Bitcoin output index
+    uint32 vout = 2;
+    
+    // Peg-in amount (satoshis)
+    uint64 amount = 3;
+    
+    // Recipient EVM address
+    string evm_address = 4;
+    
+    // Bitcoin confirmation count
+    uint32 confirmations = 5;
+    
+    // Additional data
+    optional bytes extra_data = 6;
+}
+
+// Federation update
+message FederationUpdate {
+    // Update type
+    FederationUpdateType update_type = 1;
+    
+    // New federation members
+    repeated FederationMember members = 2;
+    
+    // Update effective block height
+    uint64 effective_height = 3;
+    
+    // Update signature
+    bytes update_signature = 4;
+    
+    // Configuration changes
+    optional FederationConfig config = 5;
+}
+
+// Proposal notification
+message ProposalNotification {
+    // Proposal ID
+    string proposal_id = 1;
+    
+    // Proposal type
+    ProposalType proposal_type = 2;
+    
+    // Proposal data
+    bytes proposal_data = 3;
+    
+    // Voting deadline
+    int64 voting_deadline = 4;
+    
+    // Required votes
+    uint32 required_votes = 5;
+}
+
+// Status update
+message StatusUpdate {
+    // Node status
+    NodeStatus status = 1;
+    
+    // Current block height
+    uint64 block_height = 2;
+    
+    // Sync status
+    SyncStatus sync_status = 3;
+    
+    // Connection count
+    uint32 connection_count = 4;
+    
+    // Performance metrics
+    optional PerformanceMetrics metrics = 5;
+}
+
+// Error response
+message ErrorResponse {
+    // Error code
+    ErrorCode error_code = 1;
+    
+    // Error message
+    string error_message = 2;
+    
+    // Error details
+    optional string error_details = 3;
+    
+    // Retry information
+    optional RetryInfo retry_info = 4;
+}
+
+// Heartbeat message
+message Heartbeat {
+    // Heartbeat timestamp
+    int64 timestamp = 1;
+    
+    // Sequence number
+    uint64 sequence = 2;
+    
+    // Node health status
+    HealthStatus health = 3;
+}
+
+// Heartbeat acknowledgment
+message HeartbeatAck {
+    // Original heartbeat timestamp
+    int64 original_timestamp = 1;
+    
+    // Ack timestamp
+    int64 ack_timestamp = 2;
+    
+    // Sequence number
+    uint64 sequence = 3;
+}
+
+// Health check request
+message HealthRequest {
+    // Optional health check type
+    optional string check_type = 1;
+}
+
+// Health check response
+message HealthResponse {
+    // Health status
+    HealthStatus status = 1;
+    
+    // Service version
+    string version = 2;
+    
+    // Uptime seconds
+    int64 uptime = 3;
+    
+    // Additional info
+    map<string, string> info = 4;
+}
+
+// Capabilities request
+message CapabilitiesRequest {
+    // Node ID making the request
+    string node_id = 1;
+}
+
+// Capabilities response
+message CapabilitiesResponse {
+    // Supported protocol versions
+    repeated string protocol_versions = 1;
+    
+    // Supported features
+    repeated string features = 2;
+    
+    // Service limits
+    map<string, int32> limits = 3;
+}
+
+// Supporting message types
+
+// Node information
+message NodeInfo {
+    // Node public key
+    string public_key = 1;
+    
+    // Node type
+    NodeType node_type = 2;
+    
+    // Node version
+    string version = 3;
+    
+    // Geographic region
+    optional string region = 4;
+}
+
+// Network endpoint
+message NetworkEndpoint {
+    // Endpoint URL
+    string url = 1;
+    
+    // Endpoint type
+    EndpointType endpoint_type = 2;
+    
+    // Priority
+    uint32 priority = 3;
+    
+    // Enabled status
+    bool enabled = 4;
+}
+
+// Authentication credentials
+message AuthCredentials {
+    // Credential type
+    AuthType auth_type = 1;
+    
+    // Credential data
+    bytes credential_data = 2;
+    
+    // Expiration time
+    optional int64 expires_at = 3;
+}
+
+// Witness data for signatures
+message WitnessData {
+    // Signature data
+    bytes signature = 1;
+    
+    // Public key
+    bytes public_key = 2;
+    
+    // Signature type
+    SignatureType sig_type = 3;
+}
+
+// Partial signature information
+message PartialSignature {
+    // Signer ID
+    string signer_id = 1;
+    
+    // Signature data
+    bytes signature = 2;
+    
+    // Signature status
+    SignatureStatus status = 3;
+}
+
+// Federation member
+message FederationMember {
+    // Member ID
+    string member_id = 1;
+    
+    // Public key
+    bytes public_key = 2;
+    
+    // Member weight
+    uint32 weight = 3;
+    
+    // Active status
+    bool active = 4;
+}
+
+// Federation configuration
+message FederationConfig {
+    // Signature threshold
+    uint32 signature_threshold = 1;
+    
+    // Member count
+    uint32 member_count = 2;
+    
+    // Configuration parameters
+    map<string, string> parameters = 3;
+}
+
+// Performance metrics
+message PerformanceMetrics {
+    // CPU usage percentage
+    float cpu_usage = 1;
+    
+    // Memory usage bytes
+    uint64 memory_usage = 2;
+    
+    // Network bytes sent
+    uint64 network_sent = 3;
+    
+    // Network bytes received
+    uint64 network_received = 4;
+    
+    // Request latency milliseconds
+    float avg_latency_ms = 5;
+}
+
+// Retry information
+message RetryInfo {
+    // Retry after seconds
+    int32 retry_after = 1;
+    
+    // Max retry attempts
+    int32 max_retries = 2;
+    
+    // Current attempt
+    int32 current_attempt = 3;
+}
+
+// Enumerations
+
+// Transaction types
+enum TransactionType {
+    TRANSACTION_TYPE_UNSPECIFIED = 0;
+    TRANSACTION_TYPE_PEGIN = 1;
+    TRANSACTION_TYPE_PEGOUT = 2;
+    TRANSACTION_TYPE_FEDERATION_CHANGE = 3;
+    TRANSACTION_TYPE_EMERGENCY = 4;
+}
+
+// Signature status
+enum SignatureStatus {
+    SIGNATURE_STATUS_UNSPECIFIED = 0;
+    SIGNATURE_STATUS_PENDING = 1;
+    SIGNATURE_STATUS_PARTIAL = 2;
+    SIGNATURE_STATUS_COMPLETE = 3;
+    SIGNATURE_STATUS_FAILED = 4;
+    SIGNATURE_STATUS_TIMEOUT = 5;
+}
+
+// Federation update types
+enum FederationUpdateType {
+    FEDERATION_UPDATE_TYPE_UNSPECIFIED = 0;
+    FEDERATION_UPDATE_TYPE_MEMBER_ADD = 1;
+    FEDERATION_UPDATE_TYPE_MEMBER_REMOVE = 2;
+    FEDERATION_UPDATE_TYPE_CONFIG_CHANGE = 3;
+    FEDERATION_UPDATE_TYPE_EMERGENCY_HALT = 4;
+}
+
+// Proposal types
+enum ProposalType {
+    PROPOSAL_TYPE_UNSPECIFIED = 0;
+    PROPOSAL_TYPE_FEDERATION_CHANGE = 1;
+    PROPOSAL_TYPE_PARAMETER_CHANGE = 2;
+    PROPOSAL_TYPE_EMERGENCY_ACTION = 3;
+    PROPOSAL_TYPE_UPGRADE = 4;
+}
+
+// Node types
+enum NodeType {
+    NODE_TYPE_UNSPECIFIED = 0;
+    NODE_TYPE_VALIDATOR = 1;
+    NODE_TYPE_OBSERVER = 2;
+    NODE_TYPE_BRIDGE = 3;
+    NODE_TYPE_SIGNER = 4;
+}
+
+// Endpoint types
+enum EndpointType {
+    ENDPOINT_TYPE_UNSPECIFIED = 0;
+    ENDPOINT_TYPE_GRPC = 1;
+    ENDPOINT_TYPE_REST = 2;
+    ENDPOINT_TYPE_WEBSOCKET = 3;
+}
+
+// Authentication types
+enum AuthType {
+    AUTH_TYPE_UNSPECIFIED = 0;
+    AUTH_TYPE_BEARER = 1;
+    AUTH_TYPE_MUTUAL_TLS = 2;
+    AUTH_TYPE_SIGNATURE = 3;
+    AUTH_TYPE_API_KEY = 4;
+}
+
+// Signature types
+enum SignatureType {
+    SIGNATURE_TYPE_UNSPECIFIED = 0;
+    SIGNATURE_TYPE_ECDSA = 1;
+    SIGNATURE_TYPE_SCHNORR = 2;
+    SIGNATURE_TYPE_BLS = 3;
+}
+
+// Node status
+enum NodeStatus {
+    NODE_STATUS_UNSPECIFIED = 0;
+    NODE_STATUS_STARTING = 1;
+    NODE_STATUS_SYNCING = 2;
+    NODE_STATUS_ACTIVE = 3;
+    NODE_STATUS_DEGRADED = 4;
+    NODE_STATUS_OFFLINE = 5;
+}
+
+// Sync status
+enum SyncStatus {
+    SYNC_STATUS_UNSPECIFIED = 0;
+    SYNC_STATUS_SYNCED = 1;
+    SYNC_STATUS_SYNCING = 2;
+    SYNC_STATUS_STALLED = 3;
+    SYNC_STATUS_ERROR = 4;
+}
+
+// Health status
+enum HealthStatus {
+    HEALTH_STATUS_UNSPECIFIED = 0;
+    HEALTH_STATUS_HEALTHY = 1;
+    HEALTH_STATUS_DEGRADED = 2;
+    HEALTH_STATUS_UNHEALTHY = 3;
+    HEALTH_STATUS_UNKNOWN = 4;
+}
+
+// Error codes
+enum ErrorCode {
+    ERROR_CODE_UNSPECIFIED = 0;
+    ERROR_CODE_INVALID_REQUEST = 1;
+    ERROR_CODE_AUTHENTICATION_FAILED = 2;
+    ERROR_CODE_AUTHORIZATION_FAILED = 3;
+    ERROR_CODE_RATE_LIMITED = 4;
+    ERROR_CODE_SERVICE_UNAVAILABLE = 5;
+    ERROR_CODE_TIMEOUT = 6;
+    ERROR_CODE_INTERNAL_ERROR = 7;
+    ERROR_CODE_INVALID_SIGNATURE = 8;
+    ERROR_CODE_INSUFFICIENT_SIGNATURES = 9;
+    ERROR_CODE_FEDERATION_ERROR = 10;
+}

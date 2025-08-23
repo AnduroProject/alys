@@ -171,7 +171,7 @@ pub struct RetryConfig {
     pub retryable_errors: Vec<i32>,
 }
 
-// gRPC service definitions (would be generated from .proto file)
+// gRPC service definitions generated from proto file
 pub mod governance {
     tonic::include_proto!("governance.v1");
 }

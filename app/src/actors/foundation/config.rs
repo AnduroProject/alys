@@ -272,6 +272,27 @@ impl Default for PerformanceConfig {
 }
 
 impl ActorSystemConfig {
+    /// Add governance stream actor configuration
+    pub fn add_governance_stream_config(&mut self) {
+        let governance_stream_config = ActorSpecificConfig {
+            restart_strategy: Some(AlysRestartStrategy::Always),
+            mailbox_capacity: Some(5000),
+            priority: ActorPriority::High,
+            dependencies: vec![], // No dependencies initially
+            health_check_config: Some(HealthCheckConfig {
+                interval: Duration::from_secs(30),
+                timeout: Duration::from_secs(10),
+                failure_threshold: 3,
+                detailed_reporting: true,
+            }),
+        };
+        
+        self.actor_configs.insert(
+            "GovernanceStreamActor".to_string(),
+            governance_stream_config,
+        );
+    }
+
     /// Create development configuration with relaxed timeouts
     pub fn development() -> Self {
         let mut config = Self::default();
@@ -293,6 +314,9 @@ impl ActorSystemConfig {
         config.feature_flags.insert("actor_system".to_string(), true);
         config.feature_flags.insert("enhanced_logging".to_string(), true);
         config.feature_flags.insert("development_mode".to_string(), true);
+        
+        // Add governance stream actor configuration
+        config.add_governance_stream_config();
         
         config
     }
@@ -321,6 +345,9 @@ impl ActorSystemConfig {
         // Conservative feature flags for production
         config.feature_flags.insert("actor_system".to_string(), true);
         config.feature_flags.insert("enhanced_logging".to_string(), false);
+        
+        // Add governance stream actor configuration
+        config.add_governance_stream_config();
         config.feature_flags.insert("development_mode".to_string(), false);
         
         config

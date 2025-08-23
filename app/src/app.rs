@@ -1,5 +1,7 @@
 #![allow(clippy::manual_div_ceil)]
 
+use crate::actors::governance_stream::{StreamActor, StreamConfig};
+use crate::actors::foundation::{ActorSystemConfig, RootSupervisor, ActorInfo, ActorPriority, ActorSpecificConfig};
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
@@ -20,10 +22,11 @@ use futures::pin_mut;
 use lighthouse_wrapper::bls::{Keypair, SecretKey};
 use lighthouse_wrapper::execution_layer::auth::JwtKey;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::{future::Future, sync::Arc};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
+use actix::{Actor, Addr};
 
 #[inline]
 pub fn run() -> Result<()> {
@@ -317,6 +320,28 @@ impl App {
         .await;
 
         crate::metrics::start_server(self.metrics_port).await;
+
+        // Initialize V2 Actor System with Governance Stream
+        info!("Initializing V2 Actor System");
+        let actor_config = if self.dev {
+            ActorSystemConfig::development()
+        } else {
+            ActorSystemConfig::production()
+        };
+        
+        let mut root_supervisor = RootSupervisor::new(actor_config)
+            .expect("Failed to create root supervisor");
+        root_supervisor.initialize_supervision_tree().await
+            .expect("Failed to initialize supervision tree");
+        let supervisor_addr = root_supervisor.start();
+        
+        // Initialize Governance Stream Actor
+        let governance_config = StreamConfig::default();
+        let governance_actor = StreamActor::new(governance_config)
+            .expect("Failed to create governance stream actor");
+        let _governance_addr = governance_actor.start();
+        
+        info!("V2 Actor System initialized with Governance Stream");
 
         if (self.mine || self.dev) && !self.no_mine {
             info!("Spawning miner");
