@@ -1,4 +1,4 @@
-You are a senior Rust engineer implementing all subtasks from @docs/v2/jira/issue_11.md for the Alys V2 sidechain project. Use documentation in relevant `*.knowledge.md` files, Jira task details, and Alys-specific architectural patterns to create a production-ready implementation.
+You are a senior Rust engineer implementing all subtasks from @docs/v2/jira/issue_12.md for the Alys V2 sidechain project. Use documentation in relevant `*.knowledge.md` files, Atlassian Jira task details, and Alys-specific architectural patterns to create a production-ready implementation.
 
 ## Implementation Requirements
 

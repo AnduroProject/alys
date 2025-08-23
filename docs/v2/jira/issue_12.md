@@ -1,23 +1,5 @@
 # ALYS-012: Implement StreamActor for Governance Communication
 
-## Issue Type
-Task
-
-## Priority
-Critical
-
-## Story Points
-8
-
-## Sprint
-Migration Sprint 5
-
-## Component
-Governance Integration
-
-## Labels
-`migration`, `phase-5`, `governance`, `actor-system`, `stream`
-
 ## Description
 
 Implement the StreamActor to establish and maintain persistent bi-directional streaming communication with Anduro Governance. This actor handles message routing, connection resilience, buffering during disconnections, and serves as the gateway for all governance operations including signature requests and federation updates.
@@ -747,6 +729,247 @@ fn bench_message_throughput(b: &mut Bencher) {
 - [ ] All tests passing
 - [ ] Documentation complete
 - [ ] Code review completed
+
+## Subtasks
+
+### Phase 1: Foundation & Protocol Design (Story Points: 1)
+
+#### **ALYS-012-1**: Design Stream Protocol and Define Message Types (TDD) [https://marathondh.atlassian.net/browse/AN-450]
+
+* **Objective**: Define comprehensive gRPC protocol and Rust message types for governance communication
+* **Test-First Approach**:
+  - [ ] Write tests for message serialization/deserialization
+  - [ ] Write tests for protocol buffer validation
+  - [ ] Write tests for message type conversions
+  - [ ] Write tests for error handling in message parsing
+* **Implementation**:
+  - [ ] Create `governance.proto` file with complete service definition
+  - [ ] Generate Rust bindings with `tonic-build`
+  - [ ] Implement Rust message types in `src/actors/stream/messages.rs`
+  - [ ] Create conversion traits between proto and internal types
+  - [ ] Add comprehensive error types for stream operations
+* **DoD**: All message types compile, serialize correctly, and pass property-based tests
+
+#### **ALYS-012-2**: Implement Exponential Backoff Reconnection Strategy (TDD) [https://marathondh.atlassian.net/browse/AN-451]
+
+* **Objective**: Create robust reconnection logic with exponential backoff and jitter
+* **Test-First Approach**:
+  - [ ] Write tests for backoff delay calculation
+  - [ ] Write tests for jitter randomization
+  - [ ] Write tests for max attempts handling
+  - [ ] Write tests for backoff reset functionality
+* **Implementation**:
+  - [ ] Create `src/actors/stream/reconnect.rs` module
+  - [ ] Implement `ExponentialBackoff` struct with configurable parameters
+  - [ ] Add jitter to prevent thundering herd
+  - [ ] Implement circuit breaker pattern for permanent failures
+  - [ ] Add metrics for reconnection attempts and success rates
+* **DoD**: Reconnection strategy tested with statistical validation of delay distribution
+
+### Phase 2: Core Actor Implementation (Story Points: 3)
+
+#### **ALYS-012-3**: Implement StreamActor Core Structure (TDD) [https://marathondh.atlassian.net/browse/AN-452]
+
+* **Objective**: Create the main StreamActor with state management and lifecycle
+* **Test-First Approach**:
+  - [ ] Write tests for actor initialization
+  - [ ] Write tests for state transitions
+  - [ ] Write tests for configuration validation
+  - [ ] Write tests for actor lifecycle (start/stop)
+* **Implementation**:
+  - [ ] Create `src/actors/stream/mod.rs` with StreamActor struct
+  - [ ] Implement connection state machine
+  - [ ] Add configuration management
+  - [ ] Implement actor lifecycle methods (started/stopping)
+  - [ ] Add metrics collection infrastructure
+* **DoD**: StreamActor can be instantiated, configured, and transitions through states correctly
+
+#### **ALYS-012-4**: Implement gRPC Connection Management (TDD) [https://marathondh.atlassian.net/browse/AN-453]
+
+* **Objective**: Handle gRPC channel creation, stream establishment, and connection health
+* **Test-First Approach**:
+  - [ ] Write tests for channel creation with various endpoints
+  - [ ] Write tests for stream establishment success/failure scenarios
+  - [ ] Write tests for connection timeout handling
+  - [ ] Write tests for authentication token management
+* **Implementation**:
+  - [ ] Implement `establish_connection()` method
+  - [ ] Create bidirectional gRPC stream
+  - [ ] Handle authentication and authorization
+  - [ ] Implement connection health checks
+  - [ ] Add TLS support for production deployment
+* **DoD**: Can establish secure gRPC connections with proper error handling and timeout management
+
+#### **ALYS-012-5**: Implement Message Buffering System (TDD) [https://marathondh.atlassian.net/browse/AN-454]
+
+* **Objective**: Buffer messages during disconnections and replay on reconnection
+* **Test-First Approach**:
+  - [ ] Write tests for message buffering during disconnection
+  - [ ] Write tests for buffer overflow handling
+  - [ ] Write tests for message ordering preservation
+  - [ ] Write tests for buffer persistence across actor restarts
+* **Implementation**:
+  - [ ] Implement `VecDeque`-based message buffer
+  - [ ] Add configurable buffer size limits
+  - [ ] Implement message prioritization (signatures > heartbeats)
+  - [ ] Add buffer persistence for critical messages
+  - [ ] Implement message deduplication
+* **DoD**: Messages are reliably buffered and replayed with correct ordering and no duplicates
+
+### Phase 3: Message Handling & Routing (Story Points: 2)
+
+#### **ALYS-012-6**: Implement Outbound Message Handlers (TDD) [https://marathondh.atlassian.net/browse/AN-456]
+
+* **Objective**: Handle signature requests, peg-in notifications, and node registration
+* **Test-First Approach**:
+  - [ ] Write tests for `RequestSignatures` message handling
+  - [ ] Write tests for `NotifyPegin` message processing
+  - [ ] Write tests for `RegisterNode` functionality
+  - [ ] Write tests for message timeout and retry logic
+* **Implementation**:
+  - [ ] Implement `Handler<RequestSignatures>` with proper error handling
+  - [ ] Implement `Handler<NotifyPegin>` with validation
+  - [ ] Implement `Handler<RegisterNode>` with capabilities reporting
+  - [ ] Add request tracking with unique IDs
+  - [ ] Implement timeout and retry mechanisms
+* **DoD**: All outbound message types are handled correctly with comprehensive error handling
+
+#### **ALYS-012-7**: Implement Inbound Message Processing (TDD) [https://marathondh.atlassian.net/browse/AN-459]
+
+* **Objective**: Process responses from governance including signatures and federation updates
+* **Test-First Approach**:
+  - [ ] Write tests for signature response processing
+  - [ ] Write tests for federation update handling
+  - [ ] Write tests for proposal notification processing
+  - [ ] Write tests for error response handling
+* **Implementation**:
+  - [ ] Implement `handle_signature_response()` with witness data conversion
+  - [ ] Implement `handle_federation_update()` with validation
+  - [ ] Implement `handle_proposal_notification()` with routing
+  - [ ] Add proper error handling for malformed responses
+  - [ ] Implement heartbeat processing for connection health
+* **DoD**: All inbound message types are processed correctly with proper validation and error handling
+
+#### **ALYS-012-8**: Implement Actor Integration & Routing (TDD) [https://marathondh.atlassian.net/browse/AN-460]
+
+* **Objective**: Integrate with BridgeActor and ChainActor for message routing
+* **Test-First Approach**:
+  - [ ] Write tests for BridgeActor signature routing
+  - [ ] Write tests for ChainActor federation update routing
+  - [ ] Write tests for actor reference management
+  - [ ] Write tests for routing failure recovery
+* **Implementation**:
+  - [ ] Add actor reference management in StreamActor
+  - [ ] Implement signature routing to BridgeActor
+  - [ ] Implement federation update routing to ChainActor
+  - [ ] Add fallback handling for unavailable actors
+  - [ ] Implement request-response correlation
+* **DoD**: Messages are correctly routed to appropriate actors with proper error handling
+
+### Phase 4: Health Monitoring & Observability (Story Points: 1)
+
+#### **ALYS-012-9**: Implement Health Monitoring and Status Reporting (TDD) [https://marathondh.atlassian.net/browse/AN-461]
+
+* **Objective**: Comprehensive health monitoring with metrics and status reporting
+* **Test-First Approach**:
+  - [ ] Write tests for connection status reporting
+  - [ ] Write tests for health check functionality
+  - [ ] Write tests for metrics collection accuracy
+  - [ ] Write tests for status change notifications
+* **Implementation**:
+  - [ ] Implement `GetConnectionStatus` message handler
+  - [ ] Add comprehensive metrics collection (Prometheus)
+  - [ ] Implement heartbeat monitoring
+  - [ ] Add connection uptime tracking
+  - [ ] Create health status enumeration with detailed states
+* **DoD**: Complete observability with accurate metrics and detailed status reporting
+
+#### **ALYS-012-10**: Implement Request Timeout and Cleanup (TDD) [https://marathondh.atlassian.net/browse/AN-462]
+
+* **Objective**: Manage request lifecycles with timeout handling and resource cleanup
+* **Test-First Approach**:
+  - [ ] Write tests for request timeout detection
+  - [ ] Write tests for pending request cleanup
+  - [ ] Write tests for timeout callback handling
+  - [ ] Write tests for resource leak prevention
+* **Implementation**:
+  - [ ] Implement periodic timeout checking
+  - [ ] Add request cleanup on timeout
+  - [ ] Implement callback notification for timeouts
+  - [ ] Add resource leak detection and prevention
+  - [ ] Create configurable timeout policies per request type
+* **DoD**: No resource leaks, reliable timeout handling, and proper cleanup of expired requests
+
+### Phase 5: Integration & Error Handling (Story Points: 1)
+
+#### **ALYS-012-11**: Implement Comprehensive Error Handling and Recovery (TDD) [https://marathondh.atlassian.net/browse/AN-463]
+
+* **Objective**: Robust error handling with automatic recovery for all failure scenarios
+* **Test-First Approach**:
+  - [ ] Write tests for network failure scenarios
+  - [ ] Write tests for governance service unavailability
+  - [ ] Write tests for malformed message handling
+  - [ ] Write tests for partial failure recovery
+* **Implementation**:
+  - [ ] Implement comprehensive `StreamError` enum
+  - [ ] Add automatic error recovery strategies
+  - [ ] Implement graceful degradation for non-critical failures
+  - [ ] Add error reporting and alerting
+  - [ ] Create failure analysis and debugging tools
+* **DoD**: All error scenarios are handled gracefully with appropriate recovery strategies
+
+#### **ALYS-012-12**: End-to-End Integration Testing and Optimization (TDD) [https://marathondh.atlassian.net/browse/AN-464]
+
+* **Objective**: Complete integration testing with performance optimization
+* **Test-First Approach**:
+  - [ ] Write integration tests with mock governance server
+  - [ ] Write tests for message ordering under high load
+  - [ ] Write tests for reconnection scenarios with real network conditions
+  - [ ] Write performance benchmarks for message throughput
+* **Implementation**:
+  - [ ] Create comprehensive integration test suite
+  - [ ] Implement mock governance server for testing
+  - [ ] Add performance benchmarking and optimization
+  - [ ] Implement load testing scenarios
+  - [ ] Add chaos engineering tests for resilience validation
+* **DoD**: All integration tests pass, performance targets met, and system is production-ready
+
+### Technical Implementation Guidelines
+
+#### Test-Driven Development Approach
+
+1. **Red Phase**: Write failing tests that define expected behavior
+2. **Green Phase**: Implement minimal code to make tests pass
+3. **Refactor Phase**: Clean up code while maintaining test coverage
+
+#### Testing Strategy
+
+* **Unit Tests**: >95% coverage for all StreamActor components
+* **Integration Tests**: End-to-end scenarios with mock governance
+* **Property-Based Tests**: Message serialization and protocol correctness
+* **Performance Tests**: Throughput and latency benchmarks
+* **Chaos Tests**: Network partitions and service failures
+
+#### Code Quality Standards
+
+* **Static Analysis**: Clippy warnings addressed
+* **Security Review**: No secrets in logs, secure gRPC communication
+* **Documentation**: Comprehensive API docs and usage examples
+* **Error Handling**: Graceful degradation and clear error messages
+
+#### Deployment Strategy
+
+* **Feature Flags**: Safe rollout with configuration-based enabling
+* **Metrics**: Comprehensive monitoring with alerts
+* **Health Checks**: Kubernetes-ready health endpoints
+* **Circuit Breakers**: Protection against cascade failures
+
+#### Risk Mitigation
+
+* **Network Partitions**: Robust reconnection with exponential backoff
+* **Message Ordering**: Guaranteed delivery order for critical messages
+* **Memory Management**: Bounded buffers and resource cleanup
+* **Security**: Mutual TLS and token-based authentication
 
 ## Notes
 

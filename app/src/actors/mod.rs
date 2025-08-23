@@ -17,6 +17,7 @@ pub mod sync_actor;
 pub mod network_actor;
 pub mod stream_actor;
 pub mod storage_actor;
+pub mod governance_stream;
 
 pub use foundation::*;
 pub use supervisor::*;
@@ -28,3 +29,4 @@ pub use sync_actor::*;
 pub use network_actor::*;
 pub use stream_actor::*;
 pub use storage_actor::*;
+pub use governance_stream::*;
