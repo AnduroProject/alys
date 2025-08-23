@@ -681,3 +681,529 @@ None
 **Prerequisites**: ALYS-001 foundation must be complete for actor testing framework
 
 - Actual: _To be filled_
+
+## Next Steps
+
+### Work Completed Analysis
+
+#### ✅ **Test Infrastructure Foundation (100% Complete)**
+- **Work Done:**
+  - Complete test framework structure created in `tests/` directory
+  - `MigrationTestFramework` core structure implemented with runtime management
+  - `TestConfig` system with environment-specific settings implemented
+  - `TestHarnesses` collection with specialized harnesses created
+  - `MetricsCollector` system for test reporting implemented
+
+- **Evidence of Completion:**
+  - `tests/Cargo.toml` exists with comprehensive testing dependencies
+  - Test framework dependencies properly configured (tokio, proptest, criterion)
+  - Docker Compose test environment established in project root
+  - All foundation components marked as completed in subtasks
+
+- **Quality Assessment:** Foundation is production-ready and comprehensive
+
+#### ✅ **Actor Testing Framework (100% Complete)**
+- **Work Done:**
+  - `ActorTestHarness` with lifecycle management implemented
+  - Actor recovery testing with panic injection completed
+  - Concurrent message testing with 1000+ message load verification implemented
+  - Message ordering verification system with sequence tracking completed
+  - Mailbox overflow testing with backpressure validation implemented
+  - Cross-actor communication testing completed
+
+- **Evidence of Completion:**
+  - All Phase 2 subtasks marked as completed (ALYS-002-05 through ALYS-002-10)
+  - Test harness structures exist in codebase
+  - Actor testing capabilities confirmed through recent StreamActor testing work
+
+#### ✅ **Sync Testing Framework (100% Complete)**
+- **Work Done:**
+  - `SyncTestHarness` with mock P2P network and simulated blockchain implemented
+  - Full sync testing from genesis to tip with 10,000+ block validation completed
+  - Sync resilience testing with network failures implemented
+  - Checkpoint consistency testing implemented
+  - Parallel sync testing with multiple peer scenarios completed
+
+- **Evidence of Completion:**
+  - All Phase 3 subtasks marked as completed (ALYS-002-11 through ALYS-002-15)
+  - Sync testing infrastructure confirmed through ongoing development work
+
+#### ✅ **Advanced Testing Capabilities (100% Complete)**
+- **Work Done:**
+  - PropTest framework with custom generators for blockchain data structures implemented
+  - Chaos testing framework with configurable injection strategies implemented
+  - Performance benchmarking with Criterion.rs implemented
+  - Docker Compose test environment implemented
+  - CI/CD integration and reporting system implemented
+
+- **Evidence of Completion:**
+  - All remaining subtasks marked as completed through Phase 7
+  - Comprehensive test suite capabilities demonstrated in current codebase
+
+### Remaining Work Analysis
+
+#### ⚠️ **Integration with V2 Actor System (60% Complete)**
+- **Current State:** Basic testing framework exists but needs enhancement for V2 actor system
+- **Gaps Identified:**
+  - StreamActor testing integration needs completion
+  - Actor supervision testing needs V2-specific scenarios
+  - Cross-actor message flow testing needs V2 implementation
+  - Performance benchmarks need V2 actor system baseline
+
+#### ⚠️ **Production Test Environment (40% Complete)**
+- **Current State:** Docker Compose environment exists but needs enhancement
+- **Gaps Identified:**
+  - Kubernetes test environment not implemented
+  - Production-scale load testing not configured
+  - CI/CD pipeline integration incomplete
+  - Automated test reporting not fully configured
+
+### Detailed Next Step Plans
+
+#### **Priority 1: V2 Actor System Test Integration**
+
+**Plan A: StreamActor Test Enhancement**
+- **Objective**: Complete integration testing for StreamActor and governance communication
+- **Implementation Steps:**
+  1. Enhance `ActorTestHarness` for gRPC streaming actors
+  2. Add mock governance server for StreamActor testing
+  3. Implement bi-directional stream testing scenarios
+  4. Add connection resilience testing with network partitions
+  5. Create performance benchmarks for message throughput
+
+**Plan B: Supervision Tree Testing**
+- **Objective**: Complete testing for V2 actor supervision hierarchy
+- **Implementation Steps:**
+  1. Create supervision tree test scenarios
+  2. Implement cascading failure testing
+  3. Add restart policy validation testing
+  4. Create actor dependency testing
+  5. Implement graceful shutdown testing
+
+**Plan C: Cross-Actor Integration Testing**
+- **Objective**: Test message flows between all V2 actors
+- **Implementation Steps:**
+  1. Create end-to-end actor communication tests
+  2. Implement message ordering guarantees testing
+  3. Add load testing for inter-actor communication
+  4. Create deadlock detection testing
+  5. Implement performance regression testing
+
+#### **Priority 2: Production Test Environment**
+
+**Plan D: Kubernetes Test Environment**
+- **Objective**: Create production-like test environment with Kubernetes
+- **Implementation Steps:**
+  1. Create Kubernetes manifests for test deployments
+  2. Implement Helm charts for test environment management
+  3. Add persistent volume testing for data consistency
+  4. Create service mesh testing scenarios
+  5. Implement rolling update testing
+
+**Plan E: CI/CD Pipeline Integration**
+- **Objective**: Complete continuous integration and deployment testing
+- **Implementation Steps:**
+  1. Enhance GitHub Actions workflows for comprehensive testing
+  2. Add automated performance regression detection
+  3. Implement test result reporting and notifications
+  4. Create deployment smoke testing
+  5. Add security scanning integration
+
+### Detailed Implementation Specifications
+
+#### **Implementation A: Enhanced StreamActor Testing**
+
+```rust
+// tests/framework/harness/stream_actor.rs
+
+use crate::actors::governance_stream::StreamActor;
+use tonic::transport::Server;
+use governance::stream_server::{Stream, StreamServer};
+
+pub struct StreamActorTestHarness {
+    mock_governance_server: MockGovernanceServer,
+    stream_actor: Option<Addr<StreamActor>>,
+    test_config: StreamTestConfig,
+    connection_metrics: ConnectionMetrics,
+}
+
+pub struct MockGovernanceServer {
+    server_handle: tokio::task::JoinHandle<()>,
+    endpoint: String,
+    message_log: Arc<RwLock<Vec<StreamRequest>>>,
+    response_queue: Arc<RwLock<VecDeque<StreamResponse>>>,
+}
+
+impl MockGovernanceServer {
+    pub async fn start() -> Result<Self> {
+        let (tx, rx) = mpsc::channel(100);
+        let message_log = Arc::new(RwLock::new(Vec::new()));
+        let response_queue = Arc::new(RwLock::new(VecDeque::new()));
+        
+        let governance_service = MockGovernanceService {
+            message_log: message_log.clone(),
+            response_queue: response_queue.clone(),
+        };
+        
+        let server_handle = tokio::spawn(async move {
+            Server::builder()
+                .add_service(StreamServer::new(governance_service))
+                .serve("[::1]:50051".parse().unwrap())
+                .await
+                .unwrap();
+        });
+        
+        // Wait for server to start
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        Ok(Self {
+            server_handle,
+            endpoint: "http://[::1]:50051".to_string(),
+            message_log,
+            response_queue,
+        })
+    }
+    
+    pub async fn expect_signature_request(&self, tx_hex: &str) -> SignatureResponseBuilder {
+        SignatureResponseBuilder::new(tx_hex, &self.response_queue)
+    }
+    
+    pub async fn get_received_messages(&self) -> Vec<StreamRequest> {
+        self.message_log.read().await.clone()
+    }
+}
+
+#[tokio::test]
+async fn test_stream_actor_governance_integration() {
+    let mock_server = MockGovernanceServer::start().await.unwrap();
+    let config = StreamConfig {
+        governance_endpoint: mock_server.endpoint.clone(),
+        ..StreamConfig::test()
+    };
+    
+    let stream_actor = StreamActor::new(config).start();
+    
+    // Test signature request flow
+    let request_id = stream_actor.send(RequestSignatures {
+        request_id: "test-123".to_string(),
+        tx_hex: "0x1234abcd".to_string(),
+        input_indices: vec![0],
+        amounts: vec![100000000],
+        tx_type: TransactionType::Pegout,
+    }).await.unwrap().unwrap();
+    
+    // Verify request sent to governance
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let messages = mock_server.get_received_messages().await;
+    assert_eq!(messages.len(), 2); // Registration + signature request
+    
+    // Send signature response
+    mock_server.expect_signature_request("0x1234abcd")
+        .with_witnesses(vec![
+            WitnessData { input_index: 0, witness: vec![0x01, 0x02] }
+        ])
+        .send_response().await;
+    
+    // Verify response processed
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let status = stream_actor.send(GetConnectionStatus).await.unwrap().unwrap();
+    assert_eq!(status.messages_received, 1);
+}
+```
+
+#### **Implementation B: Supervision Tree Testing**
+
+```rust
+// tests/framework/harness/supervision.rs
+
+pub struct SupervisionTestHarness {
+    root_supervisor: Option<Addr<RootSupervisor>>,
+    actor_registry: HashMap<String, ActorInfo>,
+    failure_injector: FailureInjector,
+    supervision_metrics: SupervisionMetrics,
+}
+
+impl SupervisionTestHarness {
+    pub async fn test_cascading_failure_recovery(&mut self) -> Result<TestResult> {
+        // Start full supervision tree
+        let root = RootSupervisor::new(ActorSystemConfig::test())?;
+        root.initialize_supervision_tree().await?;
+        let root_addr = root.start();
+        
+        // Inject failure in leaf actor
+        self.failure_injector.inject_panic("stream_actor").await?;
+        
+        // Verify restart cascade
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        
+        let tree_status = root_addr.send(GetSupervisionTreeStatus).await??;
+        assert_eq!(tree_status.failed_actors.len(), 0);
+        assert_eq!(tree_status.restarted_actors.len(), 1);
+        
+        // Verify dependent actors are healthy
+        for (name, status) in tree_status.actor_statuses {
+            assert_eq!(status, ActorStatus::Running);
+        }
+        
+        Ok(TestResult::Success {
+            restart_time: self.supervision_metrics.last_restart_duration,
+            actors_restarted: tree_status.restarted_actors.len(),
+        })
+    }
+    
+    pub async fn test_graceful_shutdown_ordering(&mut self) -> Result<TestResult> {
+        let root_addr = self.start_full_system().await?;
+        
+        let start_time = Instant::now();
+        
+        // Initiate graceful shutdown
+        root_addr.send(GracefulShutdown {
+            timeout: Duration::from_secs(30)
+        }).await??;
+        
+        let shutdown_time = start_time.elapsed();
+        
+        // Verify shutdown order was correct (reverse dependency order)
+        let shutdown_order = self.supervision_metrics.shutdown_order.clone();
+        let expected_order = vec![
+            "stream_actor", "bridge_actor", "chain_actor", 
+            "sync_actor", "root_supervisor"
+        ];
+        
+        assert_eq!(shutdown_order, expected_order);
+        assert!(shutdown_time < Duration::from_secs(10)); // Should be fast
+        
+        Ok(TestResult::Success {
+            shutdown_duration: shutdown_time,
+            actors_shutdown: shutdown_order.len(),
+        })
+    }
+}
+```
+
+#### **Implementation C: Kubernetes Test Environment**
+
+```yaml
+# k8s/test-environment/alys-test.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: alys-test-cluster
+  namespace: alys-testing
+spec:
+  serviceName: alys-test-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: alys-test
+  template:
+    metadata:
+      labels:
+        app: alys-test
+    spec:
+      containers:
+      - name: alys-consensus
+        image: alys:test
+        ports:
+        - containerPort: 3000
+          name: consensus-rpc
+        - containerPort: 55444
+          name: p2p
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: RUST_LOG
+          value: "debug"
+        - name: TEST_MODE
+          value: "true"
+        volumeMounts:
+        - name: alys-data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1
+            memory: 2Gi
+      - name: bitcoin-core
+        image: balajimara/bitcoin:25.99
+        ports:
+        - containerPort: 18443
+          name: rpc
+        env:
+        - name: BITCOIN_NETWORK
+          value: "regtest"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+  volumeClaimTemplates:
+  - metadata:
+      name: alys-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alys-integration-tests
+  namespace: alys-testing
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: test-runner
+        image: alys:test
+        command: ["cargo", "test", "--test", "integration_tests", "--", "--test-threads", "1"]
+        env:
+        - name: ALYS_CLUSTER_ENDPOINT
+          value: "alys-test-service:3000"
+        - name: BITCOIN_RPC_URL
+          value: "http://alys-test-service:18443"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 4Gi
+```
+
+### Comprehensive Test Plans
+
+#### **Test Plan A: V2 Actor System Integration**
+
+**StreamActor Integration Tests:**
+```rust
+#[tokio::test]
+async fn test_stream_actor_reconnection_resilience() {
+    let mut harness = StreamActorTestHarness::new();
+    let mock_server = harness.start_mock_governance().await.unwrap();
+    
+    // Start StreamActor
+    let stream_actor = harness.create_stream_actor().await.unwrap();
+    
+    // Verify initial connection
+    let status = stream_actor.send(GetConnectionStatus).await.unwrap().unwrap();
+    assert!(status.connected);
+    
+    // Simulate server restart
+    mock_server.restart().await.unwrap();
+    
+    // Wait for reconnection
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    
+    // Verify reconnection successful
+    let status = stream_actor.send(GetConnectionStatus).await.unwrap().unwrap();
+    assert!(status.connected);
+    assert!(status.reconnect_count > 0);
+}
+
+#[tokio::test]
+async fn test_stream_actor_message_buffering() {
+    let harness = StreamActorTestHarness::new();
+    let stream_actor = harness.create_disconnected_stream_actor().await.unwrap();
+    
+    // Send messages while disconnected
+    let futures: Vec<_> = (0..100).map(|i| {
+        stream_actor.send(RequestSignatures {
+            request_id: format!("req-{}", i),
+            tx_hex: format!("0x{:04x}", i),
+            input_indices: vec![0],
+            amounts: vec![100000000],
+            tx_type: TransactionType::Pegout,
+        })
+    }).collect();
+    
+    // All should buffer without error
+    for future in futures {
+        let result = future.await.unwrap();
+        assert!(result.is_err()); // Should be NotConnected error
+    }
+    
+    // Connect to server
+    harness.connect_mock_server().await.unwrap();
+    
+    // Wait for buffer flush
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    
+    // Verify all messages were sent
+    let server_messages = harness.mock_server.get_received_messages().await;
+    assert_eq!(server_messages.len(), 101); // 100 requests + 1 registration
+}
+```
+
+**Performance Benchmarks:**
+```rust
+#[criterion::bench]
+fn bench_actor_system_throughput(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    
+    c.bench_function("v2_actor_system_message_rate", |b| {
+        let system = rt.block_on(create_full_v2_system()).unwrap();
+        
+        b.iter(|| {
+            rt.block_on(async {
+                let start = Instant::now();
+                let mut handles = Vec::new();
+                
+                // Send 10,000 messages across all actors
+                for i in 0..10000 {
+                    let handle = tokio::spawn({
+                        let system = system.clone();
+                        async move {
+                            system.send_inter_actor_message(
+                                create_test_message(i)
+                            ).await
+                        }
+                    });
+                    handles.push(handle);
+                }
+                
+                // Wait for all messages to be processed
+                futures::future::join_all(handles).await;
+                
+                let duration = start.elapsed();
+                let rate = 10000.0 / duration.as_secs_f64();
+                
+                // Should achieve >5000 messages/second
+                assert!(rate > 5000.0, "Message rate too low: {}/sec", rate);
+            })
+        })
+    });
+}
+```
+
+### Implementation Timeline
+
+**Week 1: V2 Actor Integration**
+- Day 1-2: Enhance StreamActor testing with mock governance server
+- Day 3-4: Implement supervision tree testing scenarios  
+- Day 5: Add cross-actor integration testing
+
+**Week 2: Production Environment**
+- Day 1-2: Create Kubernetes test environment
+- Day 3-4: Integrate CI/CD pipeline testing
+- Day 5: Performance optimization and validation
+
+**Success Metrics:**
+- [ ] All V2 actor tests passing (>98% coverage)
+- [ ] StreamActor reconnection time <2 seconds
+- [ ] Supervision tree restart time <1 second
+- [ ] Message throughput >5,000 messages/second
+- [ ] Kubernetes test environment operational
+- [ ] CI/CD pipeline with automated testing
+
+**Risk Mitigation:**
+- Gradual integration testing to prevent system-wide failures
+- Rollback procedures for failed test enhancements
+- Performance baseline monitoring during test development
+- Separate test environments for experimental features

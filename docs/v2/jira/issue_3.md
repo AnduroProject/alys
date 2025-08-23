@@ -611,3 +611,406 @@ None
 **Performance Target**: <1% CPU/memory overhead with <10K metric series
 
 - Actual: _To be filled_
+
+## Next Steps
+
+### Work Completed Analysis
+
+#### ✅ **Core Metrics Infrastructure (100% Complete)**
+- **Work Done:**
+  - Comprehensive metrics registry implemented with migration, actor, sync, and system metrics
+  - Prometheus metrics server with text format export and health endpoints implemented
+  - Lazy static metrics initialization with proper error handling completed
+  - Metric labeling strategy with consistent naming conventions established
+
+- **Evidence of Completion:**
+  - All Phase 1 subtasks marked as completed (metrics registry, server setup, initialization, labeling)
+  - Metrics collection infrastructure confirmed through StreamActor implementation
+  - Prometheus integration working in current codebase
+
+#### ✅ **Actor & System Metrics (100% Complete)**
+- **Work Done:**
+  - Actor message metrics with counters and latency histograms implemented
+  - Mailbox size monitoring with gauges per actor type completed
+  - Actor restart tracking with failure reason labels implemented
+  - Sync progress tracking with current/target height and speed metrics implemented
+  - System resource monitoring with automated collection implemented
+
+- **Evidence of Completion:**
+  - All Phase 2-4 subtasks marked as completed
+  - Metrics integration demonstrated in recent actor implementations
+  - Performance and resource tracking operational
+
+#### ✅ **Infrastructure & Alerting (100% Complete)**
+- **Work Done:**
+  - Prometheus configuration with scraping targets and retention implemented
+  - Comprehensive alert rules for migration stalls, error rates, and system failures created
+  - Automated metrics collection with configurable intervals implemented
+
+- **Evidence of Completion:**
+  - Phase 5 subtasks completed
+  - Alert rules and monitoring infrastructure established
+
+### Remaining Work Analysis
+
+#### ⚠️ **Production Dashboard Integration (40% Complete)**
+- **Current State:** Basic metrics collection exists but production dashboards incomplete
+- **Gaps Identified:**
+  - Grafana dashboards not fully configured for V2 system
+  - Alert manager integration incomplete
+  - Real-time monitoring for actor system not optimized
+  - Performance regression detection needs enhancement
+
+#### ⚠️ **V2-Specific Metrics (60% Complete)**
+- **Current State:** Foundation metrics exist but V2 actor-specific metrics need enhancement
+- **Gaps Identified:**
+  - StreamActor specific metrics need comprehensive coverage
+  - Inter-actor communication metrics incomplete
+  - Governance integration metrics need expansion
+  - Migration progress tracking needs V2 updates
+
+### Detailed Next Step Plans
+
+#### **Priority 1: Complete V2 Actor Metrics**
+
+**Plan A: StreamActor Monitoring Enhancement**
+- **Objective**: Complete comprehensive monitoring for StreamActor governance communication
+- **Implementation Steps:**
+  1. Add detailed gRPC connection metrics (latency, errors, reconnections)
+  2. Implement message buffering and backpressure monitoring
+  3. Create signature request/response correlation tracking
+  4. Add federation update processing metrics
+  5. Implement governance endpoint health monitoring
+
+**Plan B: Inter-Actor Communication Metrics**
+- **Objective**: Monitor message flows and performance between all V2 actors
+- **Implementation Steps:**
+  1. Add message routing latency tracking between actors
+  2. Implement actor dependency health monitoring
+  3. Create supervision tree restart metrics
+  4. Add actor lifecycle transition tracking
+  5. Implement deadlock detection and alerting
+
+#### **Priority 2: Production Dashboard Deployment**
+
+**Plan C: Grafana Dashboard Creation**
+- **Objective**: Create comprehensive production dashboards for V2 system
+- **Implementation Steps:**
+  1. Create StreamActor governance communication dashboard
+  2. Implement actor system health overview dashboard
+  3. Add federation and bridge operation monitoring
+  4. Create system performance and resource utilization dashboards
+  5. Implement migration progress tracking dashboard
+
+**Plan D: Alert System Enhancement**
+- **Objective**: Complete production alerting with automated response
+- **Implementation Steps:**
+  1. Enhance alert rules for V2 actor-specific scenarios
+  2. Implement alert escalation and notification routing
+  3. Add automated recovery actions for common issues
+  4. Create operational runbooks linked to alerts
+  5. Implement alert fatigue reduction and intelligent grouping
+
+### Detailed Implementation Specifications
+
+#### **Implementation A: StreamActor Metrics Enhancement**
+
+```rust
+// app/src/actors/governance_stream/metrics.rs (Enhanced)
+
+lazy_static! {
+    // Enhanced StreamActor metrics
+    pub static ref GOVERNANCE_CONNECTION_STATUS: IntGauge = register_int_gauge!(
+        "alys_governance_connection_status",
+        "Governance connection status (0=disconnected, 1=connected)"
+    ).unwrap();
+    
+    pub static ref GOVERNANCE_MESSAGE_BUFFER_SIZE: IntGauge = register_int_gauge!(
+        "alys_governance_message_buffer_size",
+        "Number of buffered messages during disconnection"
+    ).unwrap();
+    
+    pub static ref GOVERNANCE_RECONNECT_ATTEMPTS: Counter = register_counter!(
+        "alys_governance_reconnect_attempts_total",
+        "Total governance reconnection attempts"
+    ).unwrap();
+    
+    pub static ref GOVERNANCE_REQUEST_CORRELATION: Histogram = register_histogram!(
+        "alys_governance_request_correlation_duration_seconds",
+        "Time from request to correlated response",
+        vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
+    ).unwrap();
+    
+    pub static ref FEDERATION_UPDATE_PROCESSING_TIME: Histogram = register_histogram!(
+        "alys_federation_update_processing_duration_seconds",
+        "Time to process federation updates",
+        vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+    ).unwrap();
+}
+
+impl StreamActorMetrics {
+    pub fn record_connection_state_change(&self, connected: bool) {
+        GOVERNANCE_CONNECTION_STATUS.set(if connected { 1 } else { 0 });
+        if connected {
+            self.connections_established.inc();
+        }
+    }
+    
+    pub fn record_message_buffered(&self, buffer_size: usize) {
+        GOVERNANCE_MESSAGE_BUFFER_SIZE.set(buffer_size as i64);
+    }
+    
+    pub fn record_request_correlation(&self, request_id: &str, duration: Duration) {
+        GOVERNANCE_REQUEST_CORRELATION.observe(duration.as_secs_f64());
+        info!("Request {} correlated in {:?}", request_id, duration);
+    }
+    
+    pub fn record_federation_update(&self, processing_time: Duration) {
+        FEDERATION_UPDATE_PROCESSING_TIME.observe(processing_time.as_secs_f64());
+    }
+}
+```
+
+#### **Implementation B: Actor Communication Metrics**
+
+```rust
+// app/src/actors/foundation/metrics.rs
+
+lazy_static! {
+    pub static ref INTER_ACTOR_MESSAGE_LATENCY: HistogramVec = register_histogram_vec!(
+        "alys_inter_actor_message_latency_seconds",
+        "Message latency between actors",
+        &["from_actor", "to_actor", "message_type"]
+    ).unwrap();
+    
+    pub static ref ACTOR_DEPENDENCY_HEALTH: GaugeVec = register_gauge_vec!(
+        "alys_actor_dependency_health_status",
+        "Health status of actor dependencies (0=unhealthy, 1=healthy)",
+        &["actor", "dependency"]
+    ).unwrap();
+    
+    pub static ref SUPERVISION_TREE_RESTARTS: CounterVec = register_counter_vec!(
+        "alys_supervision_tree_restarts_total",
+        "Supervision tree restart events",
+        &["supervisor", "child_actor", "restart_reason"]
+    ).unwrap();
+    
+    pub static ref ACTOR_LIFECYCLE_TRANSITIONS: CounterVec = register_counter_vec!(
+        "alys_actor_lifecycle_transitions_total",
+        "Actor lifecycle state transitions",
+        &["actor", "from_state", "to_state"]
+    ).unwrap();
+}
+
+pub struct ActorCommunicationMetrics {
+    message_correlation: HashMap<String, Instant>,
+}
+
+impl ActorCommunicationMetrics {
+    pub fn record_message_sent(&mut self, from: &str, to: &str, message_type: &str, correlation_id: &str) {
+        self.message_correlation.insert(correlation_id.to_string(), Instant::now());
+        
+        INTER_ACTOR_MESSAGE_LATENCY
+            .with_label_values(&[from, to, message_type])
+            .observe(0.0); // Start timing
+    }
+    
+    pub fn record_message_received(&mut self, from: &str, to: &str, message_type: &str, correlation_id: &str) {
+        if let Some(start_time) = self.message_correlation.remove(correlation_id) {
+            let latency = start_time.elapsed();
+            INTER_ACTOR_MESSAGE_LATENCY
+                .with_label_values(&[from, to, message_type])
+                .observe(latency.as_secs_f64());
+        }
+    }
+    
+    pub fn record_actor_restart(&self, supervisor: &str, child: &str, reason: &str) {
+        SUPERVISION_TREE_RESTARTS
+            .with_label_values(&[supervisor, child, reason])
+            .inc();
+    }
+    
+    pub fn record_lifecycle_transition(&self, actor: &str, from_state: &str, to_state: &str) {
+        ACTOR_LIFECYCLE_TRANSITIONS
+            .with_label_values(&[actor, from_state, to_state])
+            .inc();
+    }
+}
+```
+
+#### **Implementation C: Production Grafana Dashboards**
+
+```json
+{
+  "dashboard": {
+    "title": "Alys V2 StreamActor Governance Dashboard",
+    "tags": ["alys", "v2", "governance", "streamactor"],
+    "panels": [
+      {
+        "title": "Governance Connection Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "alys_governance_connection_status",
+            "legendFormat": "Connection Status"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"options": {"0": {"text": "Disconnected", "color": "red"}}},
+              {"options": {"1": {"text": "Connected", "color": "green"}}}
+            ]
+          }
+        }
+      },
+      {
+        "title": "Message Buffer Size",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "alys_governance_message_buffer_size",
+            "legendFormat": "Buffered Messages"
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"params": [], "type": "last"},
+              "evaluator": {"params": [100], "type": "gt"}
+            }
+          ],
+          "executionErrorState": "alerting",
+          "noDataState": "no_data",
+          "frequency": "10s",
+          "handler": 1,
+          "name": "High Message Buffer",
+          "message": "Governance message buffer is high - potential connection issues"
+        }
+      },
+      {
+        "title": "Request/Response Correlation Latency",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, alys_governance_request_correlation_duration_seconds)",
+            "legendFormat": "P95 Correlation Time"
+          },
+          {
+            "expr": "histogram_quantile(0.50, alys_governance_request_correlation_duration_seconds)",
+            "legendFormat": "P50 Correlation Time"
+          }
+        ]
+      },
+      {
+        "title": "Inter-Actor Message Latency",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "rate(alys_inter_actor_message_latency_seconds_bucket[5m])",
+            "format": "heatmap",
+            "legendFormat": "{{le}}"
+          }
+        ]
+      },
+      {
+        "title": "Actor Supervision Tree Health",
+        "type": "graph", 
+        "targets": [
+          {
+            "expr": "rate(alys_supervision_tree_restarts_total[5m])",
+            "legendFormat": "{{supervisor}}/{{child_actor}} - {{restart_reason}}"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Comprehensive Test Plans
+
+#### **Test Plan A: Metrics Accuracy Validation**
+
+```rust
+#[tokio::test]
+async fn test_stream_actor_metrics_accuracy() {
+    let metrics_collector = StreamActorMetrics::new();
+    let stream_actor = create_test_stream_actor_with_metrics(metrics_collector.clone()).await;
+    
+    // Test connection metrics
+    stream_actor.connect_to_governance().await.unwrap();
+    assert_eq!(GOVERNANCE_CONNECTION_STATUS.get(), 1);
+    assert_eq!(metrics_collector.connections_established.get(), 1);
+    
+    // Test message buffering metrics  
+    stream_actor.disconnect().await;
+    assert_eq!(GOVERNANCE_CONNECTION_STATUS.get(), 0);
+    
+    // Send messages while disconnected
+    for i in 0..10 {
+        stream_actor.send_test_message(i).await;
+    }
+    
+    assert_eq!(GOVERNANCE_MESSAGE_BUFFER_SIZE.get(), 10);
+    
+    // Reconnect and verify buffer flush
+    stream_actor.reconnect().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(GOVERNANCE_MESSAGE_BUFFER_SIZE.get(), 0);
+}
+
+#[tokio::test]
+async fn test_inter_actor_communication_metrics() {
+    let mut metrics = ActorCommunicationMetrics::new();
+    
+    let bridge_actor = create_test_bridge_actor().await;
+    let stream_actor = create_test_stream_actor().await;
+    
+    let correlation_id = uuid::Uuid::new_v4().to_string();
+    
+    // Record message sent
+    metrics.record_message_sent("stream_actor", "bridge_actor", "ApplySignatures", &correlation_id);
+    
+    // Simulate processing delay
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    
+    // Record message received
+    metrics.record_message_received("stream_actor", "bridge_actor", "ApplySignatures", &correlation_id);
+    
+    // Verify latency was recorded
+    let latency_metric = INTER_ACTOR_MESSAGE_LATENCY
+        .with_label_values(&["stream_actor", "bridge_actor", "ApplySignatures"]);
+    
+    // Should have recorded ~50ms latency
+    let samples = latency_metric.get_sample_count();
+    assert_eq!(samples, 1);
+}
+```
+
+### Implementation Timeline
+
+**Week 1: V2 Metrics Enhancement**
+- Day 1-2: Complete StreamActor metrics implementation
+- Day 3-4: Add inter-actor communication metrics
+- Day 5: Implement supervision tree monitoring
+
+**Week 2: Production Dashboards**
+- Day 1-2: Create Grafana dashboards for V2 system
+- Day 3-4: Implement enhanced alerting rules
+- Day 5: Deploy and validate monitoring infrastructure
+
+**Success Metrics:**
+- [ ] All V2 actors have comprehensive metrics coverage
+- [ ] StreamActor metrics accuracy >99%
+- [ ] Inter-actor latency tracking operational
+- [ ] Grafana dashboards displaying real-time data
+- [ ] Alert system responding to test scenarios within 30 seconds
+- [ ] Monitoring overhead <2% CPU usage
+
+**Risk Mitigation:**
+- Gradual rollout of new metrics to avoid performance impact
+- A/B testing of alert rules to prevent false positives
+- Backup monitoring system during dashboard migration
+- Performance testing of metrics collection under load

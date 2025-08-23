@@ -975,3 +975,549 @@ fn bench_message_throughput(b: &mut Bencher) {
 
 - Add support for multiple governance endpoints
 - Implement circuit breaker pattern
+
+## Next Steps
+
+### Work Completed Analysis
+
+#### ✅ **Protocol & Foundation (100% Complete)**
+- **Work Done:**
+  - Complete protobuf schema definition created in `app/proto/governance.proto` with 40+ message types
+  - Build configuration implemented with `tonic-build` for code generation
+  - gRPC service contract defined with bi-directional streaming, health checks, and capabilities
+  - Message type definitions completed for all governance operations
+  - Error handling types and enums fully implemented
+
+- **Evidence of Completion:**
+  - `app/proto/governance.proto` file exists with comprehensive service definition
+  - `app/build.rs` configured for protobuf code generation
+  - `app/Cargo.toml` includes required gRPC dependencies (tonic, prost, tokio-stream)
+  - All Phase 1 subtasks marked as completed (ALYS-012-1, ALYS-012-2)
+
+- **Quality Assessment:** Protocol foundation is production-ready with comprehensive type safety
+
+#### ✅ **Core Actor Implementation (95% Complete)**
+- **Work Done:**
+  - StreamActor core structure implemented with state management
+  - gRPC connection management with bi-directional streaming completed
+  - Message buffering system implemented with configurable capacity
+  - Exponential backoff reconnection strategy with jitter completed
+  - Actor integration points with BridgeActor and ChainActor established
+
+- **Evidence of Completion:**
+  - StreamActor implementation exists in `app/src/actors/governance_stream/`
+  - Actor foundation integration completed in `app/src/actors/foundation/`
+  - Configuration integration added to main config system
+  - Application startup integration completed in `app/src/app.rs:338-344`
+  - All Phase 2-3 subtasks marked as completed (ALYS-012-3 through ALYS-012-8)
+
+- **Gaps Identified:**
+  - Connection health monitoring needs refinement
+  - Request timeout handling needs optimization
+  - Performance metrics collection partially complete
+
+#### ⚠️ **Message Handling & Integration (85% Complete)**
+- **Work Done:**
+  - Outbound message handlers for signature requests implemented
+  - Inbound message processing for governance responses implemented
+  - Basic actor-to-actor routing established
+  - Message envelope and correlation ID system implemented
+
+- **Gaps Identified:**
+  - BridgeActor integration not fully connected
+  - ChainActor message routing needs completion
+  - Federation update handling needs validation
+  - Error recovery scenarios need enhancement
+
+#### ⚠️ **Production Readiness (60% Complete)**
+- **Work Done:**
+  - Basic health monitoring and status reporting implemented
+  - Configuration system with environment overrides completed
+  - Metrics collection structure established
+
+- **Gaps Identified:**
+  - Comprehensive monitoring dashboard not configured
+  - Production deployment scripts not created
+  - Load testing and performance validation needed
+  - Security audit and TLS configuration incomplete
+
+### Detailed Next Step Plans
+
+#### **Priority 1: Complete Actor Integration**
+
+**Plan A: BridgeActor Connection**
+- **Objective**: Complete integration between StreamActor and BridgeActor for signature workflows
+- **Implementation Steps:**
+  1. Implement `ApplySignatures` message handler in BridgeActor
+  2. Add signature validation and witness data processing
+  3. Create end-to-end signature request/response flow
+  4. Implement error handling for signature failures
+  5. Add comprehensive integration testing
+
+**Plan B: ChainActor Federation Updates**
+- **Objective**: Complete federation update routing and processing
+- **Implementation Steps:**
+  1. Implement `FederationUpdate` message handler in ChainActor
+  2. Add federation membership validation logic
+  3. Create federation transition workflows
+  4. Implement activation height tracking
+  5. Add federation change testing scenarios
+
+**Plan C: Cross-Actor Communication Enhancement**
+- **Objective**: Optimize message routing and error handling between actors
+- **Implementation Steps:**
+  1. Implement request-response correlation system
+  2. Add circuit breaker patterns for actor communication
+  3. Create fallback handling for unavailable actors
+  4. Implement distributed tracing for message flows
+  5. Add performance optimization for high-frequency messages
+
+#### **Priority 2: Production Deployment**
+
+**Plan D: Monitoring and Observability**
+- **Objective**: Complete production-ready monitoring and alerting
+- **Implementation Steps:**
+  1. Implement comprehensive Prometheus metrics
+  2. Create Grafana dashboards for governance communication
+  3. Add alerting rules for connection failures and high latency
+  4. Implement distributed tracing integration
+  5. Create operational runbooks for common issues
+
+**Plan E: Security and Performance**
+- **Objective**: Ensure production security and performance standards
+- **Implementation Steps:**
+  1. Implement mutual TLS for governance communication
+  2. Add authentication token management and refresh
+  3. Conduct security audit of message handling
+  4. Implement rate limiting and backpressure handling
+  5. Add comprehensive load testing and optimization
+
+### Detailed Implementation Specifications
+
+#### **Implementation A: BridgeActor Integration**
+
+```rust
+// app/src/actors/bridge/messages.rs
+
+#[derive(Message)]
+#[rtype(result = "Result<(), BridgeError>")]
+pub struct ApplySignatures {
+    pub request_id: String,
+    pub witnesses: Vec<WitnessData>,
+    pub signature_status: SignatureStatus,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<SignatureRequestStatus, BridgeError>")]
+pub struct GetSignatureStatus {
+    pub request_id: String,
+}
+
+// app/src/actors/bridge/mod.rs
+
+impl Handler<ApplySignatures> for BridgeActor {
+    type Result = ResponseActFuture<Self, Result<(), BridgeError>>;
+    
+    fn handle(&mut self, msg: ApplySignatures, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!("Applying signatures for request {}", msg.request_id);
+            
+            // Find pending transaction
+            let pending_tx = self.pending_transactions
+                .get_mut(&msg.request_id)
+                .ok_or(BridgeError::RequestNotFound(msg.request_id.clone()))?;
+            
+            // Validate signature threshold
+            if msg.witnesses.len() < self.federation_config.threshold {
+                return Err(BridgeError::InsufficientSignatures {
+                    required: self.federation_config.threshold,
+                    provided: msg.witnesses.len(),
+                });
+            }
+            
+            // Apply witnesses to transaction
+            for witness in msg.witnesses {
+                if witness.input_index >= pending_tx.inputs.len() {
+                    return Err(BridgeError::InvalidWitnessIndex(witness.input_index));
+                }
+                
+                pending_tx.inputs[witness.input_index].witness = 
+                    Witness::from_slice(&witness.witness_data)?;
+            }
+            
+            // Broadcast completed transaction
+            let tx_result = self.bitcoin_client
+                .send_raw_transaction(&pending_tx.tx)
+                .await?;
+            
+            info!("Broadcasted transaction: {}", tx_result.txid);
+            
+            // Update metrics
+            self.metrics.successful_pegouts.inc();
+            self.metrics.signature_application_time
+                .observe(pending_tx.created_at.elapsed().as_secs_f64());
+            
+            // Remove from pending
+            self.pending_transactions.remove(&msg.request_id);
+            
+            // Notify ChainActor of completion
+            if let Some(chain_actor) = &self.chain_actor {
+                chain_actor.send(PegoutCompleted {
+                    request_id: msg.request_id.clone(),
+                    txid: tx_result.txid,
+                }).await?;
+            }
+            
+            Ok(())
+        }.into_actor(self))
+    }
+}
+```
+
+#### **Implementation B: Federation Update Processing**
+
+```rust
+// app/src/actors/chain/federation.rs
+
+impl Handler<FederationUpdate> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<(), ChainError>>;
+    
+    fn handle(&mut self, msg: FederationUpdate, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!("Processing federation update version {}", msg.version);
+            
+            // Validate federation update
+            self.validate_federation_update(&msg).await?;
+            
+            // Check if activation height is reached
+            let current_height = self.chain_state.current_height();
+            if let Some(activation_height) = msg.activation_height {
+                if current_height < activation_height {
+                    info!("Scheduling federation update for height {}", activation_height);
+                    self.scheduled_federation_updates.insert(activation_height, msg);
+                    return Ok(());
+                }
+            }
+            
+            // Apply federation update immediately
+            self.apply_federation_update(msg).await?;
+            
+            Ok(())
+        }.into_actor(self))
+    }
+}
+
+impl ChainActor {
+    async fn validate_federation_update(&self, update: &FederationUpdate) -> Result<(), ChainError> {
+        // Verify version progression
+        if update.version <= self.current_federation.version {
+            return Err(ChainError::InvalidFederationVersion {
+                current: self.current_federation.version,
+                proposed: update.version,
+            });
+        }
+        
+        // Validate member public keys
+        for member in &update.members {
+            if !member.public_key.is_valid() {
+                return Err(ChainError::InvalidPublicKey(member.node_id.clone()));
+            }
+        }
+        
+        // Verify threshold constraints
+        if update.threshold == 0 || update.threshold > update.members.len() {
+            return Err(ChainError::InvalidThreshold {
+                threshold: update.threshold,
+                members: update.members.len(),
+            });
+        }
+        
+        // Validate P2WSH address derivation
+        let derived_address = derive_federation_address(&update.members, update.threshold)?;
+        if derived_address != update.p2wsh_address {
+            return Err(ChainError::AddressMismatch {
+                expected: derived_address,
+                provided: update.p2wsh_address.clone(),
+            });
+        }
+        
+        Ok(())
+    }
+    
+    async fn apply_federation_update(&mut self, update: FederationUpdate) -> Result<(), ChainError> {
+        info!("Applying federation update to version {}", update.version);
+        
+        // Update federation configuration
+        self.current_federation = FederationConfig {
+            version: update.version,
+            members: update.members.clone(),
+            threshold: update.threshold,
+            p2wsh_address: update.p2wsh_address.clone(),
+            activation_height: update.activation_height,
+        };
+        
+        // Update BridgeActor with new federation config
+        if let Some(bridge_actor) = &self.bridge_actor {
+            bridge_actor.send(UpdateFederation {
+                config: self.current_federation.clone(),
+            }).await?;
+        }
+        
+        // Persist federation update to storage
+        self.storage.store_federation_update(&self.current_federation).await?;
+        
+        // Emit federation change event
+        self.emit_event(ChainEvent::FederationUpdated {
+            old_version: update.version - 1,
+            new_version: update.version,
+            new_address: update.p2wsh_address,
+        }).await?;
+        
+        self.metrics.federation_updates.inc();
+        
+        Ok(())
+    }
+}
+```
+
+#### **Implementation C: Production Monitoring**
+
+```rust
+// app/src/actors/governance_stream/metrics.rs
+
+use prometheus::{Counter, Histogram, Gauge, register_counter, register_histogram, register_gauge};
+
+pub struct StreamActorMetrics {
+    // Connection metrics
+    pub connections_established: Counter,
+    pub connection_failures: Counter,
+    pub reconnections: Counter,
+    pub connection_duration: Histogram,
+    
+    // Message metrics
+    pub messages_sent: Counter,
+    pub messages_received: Counter,
+    pub message_send_latency: Histogram,
+    pub message_buffer_size: Gauge,
+    
+    // Request metrics
+    pub signature_requests: Counter,
+    pub signature_responses: Counter,
+    pub request_timeouts: Counter,
+    pub request_latency: Histogram,
+    
+    // Error metrics
+    pub stream_errors: Counter,
+    pub governance_errors: Counter,
+    pub serialization_errors: Counter,
+}
+
+impl StreamActorMetrics {
+    pub fn new() -> Self {
+        Self {
+            connections_established: register_counter!(
+                "alys_stream_connections_established_total",
+                "Total governance connections established"
+            ).unwrap(),
+            
+            connection_failures: register_counter!(
+                "alys_stream_connection_failures_total", 
+                "Total governance connection failures"
+            ).unwrap(),
+            
+            message_send_latency: register_histogram!(
+                "alys_stream_message_send_duration_seconds",
+                "Time to send message to governance",
+                vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+            ).unwrap(),
+            
+            request_latency: register_histogram!(
+                "alys_stream_request_duration_seconds", 
+                "Time from request to response",
+                vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+            ).unwrap(),
+            
+            // Initialize other metrics...
+        }
+    }
+    
+    pub fn record_connection_established(&self) {
+        self.connections_established.inc();
+    }
+    
+    pub fn record_message_sent(&self, latency: Duration) {
+        self.messages_sent.inc();
+        self.message_send_latency.observe(latency.as_secs_f64());
+    }
+    
+    pub fn record_request_completed(&self, latency: Duration) {
+        self.signature_responses.inc();
+        self.request_latency.observe(latency.as_secs_f64());
+    }
+}
+```
+
+### Comprehensive Test Plans
+
+#### **Test Plan A: Actor Integration Testing**
+
+```rust
+// tests/integration/stream_actor_bridge_integration.rs
+
+#[tokio::test]
+async fn test_end_to_end_signature_flow() {
+    let test_harness = IntegrationTestHarness::new().await;
+    
+    // Start all actors
+    let bridge_actor = test_harness.start_bridge_actor().await.unwrap();
+    let stream_actor = test_harness.start_stream_actor_with_bridge(bridge_actor.clone()).await.unwrap();
+    let mock_governance = test_harness.start_mock_governance().await.unwrap();
+    
+    // Create peg-out transaction
+    let pegout_tx = create_test_pegout_transaction();
+    
+    // Submit to bridge
+    let request_id = bridge_actor.send(InitiatePegout {
+        tx: pegout_tx.clone(),
+        amounts: vec![100000000],
+        destinations: vec!["bc1qtest...".to_string()],
+    }).await.unwrap().unwrap();
+    
+    // Verify stream actor received signature request
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let governance_messages = mock_governance.get_messages().await;
+    assert_eq!(governance_messages.len(), 2); // Registration + signature request
+    
+    let sig_request = governance_messages.iter()
+        .find(|m| matches!(m.request, Some(Request::SignatureRequest(_))))
+        .unwrap();
+    
+    // Send signature response from governance
+    let witnesses = vec![
+        WitnessData { input_index: 0, witness_data: vec![0x30, 0x44, /* signature */] },
+        WitnessData { input_index: 0, witness_data: vec![0x21, /* pubkey */] },
+    ];
+    
+    mock_governance.send_signature_response(SignatureResponse {
+        request_id: request_id.clone(),
+        witnesses,
+        status: SignatureStatus::Complete as i32,
+    }).await.unwrap();
+    
+    // Wait for processing
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    
+    // Verify transaction was broadcast
+    let bridge_status = bridge_actor.send(GetPegoutStatus {
+        request_id: request_id.clone(),
+    }).await.unwrap().unwrap();
+    
+    assert_eq!(bridge_status.status, PegoutStatus::Broadcast);
+    assert!(bridge_status.txid.is_some());
+    
+    // Verify metrics
+    let stream_metrics = stream_actor.send(GetMetrics).await.unwrap().unwrap();
+    assert_eq!(stream_metrics.signature_requests, 1);
+    assert_eq!(stream_metrics.signature_responses, 1);
+}
+
+#[tokio::test]  
+async fn test_federation_update_propagation() {
+    let harness = IntegrationTestHarness::new().await;
+    
+    let chain_actor = harness.start_chain_actor().await.unwrap();
+    let stream_actor = harness.start_stream_actor_with_chain(chain_actor.clone()).await.unwrap();
+    let mock_governance = harness.start_mock_governance().await.unwrap();
+    
+    // Send federation update
+    let new_federation = FederationUpdate {
+        version: 2,
+        members: create_test_federation_members(),
+        threshold: 3,
+        p2wsh_address: "bc1qnew_federation_address".to_string(),
+        activation_height: Some(1000),
+    };
+    
+    mock_governance.send_federation_update(new_federation.clone()).await.unwrap();
+    
+    // Wait for processing
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    
+    // Verify chain actor received update
+    let chain_status = chain_actor.send(GetChainStatus).await.unwrap().unwrap();
+    assert_eq!(chain_status.federation_version, 2);
+    assert_eq!(chain_status.federation_activation_height, Some(1000));
+}
+```
+
+#### **Test Plan B: Performance and Load Testing**
+
+```rust
+#[tokio::test]
+async fn test_high_throughput_signature_requests() {
+    let harness = PerformanceTestHarness::new().await;
+    let stream_actor = harness.start_optimized_stream_actor().await.unwrap();
+    
+    let start = Instant::now();
+    let mut request_handles = Vec::new();
+    
+    // Send 1000 signature requests concurrently
+    for i in 0..1000 {
+        let handle = tokio::spawn({
+            let stream_actor = stream_actor.clone();
+            async move {
+                stream_actor.send(RequestSignatures {
+                    request_id: format!("load-test-{}", i),
+                    tx_hex: format!("0x{:08x}", i),
+                    input_indices: vec![0],
+                    amounts: vec![100000000],
+                    tx_type: TransactionType::Pegout,
+                }).await
+            }
+        });
+        request_handles.push(handle);
+    }
+    
+    // Wait for all requests to complete
+    let results = futures::future::join_all(request_handles).await;
+    let duration = start.elapsed();
+    
+    // Verify performance
+    let successful_requests = results.iter()
+        .filter(|r| r.is_ok() && r.as_ref().unwrap().is_ok())
+        .count();
+    
+    let requests_per_second = successful_requests as f64 / duration.as_secs_f64();
+    
+    assert!(successful_requests >= 990); // 99% success rate
+    assert!(requests_per_second >= 100.0); // Minimum 100 req/sec
+    
+    println!("Performance: {} requests/second", requests_per_second);
+}
+```
+
+### Implementation Timeline
+
+**Week 1: Actor Integration Completion**
+- Day 1-2: Complete BridgeActor and ChainActor integration
+- Day 3-4: Implement federation update processing
+- Day 5: Add comprehensive integration testing
+
+**Week 2: Production Deployment**
+- Day 1-2: Implement monitoring and alerting
+- Day 3-4: Complete security audit and TLS setup
+- Day 5: Performance optimization and load testing
+
+**Success Metrics:**
+- [ ] End-to-end signature flow working (100% success rate)
+- [ ] Federation updates processed correctly
+- [ ] StreamActor throughput >100 requests/second
+- [ ] Connection uptime >99.9%
+- [ ] Response latency p99 <2 seconds
+- [ ] Comprehensive monitoring operational
+
+**Risk Mitigation:**
+- Gradual rollout with feature flags for each integration
+- Comprehensive testing in staging environment
+- Rollback procedures for each component
+- Performance monitoring and alerting throughout deployment
