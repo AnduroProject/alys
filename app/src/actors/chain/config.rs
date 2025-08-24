@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 use actor_system::SupervisionConfig;
+use super::state::FederationConfig;
 
 /// Configuration for ChainActor behavior and performance
 #[derive(Debug, Clone)]
@@ -42,6 +43,9 @@ pub struct ChainActorConfig {
     
     /// Actor supervision configuration
     pub supervision_config: SupervisionConfig,
+    
+    /// Federation configuration (if this node is part of federation)
+    pub federation_config: Option<FederationConfig>,
 }
 
 /// Performance targets for monitoring and optimization
@@ -100,6 +104,7 @@ impl ChainActorConfig {
                 target_blocks_per_second: 0.5,
                 max_memory_mb: 1024,
             },
+            federation_config: None,
             ..Default::default()
         }
     }
@@ -117,6 +122,7 @@ impl ChainActorConfig {
                 target_blocks_per_second: 0.5,
                 max_memory_mb: 768,
             },
+            federation_config: None,
             ..Default::default()
         }
     }
@@ -140,6 +146,7 @@ impl ChainActorConfig {
                 target_blocks_per_second: 1.0,
                 max_memory_mb: 256,
             },
+            federation_config: None,
             ..Default::default()
         }
     }
@@ -220,6 +227,7 @@ impl Default for ChainActorConfig {
                 max_memory_mb: 512,
             },
             supervision_config: SupervisionConfig::default(),
+            federation_config: None,
         }
     }
 }
