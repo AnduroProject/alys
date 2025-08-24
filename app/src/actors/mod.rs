@@ -6,7 +6,8 @@
 
 pub mod foundation;
 pub mod supervisor;
-pub mod chain_actor;
+pub mod chain; // New organized chain actor module
+pub mod chain_actor; // Legacy - will be deprecated
 pub mod chain_actor_handlers;
 pub mod chain_actor_supervision;
 pub mod chain_actor_tests;
@@ -21,7 +22,8 @@ pub mod governance_stream;
 
 pub use foundation::*;
 pub use supervisor::*;
-pub use chain_actor::*;
+pub use chain::*; // Import from new organized module
+pub use chain_actor::*; // Legacy - for backward compatibility
 pub use chain_migration_adapter::*;
 pub use engine_actor::*;
 pub use bridge_actor::*;
