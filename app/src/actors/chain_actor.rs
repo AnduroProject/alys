@@ -35,7 +35,12 @@ use crate::actors::foundation::*;
 use crate::features::{FeatureFlagManager, FeatureFlag};
 use crate::integration::*;
 
-use actix::prelude::*;
+// Enhanced actor system integration
+use actor_system::prelude::*;
+use actor_system::{
+    BlockchainAwareActor, BlockchainActorPriority, BlockchainTimingConstraints,
+    BlockchainEvent, BlockchainReadiness, SyncStatus, FederationConfig
+};
 use std::collections::{HashMap, VecDeque, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::{interval, timeout};
@@ -524,7 +529,7 @@ pub struct ActorHealthMonitor {
     health_check_interval: Duration,
     
     /// Health status
-    status: ActorHealthStatus,
+    status: crate::messages::chain_messages::ActorHealthStatus,
     
     /// Recent health scores
     recent_scores: VecDeque<u8>,
@@ -782,7 +787,7 @@ impl ChainActor {
             health_monitor: ActorHealthMonitor {
                 last_health_check: Instant::now(),
                 health_check_interval: Duration::from_secs(30),
-                status: ActorHealthStatus {
+                status: crate::messages::chain_messages::ActorHealthStatus {
                     active_actors: 1,
                     failed_actors: 0,
                     queue_depths: HashMap::new(),
@@ -1103,7 +1108,9 @@ impl Default for TraceContext {
             span_id: None,
             parent_span_id: None,
             baggage: HashMap::new(),
-            sampled: false,
+            trace_flags: TraceFlags::default(),
+            sampling: SamplingDecision::NotSampled,
+            trace_state: None,
         }
     }
 }
@@ -1130,9 +1137,248 @@ struct HealthCheckResult {
     details: String,
 }
 
+// Enhanced ChainActor implementation using the consolidated actor system
+impl Actor for ChainActor {
+    type Context = Context<Self>;
+    
+    fn started(&mut self, ctx: &mut Self::Context) {
+        info!(
+            actor_type = "ChainActor",
+            chain_height = self.chain_state.head_block_number,
+            federation_members = self.federation.members.len(),
+            "ChainActor started"
+        );
+        
+        // Record actor startup in metrics
+        self.metrics.record_actor_started();
+        
+        // Set up periodic blockchain health checks
+        ctx.run_interval(Duration::from_secs(10), |act, ctx| {
+            let health_check = async move {
+                match act.validate_blockchain_readiness().await {
+                    Ok(readiness) => {
+                        act.metrics.record_health_check_passed();
+                        debug!("Blockchain readiness check passed: {:?}", readiness);
+                    }
+                    Err(e) => {
+                        act.metrics.record_health_check_failed();
+                        warn!("Blockchain readiness check failed: {}", e);
+                    }
+                }
+            };
+            
+            ctx.spawn(health_check.into_actor(act));
+        });
+        
+        // Initialize blockchain event subscriptions
+        self.initialize_blockchain_subscriptions(ctx);
+    }
+    
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        info!("ChainActor stopped");
+        self.metrics.record_actor_stopped();
+    }
+}
+
+// Enhanced AlysActor implementation
+impl AlysActor for ChainActor {
+    type Config = ChainActorConfig;
+    type Error = ActorError;
+    type Message = ChainMessage;
+    type State = ChainState;
+    
+    fn new(config: Self::Config) -> Result<Self, Self::Error> {
+        Ok(Self {
+            config: config.clone(),
+            chain_state: ChainState::new(),
+            pending_blocks: HashMap::new(),
+            block_candidates: VecDeque::new(),
+            federation: FederationState::new(config.federation_config.clone()),
+            auxpow_state: AuxPowState::new(),
+            subscribers: HashMap::new(),
+            metrics: ChainActorMetrics::new(),
+            feature_flags: config.feature_flags.clone(),
+            actor_addresses: ActorAddresses::new(),
+            validation_cache: ValidationCache::new(),
+            health_monitor: ActorHealthMonitor::new("chain_actor".to_string()),
+            trace_context: TraceContext::default(),
+            production_state: BlockProductionState::default(),
+            broadcast_tracker: BroadcastTracker::default(),
+        })
+    }
+    
+    fn config(&self) -> &Self::Config {
+        &self.config
+    }
+    
+    fn config_mut(&mut self) -> &mut Self::Config {
+        &mut self.config
+    }
+    
+    fn metrics(&self) -> &ActorMetrics {
+        // Convert ChainActorMetrics to base ActorMetrics
+        // This would need proper integration
+        &ActorMetrics::default()
+    }
+    
+    fn metrics_mut(&mut self) -> &mut ActorMetrics {
+        // This needs proper implementation
+        &mut ActorMetrics::default()
+    }
+    
+    async fn get_state(&self) -> Self::State {
+        self.chain_state.clone()
+    }
+    
+    async fn set_state(&mut self, state: Self::State) -> ActorResult<()> {
+        self.chain_state = state;
+        Ok(())
+    }
+    
+    fn dependencies(&self) -> Vec<String> {
+        vec![
+            "engine_actor".to_string(),
+            "bridge_actor".to_string(),
+            "storage_actor".to_string(),
+            "network_actor".to_string(),
+        ]
+    }
+    
+    fn actor_type(&self) -> String {
+        "ChainActor".to_string()
+    }
+}
+
+// Enhanced BlockchainAwareActor implementation
+#[async_trait]
+impl BlockchainAwareActor for ChainActor {
+    fn timing_constraints(&self) -> BlockchainTimingConstraints {
+        BlockchainTimingConstraints {
+            block_interval: Duration::from_secs(2), // 2-second Alys blocks
+            max_consensus_latency: Duration::from_millis(100),
+            federation_timeout: Duration::from_millis(500),
+            auxpow_window: Duration::from_secs(600),
+        }
+    }
+    
+    fn federation_config(&self) -> Option<FederationConfig> {
+        Some(FederationConfig {
+            members: self.federation.members.clone(),
+            threshold: self.federation.threshold,
+            health_interval: Duration::from_secs(30),
+            min_healthy: 3,
+        })
+    }
+    
+    fn blockchain_priority(&self) -> BlockchainActorPriority {
+        BlockchainActorPriority::Consensus
+    }
+    
+    fn is_consensus_critical(&self) -> bool {
+        true
+    }
+    
+    async fn handle_blockchain_event(&mut self, event: BlockchainEvent) -> ActorResult<()> {
+        match event {
+            BlockchainEvent::BlockProduced { height, hash } => {
+                info!(
+                    height = height,
+                    hash = hex::encode(hash),
+                    "Block production event received"
+                );
+                self.metrics.record_block_produced(height);
+                Ok(())
+            }
+            BlockchainEvent::BlockFinalized { height, hash } => {
+                info!(
+                    height = height,
+                    hash = hex::encode(hash),
+                    "Block finalization event received"
+                );
+                self.metrics.record_block_finalized(height);
+                self.update_finalized_blocks(height, hash).await
+            }
+            BlockchainEvent::FederationChange { members, threshold } => {
+                info!(
+                    members = ?members,
+                    threshold = threshold,
+                    "Federation change event received"
+                );
+                self.update_federation_config(members, threshold).await
+            }
+            BlockchainEvent::ConsensusFailure { reason } => {
+                error!(reason = %reason, "Consensus failure event received");
+                self.metrics.record_consensus_failure();
+                self.handle_consensus_failure(reason).await
+            }
+        }
+    }
+    
+    async fn validate_blockchain_readiness(&self) -> ActorResult<BlockchainReadiness> {
+        let can_produce_blocks = self.chain_state.is_synced && self.federation.is_healthy();
+        let can_validate_blocks = self.chain_state.head_block_number > 0;
+        let federation_healthy = self.federation.healthy_members() >= self.federation.threshold;
+        let sync_status = if self.chain_state.is_synced {
+            SyncStatus::Synced
+        } else {
+            SyncStatus::Syncing { progress: self.chain_state.sync_progress }
+        };
+        
+        Ok(BlockchainReadiness {
+            can_produce_blocks,
+            can_validate_blocks,
+            federation_healthy,
+            sync_status,
+            last_validated: SystemTime::now(),
+        })
+    }
+}
+
+impl ChainActor {
+    /// Initialize blockchain event subscriptions
+    fn initialize_blockchain_subscriptions(&mut self, _ctx: &mut Context<Self>) {
+        // Subscribe to blockchain events from the system
+        debug!("Initializing blockchain event subscriptions");
+        // Implementation would subscribe to actual blockchain events
+    }
+    
+    /// Update finalized blocks in chain state
+    async fn update_finalized_blocks(&mut self, height: u64, hash: [u8; 32]) -> ActorResult<()> {
+        self.chain_state.finalized_height = self.chain_state.finalized_height.max(height);
+        info!(height = height, "Updated finalized block height");
+        Ok(())
+    }
+    
+    /// Update federation configuration
+    async fn update_federation_config(&mut self, members: Vec<String>, threshold: usize) -> ActorResult<()> {
+        self.federation.members = members;
+        self.federation.threshold = threshold;
+        info!(
+            members = self.federation.members.len(),
+            threshold = threshold,
+            "Federation configuration updated"
+        );
+        Ok(())
+    }
+    
+    /// Handle consensus failure
+    async fn handle_consensus_failure(&mut self, reason: String) -> ActorResult<()> {
+        // Implement consensus failure recovery logic
+        warn!(reason = %reason, "Handling consensus failure");
+        
+        // Could trigger recovery procedures, alert other actors, etc.
+        
+        Ok(())
+    }
+}
+
+// Use the enhanced macros for standard handlers
+impl_standard_handlers!(ChainActor, ChainActorConfig);
+impl_blockchain_events!(ChainActor);
+
 // Placeholder actor types for integration
 pub struct EngineActor;
-pub struct BridgeActor;
+pub struct BridgeActor;  
 pub struct StorageActor;
 pub struct NetworkActor;
 pub struct SyncActor;

@@ -37,17 +37,14 @@ pub enum ActorError {
     #[error("Actor restart failed: {actor_name} - {reason}")]
     RestartFailed { actor_name: String, reason: String },
     
-    /// System resource exhausted
-    #[error("Resource exhausted: {resource}")]
-    ResourceExhausted { resource: String },
     
     /// Configuration error
     #[error("Configuration error: {parameter} - {reason}")]
     ConfigurationError { parameter: String, reason: String },
     
     /// Permission denied
-    #[error("Permission denied: {operation}")]
-    PermissionDenied { operation: String },
+    #[error("Permission denied: {resource} - {reason}")]
+    PermissionDenied { resource: String, reason: String },
     
     /// Invalid state transition
     #[error("Invalid state transition from {from} to {to}")]
@@ -100,6 +97,30 @@ pub enum ActorError {
     /// Custom error with context
     #[error("Custom error: {message}")]
     Custom { message: String },
+    
+    /// Resource not found
+    #[error("Resource not found: {resource} with id {id}")]
+    NotFound { resource: String, id: String },
+    
+    /// Invalid operation attempted
+    #[error("Invalid operation: {operation} - {reason}")]
+    InvalidOperation { operation: String, reason: String },
+    
+    /// Validation failed
+    #[error("Validation failed for {field}: {reason}")]
+    ValidationFailed { field: String, reason: String },
+    
+    /// Resource exhausted with details
+    #[error("Resource exhausted: {resource} - {details}")]
+    ResourceExhausted { resource: String, details: String },
+    
+    /// Metrics initialization failed
+    #[error("Metrics initialization failed: {reason}")]
+    MetricsInitializationFailed { reason: String },
+    
+    /// Metrics export failed
+    #[error("Metrics export failed: {reason}")]
+    MetricsExportFailed { reason: String },
 }
 
 /// Blockchain-specific actor errors
@@ -596,7 +617,8 @@ impl From<BridgeActorError> for ActorError {
             }
             BridgeActorError::GovernanceApprovalFailed { operation_id, reason, .. } => {
                 ActorError::PermissionDenied {
-                    operation: format!("governance_approval_{}", operation_id),
+                    resource: format!("governance_approval_{}", operation_id),
+                    reason,
                 }
             }
         }
@@ -694,6 +716,11 @@ impl ActorError {
             ActorError::ActorNotFound { .. } => ErrorSeverity::Minor,
             ActorError::Internal { .. } => ErrorSeverity::Critical,
             ActorError::Custom { .. } => ErrorSeverity::Moderate,
+            ActorError::NotFound { .. } => ErrorSeverity::Minor,
+            ActorError::InvalidOperation { .. } => ErrorSeverity::Moderate,
+            ActorError::ValidationFailed { .. } => ErrorSeverity::Moderate,
+            ActorError::MetricsInitializationFailed { .. } => ErrorSeverity::Moderate,
+            ActorError::MetricsExportFailed { .. } => ErrorSeverity::Minor,
         }
     }
     
@@ -750,6 +777,11 @@ impl ActorError {
             ActorError::ExternalDependency { .. } => "external",
             ActorError::RateLimitExceeded { .. } => "rate_limiting",
             ActorError::Custom { .. } => "custom",
+            ActorError::NotFound { .. } => "resource_management",
+            ActorError::InvalidOperation { .. } => "operations",
+            ActorError::ValidationFailed { .. } => "validation",
+            ActorError::MetricsInitializationFailed { .. } => "metrics",
+            ActorError::MetricsExportFailed { .. } => "metrics",
         }
     }
     
@@ -931,7 +963,8 @@ impl From<std::io::Error> for ActorError {
                 name: "unknown".to_string(),
             },
             std::io::ErrorKind::PermissionDenied => ActorError::PermissionDenied {
-                operation: "io_operation".to_string(),
+                resource: "io_operation".to_string(),
+                reason: "Permission denied".to_string(),
             },
             std::io::ErrorKind::TimedOut => ActorError::Timeout {
                 operation: "io_operation".to_string(),

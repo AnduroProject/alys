@@ -1,0 +1,76 @@
+# Multi-stage Docker build for Alys V2 Test Runner
+
+# Build stage
+FROM rust:1.87-slim as builder
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    clang \
+    cmake \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy workspace configuration
+COPY Cargo.toml Cargo.lock ./
+
+# Copy all crates
+COPY crates/ crates/
+COPY app/ app/
+COPY contracts/ contracts/
+
+# Build the actor_system crate with testing features
+RUN cargo build --release -p actor_system --features="testing,integration-tests,k8s-support"
+
+# Build test runner binary
+RUN cargo build --release --bin test-runner
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app user
+RUN groupadd -r alysuser && useradd -r -g alysuser alysuser
+
+# Create directories
+WORKDIR /app
+RUN mkdir -p /test-results /test-reports /logs && \
+    chown -R alysuser:alysuser /app /test-results /test-reports /logs
+
+# Copy built binaries and source for tests
+COPY --from=builder /app/target/release/test-runner /usr/local/bin/
+COPY --from=builder /app/crates/actor_system /app/crates/actor_system
+COPY --from=builder /app/Cargo.toml /app/Cargo.lock ./
+
+# Copy test configuration
+COPY crates/actor_system/k8s/test-config.toml /app/test-config.toml
+
+# Install cargo for running tests
+COPY --from=builder /usr/local/cargo /usr/local/cargo
+COPY --from=builder /usr/local/rustup /usr/local/rustup
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+# Health check script
+COPY crates/actor_system/k8s/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh
+
+USER alysuser
+
+# Expose ports
+EXPOSE 8080 9090
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD /usr/local/bin/healthcheck.sh
+
+# Default command
+CMD ["test-runner", "--config", "/app/test-config.toml"]

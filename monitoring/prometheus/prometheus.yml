@@ -1,0 +1,156 @@
+# Prometheus configuration for Alys V2 monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'alys-v2'
+    environment: 'production'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+rule_files:
+  - "alerts/v2-*.yml"
+
+scrape_configs:
+  # Alys V2 main application metrics
+  - job_name: 'alys-v2-main'
+    static_configs:
+      - targets: ['alys-app:9001']
+        labels:
+          instance: 'alys-main'
+          service: 'alys-consensus'
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+
+  # Alys V2 actor system metrics
+  - job_name: 'alys-v2-actors'
+    static_configs:
+      - targets: ['alys-app:9002']
+        labels:
+          instance: 'alys-actors'
+          service: 'actor-system'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+
+  # Alys V2 migration metrics
+  - job_name: 'alys-v2-migration'
+    static_configs:
+      - targets: ['alys-app:9003']
+        labels:
+          instance: 'alys-migration'
+          service: 'migration-controller'
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Ethereum execution layer metrics (Geth/Reth)
+  - job_name: 'ethereum-execution'
+    static_configs:
+      - targets: ['execution:9001', 'localhost:9001']
+        labels:
+          instance: 'execution-layer'
+          service: 'ethereum-client'
+    scrape_interval: 10s
+    metrics_path: '/'
+
+  # Ethereum metrics exporter
+  - job_name: 'ethereum-metrics-exporter'
+    static_configs:
+      - targets: ['metrics-exporter:9091']
+        labels:
+          instance: 'ethereum-exporter'
+          service: 'metrics-export'
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Bitcoin Core metrics (if available)
+  - job_name: 'bitcoin-core'
+    static_configs:
+      - targets: ['bitcoin-core:8332']
+        labels:
+          instance: 'bitcoin-node'
+          service: 'bitcoin-core'
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # System metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100', 'localhost:9100']
+        labels:
+          instance: 'system'
+          service: 'node-metrics'
+    scrape_interval: 15s
+
+  # Container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          instance: 'containers'
+          service: 'container-metrics'
+    scrape_interval: 15s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus'
+          service: 'monitoring'
+
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+        labels:
+          instance: 'grafana'
+          service: 'monitoring'
+    metrics_path: '/metrics'
+
+  # AlertManager metrics
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          instance: 'alertmanager'
+          service: 'monitoring'
+
+  # Federation scraping from other Prometheus instances (if clustering)
+  - job_name: 'federated-prometheus'
+    scrape_interval: 15s
+    honor_labels: true
+    metrics_path: '/federate'
+    params:
+      'match[]':
+        - '{job=~"alys-v2-.*"}'
+        - '{__name__=~"alys_.*"}'
+        - '{__name__=~"up|scrape_.*"}'
+    static_configs:
+      - targets:
+          - 'prometheus-peer-1:9090'
+          - 'prometheus-peer-2:9090'
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'alys_.*'
+        target_label: __tmp_alys_metric
+        replacement: 'true'
+
+# Remote write configuration for long-term storage (optional)
+remote_write:
+  - url: "http://victoriametrics:8428/api/v1/write"
+    queue_config:
+      max_samples_per_send: 1000
+      max_shards: 200
+      capacity: 2500
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'alys_.*'
+        action: keep
+
+# Remote read configuration (optional)
+remote_read:
+  - url: "http://victoriametrics:8428/api/v1/read"

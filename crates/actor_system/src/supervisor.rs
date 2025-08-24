@@ -4,6 +4,10 @@
 //! restart strategies, fault isolation, and cascading failure handling.
 
 use crate::{
+    blockchain::{
+        BlockchainTimingConstraints, BlockchainActorPriority, BlockchainRestartStrategy,
+        FederationHealthRequirement, BlockchainReadiness, SyncStatus
+    },
     error::{ActorError, ActorResult, ErrorSeverity},
     message::{AlysMessage, MessageEnvelope, MessagePriority},
     metrics::ActorMetrics,
@@ -98,6 +102,114 @@ pub enum EscalationStrategy {
     ContinueWithoutActor,
 }
 
+/// Enhanced supervision policy with blockchain awareness
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockchainSupervisionPolicy {
+    /// Base supervision policy
+    pub base_policy: SupervisionPolicy,
+    /// Blockchain-specific restart strategy
+    pub blockchain_restart: BlockchainRestartStrategy,
+    /// Federation health requirements
+    pub federation_requirements: Option<FederationHealthRequirement>,
+    /// Blockchain timing constraints
+    pub timing_constraints: BlockchainTimingConstraints,
+    /// Priority level for supervision decisions
+    pub priority: BlockchainActorPriority,
+    /// Whether this actor is consensus-critical
+    pub consensus_critical: bool,
+}
+
+impl Default for BlockchainSupervisionPolicy {
+    fn default() -> Self {
+        Self {
+            base_policy: SupervisionPolicy::default(),
+            blockchain_restart: BlockchainRestartStrategy::default(),
+            federation_requirements: None,
+            timing_constraints: BlockchainTimingConstraints::default(),
+            priority: BlockchainActorPriority::Background,
+            consensus_critical: false,
+        }
+    }
+}
+
+impl BlockchainSupervisionPolicy {
+    /// Calculate restart delay with blockchain-specific adjustments
+    pub fn calculate_restart_delay(&self, attempt: u32) -> Option<Duration> {
+        self.blockchain_restart.calculate_blockchain_delay(attempt, &self.timing_constraints)
+    }
+    
+    /// Check if restart is allowed based on federation health
+    pub async fn can_restart_with_federation(&self) -> bool {
+        if let Some(federation_req) = &self.federation_requirements {
+            // In a real implementation, this would check actual federation health
+            // For now, we'll simulate a basic check
+            federation_req.allow_degraded_operation || 
+            self.simulate_federation_health_check(federation_req.min_healthy_members).await
+        } else {
+            true
+        }
+    }
+    
+    async fn simulate_federation_health_check(&self, min_healthy: usize) -> bool {
+        // Placeholder for actual federation health check
+        // In production, this would query the actual federation state
+        min_healthy <= 3 // Assume we have at least 3 healthy members
+    }
+    
+    /// Create a consensus-critical supervision policy
+    pub fn consensus_critical() -> Self {
+        Self {
+            base_policy: SupervisionPolicy {
+                restart_strategy: RestartStrategy::ExponentialBackoff {
+                    initial_delay: Duration::from_millis(50),
+                    max_delay: Duration::from_millis(500),
+                    multiplier: 1.5,
+                },
+                max_restarts: 10,
+                restart_window: Duration::from_secs(30),
+                escalation_strategy: EscalationStrategy::RestartTree,
+                shutdown_timeout: Duration::from_secs(2),
+                isolate_failures: false,
+            },
+            blockchain_restart: BlockchainRestartStrategy {
+                max_consensus_downtime: Duration::from_millis(100),
+                respect_consensus: true,
+                align_to_blocks: true,
+                ..Default::default()
+            },
+            timing_constraints: BlockchainTimingConstraints::default(),
+            priority: BlockchainActorPriority::Consensus,
+            consensus_critical: true,
+            ..Default::default()
+        }
+    }
+    
+    /// Create a federation-aware supervision policy
+    pub fn federation_aware(federation_req: FederationHealthRequirement) -> Self {
+        Self {
+            base_policy: SupervisionPolicy {
+                restart_strategy: RestartStrategy::Progressive {
+                    initial_delay: Duration::from_millis(200),
+                    max_attempts: 5,
+                    delay_multiplier: 2.0,
+                },
+                max_restarts: 8,
+                restart_window: Duration::from_secs(60),
+                escalation_strategy: EscalationStrategy::EscalateToParent,
+                shutdown_timeout: Duration::from_secs(5),
+                isolate_failures: true,
+            },
+            blockchain_restart: BlockchainRestartStrategy {
+                federation_requirements: Some(federation_req.clone()),
+                ..Default::default()
+            },
+            federation_requirements: Some(federation_req),
+            priority: BlockchainActorPriority::Bridge,
+            ..Default::default()
+        }
+    }
+}
+
 /// Supervision policy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupervisionPolicy {
@@ -120,7 +232,7 @@ impl Default for SupervisionPolicy {
         Self {
             restart_strategy: RestartStrategy::default(),
             max_restarts: 5,
-            restart_window: Duration::from_minutes(1),
+            restart_window: Duration::from_secs(60),
             escalation_strategy: EscalationStrategy::EscalateToParent,
             shutdown_timeout: Duration::from_secs(10),
             isolate_failures: true,
@@ -681,13 +793,13 @@ mod tests {
         let policy = SupervisionPolicyBuilder::new()
             .restart_strategy(RestartStrategy::Immediate)
             .max_restarts(10)
-            .restart_window(Duration::from_minutes(5))
+            .restart_window(Duration::from_secs(300))
             .escalation_strategy(EscalationStrategy::RestartTree)
             .build();
 
         assert_eq!(policy.restart_strategy, RestartStrategy::Immediate);
         assert_eq!(policy.max_restarts, 10);
-        assert_eq!(policy.restart_window, Duration::from_minutes(5));
+        assert_eq!(policy.restart_window, Duration::from_secs(300));
         assert_eq!(policy.escalation_strategy, EscalationStrategy::RestartTree);
     }
 

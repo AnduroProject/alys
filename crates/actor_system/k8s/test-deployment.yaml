@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alys-v2-test-runner
+  namespace: alys-v2-testing
+  labels:
+    app: alys-v2-test-runner
+    component: actor-system-tests
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alys-v2-test-runner
+  template:
+    metadata:
+      labels:
+        app: alys-v2-test-runner
+        component: actor-system-tests
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: alys-test-runner
+      containers:
+      - name: test-runner
+        image: alys-v2-test-runner:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: "debug"
+        - name: TEST_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: test_environment
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: log_level
+        - name: TEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: test_timeout
+        - name: MAX_TEST_ACTORS
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: max_test_actors
+        - name: PROMETHEUS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: prometheus_enabled
+        - name: METRICS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: metrics_port
+        - name: GOVERNANCE_ENDPOINTS
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: governance_mock_endpoints
+        - name: TEST_BITCOIN_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: test-secrets
+              key: test_bitcoin_private_key
+        - name: TEST_ETHEREUM_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: test-secrets
+              key: test_ethereum_private_key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        volumeMounts:
+        - name: test-data
+          mountPath: /test-data
+        - name: logs
+          mountPath: /logs
+      volumes:
+      - name: test-data
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alys-v2-test-runner-service
+  namespace: alys-v2-testing
+  labels:
+    app: alys-v2-test-runner
+    component: actor-system-tests
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: alys-v2-test-runner
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alys-test-runner
+  namespace: alys-v2-testing
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: alys-v2-testing
+  name: test-runner-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: test-runner-rolebinding
+  namespace: alys-v2-testing
+subjects:
+- kind: ServiceAccount
+  name: alys-test-runner
+  namespace: alys-v2-testing
+roleRef:
+  kind: Role
+  name: test-runner-role
+  apiGroup: rbac.authorization.k8s.io

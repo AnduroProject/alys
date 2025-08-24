@@ -1,0 +1,97 @@
+[test_environment]
+name = "k8s"
+timeout_seconds = 300
+max_concurrent_tests = 10
+log_level = "debug"
+report_format = "json"
+
+[kubernetes]
+namespace = "alys-v2-testing"
+service_discovery = true
+resource_limits = true
+cleanup_on_failure = true
+
+[mock_services]
+governance_nodes = [
+    "http://mock-governance-1:50051",
+    "http://mock-governance-2:50051", 
+    "http://mock-governance-3:50051"
+]
+bitcoin_rpc_url = "http://mock-bitcoin-node:18332"
+ethereum_rpc_url = "http://mock-ethereum-node:8545"
+
+[prometheus]
+enabled = true
+endpoint = "http://prometheus:9090"
+metrics_port = 9090
+scrape_interval = "15s"
+
+[test_scenarios]
+# StreamActor Testing
+[test_scenarios.stream_actor]
+enabled = true
+timeout = 60
+governance_connections = 3
+message_rate = 100
+test_cases = [
+    "connection_establishment",
+    "message_routing", 
+    "failure_recovery",
+    "load_testing"
+]
+
+# Supervision Testing  
+[test_scenarios.supervision]
+enabled = true
+timeout = 120
+max_actors = 50
+failure_scenarios = [
+    "single_actor_failure",
+    "cascading_failures",
+    "supervisor_failure",
+    "resource_exhaustion"
+]
+
+# Integration Testing
+[test_scenarios.integration]
+enabled = true
+timeout = 180
+actor_types = [
+    "StreamActor",
+    "ChainActor", 
+    "BridgeActor",
+    "EngineActor"
+]
+test_flows = [
+    "block_production_flow",
+    "bridge_operation_flow", 
+    "multi_actor_coordination"
+]
+
+# Performance Testing
+[test_scenarios.performance]
+enabled = true
+timeout = 300
+warmup_duration = 30
+test_duration = 240
+target_message_rate = 1000
+max_memory_usage_mb = 512
+max_cpu_percent = 80
+
+[monitoring]
+prometheus_enabled = true
+grafana_enabled = true
+log_collection = true
+metrics_retention = "1d"
+
+[alerts]
+high_failure_rate_threshold = 0.1
+high_latency_threshold_ms = 100
+memory_usage_threshold_percent = 85
+cpu_usage_threshold_percent = 90
+
+[cleanup]
+auto_cleanup = true
+cleanup_timeout = 60
+preserve_logs = true
+preserve_metrics = true

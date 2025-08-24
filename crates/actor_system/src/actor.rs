@@ -36,6 +36,9 @@ pub trait AlysActor: Actor + LifecycleAware + Send + Sync + 'static {
     fn new(config: Self::Config) -> Result<Self, Self::Error>
     where
         Self: Sized;
+
+    /// Get actor type name
+    fn actor_type(&self) -> String;
     
     /// Get actor configuration
     fn config(&self) -> &Self::Config;

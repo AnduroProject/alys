@@ -22,6 +22,8 @@ parking_lot = "0.12"
 crossbeam = "0.8"
 dashmap = "5.5"
 once_cell = "1.19"
+hyper = { version = "0.14", features = ["full"] }
+bincode = "1.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
