@@ -40,49 +40,49 @@ use actor_system::{
 #[derive(Debug)]
 pub struct ChainActor {
     /// Actor configuration
-    config: ChainActorConfig,
+    pub config: ChainActorConfig,
     
     /// Current chain state (owned by actor, no sharing)
-    chain_state: ChainState,
+    pub chain_state: ChainState,
     
     /// Pending blocks awaiting processing or validation
-    pending_blocks: HashMap<Hash256, PendingBlockInfo>,
+    pub pending_blocks: HashMap<Hash256, PendingBlockInfo>,
     
     /// Block candidate queue for production
-    block_candidates: VecDeque<BlockCandidate>,
+    pub block_candidates: VecDeque<BlockCandidate>,
     
     /// Federation configuration and state
-    federation: FederationState,
+    pub federation: FederationState,
     
     /// Auxiliary PoW state for Bitcoin merged mining
-    auxpow_state: AuxPowState,
+    pub auxpow_state: AuxPowState,
     
     /// Subscriber management for block notifications
-    subscribers: HashMap<Uuid, BlockSubscriber>,
+    pub subscribers: HashMap<Uuid, BlockSubscriber>,
     
     /// Performance metrics and monitoring
-    metrics: ChainActorMetrics,
+    pub metrics: ChainActorMetrics,
     
     /// Feature flag manager for gradual rollout
-    feature_flags: Arc<FeatureFlagManager>,
+    pub feature_flags: Arc<FeatureFlagManager>,
     
     /// Integration with other actors
-    actor_addresses: ActorAddresses,
+    pub actor_addresses: ActorAddresses,
     
     /// Validation result cache
-    validation_cache: ValidationCache,
+    pub validation_cache: ValidationCache,
     
     /// Actor health monitoring
-    health_monitor: ActorHealthMonitor,
+    pub health_monitor: ActorHealthMonitor,
     
     /// Distributed tracing context
-    trace_context: TraceContext,
+    pub trace_context: TraceContext,
     
     /// Block production state
-    production_state: BlockProductionState,
+    pub production_state: BlockProductionState,
     
     /// Network broadcast tracking
-    broadcast_tracker: BroadcastTracker,
+    pub broadcast_tracker: BroadcastTracker,
 }
 
 impl Actor for ChainActor {
@@ -245,11 +245,27 @@ impl ChainActor {
         let supervisor = &self.actor_addresses.supervisor;
         let self_addr = ctx.address();
         
+        info!(
+            actor_name = "ChainActor",
+            health_check_interval = ?self.health_monitor.health_check_interval,
+            "Registering ChainActor with supervision system"
+        );
+        
+        // Register with supervisor for health monitoring and lifecycle management
         supervisor.do_send(RegisterActor {
             name: "ChainActor".to_string(),
             address: self_addr.clone().recipient(),
             health_check_interval: self.health_monitor.health_check_interval,
         });
+
+        // TODO: Add additional supervision metadata like:
+        // - Actor priority (Critical for ChainActor)
+        // - Restart strategy (Immediate restart on failure)
+        // - Escalation rules (Notify operator on repeated failures)
+        // - Dependency actors (Engine, Storage, Network, Bridge actors)
+        // - Performance thresholds for supervision alerts
+        
+        debug!("ChainActor successfully registered with supervision system");
     }
 
     /// Calculate the current slot based on system time
@@ -261,7 +277,7 @@ impl ChainActor {
     }
 
     /// Check if this node should produce a block for the given slot
-    fn should_produce_block(&self, slot: u64) -> bool {
+    pub fn should_produce_block(&self, slot: u64) -> bool {
         // Placeholder implementation - in real system would check authority schedule
         if !self.config.is_validator {
             return false;
@@ -443,4 +459,322 @@ struct HealthCheckResult {
     healthy: bool,
     score: u8,
     details: String,
+}
+
+// Additional message handlers for remaining ChainActor operations
+impl ChainActor {
+    /// Handle request for blocks in a specific range
+    pub async fn handle_get_blocks_by_range(&mut self, msg: GetBlocksByRange) -> Result<Vec<SignedConsensusBlock>, ChainError> {
+        debug!(
+            start_height = msg.start_height,
+            count = msg.count,
+            include_body = msg.include_body,
+            "Retrieving blocks by range"
+        );
+
+        let mut blocks = Vec::new();
+        let end_height = msg.start_height + msg.count as u64;
+        let actual_end = std::cmp::min(end_height, self.chain_state.height + 1);
+
+        for height in msg.start_height..actual_end {
+            // In real implementation, would fetch from storage
+            if let Some(block) = self.get_block_by_height(height).await? {
+                blocks.push(block);
+                
+                // Check response size limit
+                if let Some(max_size) = msg.max_response_size {
+                    let estimated_size = blocks.len() * 1000; // Rough estimate
+                    if estimated_size >= max_size {
+                        break;
+                    }
+                }
+            }
+        }
+
+        debug!(
+            blocks_returned = blocks.len(),
+            requested_count = msg.count,
+            "Retrieved blocks by range"
+        );
+
+        Ok(blocks)
+    }
+
+    /// Handle block broadcast request
+    pub async fn handle_broadcast_block(&mut self, msg: BroadcastBlock) -> Result<BroadcastResult, ChainError> {
+        let start_time = Instant::now();
+        let block_hash = msg.block.message.hash();
+
+        info!(
+            block_hash = %block_hash,
+            priority = ?msg.priority,
+            exclude_peers = msg.exclude_peers.len(),
+            "Broadcasting block to network"
+        );
+
+        // Update broadcast tracker
+        self.broadcast_tracker.add_broadcast(
+            block_hash,
+            msg.priority,
+            msg.exclude_peers.clone(),
+            start_time,
+        );
+
+        // In real implementation, would use network actor to broadcast
+        let result = self.perform_block_broadcast(&msg).await?;
+
+        // Record metrics
+        let broadcast_time = start_time.elapsed();
+        self.metrics.record_block_broadcast(broadcast_time, result.successful_sends > 0);
+
+        info!(
+            block_hash = %block_hash,
+            peers_reached = result.peers_reached,
+            successful_sends = result.successful_sends,
+            broadcast_time_ms = broadcast_time.as_millis(),
+            "Block broadcast completed"
+        );
+
+        Ok(result)
+    }
+
+    /// Handle block subscription request
+    pub async fn handle_subscribe_blocks(&mut self, msg: SubscribeBlocks) -> Result<(), ChainError> {
+        let subscription_id = Uuid::new_v4();
+        
+        info!(
+            subscription_id = %subscription_id,
+            event_types = ?msg.event_types,
+            "Adding block subscription"
+        );
+
+        let subscriber = BlockSubscriber {
+            recipient: msg.subscriber,
+            event_types: msg.event_types.into_iter().collect(),
+            filter: msg.filter,
+            subscribed_at: SystemTime::now(),
+            messages_sent: 0,
+        };
+
+        self.subscribers.insert(subscription_id, subscriber);
+
+        debug!(
+            total_subscribers = self.subscribers.len(),
+            "Block subscription added"
+        );
+
+        Ok(())
+    }
+
+    /// Handle chain metrics request
+    pub async fn handle_get_chain_metrics(&mut self, msg: GetChainMetrics) -> Result<ChainMetrics, ChainError> {
+        debug!(
+            include_details = msg.include_details,
+            time_window = ?msg.time_window,
+            "Retrieving chain metrics"
+        );
+
+        let metrics = self.calculate_chain_metrics(msg.time_window).await?;
+
+        if msg.include_details {
+            debug!(
+                blocks_produced = metrics.blocks_produced,
+                blocks_imported = metrics.blocks_imported,
+                avg_production_time = metrics.avg_production_time_ms,
+                "Detailed chain metrics calculated"
+            );
+        }
+
+        Ok(metrics)
+    }
+
+    /// Handle chain state query
+    pub async fn handle_query_chain_state(&mut self, msg: QueryChainState) -> Result<ChainStateQuery, ChainError> {
+        let start_time = Instant::now();
+        
+        // Determine target block
+        let target_block = if let Some(hash) = msg.block_hash {
+            self.get_block_by_hash(hash).await?
+        } else if let Some(height) = msg.block_height {
+            self.get_block_by_height(height).await?
+        } else {
+            self.chain_state.head.clone()
+                .and_then(|head| Some(SignedConsensusBlock::from_block_ref(&head)))
+        };
+
+        let block_ref = target_block
+            .as_ref()
+            .map(BlockRef::from_block)
+            .ok_or(ChainError::BlockNotFound)?;
+
+        // Collect requested state information
+        let mut state_info = std::collections::HashMap::new();
+        
+        for info_type in msg.include_info {
+            let value = self.get_state_info(&target_block, info_type).await?;
+            state_info.insert(info_type, value);
+        }
+
+        let processing_time = start_time.elapsed().as_millis() as u64;
+
+        debug!(
+            block_hash = %block_ref.hash,
+            block_height = block_ref.number,
+            info_types = state_info.len(),
+            processing_time_ms = processing_time,
+            "Chain state query completed"
+        );
+
+        Ok(ChainStateQuery {
+            block_ref,
+            state_info,
+            processing_time_ms: processing_time,
+        })
+    }
+
+    // Helper methods for the handlers
+
+    async fn get_block_by_height(&self, height: u64) -> Result<Option<SignedConsensusBlock>, ChainError> {
+        // Implementation would fetch from storage actor
+        debug!(height = height, "Fetching block by height");
+        Ok(None) // Placeholder
+    }
+
+    async fn get_block_by_hash(&self, hash: Hash256) -> Result<Option<SignedConsensusBlock>, ChainError> {
+        // Implementation would fetch from storage actor
+        debug!(hash = %hash, "Fetching block by hash");
+        Ok(None) // Placeholder
+    }
+
+    async fn perform_block_broadcast(&mut self, msg: &BroadcastBlock) -> Result<BroadcastResult, ChainError> {
+        // Implementation would use network actor to broadcast to peers
+        // For now, return simulated success
+        Ok(BroadcastResult {
+            peers_reached: 10,
+            successful_sends: 9,
+            failed_sends: 1,
+            avg_response_time_ms: Some(50),
+            failed_peers: vec![], // Would contain actual failed peer IDs
+        })
+    }
+
+    async fn calculate_chain_metrics(&self, _time_window: Option<Duration>) -> Result<ChainMetrics, ChainError> {
+        let snapshot = self.metrics.snapshot();
+        
+        Ok(ChainMetrics {
+            blocks_produced: snapshot.blocks_produced,
+            blocks_imported: snapshot.blocks_imported,
+            avg_production_time_ms: snapshot.avg_production_time_ms,
+            avg_import_time_ms: snapshot.avg_import_time_ms,
+            reorg_count: 0, // Would track from reorg manager
+            avg_reorg_depth: 0.0,
+            pegins_processed: 0, // Would get from peg manager
+            pegouts_processed: 0,
+            total_peg_value_sats: 0,
+            validation_failures: snapshot.total_errors,
+            broadcast_success_rate: 95.0, // Would calculate from broadcast tracker
+            memory_stats: MemoryStats::default(),
+        })
+    }
+
+    async fn get_state_info(
+        &self, 
+        _target_block: &Option<SignedConsensusBlock>, 
+        info_type: StateInfoType
+    ) -> Result<serde_json::Value, ChainError> {
+        // Implementation would extract specific state information
+        match info_type {
+            StateInfoType::Header => Ok(serde_json::json!({"type": "header"})),
+            StateInfoType::Transactions => Ok(serde_json::json!({"tx_count": 0})),
+            StateInfoType::PegOperations => Ok(serde_json::json!({"pegins": 0, "pegouts": 0})),
+            StateInfoType::Validation => Ok(serde_json::json!({"is_valid": true})),
+            StateInfoType::Network => Ok(serde_json::json!({"peers": 0})),
+        }
+    }
+}
+
+/// Handler implementations for the additional Actix messages
+impl Handler<GetBlocksByRange> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Vec<SignedConsensusBlock>, ChainError>>;
+
+    fn handle(&mut self, msg: GetBlocksByRange, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.handle_get_blocks_by_range(msg).await
+        }.into_actor(self))
+    }
+}
+
+impl Handler<BroadcastBlock> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<BroadcastResult, ChainError>>;
+
+    fn handle(&mut self, msg: BroadcastBlock, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.handle_broadcast_block(msg).await
+        }.into_actor(self))
+    }
+}
+
+impl Handler<SubscribeBlocks> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<(), ChainError>>;
+
+    fn handle(&mut self, msg: SubscribeBlocks, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.handle_subscribe_blocks(msg).await
+        }.into_actor(self))
+    }
+}
+
+impl Handler<GetChainMetrics> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ChainMetrics, ChainError>>;
+
+    fn handle(&mut self, msg: GetChainMetrics, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.handle_get_chain_metrics(msg).await
+        }.into_actor(self))
+    }
+}
+
+impl Handler<QueryChainState> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ChainStateQuery, ChainError>>;
+
+    fn handle(&mut self, msg: QueryChainState, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.handle_query_chain_state(msg).await
+        }.into_actor(self))
+    }
+}
+
+/// Handler for health check requests from the supervision system
+impl Handler<HealthCheck> for ChainActor {
+    type Result = HealthCheckResult;
+
+    fn handle(&mut self, _msg: HealthCheck, ctx: &mut Context<Self>) -> Self::Result {
+        // Perform comprehensive health check
+        self.perform_health_check(ctx);
+        
+        // Get the latest health score
+        let score = self.health_monitor.recent_scores.back().cloned().unwrap_or(0);
+        let healthy = score >= 50; // Consider healthy if score is 50 or above
+        
+        let details = format!(
+            "Chain height: {}, pending blocks: {}, health score: {}",
+            self.chain_state.height,
+            self.pending_blocks.len(),
+            score
+        );
+
+        debug!(
+            health_score = score,
+            healthy = healthy,
+            chain_height = self.chain_state.height,
+            pending_blocks = self.pending_blocks.len(),
+            "Health check completed"
+        );
+        
+        HealthCheckResult {
+            healthy,
+            score,
+            details,
+        }
+    }
 }

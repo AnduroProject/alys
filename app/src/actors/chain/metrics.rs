@@ -218,6 +218,71 @@ impl ChainActorMetrics {
         self.avg_validation_time.add(duration.as_millis() as f64);
     }
     
+    /// Record block broadcast metrics
+    pub fn record_block_broadcast(&mut self, duration: Duration, success: bool) {
+        if success {
+            self.blocks_imported += 1; // Track successful broadcasts
+        } else {
+            self.error_counters.network_errors += 1;
+        }
+        
+        // Track broadcast performance
+        let broadcast_time_ms = duration.as_millis() as f64;
+        self.avg_import_time.add(broadcast_time_ms); // Reuse import time tracker for broadcasts
+        
+        // Check for performance violations
+        if broadcast_time_ms > 5000.0 { // 5 second threshold
+            self.performance_violations.import_timeouts += 1;
+            self.performance_violations.last_violation_at = Some(Instant::now());
+        }
+    }
+    
+    /// Record Engine Actor interaction metrics
+    pub fn record_engine_operation(&mut self, duration: Duration, success: bool) {
+        let operation_time_ms = duration.as_millis() as f64;
+        self.avg_production_time.add(operation_time_ms); // Engine operations affect production time
+        
+        if !success {
+            self.error_counters.production_errors += 1;
+        }
+        
+        // Check for engine performance violations
+        if operation_time_ms > 2000.0 { // 2 second threshold for engine operations
+            self.performance_violations.production_timeouts += 1;
+            self.performance_violations.last_violation_at = Some(Instant::now());
+        }
+    }
+    
+    /// Record Storage Actor operation metrics
+    pub fn record_storage_operation(&mut self, duration: Duration, success: bool) {
+        let storage_time_ms = duration.as_millis() as f64;
+        self.avg_import_time.add(storage_time_ms); // Storage affects import performance
+        
+        if !success {
+            self.error_counters.import_errors += 1;
+        }
+        
+        // Check for storage performance violations
+        if storage_time_ms > 1000.0 { // 1 second threshold for storage operations
+            self.performance_violations.import_timeouts += 1;
+            self.performance_violations.last_violation_at = Some(Instant::now());
+        }
+    }
+    
+    /// Record Bridge Actor peg operation metrics
+    pub fn record_peg_operation(&mut self, duration: Duration, success: bool) {
+        if !success {
+            self.error_counters.peg_operation_errors += 1;
+        }
+        
+        // Track peg operation performance
+        let peg_time_ms = duration.as_millis() as f64;
+        if peg_time_ms > 3000.0 { // 3 second threshold for peg operations
+            self.performance_violations.import_timeouts += 1;
+            self.performance_violations.last_violation_at = Some(Instant::now());
+        }
+    }
+    
     /// Update queue depths
     pub fn update_queue_depths(&mut self, pending: usize, candidates: usize, validation: usize, notifications: usize) {
         self.queue_depths.pending_blocks = pending;

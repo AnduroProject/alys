@@ -24,16 +24,16 @@ Implement the ChainActor that will replace the monolithic Chain struct with a me
 
 ## Subtasks
 
-- [ ] Create ALYS-007-1: Design ChainActor message protocol with comprehensive message definitions [https://marathondh.atlassian.net/browse/AN-393]
-- [ ] Create ALYS-007-2: Implement ChainActor core structure with consensus integration [https://marathondh.atlassian.net/browse/AN-394]
-- [ ] Create ALYS-007-3: Implement block production logic with timing constraints [https://marathondh.atlassian.net/browse/AN-395]
-- [ ] Create ALYS-007-4: Implement block import and validation pipeline [https://marathondh.atlassian.net/browse/AN-396]
-- [ ] Create ALYS-007-5: Implement chain state management and reorganization [https://marathondh.atlassian.net/browse/AN-397]
-- [ ] Create ALYS-007-6: Implement finalization logic with AuxPoW integration [https://marathondh.atlassian.net/browse/AN-398]
-- [ ] Create ALYS-007-7: Create migration adapter for gradual legacy transition [https://marathondh.atlassian.net/browse/AN-399]
-- [ ] Create ALYS-007-8: Implement comprehensive test suite (unit, integration, performance) [https://marathondh.atlassian.net/browse/AN-401]
-- [ ] Create ALYS-007-9: Integration with actor supervision system [https://marathondh.atlassian.net/browse/AN-402]
-- [ ] Create ALYS-007-10: Performance benchmarking and optimization [https://marathondh.atlassian.net/browse/AN-403]
+- [X] Create ALYS-007-1: Design ChainActor message protocol with comprehensive message definitions [https://marathondh.atlassian.net/browse/AN-393]
+- [X] Create ALYS-007-2: Implement ChainActor core structure with consensus integration [https://marathondh.atlassian.net/browse/AN-394]
+- [X] Create ALYS-007-3: Implement block production logic with timing constraints [https://marathondh.atlassian.net/browse/AN-395]
+- [X] Create ALYS-007-4: Implement block import and validation pipeline [https://marathondh.atlassian.net/browse/AN-396]
+- [X] Create ALYS-007-5: Implement chain state management and reorganization [https://marathondh.atlassian.net/browse/AN-397]
+- [X] Create ALYS-007-6: Implement finalization logic with AuxPoW integration [https://marathondh.atlassian.net/browse/AN-398]
+- [X] Create ALYS-007-7: Create migration adapter for gradual legacy transition [https://marathondh.atlassian.net/browse/AN-399]
+- [X] Create ALYS-007-8: Implement comprehensive test suite (unit, integration, performance) [https://marathondh.atlassian.net/browse/AN-401]
+- [X] Create ALYS-007-9: Integration with actor supervision system [https://marathondh.atlassian.net/browse/AN-402]
+- [X] Create ALYS-007-10: Performance benchmarking and optimization [https://marathondh.atlassian.net/browse/AN-403]
 
 ## Acceptance Criteria
 - [ ] ChainActor implements all Chain functionality

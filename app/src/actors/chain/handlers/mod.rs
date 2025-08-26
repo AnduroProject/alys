@@ -11,8 +11,8 @@ pub mod consensus_handlers;
 pub mod auxpow_handlers;
 pub mod peg_handlers;
 
-// Re-export handler traits and types
-pub use block_handlers::BlockHandler;
-pub use consensus_handlers::ConsensusHandler;
-pub use auxpow_handlers::AuxPowHandler;
-pub use peg_handlers::PegHandler;
+// Re-export configuration types and managers
+pub use block_handlers::{BlockProcessingConfig, BlockProcessingQueue, BlockProcessingPriority, PendingBlockInfo};
+pub use consensus_handlers::{AuraConfig, AuraConsensusManager, SlotSchedule, ValidatorMetrics};
+pub use auxpow_handlers::{FinalizationConfig, FinalizationManager, FinalizationEntry};
+pub use peg_handlers::{PegConfig, PegOperationManager, PegInState, PegOutState, PegInStatus, PegOutStatus};
