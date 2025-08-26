@@ -213,7 +213,7 @@ pub struct ActorIntegration {
     /// Sync actor for chain synchronization
     pub sync_actor: Option<Addr<crate::actors::sync_actor::SyncActor>>,
     /// Storage actor for persistence
-    pub storage_actor: Option<Addr<crate::actors::storage_actor::StorageActor>>,
+    pub storage_actor: Option<Addr<crate::actors::storage::StorageActor>>,
     /// Network actor for P2P communication
     pub network_actor: Option<Addr<crate::actors::network_actor::NetworkActor>>,
 }

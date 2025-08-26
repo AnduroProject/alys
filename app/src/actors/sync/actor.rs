@@ -1557,7 +1557,7 @@ pub struct EmergencyCondition {
 
 // Placeholder implementations for external components that would be implemented elsewhere
 
-use crate::actors::chain_actor::{ChainActor, GetChainHeight};
+use crate::actors::chain::{ChainActor, GetChainHeight};
 
 /// Checkpoint manager for recovery operations
 #[derive(Debug)]

@@ -1,10 +1,11 @@
 //! Query and statistics message handlers
 //!
 //! This module implements message handlers for querying storage statistics,
-//! cache information, and other operational data.
+//! cache information, advanced indexing queries, and other operational data.
 
 use crate::actors::storage::actor::StorageActor;
-use crate::messages::storage_messages::*;
+use crate::actors::storage::indexing::{BlockRange, IndexingError};
+use crate::actors::storage::messages::*;
 use crate::types::*;
 use actix::prelude::*;
 use tracing::*;
@@ -97,21 +98,45 @@ impl Handler<QueryLogsMessage> for StorageActor {
     type Result = ResponseFuture<Result<Vec<EventLog>, StorageError>>;
 
     fn handle(&mut self, msg: QueryLogsMessage, _ctx: &mut Self::Context) -> Self::Result {
-        debug!("Received query logs request with filter: from_block={:?}, to_block={:?}",
-            msg.filter.from_block, msg.filter.to_block);
+        debug!("Received query logs request with filter: from_block={:?}, to_block={:?}, address={:?}",
+            msg.filter.from_block, msg.filter.to_block, msg.filter.address);
+        
+        let indexing = self.indexing.clone();
         
         Box::pin(async move {
-            // TODO: Implement log querying
-            // This would involve:
-            // 1. Parsing the log filter criteria
-            // 2. Scanning the logs column family
-            // 3. Filtering by block range, address, and topics
-            // 4. Applying limit if specified
+            let from_block = msg.filter.from_block.unwrap_or(0);
+            let to_block = msg.filter.to_block.unwrap_or(u64::MAX);
             
-            let logs = Vec::new(); // Placeholder
-            
-            info!("Log query completed, found {} matching logs", logs.len());
-            Ok(logs)
+            match indexing.write().await.search_logs(
+                msg.filter.address,
+                msg.filter.topics.clone(),
+                from_block,
+                to_block
+            ).await {
+                Ok(ethereum_logs) => {
+                    // Convert Ethereum logs to EventLogs
+                    let event_logs: Vec<EventLog> = ethereum_logs.into_iter()
+                        .map(|eth_log| EventLog {
+                            address: eth_log.address,
+                            topics: eth_log.topics,
+                            data: eth_log.data,
+                            block_hash: eth_log.block_hash.unwrap_or_default(),
+                            block_number: eth_log.block_number.unwrap_or_default(),
+                            transaction_hash: eth_log.transaction_hash.unwrap_or_default(),
+                            transaction_index: eth_log.transaction_index.unwrap_or_default(),
+                            log_index: eth_log.log_index.unwrap_or_default(),
+                            removed: false,
+                        })
+                        .collect();
+                    
+                    info!("Log query completed, found {} matching logs", event_logs.len());
+                    Ok(event_logs)
+                },
+                Err(e) => {
+                    error!("Failed to query logs: {}", e);
+                    Err(StorageError::Database(format!("Log query failed: {}", e)))
+                }
+            }
         })
     }
 }
@@ -247,3 +272,196 @@ impl Handler<QueryArchiveMessage> for StorageActor {
         })
     }
 }
+
+// Advanced indexing query handlers
+
+impl Handler<GetBlockByHeightMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Option<ConsensusBlock>, StorageError>>;
+
+    fn handle(&mut self, msg: GetBlockByHeightMessage, _ctx: &mut Self::Context) -> Self::Result {
+        debug!("Received get block by height request: {}", msg.height);
+        
+        let indexing = self.indexing.clone();
+        let database = self.database.clone();
+        let cache = self.cache.clone();
+        
+        Box::pin(async move {
+            // Use indexing system to get block hash by height
+            match indexing.read().await.get_block_hash_by_height(msg.height).await {
+                Ok(Some(block_hash)) => {
+                    // Now get the block using the hash
+                    if let Some(block) = cache.get_block(&block_hash).await {
+                        debug!("Block {} retrieved from cache by height {}", block_hash, msg.height);
+                        return Ok(Some(block));
+                    }
+                    
+                    // Try database
+                    match database.get_block(&block_hash).await {
+                        Ok(Some(block)) => {
+                            debug!("Block {} retrieved from database by height {}", block_hash, msg.height);
+                            // Cache for future access
+                            cache.put_block(block_hash, block.clone()).await;
+                            Ok(Some(block))
+                        },
+                        Ok(None) => {
+                            warn!("Block hash {} found in index but block not in database", block_hash);
+                            Ok(None)
+                        },
+                        Err(e) => {
+                            error!("Failed to get block {} from database: {}", block_hash, e);
+                            Err(e)
+                        }
+                    }
+                },
+                Ok(None) => {
+                    debug!("Block not found at height {}", msg.height);
+                    Ok(None)
+                },
+                Err(e) => {
+                    error!("Failed to query block height index: {}", e);
+                    Err(StorageError::Database(format!("Height index query failed: {}", e)))
+                }
+            }
+        })
+    }
+}
+
+impl Handler<GetBlockRangeMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Vec<ConsensusBlock>, StorageError>>;
+
+    fn handle(&mut self, msg: GetBlockRangeMessage, _ctx: &mut Self::Context) -> Self::Result {
+        debug!("Received get block range request: {} to {}", msg.start_height, msg.end_height);
+        
+        if msg.start_height > msg.end_height {
+            return Box::pin(async move {
+                Err(StorageError::InvalidRequest("start_height must be <= end_height".to_string()))
+            });
+        }
+        
+        let range_size = msg.end_height - msg.start_height + 1;
+        if range_size > 1000 {
+            return Box::pin(async move {
+                Err(StorageError::InvalidRequest("Range too large, maximum 1000 blocks".to_string()))
+            });
+        }
+        
+        let indexing = self.indexing.clone();
+        let database = self.database.clone();
+        let cache = self.cache.clone();
+        
+        Box::pin(async move {
+            let block_range = BlockRange {
+                start: msg.start_height,
+                end: msg.end_height,
+            };
+            
+            match indexing.read().await.get_blocks_in_range(block_range).await {
+                Ok(block_hashes) => {
+                    let mut blocks = Vec::new();
+                    
+                    for block_hash in block_hashes {
+                        // Try cache first
+                        if let Some(block) = cache.get_block(&block_hash).await {
+                            blocks.push(block);
+                            continue;
+                        }
+                        
+                        // Try database
+                        match database.get_block(&block_hash).await {
+                            Ok(Some(block)) => {
+                                // Cache for future access
+                                cache.put_block(block_hash, block.clone()).await;
+                                blocks.push(block);
+                            },
+                            Ok(None) => {
+                                warn!("Block hash {} found in index but block not in database", block_hash);
+                                // Continue with other blocks
+                            },
+                            Err(e) => {
+                                error!("Failed to get block {} from database: {}", block_hash, e);
+                                return Err(e);
+                            }
+                        }
+                    }
+                    
+                    info!("Retrieved {} blocks in range {} to {}", blocks.len(), msg.start_height, msg.end_height);
+                    Ok(blocks)
+                },
+                Err(e) => {
+                    error!("Failed to query block range: {}", e);
+                    Err(StorageError::Database(format!("Block range query failed: {}", e)))
+                }
+            }
+        })
+    }
+}
+
+impl Handler<GetTransactionByHashMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Option<TransactionWithBlockInfo>, StorageError>>;
+
+    fn handle(&mut self, msg: GetTransactionByHashMessage, _ctx: &mut Self::Context) -> Self::Result {
+        debug!("Received get transaction by hash request: {}", msg.tx_hash);
+        
+        let indexing = self.indexing.clone();
+        let database = self.database.clone();
+        
+        Box::pin(async move {
+            match indexing.read().await.get_transaction_by_hash(&msg.tx_hash).await {
+                Ok(Some(tx_index)) => {
+                    // Get the full block to extract transaction details
+                    match database.get_block(&tx_index.block_hash).await {
+                        Ok(Some(block)) => {
+                            if let Some(transaction) = block.execution_payload.transactions.get(tx_index.transaction_index as usize) {
+                                let tx_with_info = TransactionWithBlockInfo {
+                                    transaction: transaction.clone(),
+                                    block_hash: tx_index.block_hash,
+                                    block_number: tx_index.block_number,
+                                    transaction_index: tx_index.transaction_index,
+                                };
+                                
+                                debug!("Transaction {} found in block {} at index {}", 
+                                    msg.tx_hash, tx_index.block_hash, tx_index.transaction_index);
+                                Ok(Some(tx_with_info))
+                            } else {
+                                warn!("Transaction index {} out of bounds for block {} (has {} txs)", 
+                                    tx_index.transaction_index, tx_index.block_hash, 
+                                    block.execution_payload.transactions.len());
+                                Ok(None)
+                            }
+                        },
+                        Ok(None) => {
+                            warn!("Block {} found in transaction index but block not in database", tx_index.block_hash);
+                            Ok(None)
+                        },
+                        Err(e) => {
+                            error!("Failed to get block {} for transaction {}: {}", tx_index.block_hash, msg.tx_hash, e);
+                            Err(e)
+                        }
+                    }
+                },
+                Ok(None) => {
+                    debug!("Transaction {} not found in index", msg.tx_hash);
+                    Ok(None)
+                },
+                Err(e) => {
+                    error!("Failed to query transaction index: {}", e);
+                    Err(StorageError::Database(format!("Transaction index query failed: {}", e)))
+                }
+            }
+        })
+    }
+}
+
+impl Handler<GetAddressTransactionsMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Vec<AddressTransactionInfo>, StorageError>>;
+
+    fn handle(&mut self, msg: GetAddressTransactionsMessage, _ctx: &mut Self::Context) -> Self::Result {
+        debug!("Received get address transactions request: {} (limit: {:?})", msg.address, msg.limit);
+        
+        let indexing = self.indexing.clone();
+        
+        Box::pin(async move {
+            match indexing.read().await.get_address_transactions(&msg.address, msg.limit).await {
+                Ok(address_indices) => {
+                    let tx_info: Vec<AddressTransactionInfo> = address_indices.into_iter()
+                        .map(|addr_idx| AddressTransactionInfo {\n                            transaction_hash: addr_idx.transaction_hash,\n                            block_number: addr_idx.block_number,\n                            value: addr_idx.value,\n                            is_sender: addr_idx.is_sender,\n                            transaction_type: match addr_idx.transaction_type {\n                                crate::actors::storage::indexing::TransactionType::Transfer => \"transfer\".to_string(),\n                                crate::actors::storage::indexing::TransactionType::ContractCall => \"contract_call\".to_string(),\n                                crate::actors::storage::indexing::TransactionType::ContractDeployment => \"contract_deployment\".to_string(),\n                                crate::actors::storage::indexing::TransactionType::PegIn => \"peg_in\".to_string(),\n                                crate::actors::storage::indexing::TransactionType::PegOut => \"peg_out\".to_string(),\n                            },\n                        })\n                        .collect();\n                    \n                    info!(\"Found {} transactions for address {}\", tx_info.len(), msg.address);\n                    Ok(tx_info)\n                },\n                Err(e) => {\n                    error!(\"Failed to query address transactions: {}\", e);\n                    Err(StorageError::Database(format!(\"Address transaction query failed: {}\", e)))\n                }\n            }\n        })\n    }\n}

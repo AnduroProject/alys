@@ -4,7 +4,7 @@
 //! including storing, retrieving, and querying blocks with caching optimization.
 
 use crate::actors::storage::actor::StorageActor;
-use crate::messages::storage_messages::*;
+use crate::actors::storage::messages::*;
 use crate::types::*;
 use actix::prelude::*;
 use std::sync::Arc;

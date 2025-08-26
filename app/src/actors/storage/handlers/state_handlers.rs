@@ -4,7 +4,7 @@
 //! including storing, retrieving, and querying state data with caching optimization.
 
 use crate::actors::storage::actor::StorageActor;
-use crate::messages::storage_messages::*;
+use crate::actors::storage::messages::*;
 use crate::types::*;
 use actix::prelude::*;
 use tracing::*;

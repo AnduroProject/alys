@@ -7,7 +7,6 @@
 mod tests {
     use super::super::*;
     use crate::types::*;
-    use crate::messages::storage_messages::*;
     use std::time::Duration;
     use tempfile::TempDir;
 

@@ -12,7 +12,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use crate::types::*;
-use crate::messages::storage_messages::*;
+use crate::actors::storage::messages::*;
 use super::super::{ChainActor, messages::*, state::*};
 
 /// Configuration for block processing operations

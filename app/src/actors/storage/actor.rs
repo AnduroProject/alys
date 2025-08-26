@@ -5,12 +5,14 @@
 //! for database operations with caching, batching, and performance optimization.
 
 use crate::types::*;
-use crate::messages::storage_messages::*;
 use super::database::{DatabaseManager, DatabaseConfig};
 use super::cache::{StorageCache, CacheConfig};
+use super::indexing::{StorageIndexing, IndexingStats};
+use super::messages::*;
 use super::metrics::StorageActorMetrics;
 use actix::prelude::*;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tracing::*;
 use actor_system::{Actor as AlysActor, ActorMetrics, AlysActorMessage, ActorError};
@@ -19,15 +21,17 @@ use actor_system::{Actor as AlysActor, ActorMetrics, AlysActorMessage, ActorErro
 #[derive(Debug)]
 pub struct StorageActor {
     /// Storage configuration
-    config: StorageConfig,
+    pub config: StorageConfig,
     /// Database manager for RocksDB operations
-    database: DatabaseManager,
+    pub database: DatabaseManager,
     /// Multi-level cache system
-    cache: StorageCache,
+    pub cache: StorageCache,
+    /// Advanced indexing system
+    pub indexing: Arc<RwLock<StorageIndexing>>,
     /// Pending write operations queue
     pending_writes: HashMap<String, PendingWrite>,
     /// Storage performance metrics
-    metrics: StorageActorMetrics,
+    pub metrics: StorageActorMetrics,
     /// Actor startup time
     startup_time: Option<Instant>,
     /// Last maintenance check time
@@ -174,6 +178,13 @@ impl StorageActor {
         // Initialize cache
         let cache = StorageCache::new(config.cache.clone());
         
+        // Initialize indexing system
+        let db_handle = database.get_database_handle();
+        let indexing = Arc::new(RwLock::new(
+            StorageIndexing::new(db_handle)
+                .map_err(|e| StorageError::Database(format!("Failed to initialize indexing: {}", e)))?
+        ));
+        
         // Initialize metrics
         let metrics = StorageActorMetrics::new();
         
@@ -181,6 +192,7 @@ impl StorageActor {
             config: config.clone(),
             database,
             cache,
+            indexing,
             pending_writes: HashMap::new(),
             metrics,
             startup_time: None,
@@ -205,6 +217,12 @@ impl StorageActor {
         
         // Store in database
         self.database.put_block(&block).await?;
+        
+        // Index the block for advanced queries
+        if let Err(e) = self.indexing.write().unwrap().index_block(&block).await {
+            error!("Failed to index block {}: {}", block_hash, e);
+            // Continue execution - indexing failure shouldn't stop block storage
+        }
         
         // Update chain head if this is canonical
         if canonical {
