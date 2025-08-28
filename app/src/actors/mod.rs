@@ -10,7 +10,7 @@
 //! - **chain/**: ChainActor for consensus, block production, and validation
 //! - **storage/**: StorageActor for persistent data operations  
 //! - **foundation/**: Core actor system infrastructure and supervision
-//! - **engine_actor**: Execution layer integration (Geth/Reth)
+//! - **engine/**: EngineActor for execution layer integration (Geth/Reth)
 //! - **bridge_actor**: Two-way peg bridge operations
 //! - **network_actor**: P2P networking and peer management
 //! - **sync_actor**: Blockchain synchronization
@@ -20,7 +20,7 @@
 pub mod foundation;
 pub mod supervisor;
 pub mod chain; // Organized chain actor module
-pub mod engine_actor;
+pub mod engine; // Organized engine actor module
 pub mod bridge_actor;
 pub mod sync_actor;
 pub mod network_actor;
@@ -31,7 +31,7 @@ pub mod governance_stream;
 pub use foundation::*;
 pub use supervisor::*;
 pub use chain::*; // Import from organized module
-pub use engine_actor::*;
+pub use engine::*; // Import from organized engine module
 pub use bridge_actor::*;
 pub use sync_actor::*;
 pub use network_actor::*;
