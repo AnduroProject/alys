@@ -565,7 +565,7 @@ mod tests {
     fn test_bridge_supervisor_config() {
         let config = BridgeSupervisorConfig::default();
         assert_eq!(config.max_tx_retries, 5);
-        assert_eq!(config.tx_timeout, Duration::from_minutes(10));
+        assert_eq!(config.tx_timeout, Duration::from_secs(10 * 60)); // 10 minutes
         assert!(config.enable_fee_bumping);
     }
 

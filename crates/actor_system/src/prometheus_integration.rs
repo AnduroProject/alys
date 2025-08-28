@@ -302,14 +302,14 @@ impl MetricsServer {
                             "/metrics" => {
                                 match metrics.export_metrics().await {
                                     Ok(metrics_text) => {
-                                        Ok(hyper::Response::builder()
+                                        Ok::<hyper::Response<hyper::Body>, hyper::Error>(hyper::Response::builder()
                                             .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
                                             .body(hyper::Body::from(metrics_text))
                                             .unwrap())
                                     }
                                     Err(e) => {
                                         error!("Failed to export metrics: {}", e);
-                                        Ok(hyper::Response::builder()
+                                        Ok::<hyper::Response<hyper::Body>, hyper::Error>(hyper::Response::builder()
                                             .status(500)
                                             .body(hyper::Body::from(format!("Error: {}", e)))
                                             .unwrap())
@@ -317,12 +317,12 @@ impl MetricsServer {
                                 }
                             }
                             "/health" => {
-                                Ok(hyper::Response::builder()
+                                Ok::<hyper::Response<hyper::Body>, hyper::Error>(hyper::Response::builder()
                                     .body(hyper::Body::from("OK"))
                                     .unwrap())
                             }
                             _ => {
-                                Ok(hyper::Response::builder()
+                                Ok::<hyper::Response<hyper::Body>, hyper::Error>(hyper::Response::builder()
                                     .status(404)
                                     .body(hyper::Body::from("Not Found"))
                                     .unwrap())
@@ -335,7 +335,7 @@ impl MetricsServer {
 
         let addr: SocketAddr = self.bind_address.parse()
             .map_err(|e| ActorError::ConfigurationError {
-                field: "bind_address".to_string(),
+                parameter: "bind_address".to_string(),
                 reason: format!("Invalid address format: {}", e),
             })?;
 

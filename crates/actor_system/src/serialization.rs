@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use uuid::Uuid;
 
 /// Supported serialization formats
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SerializationFormat {
     /// JSON - human readable, good for debugging
     Json,
@@ -29,7 +29,7 @@ pub enum SerializationFormat {
 }
 
 /// Compression algorithms supported
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CompressionAlgorithm {
     /// No compression
     None,
@@ -334,7 +334,11 @@ impl ActorSerializer {
                 reason: format!("Serializer not found for format: {:?}", self.config.format),
             })?;
         
-        let serialized_data = serializer.serialize_state(state)?;
+        let state_bytes = serde_json::to_vec(state)
+            .map_err(|e| ActorError::SerializationFailed { 
+                reason: e.to_string() 
+            })?;
+        let serialized_data = serializer.serialize_message(&state_bytes)?;
         let original_size = serialized_data.len();
         
         let compressor = self.compressors.get(&self.config.compression)
@@ -404,7 +408,11 @@ impl ActorSerializer {
                     reason: format!("Deserializer not found for format: {:?}", serialized.format),
                 })?;
             
-            deserializer.deserialize_state(&decompressed_data)?
+            let bytes = deserializer.deserialize_message(&decompressed_data)?;
+            serde_json::from_slice(&bytes)
+                .map_err(|e| ActorError::DeserializationFailed {
+                    reason: e.to_string()
+                })?
         };
         
         // Validate state
@@ -439,11 +447,28 @@ pub trait Compressor: Send + Sync {
 }
 
 /// Message serialization trait for different formats
-pub trait MessageSerializer: Send + Sync {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>>;
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T>;
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>>;
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S>;
+pub trait MessageSerializer: Send + Sync + Debug {
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>>;
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>>;
+}
+
+/// Helper functions for typed serialization
+impl dyn MessageSerializer {
+    pub fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
+        let serialized = serde_json::to_vec(message)
+            .map_err(|e| ActorError::SerializationFailed { 
+                reason: e.to_string() 
+            })?;
+        self.serialize_message(&serialized)
+    }
+    
+    pub fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
+        let raw_data = self.deserialize_message(data)?;
+        serde_json::from_slice(&raw_data)
+            .map_err(|e| ActorError::DeserializationFailed { 
+                reason: e.to_string() 
+            })
+    }
 }
 
 /// No compression implementation
@@ -521,135 +546,72 @@ impl Compressor for SnappyCompressor {
 }
 
 /// JSON serializer implementation
+#[derive(Debug)]
 pub struct JsonSerializer;
 
 impl MessageSerializer for JsonSerializer {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
-        serde_json::to_vec(message).map_err(|e| ActorError::SerializationFailed {
-            reason: format!("JSON serialization failed: {}", e),
-        })
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(message.to_vec()) // JSON is already in the correct format
     }
     
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
-        serde_json::from_slice(data).map_err(|e| ActorError::DeserializationFailed {
-            reason: format!("JSON deserialization failed: {}", e),
-        })
-    }
-    
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>> {
-        self.serialize(state)
-    }
-    
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S> {
-        self.deserialize(data)
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(data.to_vec()) // JSON is already in the correct format
     }
 }
 
 /// MessagePack serializer implementation
+#[derive(Debug)]
 pub struct MessagePackSerializer;
 
 impl MessageSerializer for MessagePackSerializer {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
-        // Note: In a real implementation, you would use the rmp-serde crate
-        // For now, we'll fall back to JSON
-        serde_json::to_vec(message).map_err(|e| ActorError::SerializationFailed {
-            reason: format!("MessagePack serialization failed: {}", e),
-        })
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(message.to_vec()) // Pass-through for now
     }
     
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
-        // Note: In a real implementation, you would use the rmp-serde crate
-        serde_json::from_slice(data).map_err(|e| ActorError::DeserializationFailed {
-            reason: format!("MessagePack deserialization failed: {}", e),
-        })
-    }
-    
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>> {
-        self.serialize(state)
-    }
-    
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S> {
-        self.deserialize(data)
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(data.to_vec()) // Pass-through for now
     }
 }
 
 /// Bincode serializer implementation
+#[derive(Debug)]
 pub struct BincodeSerializer;
 
 impl MessageSerializer for BincodeSerializer {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
-        bincode::serialize(message).map_err(|e| ActorError::SerializationFailed {
-            reason: format!("Bincode serialization failed: {}", e),
-        })
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(message.to_vec()) // Pass-through for now
     }
     
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
-        bincode::deserialize(data).map_err(|e| ActorError::DeserializationFailed {
-            reason: format!("Bincode deserialization failed: {}", e),
-        })
-    }
-    
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>> {
-        self.serialize(state)
-    }
-    
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S> {
-        self.deserialize(data)
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(data.to_vec()) // Pass-through for now
     }
 }
 
 /// CBOR serializer implementation
+#[derive(Debug)]
 pub struct CborSerializer;
 
 impl MessageSerializer for CborSerializer {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
-        // Note: In a real implementation, you would use the serde_cbor crate
-        serde_json::to_vec(message).map_err(|e| ActorError::SerializationFailed {
-            reason: format!("CBOR serialization failed: {}", e),
-        })
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(message.to_vec()) // Pass-through for now
     }
     
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
-        // Note: In a real implementation, you would use the serde_cbor crate
-        serde_json::from_slice(data).map_err(|e| ActorError::DeserializationFailed {
-            reason: format!("CBOR deserialization failed: {}", e),
-        })
-    }
-    
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>> {
-        self.serialize(state)
-    }
-    
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S> {
-        self.deserialize(data)
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(data.to_vec()) // Pass-through for now
     }
 }
 
 /// Protocol Buffers serializer implementation
+#[derive(Debug)]
 pub struct ProtobufSerializer;
 
 impl MessageSerializer for ProtobufSerializer {
-    fn serialize<T: Serialize>(&self, message: &T) -> ActorResult<Vec<u8>> {
-        // Note: In a real implementation, you would use protobuf libraries
-        // For now, we'll fall back to JSON
-        serde_json::to_vec(message).map_err(|e| ActorError::SerializationFailed {
-            reason: format!("Protobuf serialization failed: {}", e),
-        })
+    fn serialize_message(&self, message: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(message.to_vec()) // Pass-through for now
     }
     
-    fn deserialize<T: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<T> {
-        // Note: In a real implementation, you would use protobuf libraries
-        serde_json::from_slice(data).map_err(|e| ActorError::DeserializationFailed {
-            reason: format!("Protobuf deserialization failed: {}", e),
-        })
-    }
-    
-    fn serialize_state<S: Serialize>(&self, state: &S) -> ActorResult<Vec<u8>> {
-        self.serialize(state)
-    }
-    
-    fn deserialize_state<S: DeserializeOwned>(&self, data: &[u8]) -> ActorResult<S> {
-        self.deserialize(data)
+    fn deserialize_message(&self, data: &[u8]) -> ActorResult<Vec<u8>> {
+        Ok(data.to_vec()) // Pass-through for now
     }
 }
 

@@ -2,12 +2,13 @@
 
 use std::fmt;
 use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
 /// Result type for actor operations
 pub type ActorResult<T> = Result<T, ActorError>;
 
 /// Actor system error types with enhanced context preservation and recovery recommendations
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum ActorError {
     /// Actor not found in registry
     #[error("Actor not found: {name}")]
@@ -124,7 +125,7 @@ pub enum ActorError {
 }
 
 /// Blockchain-specific actor errors
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum BlockchainActorError {
     /// Block validation failed
     #[error("Block validation failed: {block_hash} - {reason}")]
@@ -169,7 +170,7 @@ pub enum BlockchainActorError {
 }
 
 /// Bridge/Peg operation specific errors
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum BridgeActorError {
     /// Peg-in processing failed
     #[error("Peg-in failed for Bitcoin tx {bitcoin_txid}: {reason}")]
@@ -218,7 +219,7 @@ pub enum BridgeActorError {
 }
 
 /// Networking actor specific errors
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum NetworkActorError {
     /// Peer connection failed
     #[error("Peer connection failed to {peer_id}: {reason}")]
@@ -256,7 +257,7 @@ pub enum NetworkActorError {
 }
 
 /// Mining actor specific errors
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum MiningActorError {
     /// Block template creation failed
     #[error("Block template creation failed: {reason}")]
@@ -292,7 +293,7 @@ pub enum MiningActorError {
 }
 
 /// Error context structures for specific domains
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockchainErrorContext {
     pub block_height: Option<u64>,
     pub chain_tip: Option<String>,
@@ -302,7 +303,7 @@ pub struct BlockchainErrorContext {
 }
 
 /// Recovery strategy for sync failures
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncRecoveryStrategy {
     /// Retry with same peer
     RetryWithSamePeer { delay: std::time::Duration },
@@ -315,7 +316,7 @@ pub enum SyncRecoveryStrategy {
 }
 
 /// Recovery actions for peg operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PegRecoveryAction {
     /// Wait for more confirmations
     WaitForConfirmations { current: u32, required: u32 },
@@ -328,7 +329,7 @@ pub enum PegRecoveryAction {
 }
 
 /// Signature collection status
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignatureCollectionStatus {
     /// Still collecting
     InProgress { collected: usize, required: usize },
@@ -341,7 +342,7 @@ pub enum SignatureCollectionStatus {
 }
 
 /// Peer retry strategy
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PeerRetryStrategy {
     /// Exponential backoff
     ExponentialBackoff { 
@@ -358,7 +359,7 @@ pub enum PeerRetryStrategy {
 }
 
 /// Mining hardware status
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MiningHardwareStatus {
     /// Hardware is operational
     Operational,
@@ -371,7 +372,7 @@ pub enum MiningHardwareStatus {
 }
 
 /// Comprehensive error context with recovery recommendations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnhancedErrorContext {
     /// Basic error context
     pub base_context: ErrorContext,
@@ -390,7 +391,7 @@ pub struct EnhancedErrorContext {
 }
 
 /// Recovery recommendation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryRecommendation {
     /// Recommended action
     pub action: String,
@@ -407,7 +408,7 @@ pub struct RecoveryRecommendation {
 }
 
 /// Recovery priority levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RecoveryPriority {
     /// Try as last resort
     Low = 0,
@@ -420,7 +421,7 @@ pub enum RecoveryPriority {
 }
 
 /// Error impact assessment
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorImpactAssessment {
     /// Affected components
     pub affected_components: Vec<String>,
@@ -437,7 +438,7 @@ pub struct ErrorImpactAssessment {
 }
 
 /// Data integrity impact levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DataIntegrityImpact {
     /// No data integrity issues
     None,
@@ -450,7 +451,7 @@ pub enum DataIntegrityImpact {
 }
 
 /// User experience impact levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserExperienceImpact {
     /// No user impact
     None,
@@ -463,7 +464,7 @@ pub enum UserExperienceImpact {
 }
 
 /// System availability impact
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AvailabilityImpact {
     /// System fully available
     None,
@@ -476,7 +477,7 @@ pub enum AvailabilityImpact {
 }
 
 /// Escalation levels
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EscalationLevel {
     /// Handle within actor
     ActorLevel { retry_count: u32, max_retries: u32 },
@@ -491,7 +492,7 @@ pub enum EscalationLevel {
 }
 
 /// Error severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ErrorSeverity {
     /// Low impact, system continues normally
     Minor,
@@ -505,8 +506,15 @@ pub enum ErrorSeverity {
     Fatal,
 }
 
+impl ErrorSeverity {
+    /// Check if the error severity is critical or fatal
+    pub fn is_critical(&self) -> bool {
+        matches!(self, ErrorSeverity::Critical | ErrorSeverity::Fatal)
+    }
+}
+
 /// Error context for better debugging
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorContext {
     pub actor_name: String,
     pub actor_type: String,

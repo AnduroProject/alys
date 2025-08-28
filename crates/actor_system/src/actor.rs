@@ -83,14 +83,21 @@ pub trait AlysActor: Actor + LifecycleAware + Send + Sync + 'static {
     async fn handle_supervisor_message(&mut self, msg: SupervisorMessage) -> ActorResult<()> {
         match msg {
             SupervisorMessage::HealthCheck => {
-                let healthy = self.health_check().await.map_err(|e| e.into())?;
+                let health_result = self.health_check().await;
+                let healthy = match health_result {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let actor_error: ActorError = e.into();
+                        return Err(actor_error);
+                    },
+                };
                 if !healthy {
-                    warn!(actor_type = self.actor_type(), "Actor health check failed");
+                    warn!(actor_type = LifecycleAware::actor_type(self), "Actor health check failed");
                 }
                 Ok(())
             }
             SupervisorMessage::Shutdown { timeout } => {
-                info!(actor_type = self.actor_type(), "Received shutdown signal");
+                info!(actor_type = LifecycleAware::actor_type(self), "Received shutdown signal");
                 self.on_shutdown(timeout).await
             }
             _ => Ok(()),
@@ -111,7 +118,7 @@ pub trait AlysActor: Actor + LifecycleAware + Send + Sync + 'static {
     async fn handle_message_error(&mut self, _envelope: &MessageEnvelope<Self::Message>, error: &ActorError) -> ActorResult<()> {
         self.metrics_mut().record_message_failed(&error.to_string());
         error!(
-            actor_type = self.actor_type(),
+            actor_type = LifecycleAware::actor_type(self),
             error = %error,
             "Message processing failed"
         );
@@ -130,7 +137,7 @@ pub trait ExtendedAlysActor: AlysActor {
     /// Handle critical errors that may require restart
     async fn handle_critical_error(&mut self, error: ActorError) -> ActorResult<bool> {
         error!(
-            actor_type = self.actor_type(),
+            actor_type = LifecycleAware::actor_type(self),
             error = %error,
             "Critical error occurred"
         );
@@ -172,7 +179,7 @@ pub struct ActorRegistration {
     /// Actor type name
     pub actor_type: String,
     /// Actor address (type-erased)
-    pub addr: Box<dyn std::any::Any + Send>,
+    pub addr: Box<dyn std::any::Any + Send + Sync>,
     /// Actor metrics
     pub metrics: Arc<ActorMetrics>,
     /// Registration timestamp
@@ -199,7 +206,7 @@ impl ActorRegistry {
         metrics: Arc<ActorMetrics>
     ) -> ActorResult<()>
     where
-        A: AlysActor + 'static,
+        A: AlysActor + Actor<Context = Context<A>> + 'static,
     {
         let actor_type = std::any::type_name::<A>().to_string();
         
@@ -337,7 +344,7 @@ impl ActorFactory {
     /// Create and start actor with default configuration
     pub async fn create_actor<A>(id: String) -> ActorResult<Addr<A>>
     where
-        A: AlysActor + 'static,
+        A: AlysActor + Actor<Context = Context<A>> + 'static,
         A::Config: Default,
     {
         Self::create_actor_with_config(id, A::Config::default()).await
@@ -346,7 +353,7 @@ impl ActorFactory {
     /// Create and start actor with specific configuration
     pub async fn create_actor_with_config<A>(id: String, config: A::Config) -> ActorResult<Addr<A>>
     where
-        A: AlysActor + 'static,
+        A: AlysActor + Actor<Context = Context<A>> + 'static,
     {
         let actor = A::new(config).map_err(|e| e.into())?;
         let addr = actor.start();
@@ -363,7 +370,7 @@ impl ActorFactory {
         supervisor: Recipient<SupervisorMessage>,
     ) -> ActorResult<Addr<A>>
     where
-        A: AlysActor + 'static,
+        A: AlysActor + Actor<Context = Context<A>> + 'static,
     {
         let addr = Self::create_actor_with_config(id.clone(), config).await?;
         

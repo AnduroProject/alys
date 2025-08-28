@@ -6,11 +6,12 @@
 
 use crate::{
     actor::{AlysActor, ActorRegistration},
+    lifecycle::LifecycleAware,
     supervisor::{RestartStrategy, EscalationStrategy},
     error::{ActorError, ActorResult},
     metrics::ActorMetrics,
 };
-use actix::{Actor, Addr, Message};
+use actix::{Actor, Addr, Context, Message};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -108,7 +109,7 @@ pub trait BlockchainAwareActor: AlysActor {
         match event {
             BlockchainEvent::BlockProduced { height, hash } => {
                 info!(
-                    actor_type = self.actor_type(),
+                    actor_type = LifecycleAware::actor_type(self),
                     height = height,
                     hash = ?hash,
                     "Block produced event received"
@@ -117,7 +118,7 @@ pub trait BlockchainAwareActor: AlysActor {
             }
             BlockchainEvent::BlockFinalized { height, hash } => {
                 info!(
-                    actor_type = self.actor_type(),
+                    actor_type = LifecycleAware::actor_type(self),
                     height = height, 
                     hash = ?hash,
                     "Block finalized event received"
@@ -126,7 +127,7 @@ pub trait BlockchainAwareActor: AlysActor {
             }
             BlockchainEvent::FederationChange { members, threshold } => {
                 info!(
-                    actor_type = self.actor_type(),
+                    actor_type = LifecycleAware::actor_type(self),
                     members = ?members,
                     threshold = threshold,
                     "Federation change event received"
@@ -135,7 +136,7 @@ pub trait BlockchainAwareActor: AlysActor {
             }
             BlockchainEvent::ConsensusFailure { reason } => {
                 error!(
-                    actor_type = self.actor_type(),
+                    actor_type = LifecycleAware::actor_type(self),
                     reason = %reason,
                     "Consensus failure event received"
                 );
@@ -189,7 +190,7 @@ pub struct BlockchainReadiness {
 }
 
 /// Synchronization status for blockchain operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SyncStatus {
     /// Not synced, cannot produce blocks
     NotSynced,
@@ -339,7 +340,7 @@ impl BlockchainActorFactory {
         blockchain_config: BlockchainActorConfig,
     ) -> ActorResult<Addr<A>>
     where
-        A: BlockchainAwareActor + 'static,
+        A: BlockchainAwareActor + Actor<Context = Context<A>> + 'static,
     {
         let actor = A::new(config).map_err(|e| e.into())?;
         let addr = actor.start();
@@ -390,7 +391,7 @@ pub async fn create_consensus_actor<A>(
     config: A::Config,
 ) -> ActorResult<Addr<A>>
 where
-    A: BlockchainAwareActor + 'static,
+    A: BlockchainAwareActor + Actor<Context = Context<A>> + 'static,
 {
     let blockchain_config = BlockchainActorConfig {
         priority: BlockchainActorPriority::Consensus,
@@ -417,7 +418,7 @@ pub async fn create_federation_actor<A>(
     federation_config: FederationConfig,
 ) -> ActorResult<Addr<A>>
 where
-    A: BlockchainAwareActor + 'static,
+    A: BlockchainAwareActor + Actor<Context = Context<A>> + 'static,
 {
     let blockchain_config = BlockchainActorConfig {
         priority: BlockchainActorPriority::Bridge,

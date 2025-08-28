@@ -87,8 +87,21 @@ pub struct BusMetrics {
     pub processing_time: AtomicU64,
 }
 
+impl Clone for BusMetrics {
+    fn clone(&self) -> Self {
+        BusMetrics {
+            messages_published: AtomicU64::new(self.messages_published.load(Ordering::Relaxed)),
+            messages_delivered: AtomicU64::new(self.messages_delivered.load(Ordering::Relaxed)),
+            delivery_failures: AtomicU64::new(self.delivery_failures.load(Ordering::Relaxed)),
+            active_subscriptions: AtomicU64::new(self.active_subscriptions.load(Ordering::Relaxed)),
+            total_topics: AtomicU64::new(self.total_topics.load(Ordering::Relaxed)),
+            processing_time: AtomicU64::new(self.processing_time.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 /// Subscriber information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Subscriber {
     /// Subscriber identifier
     pub id: String,
@@ -116,7 +129,7 @@ pub struct SubscriberMetadata {
 }
 
 /// Subscription priority
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SubscriptionPriority {
     /// Low priority subscription
     Low = 0,
@@ -214,6 +227,7 @@ impl CommunicationBus {
     ) -> ActorResult<String>
     where
         M: AlysMessage + 'static,
+        M::Result: Send,
     {
         let subscription_id = uuid::Uuid::new_v4().to_string();
 
@@ -238,6 +252,7 @@ impl CommunicationBus {
             if topic_subscribers.len() >= self.config.max_subscribers_per_topic {
                 return Err(ActorError::ResourceExhausted {
                     resource: "topic_subscribers".to_string(),
+                    details: format!("Maximum subscribers per topic ({}) exceeded", self.config.max_subscribers_per_topic),
                 });
             }
 
@@ -331,49 +346,59 @@ impl CommunicationBus {
             self.record_message_history(&topic, &message_id, &message, sender.as_deref()).await?;
         }
 
-        // Get subscribers for topic
-        let topic_subscribers = {
-            let subscribers = self.subscribers.read().await;
-            subscribers.get(&topic).cloned().unwrap_or_default()
-        };
-
-        if topic_subscribers.is_empty() {
-            warn!(topic = %topic, "No subscribers for topic");
-            return Ok(PublishResult {
-                message_id,
-                delivered_count: 0,
-                failed_count: 0,
-                total_subscribers: 0,
-            });
-        }
-
         let mut delivered = 0;
         let mut failed = 0;
-        let total_subscribers = topic_subscribers.len();
+        let total_subscribers;
 
         // Deliver to subscribers
-        for subscriber in topic_subscribers {
-            // Check filters
-            if !self.message_matches_filters(&message, &sender, &subscriber.filters) {
-                continue;
-            }
-
-            // Attempt delivery (simplified - would need proper type handling)
-            let delivery_success = true; // Would actually deliver the message
-
-            if delivery_success {
-                delivered += 1;
-            } else {
-                failed += 1;
+        {
+            let subscribers = self.subscribers.read().await;
+            if let Some(topic_subscribers) = subscribers.get(&topic) {
+                total_subscribers = topic_subscribers.len();
                 
-                if self.config.retry_failed_deliveries {
-                    // Schedule retry (simplified)
-                    debug!(
-                        subscriber_id = %subscriber.id,
-                        message_id = %message_id,
-                        "Scheduling message delivery retry"
-                    );
+                if total_subscribers == 0 {
+                    warn!(topic = %topic, "No subscribers for topic");
+                    return Ok(PublishResult {
+                        message_id,
+                        delivered_count: 0,
+                        failed_count: 0,
+                        total_subscribers: 0,
+                    });
                 }
+
+                for subscriber in topic_subscribers {
+                    // Check filters
+                    if !self.message_matches_filters(&message, &sender, &subscriber.filters) {
+                        continue;
+                    }
+
+                    // Attempt delivery (simplified - would need proper type handling)
+                    let delivery_success = true; // Would actually deliver the message
+
+                    if delivery_success {
+                        delivered += 1;
+                    } else {
+                        failed += 1;
+                        
+                        if self.config.retry_failed_deliveries {
+                            // Schedule retry (simplified)
+                            debug!(
+                                subscriber_id = %subscriber.id,
+                                message_id = %message_id,
+                                "Scheduling message delivery retry"
+                            );
+                        }
+                    }
+                }
+            } else {
+                total_subscribers = 0;
+                warn!(topic = %topic, "No subscribers for topic");
+                return Ok(PublishResult {
+                    message_id,
+                    delivered_count: 0,
+                    failed_count: 0,
+                    total_subscribers: 0,
+                });
             }
         }
 
@@ -414,17 +439,18 @@ impl CommunicationBus {
         M: AlysMessage + Clone + Serialize + 'static,
     {
         let mut results = HashMap::new();
-        let subscribers = self.subscribers.read().await;
+        let topics: Vec<String> = {
+            let subscribers = self.subscribers.read().await;
+            subscribers.keys().cloned().collect()
+        };
 
-        for topic in subscribers.keys() {
-            if exclude_topics.contains(topic) {
+        for topic in topics {
+            if exclude_topics.contains(&topic) {
                 continue;
             }
 
-            drop(subscribers); // Release lock before publish
             let result = self.publish(topic.clone(), message.clone(), sender.clone()).await?;
-            results.insert(topic.clone(), result);
-            let subscribers = self.subscribers.read().await; // Re-acquire lock
+            results.insert(topic, result);
         }
 
         info!(
@@ -492,7 +518,8 @@ impl CommunicationBus {
 
         // Trim history if it exceeds size limit
         if history.len() > self.config.message_history_size {
-            history.drain(..history.len() - self.config.message_history_size);
+            let drain_end = history.len() - self.config.message_history_size;
+            history.drain(..drain_end);
         }
 
         Ok(())

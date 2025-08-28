@@ -5,7 +5,7 @@
 
 use crate::{
     error::{ActorError, ActorResult},
-    message::{AlysMessage, MessageEnvelope, MessagePriority},
+    message::{AlysMessage, MessageEnvelope, MessagePriority, MessageBuilder},
     metrics::MailboxMetrics,
 };
 use actix::prelude::*;
@@ -66,7 +66,6 @@ pub enum BackpressureState {
 }
 
 /// Message wrapper with metadata for queuing
-#[derive(Debug)]
 pub struct QueuedMessage<M>
 where
     M: AlysMessage,
@@ -79,6 +78,20 @@ where
     pub message_id: Uuid,
     /// Response channel for request-response pattern
     pub response_tx: Option<oneshot::Sender<M::Result>>,
+}
+
+impl<M> std::fmt::Debug for QueuedMessage<M>
+where
+    M: AlysMessage,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueuedMessage")
+            .field("envelope", &self.envelope)
+            .field("queued_at", &self.queued_at)
+            .field("message_id", &self.message_id)
+            .field("response_tx", &self.response_tx.is_some())
+            .finish()
+    }
 }
 
 impl<M> PartialEq for QueuedMessage<M>
@@ -412,7 +425,7 @@ where
             // Drop all messages
         }
         
-        self.metrics.messages_dropped.fetch_add(dropped_count, Ordering::Relaxed);
+        self.metrics.messages_dropped.fetch_add(dropped_count as u64, Ordering::Relaxed);
         self.metrics.current_size.store(0, Ordering::Relaxed);
         
         info!("Cleared {} messages from mailbox", dropped_count);
@@ -542,16 +555,18 @@ mod tests {
         
         // Create messages with different priorities
         let low_msg = QueuedMessage {
-            envelope: MessageEnvelope::new(HealthCheckMessage)
-                .with_priority(MessagePriority::Low),
+            envelope: MessageBuilder::new(HealthCheckMessage)
+                .priority(MessagePriority::Low)
+                .build(),
             queued_at: SystemTime::now(),
             message_id: Uuid::new_v4(),
             response_tx: None,
         };
         
         let high_msg = QueuedMessage {
-            envelope: MessageEnvelope::new(HealthCheckMessage)
-                .with_priority(MessagePriority::Critical),
+            envelope: MessageBuilder::new(HealthCheckMessage)
+                .priority(MessagePriority::Critical)
+                .build(),
             queued_at: SystemTime::now(),
             message_id: Uuid::new_v4(),
             response_tx: None,

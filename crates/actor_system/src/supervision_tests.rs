@@ -370,7 +370,7 @@ impl SupervisionTestHarness {
         
         let supervisor_info = SupervisorInfo {
             id: supervisor_id.clone(),
-            strategy,
+            strategy: strategy.clone(),
             supervised_actors: Vec::new(),
             child_supervisors: Vec::new(),
             failure_count: Arc::new(AtomicU32::new(0)),

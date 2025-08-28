@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Test environment for actor testing
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TestEnvironment {
     /// Test instance ID
     pub test_id: String,
@@ -27,6 +27,12 @@ pub struct TestEnvironment {
     pub start_time: Instant,
     /// Test configuration
     pub config: TestConfig,
+}
+
+impl Default for TestEnvironment {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Configuration for actor testing
@@ -517,7 +523,7 @@ impl TestUtil {
         
         Err(ActorError::Timeout {
             operation: "wait_for_condition".to_string(),
-            duration: timeout,
+            timeout,
         })
     }
 
@@ -573,6 +579,7 @@ impl TestUtil {
     where
         A: Actor + Handler<M>,
         M: Message + Send + 'static,
+        M::Result: Send,
         A::Context: ToEnvelope<A, M>,
     {
         let start_time = Instant::now();
@@ -654,10 +661,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_util_wait_for_condition() {
-        let mut counter = 0;
-        let condition = || async {
-            counter += 1;
-            counter >= 3
+        let counter = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let condition = {
+            let counter = counter.clone();
+            move || {
+                let counter = counter.clone();
+                async move {
+                    let mut count = counter.lock().unwrap();
+                    *count += 1;
+                    *count >= 3
+                }
+            }
         };
         
         let result = TestUtil::wait_for_condition(

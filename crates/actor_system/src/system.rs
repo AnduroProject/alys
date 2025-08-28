@@ -288,7 +288,7 @@ impl AlysSystem {
         config: A::Config,
     ) -> ActorResult<Addr<A>>
     where
-        A: AlysActor + 'static,
+        A: AlysActor + Actor<Context = Context<A>> + 'static,
         A::Config: Default,
     {
         // Ensure domain supervisor exists
