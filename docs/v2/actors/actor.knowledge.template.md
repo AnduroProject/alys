@@ -56,22 +56,40 @@ Use these constructs when appropriate to enhance understanding:
 - Testing & CI/CD pipelines overview showing `<ACTOR_NAME>` test coverage
 - Debugging workflows tailored to `<ACTOR_NAME>` failure modes
 - Day 1 tasks for engineers working with `<ACTOR_NAME>`
+- Production deployment and operational procedures
+- Monitoring setup and health check configurations
+- Performance profiling and optimization workflows
 
 ---
 
 ## 🧪 Output Format  
 
-Produce the guide as a structured document with the following sections:  
+Produce the guide as a structured document with the following sections, organized in logical learning progression:
 
-1. **Introduction & Purpose** - `<ACTOR_NAME>` role and mission in Alys V2
-2. **System Architecture & Core Flows** - `<ACTOR_NAME>` architecture and key workflows  
-3. **Knowledge Tree (progressive deep-dive)** - From fundamentals to advanced `<ACTOR_NAME>` concepts
-4. **Codebase Walkthrough** - Detailed exploration of `<ACTOR_NAME>` implementation
-5. **Procedural Debugging & Worked Examples** - Real debugging scenarios and solutions
-6. **Environment Setup & Tooling** - Local development setup for `<ACTOR_NAME>` work
-7. **Testing & CI/CD Integration** - `<ACTOR_NAME>` testing strategies and automation
-8. **Pro Tips & Quick Reference** - Best practices and productivity shortcuts
-9. **Glossary & Further Learning Paths** - Key terms and advanced resources
+### **Phase 1: Foundation & Orientation**
+1. **Introduction & Purpose** - `<ACTOR_NAME>` role, mission, and business value in Alys V2
+2. **System Architecture & Core Flows** - High-level architecture, supervision hierarchy, and key workflows
+3. **Environment Setup & Tooling** - Local development setup, configuration, and essential tools for `<ACTOR_NAME>` work
+
+### **Phase 2: Deep Technical Understanding**  
+4. **Knowledge Tree (Progressive Deep-dive)** - From actor model fundamentals to advanced `<ACTOR_NAME>` concepts
+5. **Codebase Walkthrough** - Detailed exploration of `<ACTOR_NAME>` implementation, modules, and integration points
+6. **Message Protocol & Communication** - Complete message types, flows, and communication patterns
+
+### **Phase 3: Practical Implementation**
+7. **Hands-on Development Guide** - Step-by-step feature implementation following `<ACTOR_NAME>` patterns
+8. **Testing & Quality Assurance** - Unit testing, integration testing, and quality gates for `<ACTOR_NAME>`
+9. **Performance Optimization** - Profiling, benchmarking, and optimization techniques
+
+### **Phase 4: Production & Operations**
+10. **Monitoring & Observability** - Metrics, health checks, and production monitoring for `<ACTOR_NAME>`
+11. **Debugging & Troubleshooting** - Diagnostic procedures, common issues, and resolution workflows  
+12. **Documentation & Training Materials** - Comprehensive integration of developer docs, operational guides, and training resources (see Documentation and Training Framework section for required components)
+
+### **Phase 5: Mastery & Reference**
+13. **Pro Tips & Best Practices** - Expert techniques, optimization shortcuts, and productivity tips
+14. **Quick Reference & Cheatsheets** - Commands, configurations, and troubleshooting checklists
+15. **Glossary & Advanced Learning** - Key terms, concepts, and paths for continued learning
 
 ---
 
@@ -115,6 +133,8 @@ Produce the guide as a structured document with the following sections:
 - **Performance Tests**: `<PERFORMANCE_TEST_CRITERIA>` (e.g., Maintain targets under 1000+ concurrent message load)
 - **Chaos Tests**: `<CHAOS_TEST_CRITERIA>` (e.g., Automatic recovery within blockchain timing constraints)
 - **End-to-End Tests**: `<E2E_TEST_CRITERIA>` (e.g., Complete block production cycle with external systems)
+- **Security Tests**: `<SECURITY_TEST_CRITERIA>` (e.g., Vulnerability scanning and penetration testing)
+- **Documentation Coverage**: `<DOC_COVERAGE_CRITERIA>` (e.g., 100% API documentation and architecture diagrams)
 
 ---
 
@@ -131,6 +151,11 @@ After completing this `<ACTOR_NAME>` onboarding guide, engineers should be able 
 - ✅ **Integrate with External Systems**: Successfully connect `<ACTOR_NAME>` with Bitcoin, Ethereum, and other components
 - ✅ **Monitor `<ACTOR_NAME>` Health**: Set up monitoring, interpret metrics, and diagnose production issues
 - ✅ **Contribute with Confidence**: Make robust contributions to `<ACTOR_NAME>` following best practices and quality gates
+- ✅ **Access Comprehensive Documentation**: Utilize developer and operational documentation for effective `<ACTOR_NAME>` work
+- ✅ **Complete Training Materials**: Execute hands-on exercises and workshops to master `<ACTOR_NAME>` implementation patterns
+- ✅ **Deploy to Production**: Successfully deploy `<ACTOR_NAME>` to production environments with proper configuration
+- ✅ **Implement Monitoring & Alerting**: Set up comprehensive observability for `<ACTOR_NAME>` health and performance
+- ✅ **Handle Production Incidents**: Respond effectively to `<ACTOR_NAME>` failures and performance issues
 
 ### **Key Skills Acquired**
 - **`<ACTOR_NAME>` Implementation Patterns**: Understanding of actor-specific design patterns and conventions
@@ -138,3 +163,75 @@ After completing this `<ACTOR_NAME>` onboarding guide, engineers should be able 
 - **Integration Expertise**: Knowledge of how `<ACTOR_NAME>` connects with external systems and other actors
 - **Performance Optimization**: Skills to optimize `<ACTOR_NAME>` for production performance requirements
 - **Testing Excellence**: Ability to create comprehensive test coverage for all `<ACTOR_NAME>` functionality
+- **Documentation Proficiency**: Competence in creating and maintaining technical documentation and training materials
+- **Operational Excellence**: Skills in deployment, monitoring, and troubleshooting `<ACTOR_NAME>` in production environments
+- **Production Readiness**: Ability to assess and ensure `<ACTOR_NAME>` production readiness across all quality gates
+- **Incident Management**: Skills in incident detection, escalation, and resolution for `<ACTOR_NAME>` systems
+- **Architecture Decision Making**: Competence in making informed architectural decisions for `<ACTOR_NAME>` evolution
+
+---
+
+## 🏗️ Template Usage Instructions
+
+### **How to Use This Template**
+1. **Replace Template Variables**: Search and replace all `<VARIABLE_NAME>` placeholders with actor-specific values
+2. **Customize Content**: Adapt sections based on the specific actor's complexity and requirements  
+3. **Validate Completeness**: Ensure all sections address the actor's unique characteristics and integration needs
+4. **Review Learning Flow**: Verify the content follows logical progression from foundation to mastery
+
+### **Key Template Variables Quick Reference**
+- `<ACTOR_NAME>` - Name of the specific actor (e.g., ChainActor, NetworkActor, EngineActor)
+- `<ACTOR_PRIMARY_ROLE>` - Main responsibility/purpose of the actor
+- `<ACTOR_LOCATION>` - File system path where actor is implemented
+- `<KEY_MODULES>` - Core modules/files for the actor
+- `<INTEGRATION_TECHNOLOGY>` - Primary external integration (e.g., libp2p, Bitcoin Core)
+- `<PRIMARY_MESSAGES>` - Main message types handled by the actor
+- All performance, testing, and configuration variables as defined in context sections
+
+---
+
+## 📚 Documentation and Training Framework
+
+**Integration Note**: The comprehensive documentation and training components listed below should be integrated throughout the onboarding guide sections as appropriate. Each deliverable section of the onboarding guide should incorporate relevant documentation types, operational guides, and training materials to ensure complete coverage.
+
+This section defines the comprehensive documentation ecosystem that supports `<ACTOR_NAME>` development, operations, and knowledge transfer that must be included in the generated onboarding guide.
+
+### **Developer Documentation** 
+*These components should be integrated into relevant onboarding guide sections (Architecture, Codebase Walkthrough, Message Protocol, etc.)*
+
+- **`<ACTOR_NAME>` Architecture Overview**: Comprehensive system design, component relationships, and integration patterns → *Include in Section 2 (System Architecture & Core Flows)*
+- **Message Protocol Specification**: Complete `<ACTOR_NAME>` message types, flows, and communication patterns → *Include in Section 6 (Message Protocol & Communication)*
+- **`<INTEGRATION_TECHNOLOGY>` Integration Patterns**: Best practices for integrating with external systems → *Include in Section 5 (Codebase Walkthrough)*
+- **Performance Optimization Techniques**: Profiling methods, bottleneck identification, and optimization strategies → *Include in Section 9 (Performance Optimization)*
+- **Testing and Debugging Guides**: Unit testing frameworks, integration testing patterns, and debugging methodologies → *Include in Sections 8, 11 (Testing, Debugging)*
+- **API Reference Documentation**: Complete `<ACTOR_NAME>` API documentation with examples and usage patterns → *Include in Section 12 (Documentation & Training Materials)*
+- **Code Style and Contribution Guidelines**: Standards for `<ACTOR_NAME>` development, code review, and contribution processes → *Include in Section 13 (Pro Tips & Best Practices)*
+
+### **Operational Documentation**
+*These components should be integrated into relevant onboarding guide sections (Environment Setup, Monitoring, Troubleshooting, etc.)*
+
+- **Deployment and Configuration Guides**: Production deployment procedures, configuration management, and environment setup → *Include in Section 3 (Environment Setup & Tooling)*
+- **Monitoring and Alerting Setup**: Metrics collection, dashboard configuration, and alerting rules for `<ACTOR_NAME>` health → *Include in Section 10 (Monitoring & Observability)*
+- **Troubleshooting Common Issues**: Known issues, diagnostic procedures, and resolution steps for `<ACTOR_NAME>` failures → *Include in Section 11 (Debugging & Troubleshooting)*
+- **Performance Tuning Recommendations**: Production optimization settings, resource allocation, and scaling strategies → *Include in Section 9 (Performance Optimization)*
+- **Security Best Practices**: Security hardening, access control, and vulnerability mitigation → *Include in Sections 3, 12 (Environment Setup, Documentation)*
+- **Disaster Recovery Procedures**: Backup strategies, failover processes, and recovery workflows → *Include in Section 11 (Debugging & Troubleshooting)*
+- **Capacity Planning Guidelines**: Resource estimation, scaling indicators, and infrastructure requirements → *Include in Section 10 (Monitoring & Observability)*
+
+### **Training Materials**
+*These components should be integrated throughout the onboarding guide to provide hands-on learning experiences*
+
+- **`<ACTOR_NAME>` System Walkthrough**: Interactive tutorials covering architecture, implementation, and operational aspects → *Integrate across Sections 2, 4, 5 (Architecture, Knowledge Tree, Codebase Walkthrough)*
+- **Hands-on Implementation Exercises**: Practical coding exercises for implementing `<ACTOR_NAME>` features and integrations → *Include in Section 7 (Hands-on Development Guide)*
+- **Integration Testing Workshops**: Guided workshops on testing `<ACTOR_NAME>` with external systems and other actors → *Include in Section 8 (Testing & Quality Assurance)*
+- **Performance Analysis Techniques**: Training on profiling tools, performance measurement, and optimization workflows → *Include in Section 9 (Performance Optimization)*
+- **Incident Response Procedures**: Emergency response protocols, escalation procedures, and recovery strategies → *Include in Section 11 (Debugging & Troubleshooting)*
+- **Certification Pathways**: Structured learning tracks for different skill levels (Beginner, Intermediate, Advanced) → *Include in Section 15 (Glossary & Advanced Learning)*
+- **Knowledge Validation Assessments**: Quizzes and practical exercises to validate understanding of `<ACTOR_NAME>` concepts → *Include throughout all sections as interactive elements*
+
+### **Template Variables for Documentation Content**
+- **`<DOCUMENTATION_REPO>`**: Repository location for `<ACTOR_NAME>` documentation (e.g., `docs/actors/chain/`)
+- **`<API_DOC_TOOL>`**: Documentation generation tool (e.g., `rustdoc`, `swagger-codegen`)
+- **`<TRAINING_PLATFORM>`**: Platform for hosting training materials (e.g., internal wiki, confluence)
+- **`<CERTIFICATION_CRITERIA>`**: Requirements for `<ACTOR_NAME>` expertise certification
+- **`<DOC_UPDATE_FREQUENCY>`**: Schedule for documentation reviews and updates

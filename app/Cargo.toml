@@ -109,10 +109,17 @@ bitcoin = { workspace = true, features = ["serde"] }
 hyper = { version = "0.14", features = ["full"] }
 rust_decimal = { version = "1.37.1", features = ["macros"] }
 
+# Network Actor Dependencies
+rayon = "1.8"       # Parallel processing for sync validation
+bincode = "1.3"     # Fast serialization for network messages
+
+# Optional SIMD optimizations
+wide = { version = "0.7", features = ["std"], optional = true }
+
 [dependencies.libp2p]
-version = "0.52"
+version = "0.53"
 default-features = false
-features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
+features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic","kad", "request-response", "ping"]
 
 [build-dependencies]
 tonic-build = "0.10"
@@ -125,3 +132,7 @@ sha2 = "0.10"
 [[bench]]
 name = "sync_benchmarks"
 harness = false
+
+[features]
+default = []
+simd = ["wide"]
