@@ -1,7 +1,10 @@
 #![allow(clippy::manual_div_ceil)]
 
 use crate::actors::governance_stream::{StreamActor, StreamConfig};
-use crate::actors::foundation::{ActorSystemConfig, RootSupervisor, ActorInfo, ActorPriority, ActorSpecificConfig};
+use crate::actors::bridge::{
+    config::BridgeSystemConfig,
+    supervision::BridgeSupervisor,
+};
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
@@ -321,27 +324,18 @@ impl App {
 
         crate::metrics::start_server(self.metrics_port).await;
 
-        // Initialize V2 Actor System with Governance Stream
-        info!("Initializing V2 Actor System");
-        let actor_config = if self.dev {
-            ActorSystemConfig::development()
+        // Initialize Bridge Actor System
+        info!("Initializing Bridge Actor System");
+        let bridge_config = if self.dev {
+            BridgeSystemConfig::development()
         } else {
-            ActorSystemConfig::production()
+            BridgeSystemConfig::production()
         };
         
-        let mut root_supervisor = RootSupervisor::new(actor_config)
-            .expect("Failed to create root supervisor");
-        root_supervisor.initialize_supervision_tree().await
-            .expect("Failed to initialize supervision tree");
-        let supervisor_addr = root_supervisor.start();
+        let bridge_supervisor = BridgeSupervisor::new(bridge_config.supervision)
+            .start();
         
-        // Initialize Governance Stream Actor
-        let governance_config = StreamConfig::default();
-        let governance_actor = StreamActor::new(governance_config)
-            .expect("Failed to create governance stream actor");
-        let _governance_addr = governance_actor.start();
-        
-        info!("V2 Actor System initialized with Governance Stream");
+        info!("Bridge Actor System initialized successfully");
 
         if (self.mine || self.dev) && !self.no_mine {
             info!("Spawning miner");
