@@ -428,7 +428,6 @@ dependencies = [
  "strum 0.26.3",
  "superstruct",
  "svix-ksuid",
- "sync_engine",
  "sysinfo",
  "tempfile",
  "thiserror",
@@ -1091,19 +1090,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blake3"
-version = "1.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
-dependencies = [
- "arrayref",
- "arrayvec",
- "cc",
- "cfg-if",
- "constant_time_eq 0.3.1",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1693,12 +1679,6 @@ name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
-
-[[package]]
-name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
@@ -9861,41 +9841,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sync_engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bitcoin 0.31.2",
- "blake3",
- "criterion",
- "crossbeam",
- "dashmap",
- "futures",
- "libp2p 0.53.2",
- "libp2p-dns 0.41.1",
- "libp2p-gossipsub 0.46.1",
- "libp2p-identify 0.44.1",
- "libp2p-kad",
- "libp2p-mdns 0.45.1",
- "libp2p-noise 0.44.0",
- "libp2p-swarm 0.44.1",
- "libp2p-tcp 0.41.0",
- "lru 0.12.1",
- "parking_lot 0.12.1",
- "rocksdb",
- "serde",
- "serde_json",
- "sha2 0.10.8",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-test",
- "tracing",
- "uuid 1.12.1",
-]
-
-[[package]]
 name = "sync_wrapper"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11984,7 +11929,7 @@ dependencies = [
  "aes 0.8.3",
  "byteorder",
  "bzip2",
- "constant_time_eq 0.1.5",
+ "constant_time_eq",
  "crc32fast",
  "crossbeam-utils",
  "flate2",

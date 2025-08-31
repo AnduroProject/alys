@@ -2231,7 +2231,7 @@ impl MetricLabels {
     
     /// Standard migration phase labels
     pub const MIGRATION_PHASES: &'static [&'static str] = &[
-        "foundation", "actor_system", "sync_engine", "federation_v2", 
+        "foundation", "actor_system", "federation_v2", 
         "lighthouse_v2", "migration", "validation", "rollback_safety",
         "performance_verification", "final_validation"
     ];
