@@ -12,6 +12,7 @@ pub mod actors;
 pub mod shared;
 pub mod supervision;
 pub mod integration;
+pub mod workflows;
 pub mod metrics;
 pub mod config;
 
@@ -23,5 +24,6 @@ pub use actors::pegin::PegInActor;
 pub use actors::pegout::PegOutActor;
 pub use actors::stream::StreamActor;
 pub use supervision::BridgeSupervisor;
+pub use workflows::orchestrator::BridgeWorkflowOrchestrator;
 pub use config::BridgeSystemConfig;
 pub use messages::*;
