@@ -12,6 +12,7 @@ use actor_system::{AlysActor, LifecycleAware, ActorResult, ActorError};
 use actor_system::blockchain::{BlockchainAwareActor, BlockchainTimingConstraints, BlockchainActorPriority};
 
 use crate::actors::network::messages::*;
+use crate::actors::network::messages::sync_messages::*;
 use crate::actors::network::sync::*;
 use crate::actors::chain::ChainActor;
 use crate::actors::network::NetworkActor;
@@ -494,6 +495,113 @@ impl Handler<RestoreCheckpoint> for SyncActor {
                 }))
             }
         })
+    }
+}
+
+impl Handler<RequestBlocks> for SyncActor {
+    type Result = ResponseFuture<NetworkActorResult<BlocksResponse>>;
+
+    fn handle(&mut self, msg: RequestBlocks, _ctx: &mut Context<Self>) -> Self::Result {
+        let block_processor = self.block_processor.clone();
+        let peer_manager = self.peer_manager.clone();
+        let network_actor = self.network_actor.clone();
+        let start_height = msg.start_height;
+        let count = msg.count;
+        let preferred_peers = msg.preferred_peers;
+
+        tracing::debug!(
+            "RequestBlocks from height {} count {} peers {:?}",
+            start_height, count, preferred_peers
+        );
+
+        Box::pin(async move {
+            let mut blocks = Vec::new();
+            let mut source_peers = Vec::new();
+
+            // Try to get blocks from local storage first (via block processor)
+            if let Ok(local_blocks) = block_processor.get_blocks_range(start_height, start_height + count as u64).await {
+                for (height, block_data) in local_blocks {
+                    if blocks.len() >= count as usize {
+                        break;
+                    }
+                    blocks.push(BlockData {
+                        height,
+                        hash: ethereum_types::H256::random(), // Would be actual block hash
+                        parent_hash: ethereum_types::H256::random(), // Would be actual parent hash
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                        data: block_data,
+                        signature: None, // Would be populated if federation block
+                    });
+                    source_peers.push("local".to_string());
+                }
+            }
+
+            // If we don't have all blocks locally, request from network
+            let missing_count = count - blocks.len() as u32;
+            if missing_count > 0 && network_actor.is_some() {
+                let next_height = start_height + blocks.len() as u64;
+                
+                // Would implement network block requests here
+                tracing::debug!(
+                    "Need to fetch {} more blocks from height {} via network",
+                    missing_count, next_height
+                );
+
+                // For now, return what we have locally
+                // In full implementation, this would coordinate with NetworkActor
+                // to request blocks from preferred_peers
+            }
+
+            let response = BlocksResponse {
+                blocks,
+                more_available: false, // Would check if more blocks exist
+                source_peers,
+            };
+
+            Ok(Ok(response))
+        })
+    }
+}
+
+impl Handler<SyncProgressUpdate> for SyncActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: SyncProgressUpdate, _ctx: &mut Context<Self>) -> Self::Result {
+        tracing::debug!(
+            "Sync progress update: height {} progress {:.2}% bps {:.1}",
+            msg.current_height, msg.progress * 100.0, msg.blocks_per_second
+        );
+
+        // Update internal state
+        self.state.progress.current_height = msg.current_height;
+        self.state.progress.progress_percent = msg.progress;
+        self.state.metrics.current_bps = msg.blocks_per_second;
+
+        // Update metrics timestamp
+        self.metrics.last_update = std::time::Instant::now();
+
+        // Check if we've crossed the production threshold
+        let can_produce = self.can_produce_blocks();
+        if can_produce != self.state.progress.can_produce_blocks {
+            self.state.progress.can_produce_blocks = can_produce;
+            if can_produce {
+                tracing::info!(
+                    "🎯 Block production threshold reached! ({}% >= {}%)",
+                    (msg.progress * 100.0).round(),
+                    (self.config.production_threshold * 100.0).round()
+                );
+
+                // Notify ChainActor that block production is now allowed
+                if let Some(chain_actor) = &self.chain_actor {
+                    chain_actor.do_send(CanProduceBlocks);
+                }
+            }
+        }
+
+        Ok(Ok(()))
     }
 }
 

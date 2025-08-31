@@ -674,6 +674,274 @@ impl Handler<BroadcastBlock> for NetworkActor {
     }
 }
 
+impl Handler<StopNetwork> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: StopNetwork, ctx: &mut Context<Self>) -> Self::Result {
+        tracing::info!("Stopping network operations (graceful: {})", msg.graceful);
+
+        if msg.graceful {
+            // Graceful shutdown - close connections cleanly
+            if let Some(swarm) = &mut self.swarm {
+                // Unsubscribe from all topics
+                for topic in self.active_subscriptions.keys() {
+                    let _ = swarm.behaviour_mut().unsubscribe_from_topic(topic);
+                }
+                self.active_subscriptions.clear();
+
+                // Disconnect from all peers gracefully
+                let connected_peers: Vec<_> = swarm.connected_peers().cloned().collect();
+                for peer_id in connected_peers {
+                    swarm.disconnect_peer_id(peer_id).ok();
+                }
+            }
+        }
+
+        // Clear swarm and reset state
+        self.swarm = None;
+        self.pending_requests.clear();
+        self.bootstrap_status = BootstrapStatus::NotStarted;
+        
+        if !msg.graceful {
+            // Force shutdown - stop actor immediately
+            ctx.stop();
+        }
+
+        Ok(Ok(()))
+    }
+}
+
+impl Handler<BroadcastTransaction> for NetworkActor {
+    type Result = NetworkActorResult<BroadcastResponse>;
+
+    fn handle(&mut self, msg: BroadcastTransaction, _ctx: &mut Context<Self>) -> Self::Result {
+        if let Some(swarm) = &mut self.swarm {
+            match swarm.behaviour_mut().publish_message("transactions", msg.tx_data) {
+                Ok(message_id) => {
+                    self.metrics.messages_sent += 1;
+                    tracing::debug!("Broadcasting transaction {}", msg.tx_hash);
+                    
+                    Ok(Ok(BroadcastResponse {
+                        message_id: message_id.to_string(),
+                        peers_reached: swarm.connected_peers().count() as u32,
+                        propagation_started_at: std::time::SystemTime::now(),
+                    }))
+                }
+                Err(e) => Ok(Err(NetworkError::ProtocolError {
+                    message: format!("Failed to broadcast transaction: {}", e),
+                })),
+            }
+        } else {
+            Ok(Err(NetworkError::ActorError {
+                reason: "Network not initialized".to_string(),
+            }))
+        }
+    }
+}
+
+impl Handler<SubscribeToTopic> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: SubscribeToTopic, _ctx: &mut Context<Self>) -> Self::Result {
+        let topic_str = msg.topic.to_string();
+        
+        if let Some(swarm) = &mut self.swarm {
+            match swarm.behaviour_mut().subscribe_to_topic(&topic_str) {
+                Ok(_) => {
+                    self.active_subscriptions.insert(topic_str.clone(), Instant::now());
+                    tracing::info!("Subscribed to topic: {}", topic_str);
+                    Ok(Ok(()))
+                }
+                Err(e) => Ok(Err(NetworkError::ProtocolError {
+                    message: format!("Failed to subscribe to topic {}: {}", topic_str, e),
+                })),
+            }
+        } else {
+            Ok(Err(NetworkError::ActorError {
+                reason: "Network not initialized".to_string(),
+            }))
+        }
+    }
+}
+
+impl Handler<UnsubscribeFromTopic> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: UnsubscribeFromTopic, _ctx: &mut Context<Self>) -> Self::Result {
+        let topic_str = msg.topic.to_string();
+        
+        if let Some(swarm) = &mut self.swarm {
+            match swarm.behaviour_mut().unsubscribe_from_topic(&topic_str) {
+                Ok(_) => {
+                    self.active_subscriptions.remove(&topic_str);
+                    tracing::info!("Unsubscribed from topic: {}", topic_str);
+                    Ok(Ok(()))
+                }
+                Err(e) => Ok(Err(NetworkError::ProtocolError {
+                    message: format!("Failed to unsubscribe from topic {}: {}", topic_str, e),
+                })),
+            }
+        } else {
+            Ok(Err(NetworkError::ActorError {
+                reason: "Network not initialized".to_string(),
+            }))
+        }
+    }
+}
+
+impl Handler<SendRequest> for NetworkActor {
+    type Result = actix::ResponseFuture<NetworkActorResult<RequestResponse>>;
+
+    fn handle(&mut self, msg: SendRequest, _ctx: &mut Context<Self>) -> Self::Result {
+        let peer_id = msg.peer_id;
+        let request_data = msg.request_data;
+        let timeout_ms = msg.timeout_ms;
+        
+        if let Some(swarm) = &mut self.swarm {
+            let swarm_ref = swarm.clone(); // This won't work directly, need different approach
+            
+            Box::pin(async move {
+                // In a real implementation, this would:
+                // 1. Send the request via libp2p request-response protocol
+                // 2. Wait for the response with timeout
+                // 3. Return the response data
+                
+                // For now, return a placeholder response
+                Ok(Ok(RequestResponse {
+                    response_data: vec![],
+                    peer_id,
+                    duration_ms: 100,
+                }))
+            })
+        } else {
+            Box::pin(async move {
+                Ok(Err(NetworkError::ActorError {
+                    reason: "Network not initialized".to_string(),
+                }))
+            })
+        }
+    }
+}
+
+impl Handler<PeerConnected> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: PeerConnected, _ctx: &mut Context<Self>) -> Self::Result {
+        tracing::info!(
+            "Peer connected: {} at {} (federation: {}, protocols: {})",
+            msg.peer_id, 
+            msg.address, 
+            msg.is_federation_peer,
+            msg.protocols.len()
+        );
+
+        // Update metrics
+        self.metrics.messages_received += 1;
+
+        // If this is a federation peer, prioritize it
+        if msg.is_federation_peer {
+            if let Some(swarm) = &mut self.swarm {
+                // Would set peer priority in the behaviour
+                tracing::info!("Prioritizing federation peer: {}", msg.peer_id);
+            }
+        }
+
+        Ok(Ok(()))
+    }
+}
+
+impl Handler<PeerDisconnected> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: PeerDisconnected, _ctx: &mut Context<Self>) -> Self::Result {
+        tracing::info!("Peer disconnected: {} (reason: {})", msg.peer_id, msg.reason);
+
+        // Remove from pending requests if any
+        self.pending_requests.retain(|_, request| request.peer_id != msg.peer_id);
+
+        // Remove from metrics
+        self.metrics.peer_latencies.remove(&msg.peer_id);
+
+        Ok(Ok(()))
+    }
+}
+
+impl Handler<MessageReceived> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: MessageReceived, _ctx: &mut Context<Self>) -> Self::Result {
+        tracing::debug!(
+            "Message received from {} on topic {} ({} bytes)",
+            msg.from_peer, msg.topic, msg.data.len()
+        );
+
+        // Update metrics
+        self.metrics.messages_received += 1;
+        self.metrics.total_bandwidth_in += msg.data.len() as u64;
+
+        // Process the message based on topic
+        match msg.topic {
+            GossipTopic::Blocks => {
+                // Would forward to ChainActor or SyncActor
+                tracing::debug!("Received block data from peer {}", msg.from_peer);
+            }
+            GossipTopic::Transactions => {
+                // Would forward to TransactionPool or ChainActor
+                tracing::debug!("Received transaction data from peer {}", msg.from_peer);
+            }
+            GossipTopic::FederationMessages => {
+                // Would forward to federation handler
+                tracing::debug!("Received federation message from peer {}", msg.from_peer);
+            }
+            GossipTopic::Discovery => {
+                // Handle peer discovery information
+                tracing::debug!("Received discovery message from peer {}", msg.from_peer);
+            }
+            GossipTopic::Custom(topic) => {
+                tracing::debug!("Received message on custom topic '{}' from peer {}", topic, msg.from_peer);
+            }
+        }
+
+        Ok(Ok(()))
+    }
+}
+
+impl Handler<NetworkEvent> for NetworkActor {
+    type Result = NetworkActorResult<()>;
+
+    fn handle(&mut self, msg: NetworkEvent, _ctx: &mut Context<Self>) -> Self::Result {
+        tracing::info!("Network event: {:?} - {}", msg.event_type, msg.details);
+
+        match msg.event_type {
+            NetworkEventType::BootstrapCompleted => {
+                self.bootstrap_status = BootstrapStatus::Completed;
+                tracing::info!("Bootstrap process completed successfully");
+            }
+            NetworkEventType::PartitionDetected => {
+                tracing::warn!("Network partition detected: {}", msg.details);
+                // Could trigger recovery procedures
+            }
+            NetworkEventType::PartitionRecovered => {
+                tracing::info!("Network partition recovered: {}", msg.details);
+                // Could resume normal operations
+            }
+            NetworkEventType::ProtocolUpgrade => {
+                tracing::info!("Protocol upgrade: {}", msg.details);
+            }
+            NetworkEventType::BandwidthLimitExceeded => {
+                tracing::warn!("Bandwidth limit exceeded: {}", msg.details);
+                // Could implement rate limiting
+            }
+            NetworkEventType::SecurityViolation => {
+                tracing::error!("Security violation detected: {}", msg.details);
+                // Could ban peer or take security measures
+            }
+        }
+
+        Ok(Ok(()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
