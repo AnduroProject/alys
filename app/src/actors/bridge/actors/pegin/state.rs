@@ -9,21 +9,55 @@ use bitcoin::Txid;
 use ethereum_types::{H160, H256};
 use crate::actors::bridge::messages::*;
 
+/// Actor system compatible PegIn state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegInActorState {
+    pub current_state: PegInState,
+    pub pending_deposits: u32,
+    pub confirmed_deposits: u32,
+    pub monitored_addresses: u32,
+    pub last_block_checked: u64,
+    pub error_count: u32,
+    pub metrics_snapshot: actor_system::metrics::MetricsSnapshot,
+}
+
+impl Default for PegInActorState {
+    fn default() -> Self {
+        Self {
+            current_state: PegInState::default(),
+            pending_deposits: 0,
+            confirmed_deposits: 0,
+            monitored_addresses: 0,
+            last_block_checked: 0,
+            error_count: 0,
+            metrics_snapshot: actor_system::metrics::MetricsSnapshot::default(),
+        }
+    }
+}
+
 /// PegIn actor state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PegInState {
     /// Actor is initializing
     Initializing,
-    /// Actor is monitoring blockchain
-    Monitoring,
+    /// Actor is running and monitoring blockchain
+    Running,
+    /// Actor is processing deposits
+    Processing,
     /// Actor is in degraded state
     Degraded { issues: Vec<String> },
     /// Actor is paused
     Paused,
-    /// Actor is stopping
-    Stopping,
+    /// Actor is shutting down
+    ShuttingDown,
     /// Actor has stopped
     Stopped,
+}
+
+impl Default for PegInState {
+    fn default() -> Self {
+        Self::Initializing
+    }
 }
 
 /// Operation tracker for performance monitoring

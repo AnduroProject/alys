@@ -13,6 +13,7 @@ pub mod shared;
 pub mod supervision;
 pub mod integration;
 pub mod workflows;
+pub mod lifecycle;
 pub mod metrics;
 pub mod config;
 

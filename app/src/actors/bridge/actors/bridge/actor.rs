@@ -34,6 +34,9 @@ pub struct BridgeActor {
     /// System metrics
     metrics: BridgeCoordinationMetrics,
     
+    /// Actor system metrics (for AlysActor compatibility)
+    actor_system_metrics: actor_system::metrics::ActorMetrics,
+    
     /// Health monitor
     health_monitor: ActorHealthMonitor,
     
@@ -47,6 +50,17 @@ pub struct ChildActors {
     pub pegin_actor: Option<Addr<super::super::pegin::PegInActor>>,
     pub pegout_actor: Option<Addr<super::super::pegout::PegOutActor>>,
     pub stream_actor: Option<Addr<super::super::stream::StreamActor>>,
+}
+
+impl ChildActors {
+    /// Get count of registered actors
+    pub fn get_registered_count(&self) -> u32 {
+        let mut count = 0;
+        if self.pegin_actor.is_some() { count += 1; }
+        if self.pegout_actor.is_some() { count += 1; }
+        if self.stream_actor.is_some() { count += 1; }
+        count
+    }
 }
 
 /// Operation context for tracking
@@ -77,6 +91,7 @@ impl BridgeActor {
     pub fn new(config: BridgeConfig) -> Result<Self, BridgeError> {
         let metrics = BridgeCoordinationMetrics::new()?;
         let health_monitor = ActorHealthMonitor::new(config.health_check_interval);
+        let actor_system_metrics = actor_system::metrics::ActorMetrics::new("BridgeActor".to_string());
         
         Ok(Self {
             config,
@@ -84,6 +99,7 @@ impl BridgeActor {
             child_actors: ChildActors::default(),
             active_operations: HashMap::new(),
             metrics,
+            actor_system_metrics,
             health_monitor,
             started_at: SystemTime::now(),
         })

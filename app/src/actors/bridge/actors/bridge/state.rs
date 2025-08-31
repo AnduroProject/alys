@@ -8,6 +8,28 @@ use std::time::SystemTime;
 use crate::actors::bridge::messages::*;
 use crate::types::*;
 
+/// Actor system compatible bridge state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeActorState {
+    pub current_state: BridgeState,
+    pub active_operations: u32,
+    pub registered_actors: u32,
+    pub last_health_check: SystemTime,
+    pub metrics_snapshot: actor_system::metrics::MetricsSnapshot,
+}
+
+impl Default for BridgeActorState {
+    fn default() -> Self {
+        Self {
+            current_state: BridgeState::default(),
+            active_operations: 0,
+            registered_actors: 0,
+            last_health_check: SystemTime::now(),
+            metrics_snapshot: actor_system::metrics::MetricsSnapshot::default(),
+        }
+    }
+}
+
 /// Bridge coordinator state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BridgeState {
@@ -77,6 +99,35 @@ impl ActorHealthMonitor {
             system_errors: Vec::new(),
             last_error: None,
         }
+    }
+
+    /// Start health monitoring (for AlysActor compatibility)
+    pub async fn start(&mut self) -> Result<(), String> {
+        self.last_health_check = SystemTime::now();
+        Ok(())
+    }
+
+    /// Stop health monitoring (for AlysActor compatibility)
+    pub async fn stop(&mut self) -> Result<(), String> {
+        // Clean shutdown of health monitoring
+        self.system_errors.clear();
+        Ok(())
+    }
+
+    /// Update health check interval
+    pub fn update_interval(&mut self, new_interval: std::time::Duration) -> Result<(), String> {
+        self.health_check_interval = new_interval;
+        Ok(())
+    }
+
+    /// Get last health check time
+    pub fn get_last_check_time(&self) -> SystemTime {
+        self.last_health_check
+    }
+
+    /// Update last health check time
+    pub fn update_last_check(&mut self, time: SystemTime) {
+        self.last_health_check = time;
     }
 
     /// Record actor registration

@@ -47,6 +47,9 @@ pub struct PegInActor {
     metrics: PegInMetrics,
     performance_tracker: OperationTracker,
     
+    /// Actor system metrics (for AlysActor compatibility)
+    actor_system_metrics: actor_system::metrics::ActorMetrics,
+    
     /// State management
     state: PegInState,
     last_block_checked: u64,
@@ -95,6 +98,8 @@ impl PegInActor {
         let metrics = PegInMetrics::new()?;
         let performance_tracker = OperationTracker::new();
 
+        let actor_system_metrics = actor_system::metrics::ActorMetrics::new("PegInActor".to_string());
+        
         Ok(Self {
             config,
             bitcoin_client,
@@ -106,6 +111,7 @@ impl PegInActor {
             chain_actor: None,
             metrics,
             performance_tracker,
+            actor_system_metrics,
             state: PegInState::Initializing,
             last_block_checked: 0,
             recent_errors: Vec::new(),

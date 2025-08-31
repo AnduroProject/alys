@@ -8,5 +8,6 @@ pub mod validation;
 pub mod confirmation;
 pub mod state;
 pub mod metrics;
+pub mod alys_actor_impl;
 
 pub use actor::PegInActor;
