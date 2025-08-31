@@ -1,4 +1,4 @@
-# 📝 Prompt: <ACTOR_NAME> Engineer Technical Onboarding Book for Alys V2
+# 📝 Prompt: NetworkActor Engineer Technical Onboarding Book for Alys V2
 
 **System / Instructional Role:**  
 You are an expert technical writer, senior blockchain engineer, and educator specializing in distributed systems and actor model architectures. You excel at creating comprehensive technical documentation that serves as authoritative educational resources, transforming complex distributed systems knowledge into accessible yet exhaustive learning materials that produce expert-level practitioners.
@@ -6,36 +6,36 @@ You are an expert technical writer, senior blockchain engineer, and educator spe
 ---
 
 ## 🎯 Task  
-Create a **comprehensive technical onboarding book** for engineers working with the **`<ACTOR_NAME>`** in the Alys V2 codebase. This book must serve as the definitive educational resource that transforms novice engineers into expert contributors by providing complete mastery of the actor system, underlying technologies, design patterns, and operational expertise. The book should be thorough, exhaustive, and authoritative—covering every aspect necessary for deep technical proficiency.
+Create a **comprehensive technical onboarding book** for engineers working with the **`NetworkActor`** in the Alys V2 codebase. This book must serve as the definitive educational resource that transforms novice engineers into expert contributors by providing complete mastery of the actor system, underlying technologies, design patterns, and operational expertise. The book should be thorough, exhaustive, and authoritative—covering every aspect necessary for deep technical proficiency.
 
 ---
 
 ## 📚 Content Requirements  
 
 ### 1. **High-Level Orientation**  
-- Purpose of `<ACTOR_NAME>` and its mission within the Alys V2 merged mining sidechain architecture
-- Core user flow(s): `<CORE_USER_FLOW>` (e.g., Block Production Pipeline, Peg-in/Peg-out Processing, Mining Coordination)
-- System architecture overview focused on `<ACTOR_NAME>` and its supervision hierarchy (include mermaid diagrams)
-- Sequence of operations for `<KEY_WORKFLOWS>` (e.g., Block Import/Export, Consensus Voting, Federation Coordination)
+- Purpose of `NetworkActor` and its mission within the Alys V2 merged mining sidechain architecture
+- Core user flow(s): P2P Network Management and Peer Discovery Pipeline (e.g., Peer Connection Lifecycle, Message Broadcasting, Network Topology Maintenance)
+- System architecture overview focused on `NetworkActor` and its supervision hierarchy (include mermaid diagrams)
+- Sequence of operations for Peer Discovery, Message Propagation, Network Health Monitoring (e.g., Peer Handshake, Gossipsub Broadcasting, DHT Operations)
 
 ### 2. **Knowledge Tree Structure**  
-- **Roots**: Actor model fundamentals (Actix, message-passing, supervision), blockchain concepts specific to `<ACTOR_NAME>`
-- **Trunk**: Main `<ACTOR_NAME>` modules (`<KEY_MODULES>` - e.g., config.rs, state.rs, messages.rs, handlers/)
-- **Branches**: Subsystems/integrations relevant to `<ACTOR_NAME>` (supervision strategies, metrics collection, external integrations)
-- **Leaves**: Implementation details (functions like `<FUNCTION_EXAMPLES>` - e.g., handle_block_import, validate_consensus, process_message)
+- **Roots**: Actor model fundamentals (Actix, message-passing, supervision), blockchain concepts specific to `NetworkActor`
+- **Trunk**: Main `NetworkActor` modules (config.rs, peer_manager.rs, message_handler.rs, protocols/, discovery/) 
+- **Branches**: Subsystems/integrations relevant to `NetworkActor` (supervision strategies, metrics collection, external integrations)
+- **Leaves**: Implementation details (functions like handle_peer_connected, broadcast_message, update_peer_status, manage_connections)
 
 ### 3. **Codebase Walkthroughs**  
-- Folder/file structure specific to `<ACTOR_NAME>` (e.g., `app/src/actors/chain/` for ChainActor)
-- Integration points across `<KEY_MODULES>` and external systems (Bitcoin Core, Execution Layer, P2P Network)
-- Example inputs/outputs for `<FUNCTION_EXAMPLES>` with real message types and data structures
-- Procedural debugging examples for `<DEBUGGING_SCENARIO>` (e.g., actor restart cascades, message ordering failures, timing violations)
+- Folder/file structure specific to `NetworkActor` (e.g., `app/src/actors/network/` for NetworkActor)
+- Integration points across peer_manager.rs, message_handler.rs, protocols/, discovery/ and external systems (libp2p, Gossipsub, Kademlia DHT)
+- Example inputs/outputs for handle_peer_connected, broadcast_message, update_peer_status, manage_connections with real message types and data structures
+- Procedural debugging examples for Peer Connection Failures and Network Partitions (e.g., actor restart cascades, message ordering failures, timing violations)
 
 ### 4. **Educational Methodologies & Deep Learning Traversal**  
 - **Progressive Mastery**: Each concept builds systematically from fundamentals through advanced implementation
 - **Worked Implementation Paths**: Complete, step-by-step traversal through real implementation scenarios
-- **Technology Deep-Dives**: Exhaustive exploration of underlying technologies (Actor model, `<INTEGRATION_TECHNOLOGY>`, protocols)
+- **Technology Deep-Dives**: Exhaustive exploration of underlying technologies (Actor model, `libp2p`, protocols)
 - **Design Pattern Mastery**: Comprehensive understanding of architectural patterns and their practical application
-- **Comparative Analysis**: How `<ACTOR_NAME>` compares to similar systems and alternative approaches
+- **Comparative Analysis**: How `NetworkActor` compares to similar systems and alternative approaches
 - **Historical Context**: Evolution of design decisions and architectural trade-offs
 
 #### **Educational Aids & Visual Constructs**
@@ -53,11 +53,11 @@ Use these constructs when appropriate to enhance understanding:
 - **State Machine Diagrams**: Actor lifecycle states, consensus phases, error recovery flows
 
 ### 5. **Practical Engineering Aids**  
-- Environment setup (`<DEV_ENV_SETUP>` - Local network with `<ACTOR_NAME>` configuration)
-- Common commands/scripts specific to `<ACTOR_NAME>` testing and debugging
-- Testing & CI/CD pipelines overview showing `<ACTOR_NAME>` test coverage
-- Debugging workflows tailored to `<ACTOR_NAME>` failure modes
-- Day 1 tasks for engineers working with `<ACTOR_NAME>`
+- Environment setup (Local P2P network with `NetworkActor` configuration)
+- Common commands/scripts specific to `NetworkActor` testing and debugging
+- Testing & CI/CD pipelines overview showing `NetworkActor` test coverage
+- Debugging workflows tailored to `NetworkActor` failure modes
+- Day 1 tasks for engineers working with `NetworkActor`
 - Production deployment and operational procedures
 - Monitoring setup and health check configurations
 - Performance profiling and optimization workflows
@@ -69,13 +69,13 @@ Use these constructs when appropriate to enhance understanding:
 Produce this comprehensive technical book as a structured educational resource with the following sections, organized in logical learning progression from foundational understanding through expert mastery:
 
 ### **Phase 1: Foundation & Orientation**
-1. **Introduction & Purpose** - `<ACTOR_NAME>` role, mission, and business value in Alys V2
+1. **Introduction & Purpose** - `NetworkActor` role, mission, and business value in Alys V2
 2. **System Architecture & Core Flows** - High-level architecture, supervision hierarchy, and key workflows
-3. **Environment Setup & Tooling** - Local development setup, configuration, and essential tools for `<ACTOR_NAME>` work
+3. **Environment Setup & Tooling** - Local development setup, configuration, and essential tools for `NetworkActor` work
 
 ### **Phase 2: Fundamental Technologies & Design Patterns**  
-4. **Actor Model & `<INTEGRATION_TECHNOLOGY>` Mastery** - Complete understanding of underlying technologies and patterns
-5. **`<ACTOR_NAME>` Architecture Deep-Dive** - Exhaustive exploration of design decisions, implementation patterns, and system interactions
+4. **Actor Model & `libp2p` Mastery** - Complete understanding of underlying technologies and patterns
+5. **`NetworkActor` Architecture Deep-Dive** - Exhaustive exploration of design decisions, implementation patterns, and system interactions
 6. **Message Protocol & Communication Mastery** - Complete protocol specification, message flows, error handling, and integration patterns
 
 ### **Phase 3: Implementation Mastery & Advanced Techniques**
@@ -95,71 +95,71 @@ Produce this comprehensive technical book as a structured educational resource w
 
 ---
 
-## 📋 `<ACTOR_NAME>` Specific Context for Alys V2
+## 📋 `NetworkActor` Specific Context for Alys V2
 
 ### **Actor Overview**
-- **Primary Role**: `<ACTOR_PRIMARY_ROLE>` (e.g., Block production and consensus coordination for ChainActor)
-- **Location**: `<ACTOR_LOCATION>` (e.g., `app/src/actors/chain/` for ChainActor)
-- **Key Responsibilities**: `<KEY_RESPONSIBILITIES>` (e.g., Bitcoin integration, block validation, consensus timing)
-- **External Dependencies**: `<EXTERNAL_DEPENDENCIES>` (e.g., Bitcoin Core RPC, Execution Layer, P2P Network)
+- **Primary Role**: P2P network management and peer discovery coordination (e.g., Peer connection lifecycle, message broadcasting, network topology maintenance)
+- **Location**: `app/src/actors/network/` (e.g., `app/src/actors/network/` for NetworkActor)
+- **Key Responsibilities**: libp2p integration, peer discovery and management, message propagation, network health monitoring (e.g., Peer connection management, Gossipsub message routing, DHT operations)
+- **External Dependencies**: libp2p, Gossipsub, Kademlia DHT, mDNS (e.g., libp2p networking stack, Gossipsub pub/sub, Kademlia DHT)
 
-### **Core Message Types for `<ACTOR_NAME>`**
-- **Primary Messages**: `<PRIMARY_MESSAGES>` (e.g., `ProduceBlock`, `ValidateBlock`, `ProposeBlock`, `FinalizeBlock`)
-- **Integration Messages**: `<INTEGRATION_MESSAGES>` (e.g., `BitcoinDeposit`, `ExecutionPayload`, `P2PMessage`)
-- **Control Messages**: `<CONTROL_MESSAGES>` (e.g., `Restart`, `HealthCheck`, `ConfigUpdate`)
-- **Error Messages**: `<ERROR_MESSAGES>` (e.g., `ValidationError`, `TimingViolation`, `IntegrationFailure`)
+### **Core Message Types for `NetworkActor`**
+- **Primary Messages**: `PeerConnected`, `PeerDisconnected`, `BroadcastMessage`, `UpdatePeerStatus` (e.g., `PeerConnected`, `PeerDisconnected`, `BroadcastMessage`, `UpdatePeerStatus`)
+- **Integration Messages**: `GossipsubMessage`, `KademliaQuery`, `MDNSDiscovery`, `NetworkHealth` (e.g., `GossipsubMessage`, `KademliaQuery`, `MDNSDiscovery`, `NetworkHealth`)
+- **Control Messages**: `RestartNetwork`, `HealthCheck`, `ConfigUpdate` (e.g., `RestartNetwork`, `HealthCheck`, `ConfigUpdate`)
+- **Error Messages**: `PeerConnectionError`, `MessageDeliveryFailure`, `NetworkPartition` (e.g., `PeerConnectionError`, `MessageDeliveryFailure`, `NetworkPartition`)
 
-### **Performance Targets for `<ACTOR_NAME>`**
-- **Message Throughput**: `<THROUGHPUT_TARGET>` (e.g., 1000+ concurrent messages per second)
-- **Message Latency**: `<LATENCY_TARGET>` (e.g., Sub-100ms average processing time)
-- **Recovery Time**: `<RECOVERY_TARGET>` (e.g., <5 second restart time)
-- **Integration Response**: `<INTEGRATION_RESPONSE_TARGET>` (e.g., <1 second for external API calls)
-- **Resource Usage**: `<RESOURCE_TARGET>` (e.g., <50MB memory footprint, <10% CPU under normal load)
+### **Performance Targets for `NetworkActor`**
+- **Message Throughput**: 5000+ messages per second (e.g., 5000+ messages per second across all peer connections)
+- **Message Latency**: Sub-50ms network propagation time (e.g., Sub-50ms average message propagation across network)
+- **Recovery Time**: <3 second network reconnection time (e.g., <3 second recovery from network partitions)
+- **Integration Response**: <500ms for peer discovery operations (e.g., <500ms for peer discovery and connection establishment)
+- **Resource Usage**: <100MB memory footprint, <15% CPU under normal network load (e.g., <100MB memory footprint, <15% CPU under normal load)
 
-### **Development Environment for `<ACTOR_NAME>`**
-- **Local Setup Command**: `<LOCAL_SETUP_COMMAND>` (e.g., `./scripts/start_network.sh`)
-- **Test Command**: `<TEST_COMMAND>` (e.g., `cargo test --lib chain_actor`)
-- **Benchmark Command**: `<BENCHMARK_COMMAND>` (e.g., `cargo bench --bench chain_actor_benchmarks`)
-- **Debug Configuration**: `<DEBUG_CONFIG>` (e.g., `RUST_LOG=chain_actor=debug`)
-- **Key Config Files**: `<CONFIG_FILES>` (e.g., `etc/config/chain.json`, `app/src/actors/chain/config.rs`)
+### **Development Environment for `NetworkActor`**
+- **Local Setup Command**: `./scripts/start_network.sh` (e.g., `./scripts/start_network.sh`)
+- **Test Command**: `cargo test --lib network_actor` (e.g., `cargo test --lib network_actor`)
+- **Benchmark Command**: `cargo bench --bench network_actor_benchmarks` (e.g., `cargo bench --bench network_actor_benchmarks`)
+- **Debug Configuration**: `RUST_LOG=network_actor=debug,libp2p=debug` (e.g., `RUST_LOG=network_actor=debug,libp2p=debug`)
+- **Key Config Files**: `etc/config/network.toml`, `app/src/actors/network/config.rs` (e.g., `etc/config/network.toml`, `app/src/actors/network/config.rs`)
 
-### **Integration Points for `<ACTOR_NAME>`**
-- **Primary Integration**: `<PRIMARY_INTEGRATION>` (e.g., Bitcoin Core RPC for ChainActor)
-- **Secondary Integrations**: `<SECONDARY_INTEGRATIONS>` (e.g., Execution Layer, P2P Network, Prometheus)
-- **Data Flow In**: `<INPUT_DATA_FLOW>` (e.g., Bitcoin blocks, transaction pools, consensus messages)
-- **Data Flow Out**: `<OUTPUT_DATA_FLOW>` (e.g., Signed blocks, validation results, health metrics)
+### **Integration Points for `NetworkActor`**
+- **Primary Integration**: libp2p networking stack for NetworkActor (e.g., libp2p networking stack for peer-to-peer communication)
+- **Secondary Integrations**: Gossipsub, Kademlia DHT, mDNS, Prometheus metrics (e.g., Gossipsub for pub/sub, Kademlia DHT for peer discovery, mDNS for local discovery)
+- **Data Flow In**: Peer connections, network messages, discovery queries, health checks (e.g., Incoming peer connections, network protocol messages, DHT queries)
+- **Data Flow Out**: Message broadcasts, peer status updates, network topology, connectivity metrics (e.g., Message broadcasts to peers, peer status updates, network health metrics)
 
-### **Quality Gates for `<ACTOR_NAME>`**
-- **Unit Tests**: `<UNIT_TEST_CRITERIA>` (e.g., 100% success rate for lifecycle and recovery testing)
-- **Integration Tests**: `<INTEGRATION_TEST_CRITERIA>` (e.g., Full Bitcoin/Ethereum compatibility with <1% failure rate)
-- **Performance Tests**: `<PERFORMANCE_TEST_CRITERIA>` (e.g., Maintain targets under 1000+ concurrent message load)
-- **Chaos Tests**: `<CHAOS_TEST_CRITERIA>` (e.g., Automatic recovery within blockchain timing constraints)
-- **End-to-End Tests**: `<E2E_TEST_CRITERIA>` (e.g., Complete block production cycle with external systems)
-- **Security Tests**: `<SECURITY_TEST_CRITERIA>` (e.g., Vulnerability scanning and penetration testing)
-- **Documentation Coverage**: `<DOC_COVERAGE_CRITERIA>` (e.g., 100% API documentation and architecture diagrams)
+### **Quality Gates for `NetworkActor`**
+- **Unit Tests**: 100% success rate for peer lifecycle and message propagation testing (e.g., 100% success rate for peer connection lifecycle and message routing)
+- **Integration Tests**: Full libp2p compatibility with <1% message loss rate (e.g., Full libp2p stack integration with <1% message delivery failure rate)
+- **Performance Tests**: Maintain targets under 1000+ concurrent peer connections (e.g., Maintain performance targets under 1000+ concurrent peer load)
+- **Chaos Tests**: Automatic network recovery within 5 seconds from partitions (e.g., Automatic recovery within 5 seconds from network partitions and failures)
+- **End-to-End Tests**: Complete message propagation cycle across network topology (e.g., Complete message propagation from source to all network peers)
+- **Security Tests**: Network security scanning and DDoS resistance testing (e.g., Network vulnerability scanning and DDoS attack simulation)
+- **Documentation Coverage**: 100% API documentation and network protocol diagrams (e.g., 100% API documentation and network architecture diagrams)
 
 ---
 
 ## 🎯 Expert Competency Outcomes
 
-After completing this comprehensive `<ACTOR_NAME>` technical onboarding book, engineers will have achieved expert-level competency and should be able to:
+After completing this comprehensive `NetworkActor` technical onboarding book, engineers will have achieved expert-level competency and should be able to:
 
-- ✅ **Master `<ACTOR_NAME>` Architecture**: Deep understanding of design decisions, trade-offs, and architectural evolution
-- ✅ **Expert System Integration**: Seamlessly integrate `<ACTOR_NAME>` with complex distributed systems and external components
+- ✅ **Master `NetworkActor` Architecture**: Deep understanding of design decisions, trade-offs, and architectural evolution
+- ✅ **Expert System Integration**: Seamlessly integrate `NetworkActor` with complex distributed systems and external components
 - ✅ **Advanced Implementation Patterns**: Apply sophisticated design patterns and implement complex features with confidence
 - ✅ **Expert-Level Debugging**: Diagnose and resolve complex system failures, race conditions, and integration issues
 - ✅ **Comprehensive Testing Mastery**: Design and implement full testing strategies including chaos engineering and edge cases
 - ✅ **Performance Engineering**: Identify bottlenecks, optimize performance, and design for scale
-- ✅ **Production Operations Excellence**: Deploy, monitor, and maintain `<ACTOR_NAME>` in production environments
-- ✅ **Technology Deep Expertise**: Master underlying technologies (`<INTEGRATION_TECHNOLOGY>`, Actor model, protocols)
+- ✅ **Production Operations Excellence**: Deploy, monitor, and maintain `NetworkActor` in production environments
+- ✅ **Technology Deep Expertise**: Master underlying technologies (`libp2p`, Actor model, protocols)
 - ✅ **Architectural Decision Making**: Make informed decisions about system evolution and architectural changes
 - ✅ **Research & Innovation**: Contribute to cutting-edge developments and research in the field
 - ✅ **Mentorship & Knowledge Transfer**: Train other engineers and contribute to organizational knowledge
 - ✅ **Emergency Response**: Handle critical incidents and system failures with expert-level competency
 
 ### **Expert Competencies Developed**
-- **`<ACTOR_NAME>` System Expertise**: Complete mastery of system architecture, implementation patterns, and operational characteristics
-- **`<INTEGRATION_TECHNOLOGY>` Technology Mastery**: Deep expertise in underlying technologies and their application patterns
+- **`NetworkActor` System Expertise**: Complete mastery of system architecture, implementation patterns, and operational characteristics
+- **`libp2p` Technology Mastery**: Deep expertise in underlying technologies and their application patterns
 - **Advanced Design Pattern Application**: Sophisticated understanding of distributed systems patterns and their practical implementation
 - **Expert-Level Performance Engineering**: Advanced optimization techniques, bottleneck analysis, and scalability design
 - **Comprehensive Testing Strategies**: Mastery of testing methodologies from unit testing through chaos engineering
@@ -180,12 +180,12 @@ After completing this comprehensive `<ACTOR_NAME>` technical onboarding book, en
 4. **Review Learning Flow**: Verify the content follows logical progression from foundation to mastery
 
 ### **Key Template Variables Quick Reference**
-- `<ACTOR_NAME>` - Name of the specific actor (e.g., ChainActor, NetworkActor, EngineActor)
-- `<ACTOR_PRIMARY_ROLE>` - Main responsibility/purpose of the actor
-- `<ACTOR_LOCATION>` - File system path where actor is implemented
-- `<KEY_MODULES>` - Core modules/files for the actor
-- `<INTEGRATION_TECHNOLOGY>` - Primary external integration (e.g., libp2p, Bitcoin Core)
-- `<PRIMARY_MESSAGES>` - Main message types handled by the actor
+- `NetworkActor` - Name of the specific actor (e.g., ChainActor, NetworkActor, EngineActor)
+- `P2P network management and peer discovery coordination` - Main responsibility/purpose of the actor
+- `app/src/actors/network/` - File system path where actor is implemented
+- `peer_manager.rs, message_handler.rs, protocols/, discovery/` - Core modules/files for the actor
+- `libp2p` - Primary external integration (e.g., libp2p, Bitcoin Core)
+- `PeerConnected`, `PeerDisconnected`, `BroadcastMessage`, `UpdatePeerStatus` - Main message types handled by the actor
 - All performance, testing, and configuration variables as defined in context sections
 
 ---
@@ -200,7 +200,7 @@ This section defines the comprehensive educational ecosystem that must be direct
 *These comprehensive educational components must be fully developed within the book sections*
 
 - **Complete System Architecture**: Exhaustive architectural analysis including design rationale, trade-offs, and evolution → *Fully developed in Section 5 (Architecture Deep-Dive)*
-- **Technology Fundamentals**: Deep exploration of Actor model, `<INTEGRATION_TECHNOLOGY>`, and underlying protocols → *Comprehensive coverage in Section 4 (Technology Mastery)*
+- **Technology Fundamentals**: Deep exploration of Actor model, `libp2p`, and underlying protocols → *Comprehensive coverage in Section 4 (Technology Mastery)*
 - **Advanced Implementation Patterns**: Complete analysis of design patterns, best practices, and expert techniques → *Thoroughly covered in Section 7 (Implementation Walkthrough)*
 - **Performance Engineering Mastery**: Deep performance analysis, optimization strategies, and scaling techniques → *Exhaustively covered in Section 9 (Performance Engineering)*
 - **Expert Testing Methodologies**: Complete testing strategies from unit testing through chaos engineering → *Comprehensively covered in Section 8 (Advanced Testing)*
@@ -230,8 +230,8 @@ This section defines the comprehensive educational ecosystem that must be direct
 - **Mastery Validation Frameworks**: Comprehensive assessment methodologies and expertise measurement → *Thoroughly covered in Section 15 (Mastery Assessment)*
 
 ### **Template Variables for Documentation Content**
-- **`<DOCUMENTATION_REPO>`**: Repository location for `<ACTOR_NAME>` documentation (e.g., `docs/actors/chain/`)
-- **`<API_DOC_TOOL>`**: Documentation generation tool (e.g., `rustdoc`, `swagger-codegen`)
-- **`<TRAINING_PLATFORM>`**: Platform for hosting training materials (e.g., internal wiki, confluence)
-- **`<CERTIFICATION_CRITERIA>`**: Requirements for `<ACTOR_NAME>` expertise certification
-- **`<DOC_UPDATE_FREQUENCY>`**: Schedule for documentation reviews and updates
+- **Documentation Repository**: Repository location for `NetworkActor` documentation (e.g., `docs/actors/network/`)
+- **API Documentation Tool**: Documentation generation tool (e.g., `rustdoc`, `swagger-codegen`)
+- **Training Platform**: Platform for hosting training materials (e.g., internal wiki, confluence)
+- **Certification Criteria**: Requirements for `NetworkActor` expertise certification
+- **Documentation Update Frequency**: Schedule for documentation reviews and updates
