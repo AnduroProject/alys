@@ -39,7 +39,7 @@ pub struct StreamActor {
     /// Actor performance metrics
     metrics: Arc<RwLock<StreamActorMetrics>>,
     /// Actor supervisor reference
-    supervisor: Option<Addr<crate::actors::supervisor::Supervisor>>,
+    supervisor: Option<Addr<actor_system::supervisor::Supervisor>>,
     /// Integration actor references
     integration: ActorIntegration,
     /// Message routing system
@@ -211,11 +211,11 @@ pub struct ActorIntegration {
     /// Bridge actor for signature operations
     pub bridge_actor: Option<Addr<crate::actors::bridge::BridgeActor>>,
     /// Sync actor for chain synchronization
-    pub sync_actor: Option<Addr<crate::actors::sync_actor::SyncActor>>,
+    pub sync_actor: Option<Addr<crate::actors::sync::SyncActor>>,
     /// Storage actor for persistence
     pub storage_actor: Option<Addr<crate::actors::storage::StorageActor>>,
     /// Network actor for P2P communication
-    pub network_actor: Option<Addr<crate::actors::network_actor::NetworkActor>>,
+    pub network_actor: Option<Addr<crate::actors::network::NetworkActor>>,
 }
 
 /// Message routing system
@@ -559,7 +559,7 @@ impl StreamActor {
     }
 
     /// Set supervisor reference
-    pub fn with_supervisor(mut self, supervisor: Addr<crate::actors::supervisor::Supervisor>) -> Self {
+    pub fn with_supervisor(mut self, supervisor: Addr<actor_system::supervisor::Supervisor>) -> Self {
         self.supervisor = Some(supervisor);
         self
     }

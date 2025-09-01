@@ -17,22 +17,17 @@
 //! All actors use the actor_system crate for supervision, lifecycle management,
 //! message handling, and metrics collection.
 
-pub mod supervisor;
 pub mod chain; // Organized chain actor module
 pub mod engine; // Organized engine actor module
 pub mod bridge; // Bridge actor system
-pub mod sync_actor; // Legacy sync - will be deprecated
-pub mod network_actor; // Legacy network - will be deprecated  
-pub mod network; // New network actor system (SyncActor, NetworkActor, PeerActor)
+pub mod network; // Network actor system (SyncActor, NetworkActor, PeerActor)
+pub mod sync; // Sync actor system
 pub mod stream_actor;
 pub mod storage; // Organized storage actor module
 pub mod governance_stream;
 
-pub use supervisor::*;
 pub use chain::*; // Import from organized module
 pub use engine::*; // Import from organized engine module
-pub use sync_actor::*; // Legacy sync
-pub use network_actor::*; // Legacy network
 pub use network::*; // New network actor system
 pub use stream_actor::*;
 pub use storage::*; // Import from organized storage module

@@ -7,9 +7,11 @@ pub mod federation;
 pub mod bitcoin_client;
 pub mod validation;
 pub mod constants;
+pub mod errors;
 
 pub use utxo::*;
 pub use federation::*;
 pub use bitcoin_client::*;
 pub use validation::*;
 pub use constants::*;
+pub use errors::*;

@@ -4,9 +4,12 @@
 
 use actix::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use crate::types::*;
 use super::pegout_messages::{SignatureSet, PegOutActor};
+
+// Import actor_system message traits
+use actor_system::message::{AlysMessage, MessagePriority};
 
 // Forward declaration for circular dependency handling
 pub struct StreamActor;
@@ -198,4 +201,207 @@ pub struct FederationSignature {
     pub signature: Vec<u8>,
     pub public_key: Vec<u8>,
     pub timestamp: SystemTime,
+}
+
+impl AlysMessage for StreamMessage {
+    fn priority(&self) -> MessagePriority {
+        match self {
+            // Critical governance operations - highest priority
+            StreamMessage::RequestPegOutSignatures { .. } => MessagePriority::Critical,
+            StreamMessage::ReceiveSignatureResponse { .. } => MessagePriority::Critical,
+            
+            // High priority bridge operations
+            StreamMessage::HandleFederationUpdate { .. } => MessagePriority::High,
+            StreamMessage::NotifyPegIn { .. } => MessagePriority::High,
+            StreamMessage::RegisterPegOutActor(_) => MessagePriority::High,
+            
+            // Medium priority connection management
+            StreamMessage::EstablishGovernanceConnection { .. } => MessagePriority::Normal,
+            StreamMessage::ReconnectToGovernance => MessagePriority::Normal,
+            StreamMessage::UpdateGovernanceEndpoints { .. } => MessagePriority::Normal,
+            
+            // Low priority monitoring and status
+            StreamMessage::SendHeartbeat => MessagePriority::Low,
+            StreamMessage::GetConnectionStatus => MessagePriority::Low,
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        match self {
+            // Signature operations have extended timeouts due to consensus requirements
+            StreamMessage::RequestPegOutSignatures { request } => {
+                request.timeout
+            }
+            StreamMessage::ReceiveSignatureResponse { .. } => Duration::from_secs(30),
+            
+            // Federation updates need time for propagation
+            StreamMessage::HandleFederationUpdate { .. } => Duration::from_secs(120),
+            
+            // Connection operations need reasonable timeouts
+            StreamMessage::EstablishGovernanceConnection { .. } => Duration::from_secs(60),
+            StreamMessage::ReconnectToGovernance => Duration::from_secs(45),
+            StreamMessage::UpdateGovernanceEndpoints { .. } => Duration::from_secs(30),
+            
+            // Notifications and registration should be fast
+            StreamMessage::NotifyPegIn { .. } => Duration::from_secs(30),
+            StreamMessage::RegisterPegOutActor(_) => Duration::from_secs(15),
+            
+            // Quick operations
+            StreamMessage::SendHeartbeat => Duration::from_secs(10),
+            StreamMessage::GetConnectionStatus => Duration::from_secs(5),
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            // Signature operations are retryable but with limits
+            StreamMessage::RequestPegOutSignatures { .. } => true,
+            StreamMessage::ReceiveSignatureResponse { .. } => false, // Don't retry responses
+            
+            // Federation and connection operations are retryable
+            StreamMessage::HandleFederationUpdate { .. } => true,
+            StreamMessage::EstablishGovernanceConnection { .. } => true,
+            StreamMessage::ReconnectToGovernance => true,
+            StreamMessage::UpdateGovernanceEndpoints { .. } => true,
+            
+            // Notifications should be retried to ensure delivery
+            StreamMessage::NotifyPegIn { .. } => true,
+            
+            // Registration and status operations are retryable
+            StreamMessage::RegisterPegOutActor(_) => true,
+            StreamMessage::SendHeartbeat => true,
+            StreamMessage::GetConnectionStatus => true,
+        }
+    }
+
+    fn max_retries(&self) -> u32 {
+        match self {
+            // Critical operations get more retries
+            StreamMessage::RequestPegOutSignatures { .. } => 5,
+            StreamMessage::HandleFederationUpdate { .. } => 5,
+            StreamMessage::NotifyPegIn { .. } => 5,
+            
+            // Connection operations get moderate retries
+            StreamMessage::EstablishGovernanceConnection { .. } => 3,
+            StreamMessage::ReconnectToGovernance => 3,
+            StreamMessage::UpdateGovernanceEndpoints { .. } => 3,
+            
+            // Registration and heartbeat get fewer retries
+            StreamMessage::RegisterPegOutActor(_) => 2,
+            StreamMessage::SendHeartbeat => 2,
+            
+            // Status checks and responses get minimal retries
+            StreamMessage::GetConnectionStatus => 1,
+            StreamMessage::ReceiveSignatureResponse { .. } => 0, // No retries for responses
+        }
+    }
+
+    fn serialize_debug(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": self.message_type(),
+            "priority": self.priority(),
+            "timeout_secs": self.timeout().as_secs(),
+            "retryable": self.is_retryable(),
+            "max_retries": self.max_retries(),
+            "message_data": match self {
+                StreamMessage::EstablishGovernanceConnection { endpoints } => serde_json::json!({
+                    "endpoint_count": endpoints.len(),
+                    "endpoints": endpoints
+                }),
+                StreamMessage::RequestPegOutSignatures { request } => serde_json::json!({
+                    "request_id": request.request_id,
+                    "pegout_id": request.pegout_id,
+                    "amount": request.amount,
+                    "destination": request.destination_address.to_string()
+                }),
+                StreamMessage::ReceiveSignatureResponse { response } => serde_json::json!({
+                    "request_id": response.request_id,
+                    "pegout_id": response.pegout_id,
+                    "approval_status": format!("{:?}", response.approval_status),
+                    "responding_nodes": response.responding_nodes.len()
+                }),
+                StreamMessage::HandleFederationUpdate { update } => serde_json::json!({
+                    "update_id": update.update_id,
+                    "update_type": format!("{:?}", update.update_type),
+                    "effective_height": update.effective_height
+                }),
+                StreamMessage::NotifyPegIn { notification } => serde_json::json!({
+                    "pegin_id": notification.pegin_id,
+                    "bitcoin_txid": notification.bitcoin_txid.to_string(),
+                    "amount": notification.amount
+                }),
+                StreamMessage::UpdateGovernanceEndpoints { endpoints } => serde_json::json!({
+                    "endpoint_count": endpoints.len()
+                }),
+                _ => serde_json::json!({ "details": "Basic message" })
+            }
+        })
+    }
+}
+
+impl StreamMessage {
+    /// Get the message type as a string for debugging and metrics
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            StreamMessage::EstablishGovernanceConnection { .. } => "EstablishGovernanceConnection",
+            StreamMessage::RequestPegOutSignatures { .. } => "RequestPegOutSignatures",
+            StreamMessage::ReceiveSignatureResponse { .. } => "ReceiveSignatureResponse",
+            StreamMessage::HandleFederationUpdate { .. } => "HandleFederationUpdate",
+            StreamMessage::NotifyPegIn { .. } => "NotifyPegIn",
+            StreamMessage::SendHeartbeat => "SendHeartbeat",
+            StreamMessage::GetConnectionStatus => "GetConnectionStatus",
+            StreamMessage::RegisterPegOutActor(_) => "RegisterPegOutActor",
+            StreamMessage::ReconnectToGovernance => "ReconnectToGovernance",
+            StreamMessage::UpdateGovernanceEndpoints { .. } => "UpdateGovernanceEndpoints",
+        }
+    }
+
+    /// Check if this message requires active governance connections
+    pub fn requires_governance_connection(&self) -> bool {
+        match self {
+            StreamMessage::RequestPegOutSignatures { .. } |
+            StreamMessage::HandleFederationUpdate { .. } |
+            StreamMessage::NotifyPegIn { .. } |
+            StreamMessage::SendHeartbeat => true,
+            
+            StreamMessage::ReceiveSignatureResponse { .. } |
+            StreamMessage::EstablishGovernanceConnection { .. } |
+            StreamMessage::ReconnectToGovernance |
+            StreamMessage::UpdateGovernanceEndpoints { .. } |
+            StreamMessage::GetConnectionStatus |
+            StreamMessage::RegisterPegOutActor(_) => false,
+        }
+    }
+
+    /// Get the category of this message for routing and handling
+    pub fn category(&self) -> StreamMessageCategory {
+        match self {
+            StreamMessage::RequestPegOutSignatures { .. } |
+            StreamMessage::ReceiveSignatureResponse { .. } => StreamMessageCategory::Signatures,
+            
+            StreamMessage::HandleFederationUpdate { .. } => StreamMessageCategory::Federation,
+            
+            StreamMessage::NotifyPegIn { .. } => StreamMessageCategory::Notifications,
+            
+            StreamMessage::EstablishGovernanceConnection { .. } |
+            StreamMessage::ReconnectToGovernance |
+            StreamMessage::UpdateGovernanceEndpoints { .. } => StreamMessageCategory::ConnectionManagement,
+            
+            StreamMessage::SendHeartbeat |
+            StreamMessage::GetConnectionStatus => StreamMessageCategory::Monitoring,
+            
+            StreamMessage::RegisterPegOutActor(_) => StreamMessageCategory::Registration,
+        }
+    }
+}
+
+/// Categories of stream messages for routing and processing
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamMessageCategory {
+    Signatures,
+    Federation,
+    Notifications,
+    ConnectionManagement,
+    Monitoring,
+    Registration,
 }

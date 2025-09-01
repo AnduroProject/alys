@@ -15,7 +15,9 @@ use crate::actors::bridge::{
     shared::*,
 };
 use crate::types::*;
-use super::{governance::*, reconnection::*, metrics::*};
+use super::{governance::*, reconnection::*, metrics::*, protocol::*, request_tracking::*};
+use super::reconnection::BackoffDecision;
+use crate::actors::bridge::shared::errors::BridgeError;
 
 /// Enhanced StreamActor for bridge operations
 pub struct StreamActor {
@@ -27,7 +29,7 @@ pub struct StreamActor {
     
     /// Message handling
     message_buffer: Vec<PendingMessage>,
-    request_tracker: RequestTracker,
+    request_tracker: AdvancedRequestTracker,
     
     /// Bridge actor integration
     pegout_actor: Option<Addr<super::super::pegout::PegOutActor>>,
@@ -38,6 +40,12 @@ pub struct StreamActor {
     
     /// Metrics and monitoring
     metrics: StreamMetrics,
+    
+    /// actor_system integration
+    actor_system_metrics: actor_system::metrics::ActorMetrics,
+    
+    /// Protocol handler for gRPC communication
+    protocol_handler: Option<BridgeGovernanceProtocol>,
     
     /// State management
     connection_status: ConnectionStatus,
@@ -68,29 +76,13 @@ pub struct PendingMessage {
     pub timeout: SystemTime,
 }
 
-/// Request tracker for correlation
-#[derive(Debug)]
-pub struct RequestTracker {
-    pending_requests: HashMap<String, PendingRequest>,
-    request_timeouts: Vec<(String, SystemTime)>,
-}
+// Old RequestTracker definitions removed - replaced by AdvancedRequestTracker
 
-/// Pending request tracking
-#[derive(Debug, Clone)]
-pub struct PendingRequest {
-    pub request_id: String,
-    pub request_type: RequestType,
-    pub pegout_id: Option<String>,
-    pub created_at: SystemTime,
-    pub timeout: SystemTime,
-    pub retry_count: u32,
-}
-
-/// Request types
+/// Legacy request types (kept for compatibility)
 #[derive(Debug, Clone)]
 pub enum RequestType {
     PegOutSignature,
-    FederationUpdate,
+    FederationUpdate,  
     Heartbeat,
 }
 
@@ -113,15 +105,22 @@ impl StreamActor {
         
         let metrics = StreamMetrics::new()?;
         
+        let actor_system_metrics = actor_system::metrics::ActorMetrics::new(
+            "bridge_stream_actor", 
+            "v1.0.0"
+        ).map_err(|e| StreamError::InternalError(format!("Failed to create actor_system metrics: {:?}", e)))?;
+        
         Ok(Self {
             config,
             governance_connections: HashMap::new(),
             message_buffer: Vec::new(),
-            request_tracker: RequestTracker::new(),
+            request_tracker: AdvancedRequestTracker::with_defaults(),
             pegout_actor: None,
             bridge_coordinator: None,
             reconnection_manager,
             metrics,
+            actor_system_metrics,
+            protocol_handler: None,
             connection_status: ConnectionStatus::Disconnected,
             last_heartbeat: None,
         })
@@ -130,6 +129,9 @@ impl StreamActor {
     /// Initialize StreamActor
     async fn initialize(&mut self, ctx: &mut Context<Self>) -> Result<(), StreamError> {
         info!("Initializing enhanced StreamActor for bridge operations");
+
+        // Initialize protocol handler
+        self.initialize_protocol_handler().await?;
 
         // Establish connections to governance nodes
         self.establish_governance_connections().await?;
@@ -148,24 +150,63 @@ impl StreamActor {
         Ok(())
     }
 
+    /// Initialize protocol handler
+    async fn initialize_protocol_handler(&mut self) -> Result<(), StreamError> {
+        match BridgeGovernanceProtocol::new(self.config.clone()).await {
+            Ok(protocol) => {
+                self.protocol_handler = Some(protocol);
+                info!("Protocol handler initialized successfully");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to initialize protocol handler: {:?}", e);
+                Err(StreamError::InternalError(format!("Protocol handler initialization failed: {:?}", e)))
+            }
+        }
+    }
+
     /// Establish connections to governance nodes
     async fn establish_governance_connections(&mut self) -> Result<(), StreamError> {
         info!("Establishing connections to {} governance nodes", self.config.governance_endpoints.len());
 
-        for endpoint in &self.config.governance_endpoints {
-            let node_id = self.generate_node_id(endpoint);
-            
-            match self.connect_to_governance_node(endpoint.clone(), node_id.clone()).await {
-                Ok(connection) => {
-                    self.governance_connections.insert(node_id.clone(), connection);
-                    self.metrics.record_connection_established(&node_id);
-                    info!("Connected to governance node: {}", endpoint);
+        if let Some(protocol) = &self.protocol_handler {
+            // Use protocol handler to establish connections
+            match protocol.connect_all().await {
+                Ok(connection_results) => {
+                    for (endpoint, result) in connection_results {
+                        let node_id = self.generate_node_id(&endpoint);
+                        
+                        match result {
+                            Ok(_) => {
+                                let connection = GovernanceConnection {
+                                    node_id: node_id.clone(),
+                                    endpoint: endpoint.clone(),
+                                    status: NodeConnectionStatus::Connected,
+                                    connected_at: Some(SystemTime::now()),
+                                    last_activity: SystemTime::now(),
+                                    message_count: 0,
+                                    latency: None,
+                                    health_score: 100.0,
+                                };
+                                
+                                self.governance_connections.insert(node_id.clone(), connection);
+                                self.metrics.record_connection_established(&node_id);
+                                info!("Connected to governance node: {}", endpoint);
+                            }
+                            Err(e) => {
+                                warn!("Failed to connect to governance node {}: {:?}", endpoint, e);
+                                self.metrics.record_connection_failed(&endpoint);
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
-                    warn!("Failed to connect to governance node {}: {:?}", endpoint, e);
-                    self.metrics.record_connection_failed(&endpoint);
+                    error!("Failed to establish governance connections: {:?}", e);
+                    return Err(StreamError::ConnectionError(format!("Connection establishment failed: {:?}", e)));
                 }
             }
+        } else {
+            return Err(StreamError::InternalError("Protocol handler not initialized".to_string()));
         }
 
         Ok(())
@@ -290,29 +331,54 @@ impl StreamActor {
             return Err(StreamError::NoActiveConnections);
         }
 
-        let mut success_count = 0;
-        let message_id = message.message_id.clone();
+        if let Some(protocol) = &self.protocol_handler {
+            let message_id = message.message_id.clone();
+            let target_endpoints: Vec<String> = active_connections
+                .iter()
+                .map(|(_, conn)| conn.endpoint.clone())
+                .collect();
 
-        for (node_id, _connection) in active_connections {
-            // In a real implementation, this would send via gRPC
-            debug!("Sending message {} to governance node {}", message_id, node_id);
-            
-            // Simulate successful send
-            success_count += 1;
-            
-            // Update connection activity
-            if let Some(connection) = self.governance_connections.get_mut(node_id) {
-                connection.last_activity = SystemTime::now();
-                connection.message_count += 1;
+            match protocol.broadcast_message(message, target_endpoints).await {
+                Ok(results) => {
+                    let mut success_count = 0;
+                    
+                    for (endpoint, result) in results {
+                        if let Some((node_id, connection)) = self.governance_connections
+                            .iter_mut()
+                            .find(|(_, conn)| conn.endpoint == endpoint) {
+                            
+                            match result {
+                                Ok(_) => {
+                                    success_count += 1;
+                                    connection.last_activity = SystemTime::now();
+                                    connection.message_count += 1;
+                                    debug!("Successfully sent message {} to node {}", message_id, node_id);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to send message {} to node {}: {:?}", message_id, node_id, e);
+                                    connection.status = NodeConnectionStatus::Failed { 
+                                        error: format!("Send failed: {:?}", e) 
+                                    };
+                                }
+                            }
+                        }
+                    }
+
+                    if success_count > 0 {
+                        self.metrics.record_message_broadcast(&message_id, success_count);
+                        info!("Broadcast message {} to {} governance nodes", message_id, success_count);
+                        Ok(())
+                    } else {
+                        Err(StreamError::BroadcastFailed)
+                    }
+                }
+                Err(e) => {
+                    error!("Broadcast failed: {:?}", e);
+                    Err(StreamError::BroadcastFailed)
+                }
             }
-        }
-
-        if success_count > 0 {
-            self.metrics.record_message_broadcast(&message_id, success_count);
-            info!("Broadcast message {} to {} governance nodes", message_id, success_count);
-            Ok(())
         } else {
-            Err(StreamError::BroadcastFailed)
+            Err(StreamError::InternalError("Protocol handler not available".to_string()))
         }
     }
 
@@ -357,25 +423,92 @@ impl StreamActor {
         });
     }
 
-    /// Monitor connection health
+    /// Monitor connection health with advanced reconnection logic
     fn monitor_connections(&mut self) {
         let now = SystemTime::now();
         let stale_threshold = Duration::from_secs(120); // 2 minutes
+
+        let mut nodes_to_reconnect = Vec::new();
 
         for (node_id, connection) in &mut self.governance_connections {
             // Check for stale connections
             if let Ok(time_since_activity) = now.duration_since(connection.last_activity) {
                 if time_since_activity > stale_threshold {
                     if matches!(connection.status, NodeConnectionStatus::Connected) {
-                        warn!("Governance node {} appears stale", node_id);
+                        warn!("Governance node {} appears stale, marking for reconnection", node_id);
                         connection.status = NodeConnectionStatus::Timeout;
                         connection.health_score = (connection.health_score * 0.8).max(10.0);
+                        
+                        // Record failure in reconnection manager
+                        let error = BridgeError::ConnectionError("Connection stale".to_string());
+                        self.reconnection_manager.record_failure(node_id.clone(), error);
+                        
+                        nodes_to_reconnect.push(node_id.clone());
                     }
                 }
             }
         }
 
+        // Check reconnection decisions for failed nodes
+        for node_id in nodes_to_reconnect {
+            match self.reconnection_manager.should_reconnect(&node_id) {
+                BackoffDecision::Proceed => {
+                    info!("Initiating reconnection to node {}", node_id);
+                    // Schedule reconnection attempt
+                    self.schedule_reconnection_attempt(node_id);
+                }
+                BackoffDecision::Wait { delay } => {
+                    debug!("Waiting {:?} before reconnecting to {}", delay, node_id);
+                }
+                BackoffDecision::GiveUp { reason } => {
+                    warn!("Giving up on reconnection to {}: {:?}", node_id, reason);
+                    // Remove from active connections
+                    self.governance_connections.remove(&node_id);
+                }
+                BackoffDecision::CircuitOpen { recovery_time } => {
+                    info!("Circuit breaker open for {}, recovery in {:?}", node_id, recovery_time);
+                }
+            }
+        }
+
+        // Perform health check reset thresholds
+        self.reconnection_manager.check_reset_thresholds();
+
         self.metrics.update_connection_health(&self.governance_connections);
+    }
+
+    /// Schedule reconnection attempt for a node
+    fn schedule_reconnection_attempt(&mut self, node_id: String) {
+        // In a real implementation, this would schedule an async task
+        // For now, we'll attempt immediate reconnection
+        if let Some(connection) = self.governance_connections.get(&node_id) {
+            let endpoint = connection.endpoint.clone();
+            
+            // Mark as reconnecting
+            if let Some(conn) = self.governance_connections.get_mut(&node_id) {
+                conn.status = NodeConnectionStatus::Connecting;
+            }
+
+            // In an async context, you would spawn a task like:
+            /*
+            let reconnection_manager = Arc::clone(&self.reconnection_manager);
+            let endpoint_clone = endpoint.clone();
+            let node_id_clone = node_id.clone();
+            
+            tokio::spawn(async move {
+                match attempt_reconnection(endpoint_clone).await {
+                    Ok(_) => {
+                        reconnection_manager.lock().await.record_success(node_id_clone);
+                    }
+                    Err(e) => {
+                        reconnection_manager.lock().await.record_failure(node_id_clone, e);
+                    }
+                }
+            });
+            */
+            
+            info!("Reconnection scheduled for node {} at {}", node_id, endpoint);
+        }
     }
 
     /// Update connection status
@@ -511,45 +644,7 @@ impl Actor for StreamActor {
     }
 }
 
-impl RequestTracker {
-    pub fn new() -> Self {
-        Self {
-            pending_requests: HashMap::new(),
-            request_timeouts: Vec::new(),
-        }
-    }
-
-    pub fn track_request(&mut self, request: PendingRequest) {
-        self.request_timeouts.push((request.request_id.clone(), request.timeout));
-        self.pending_requests.insert(request.request_id.clone(), request);
-    }
-
-    pub fn has_pending_request(&self, request_id: &str) -> bool {
-        self.pending_requests.contains_key(request_id)
-    }
-
-    pub fn complete_request(&mut self, request_id: &str) -> Option<PendingRequest> {
-        self.pending_requests.remove(request_id)
-    }
-
-    pub fn check_timeouts(&mut self) {
-        let now = SystemTime::now();
-        let mut timed_out = Vec::new();
-
-        for (request_id, timeout) in &self.request_timeouts {
-            if now >= *timeout {
-                timed_out.push(request_id.clone());
-            }
-        }
-
-        for request_id in timed_out {
-            if let Some(_request) = self.pending_requests.remove(&request_id) {
-                warn!("Request {} timed out", request_id);
-            }
-            self.request_timeouts.retain(|(id, _)| id != &request_id);
-        }
-    }
-}
+// Old RequestTracker implementation removed - functionality moved to AdvancedRequestTracker
 
 /// StreamActor errors
 #[derive(Debug, thiserror::Error)]

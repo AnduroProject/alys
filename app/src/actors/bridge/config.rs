@@ -72,6 +72,14 @@ pub struct StreamConfig {
     pub message_buffer_size: usize,
     pub reconnect_attempts: u32,
     pub reconnect_delay: Duration,
+    
+    /// TLS certificate paths
+    pub ca_cert_path: Option<String>,
+    pub client_cert_path: Option<String>,
+    pub client_key_path: Option<String>,
+    
+    /// Authentication token
+    pub auth_token: Option<String>,
 }
 
 /// Bridge supervision configuration
@@ -170,6 +178,10 @@ impl Default for StreamConfig {
             message_buffer_size: 1000,
             reconnect_attempts: 5,
             reconnect_delay: Duration::from_secs(5),
+            ca_cert_path: None,
+            client_cert_path: None,
+            client_key_path: None,
+            auth_token: None,
         }
     }
 }
