@@ -66,7 +66,7 @@ pub trait BlockchainAwareActor {
 /// 
 /// This actor implements the core execution functionality using the actor model
 /// to replace shared mutable state patterns with message-driven operations.
-/// It integrates with the Alys V2 actor foundation system for supervision,
+/// It integrates with the Alys V2 actor system for supervision,
 /// health monitoring, and graceful shutdown.
 /// 
 /// ## Architecture Integration

@@ -35,7 +35,7 @@ use actor_system::{
 /// 
 /// This actor implements the core blockchain functionality using the actor model
 /// to replace shared mutable state patterns with message-driven operations.
-/// It integrates with the Alys V2 actor foundation system for supervision,
+/// It integrates with the Alys V2 actor system for supervision,
 /// health monitoring, and graceful shutdown.
 #[derive(Debug)]
 pub struct ChainActor {
