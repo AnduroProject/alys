@@ -1,6 +1,6 @@
 #![allow(clippy::manual_div_ceil)]
 
-use crate::actors::governance_stream::{StreamActor, StreamConfig};
+use crate::actors::bridge::actors::stream::{StreamActor, config::AdvancedStreamConfig};
 use crate::actors::bridge::{
     config::BridgeSystemConfig,
     supervision::BridgeSupervisor,

@@ -12,7 +12,7 @@
 //! - **bridge/**: Bridge actors for two-way peg operations with Bitcoin
 //! - **engine/**: EngineActor for execution layer integration (Geth/Reth)
 //! - **network/**: Network actors for P2P networking, sync, and peer management
-//! - **governance_stream**: Governance node communication
+//! - **bridge/actors/stream**: Consolidated StreamActor for governance communication
 //!
 //! All actors use the actor_system crate for supervision, lifecycle management,
 //! message handling, and metrics collection.
@@ -22,13 +22,10 @@ pub mod engine; // Organized engine actor module
 pub mod bridge; // Bridge actor system
 pub mod network; // Network actor system (SyncActor, NetworkActor, PeerActor)
 pub mod sync; // Sync actor system
-pub mod stream_actor;
 pub mod storage; // Organized storage actor module
-pub mod governance_stream;
 
 pub use chain::*; // Import from organized module
-pub use engine::*; // Import from organized engine module
+pub use engine::*; // Import from organized engine module  
 pub use network::*; // New network actor system
-pub use stream_actor::*;
 pub use storage::*; // Import from organized storage module
-pub use governance_stream::*;
+pub use bridge::actors::stream::*; // Export new consolidated StreamActor
