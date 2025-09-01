@@ -209,7 +209,7 @@ pub enum RequestType {
 #[derive(Debug)]
 pub struct ActorIntegration {
     /// Bridge actor for signature operations
-    pub bridge_actor: Option<Addr<crate::actors::bridge_actor::BridgeActor>>,
+    pub bridge_actor: Option<Addr<crate::actors::bridge::BridgeActor>>,
     /// Sync actor for chain synchronization
     pub sync_actor: Option<Addr<crate::actors::sync_actor::SyncActor>>,
     /// Storage actor for persistence

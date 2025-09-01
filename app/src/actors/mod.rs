@@ -21,7 +21,6 @@ pub mod supervisor;
 pub mod chain; // Organized chain actor module
 pub mod engine; // Organized engine actor module
 pub mod bridge; // Bridge actor system
-pub mod bridge_actor; // Legacy bridge - will be deprecated
 pub mod sync_actor; // Legacy sync - will be deprecated
 pub mod network_actor; // Legacy network - will be deprecated  
 pub mod network; // New network actor system (SyncActor, NetworkActor, PeerActor)
@@ -32,7 +31,6 @@ pub mod governance_stream;
 pub use supervisor::*;
 pub use chain::*; // Import from organized module
 pub use engine::*; // Import from organized engine module
-pub use bridge_actor::*;
 pub use sync_actor::*; // Legacy sync
 pub use network_actor::*; // Legacy network
 pub use network::*; // New network actor system
