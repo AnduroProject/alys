@@ -7,7 +7,7 @@ use crate::block::{AuxPowHeader, SignedConsensusBlock};
 use crate::network::rpc::RPC;
 use crate::signatures::IndividualApproval;
 use bitcoin::Txid;
-use bridge::SingleMemberTransactionSignatures;
+use crate::bridge_compat::SingleMemberTransactionSignatures;
 use futures::stream::StreamExt;
 use libp2p::gossipsub::PublishError;
 use libp2p::swarm::{ConnectionId, DialError};

@@ -1,4 +1,4 @@
-use bridge::BitcoinPublicKey;
+use crate::bridge_compat::BitcoinPublicKey;
 use ethereum_types::Address;
 use lighthouse_wrapper::bls::PublicKey;
 use once_cell::sync::Lazy;

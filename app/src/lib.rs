@@ -14,6 +14,7 @@ mod network;
 mod rpc;
 mod rpc_v2; // V2 Actor-based RPC server
 mod signatures;
+mod bridge_compat; // Federation compatibility layer
 mod spec;
 mod store;
 

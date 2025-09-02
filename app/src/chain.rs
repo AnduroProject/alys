@@ -29,9 +29,15 @@ use crate::store::{BlockByHeight, BlockRef};
 use crate::{aura::Aura, block::SignedConsensusBlock, error::Error, store::Storage};
 use async_trait::async_trait;
 use bitcoin::{BlockHash, Transaction as BitcoinTransaction, Txid};
-use bridge::Error as FederationError;
-use bridge::SingleMemberTransactionSignatures;
-use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, UtxoManager};
+use crate::actors::bridge::{
+    actors::bridge::BridgeActor,
+    messages::*,
+    shared::*,
+};
+use crate::bridge_compat::{
+    Bridge, PegInInfo, BitcoinWallet, BitcoinSignatureCollector, BitcoinSigner,
+    Error as FederationError, BridgeCompatError
+};
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use eyre::{eyre, Report, Result};
@@ -50,8 +56,10 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use tracing_futures::Instrument;
+use actix::prelude::*;
 
-pub(crate) type BitcoinWallet = UtxoManager<Tree>;
+// Legacy type alias - now uses compatibility layer
+pub(crate) type LegacyBitcoinWallet = BitcoinWallet;
 
 /// Simple circuit breaker to avoid overwhelming failing peers with RPC requests
 #[derive(Debug)]
@@ -137,8 +145,11 @@ pub struct Chain<DB> {
     queued_pow: RwLock<Option<AuxPowHeader>>,
     max_blocks_without_pow: u64,
     federation: Vec<Address>,
-    bridge: Bridge,
+    // V2 Bridge Actor integration
+    bridge_actor: Option<Addr<BridgeActor>>,
     queued_pegins: RwLock<BTreeMap<Txid, PegInInfo>>,
+    // Legacy bridge for backward compatibility during transition
+    bridge: Bridge,
     bitcoin_wallet: RwLock<BitcoinWallet>,
     bitcoin_signature_collector: RwLock<BitcoinSignatureCollector>,
     maybe_bitcoin_signer: Option<BitcoinSigner>,
@@ -193,6 +204,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         maybe_bitcoin_signer: Option<BitcoinSigner>,
         retarget_params: BitcoinConsensusParams,
         is_validator: bool,
+        bridge_actor: Option<Addr<BridgeActor>>,
     ) -> Self {
         let head = storage.get_head().expect("Failed to get head from storage");
         Self {
@@ -207,8 +219,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             queued_pow: RwLock::new(None),
             max_blocks_without_pow,
             federation,
-            bridge,
+            bridge_actor,
             queued_pegins: RwLock::new(BTreeMap::new()),
+            bridge,
             bitcoin_wallet: RwLock::new(bitcoin_wallet),
             bitcoin_signature_collector: RwLock::new(bitcoin_signature_collector),
             maybe_bitcoin_signer,
@@ -217,6 +230,11 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             block_hash_cache: Some(RwLock::new(BlockHashCache::new(None))),
             circuit_breaker: RwLock::new(RpcCircuitBreaker::new(3, Duration::from_secs(60))),
         }
+    }
+
+    /// Set the bridge actor after initialization
+    pub fn set_bridge_actor(&mut self, bridge_actor: Addr<BridgeActor>) {
+        self.bridge_actor = Some(bridge_actor);
     }
 
     // we collect fees from x to n-1 (where x <= n-1)

@@ -22,7 +22,6 @@ lighthouse_wrapper = { package = "lighthouse_wrapper", path = "../crates/lightho
 
 
 # workspace
-bridge = { package = "federation", path = "../crates/federation" }
 actor_system = { path = "../crates/actor_system" }
 lighthouse_wrapper_v2 = { path = "../crates/lighthouse_wrapper_v2" }
 

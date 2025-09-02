@@ -33,10 +33,14 @@ use crate::{
 };
 use std::sync::Arc;
 
-// External dependencies
-use bridge::{
-    bitcoin::Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
+// Bridge compatibility layer
+use crate::bridge_compat::{
+    Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
     Bridge, Federation,
+};
+use crate::actors::bridge::{
+    actors::bridge::BridgeActor,
+    config::BridgeSystemConfig,
 };
 use clap::builder::ArgPredicate;
 use clap::Parser;

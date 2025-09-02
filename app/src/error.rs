@@ -1,5 +1,5 @@
 use crate::aura::AuraError;
-use bridge::Error as FederationError;
+use crate::bridge_compat::Error as FederationError;
 use lighthouse_wrapper::execution_layer;
 use std::time::SystemTimeError;
 use strum::Display;
