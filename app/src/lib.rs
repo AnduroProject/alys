@@ -12,6 +12,7 @@ mod error;
 mod metrics;
 mod network;
 mod rpc;
+mod rpc_v2; // V2 Actor-based RPC server
 mod signatures;
 mod spec;
 mod store;

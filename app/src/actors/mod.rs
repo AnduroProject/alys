@@ -23,9 +23,16 @@ pub mod bridge; // Bridge actor system
 pub mod network; // Network actor system (SyncActor, NetworkActor, PeerActor)
 pub mod sync; // Sync actor system
 pub mod storage; // Organized storage actor module
+pub mod supervisor; // Root supervisor for all actors
+pub mod shared; // Shared structures like ActorAddresses
+
+#[cfg(test)]
+pub mod tests; // V2 Actor system integration tests
 
 pub use chain::*; // Import from organized module
 pub use engine::*; // Import from organized engine module  
 pub use network::*; // New network actor system
 pub use storage::*; // Import from organized storage module
 pub use bridge::actors::stream::*; // Export new consolidated StreamActor
+pub use supervisor::*; // Export supervisor
+pub use shared::*; // Export shared structures

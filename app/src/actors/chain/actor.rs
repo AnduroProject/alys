@@ -778,3 +778,38 @@ impl Handler<HealthCheck> for ChainActor {
         }
     }
 }
+
+// === RPC Message Handlers ===
+
+/// Handler for GetBlockByHeight RPC message
+impl Handler<GetBlockByHeight> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Option<SignedConsensusBlock>, ChainError>>;
+    
+    fn handle(&mut self, msg: GetBlockByHeight, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.get_block_by_height(msg.height).await
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetBlockByHash RPC message
+impl Handler<GetBlockByHash> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Option<SignedConsensusBlock>, ChainError>>;
+    
+    fn handle(&mut self, msg: GetBlockByHash, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            self.get_block_by_hash(msg.hash).await
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetBlockCount RPC message  
+impl Handler<GetBlockCount> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<u64, ChainError>>;
+    
+    fn handle(&mut self, msg: GetBlockCount, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            Ok(self.chain_state.height)
+        }.into_actor(self))
+    }
+}

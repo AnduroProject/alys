@@ -1154,3 +1154,26 @@ impl Default for ChainStatus {
         }
     }
 }
+
+// === RPC-specific messages ===
+
+/// Message to get a block by its height (for RPC)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<SignedConsensusBlock>, ChainError>")]
+pub struct GetBlockByHeight {
+    /// Block height to retrieve
+    pub height: u64,
+}
+
+/// Message to get a block by its hash (for RPC)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<SignedConsensusBlock>, ChainError>")]
+pub struct GetBlockByHash {
+    /// Block hash to retrieve
+    pub hash: Hash256,
+}
+
+/// Message to get the current block count (for RPC)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<u64, ChainError>")]
+pub struct GetBlockCount;
