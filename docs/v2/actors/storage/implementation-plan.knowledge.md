@@ -71,7 +71,7 @@ match self.actor_addresses.storage.send(storage_request).await {
 ```
 
 **✅ Dependencies & Configuration Complete**:
-- **✅ RocksDB v0.22** added to `app/Cargo.toml` (compatible with federation_v2)
+- **✅ RocksDB v0.22** added to `app/Cargo.toml`
 - **✅ LRU v0.12** for cache implementation
 - **✅ Storage actor module registration** in `app/src/actors/mod.rs`
 - **✅ Message imports** integrated throughout the system

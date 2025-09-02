@@ -365,7 +365,7 @@ impl MetricLabels {
     
     /// Standard migration phase labels
     pub const MIGRATION_PHASES: &'static [&'static str] = &[
-        "foundation", "actor_system", "sync_engine", "federation_v2", 
+        "foundation", "actor_system", "sync_engine", 
         "lighthouse_v2", "migration", "validation", "rollback_safety",
         "performance_verification", "final_validation"
     ];
@@ -600,8 +600,8 @@ let collector = MetricsCollector::new().await?;
 // Record migration events
 collector.set_migration_phase(4);
 collector.set_migration_progress(67.8);
-collector.record_migration_error("federation_v2", "timeout");
-collector.record_validation_success("federation_v2");
+collector.record_migration_error("sync_engine", "timeout");
+collector.record_validation_success("sync_engine");
 ```
 
 #### Health Monitoring
