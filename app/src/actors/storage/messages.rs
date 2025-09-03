@@ -624,3 +624,75 @@ pub struct ArchiveQuery {
     /// Whether to include receipt data
     pub include_receipts: bool,
 }
+
+// =============================================================================
+// AUXPOW DIFFICULTY PERSISTENCE OPERATIONS  
+// =============================================================================
+
+/// Message to get stored difficulty history from database
+///
+/// Used by DifficultyManager during startup to restore difficulty adjustment
+/// history for Bitcoin-compatible retargeting calculations.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Vec<DifficultyEntry>, StorageError>")]
+pub struct GetStoredDifficultyHistory {
+    /// Maximum number of entries to return (None = all)
+    pub limit: Option<usize>,
+    /// Starting height filter (None = from beginning)
+    pub start_height: Option<u64>,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to save difficulty entry to persistent storage  
+///
+/// Used by DifficultyManager to persist difficulty history for recovery
+/// after node restarts. Each entry represents a difficulty calculation event.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct SaveDifficultyEntry {
+    /// Difficulty entry to persist
+    pub entry: DifficultyEntry,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get last retarget height from storage
+///
+/// Used during DifficultyManager startup to restore the last height
+/// at which difficulty retargeting occurred.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<u64>, StorageError>")]
+pub struct GetLastRetargetHeight {
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to save retarget height to storage
+///
+/// Used by DifficultyManager when a difficulty retargeting event occurs
+/// to persist the height for future recovery.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct SaveRetargetHeight {
+    /// Height at which retargeting occurred
+    pub height: u64,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Difficulty entry for persistence
+///
+/// Represents a single difficulty calculation event with all necessary
+/// data for Bitcoin-compatible difficulty adjustment algorithms.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DifficultyEntry {
+    /// Block height of this difficulty entry
+    pub height: u64,
+    /// Timestamp when this difficulty was calculated
+    pub timestamp: std::time::Duration,
+    /// Difficulty target as compact bits representation
+    pub bits: bitcoin::CompactTarget,
+    /// Number of AuxPow submissions at this height
+    pub auxpow_count: u32,
+}

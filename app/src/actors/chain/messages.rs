@@ -1177,3 +1177,73 @@ pub struct GetBlockByHash {
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<u64, ChainError>")]
 pub struct GetBlockCount;
+
+// ============================================================================
+// AuxPow Mining Integration Messages - ChainManager Trait Ports
+// ============================================================================
+
+/// Direct port of ChainManager::get_aggregate_hashes
+/// 
+/// Returns vector of block hashes for aggregate hash calculation in mining.
+/// Used by AuxPowActor to create work packages for miners.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Vec<bitcoin::BlockHash>, ChainError>")]
+pub struct GetAggregateHashes;
+
+/// Direct port of ChainManager::get_last_finalized_block
+/// 
+/// Returns the most recent finalized consensus block for mining operations.
+/// Used by AuxPowActor to determine mining base and difficulty calculation.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<ConsensusBlock<MainnetEthSpec>, ChainError>")]
+pub struct GetLastFinalizedBlock;
+
+/// Direct port of ChainManager::get_block_by_hash for mining
+/// 
+/// Retrieves specific block by hash for mining validation purposes.
+/// Used during AuxPow submission to validate block references.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<ConsensusBlock<MainnetEthSpec>>, ChainError>")]
+pub struct GetBlockByHashForMining {
+    /// Bitcoin block hash to retrieve
+    pub hash: bitcoin::BlockHash,
+}
+
+/// Direct port of ChainManager::push_auxpow
+/// 
+/// Submits validated AuxPow to chain for block finalization.
+/// This is the final step in the mining process after PoW validation.
+#[derive(Message, Debug, Clone)]  
+#[rtype(result = "Result<bool, ChainError>")]
+pub struct PushAuxPow {
+    /// Starting hash of block range
+    pub start_hash: bitcoin::BlockHash,
+    /// Ending hash of block range  
+    pub end_hash: bitcoin::BlockHash,
+    /// Difficulty bits for validation
+    pub bits: u32,
+    /// Chain ID for isolation
+    pub chain_id: u32,
+    /// Target height for finalization
+    pub height: u64,
+    /// Completed AuxPow solution
+    pub auxpow: crate::auxpow::AuxPow,
+    /// Mining reward address
+    pub address: ethereum_types::Address,
+}
+
+/// Direct port of ChainManager::is_synced
+/// 
+/// Checks if chain is currently synchronized for mining decisions.
+/// Mining is typically disabled when chain is syncing.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<bool, ChainError>")]
+pub struct IsSynced;
+
+/// Get queued AuxPow header (legacy compatibility)
+/// 
+/// Direct port of legacy get_queued_auxpow function.
+/// Returns currently queued AuxPow header awaiting finalization.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Option<AuxPowHeader>")]
+pub struct GetQueuedAuxpow;

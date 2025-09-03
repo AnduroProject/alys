@@ -22,7 +22,12 @@ use crate::actors::{
 
 // V2 Configuration and types
 use crate::{
-    auxpow_miner::spawn_background_miner,
+    auxpow_miner::BitcoinConsensusParams, // Keep for legacy compatibility
+    actors::auxpow::{
+        AuxPowActor, DifficultyManager,
+        config::{AuxPowConfig, DifficultyConfig},
+        rpc::AuxPowRpcContext,
+    },
     spec::{
         genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
     },
@@ -32,6 +37,10 @@ use crate::{
     features::FeatureFlagManager,
 };
 use std::sync::Arc;
+use std::str::FromStr;
+use std::time::Duration;
+use ethereum_types::Address as EvmAddress;
+use tracing::{info, warn};
 
 // Bridge compatibility layer
 use crate::bridge_compat::{
@@ -418,11 +427,59 @@ impl App {
         ).await;
         info!("✅ V2 RPC server started successfully!");
 
-        // Mining configuration for V2 
+        // Step 10: Initialize V2 AuxPow Mining System
         if (self.mine || self.dev) && !self.no_mine {
-            info!("Mining will be handled by V2 ChainActor automatically");
-            // Mining is now handled by ChainActor's block production timer
-            // No separate miner spawn needed in V2 architecture
+            info!("Initializing V2 AuxPow mining system");
+            
+            // Use default mining address (can be configured later via RPC)
+            let mining_address = EvmAddress::zero();
+
+            // Initialize DifficultyManager with storage integration
+            let difficulty_config = DifficultyConfig {
+                consensus_params: chain_spec.retarget_params.clone(),
+                history_size: 2016, // Bitcoin's difficulty adjustment window
+                enable_caching: true,
+                cache_cleanup_interval: Duration::from_secs(300),
+            };
+
+            let difficulty_manager = DifficultyManager::restore_from_storage(
+                storage_actor.clone(),
+                difficulty_config,
+            ).await
+            .unwrap_or_else(|e| {
+                warn!("Failed to restore difficulty manager from storage: {:?}, creating new", e);
+                DifficultyManager::new(DifficultyConfig::default())
+            })
+            .start();
+
+            // Initialize AuxPowActor with mining configuration
+            let auxpow_config = AuxPowConfig {
+                mining_address,
+                mining_enabled: true,
+                sync_check_enabled: true,
+                work_refresh_interval: Duration::from_secs(30),
+                max_pending_work: 100,
+            };
+
+            let auxpow_actor = AuxPowActor::new(
+                chain_actor.clone(),
+                difficulty_manager.clone(),
+                chain_spec.retarget_params.clone(),
+                auxpow_config,
+            ).start();
+
+            // Update actor addresses for cross-actor communication
+            actor_addresses.set_auxpow_actor(auxpow_actor.clone());
+            actor_addresses.set_difficulty_manager(difficulty_manager.clone());
+
+            // Add AuxPow RPC endpoints for external miners
+            let auxpow_rpc_context = AuxPowRpcContext::new(auxpow_actor);
+            // TODO: Register auxpow_rpc_context with RPC server when RPC integration is ready
+
+            info!("✅ V2 AuxPow mining system initialized successfully!");
+            info!("Mining address: {}, background mining enabled", mining_address);
+        } else {
+            info!("Mining disabled - no AuxPow system initialized");
         }
 
         info!("V2 Actor System initialization complete");

@@ -12,6 +12,7 @@
 //! - **bridge/**: Bridge actors for two-way peg operations with Bitcoin
 //! - **engine/**: EngineActor for execution layer integration (Geth/Reth)
 //! - **network/**: Network actors for P2P networking, sync, and peer management
+//! - **auxpow/**: AuxPowActor and DifficultyManager for Bitcoin merged mining
 //! - **bridge/actors/stream**: Consolidated StreamActor for governance communication
 //!
 //! All actors use the actor_system crate for supervision, lifecycle management,
@@ -23,6 +24,7 @@ pub mod bridge; // Bridge actor system
 pub mod network; // Network actor system (SyncActor, NetworkActor, PeerActor)
 pub mod sync; // Sync actor system
 pub mod storage; // Organized storage actor module
+pub mod auxpow; // AuxPow mining actor system
 pub mod supervisor; // Root supervisor for all actors
 pub mod shared; // Shared structures like ActorAddresses
 
@@ -33,6 +35,7 @@ pub use chain::*; // Import from organized module
 pub use engine::*; // Import from organized engine module  
 pub use network::*; // New network actor system
 pub use storage::*; // Import from organized storage module
+pub use auxpow::*; // Export AuxPow mining system
 pub use bridge::actors::stream::*; // Export new consolidated StreamActor
 pub use supervisor::*; // Export supervisor
 pub use shared::*; // Export shared structures

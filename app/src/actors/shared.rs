@@ -10,6 +10,7 @@ use crate::actors::{
     chain::actor::ChainActor,
     engine::actor::EngineActor,
     storage::actor::StorageActor,
+    auxpow::{AuxPowActor, DifficultyManager},
     supervisor::RootSupervisor,
 };
 
@@ -38,6 +39,12 @@ pub struct ActorAddresses {
     /// Reference to the sync actor (optional)
     pub sync: Option<Addr<SyncActor>>,
     
+    /// Reference to the AuxPow mining actor (optional)
+    pub auxpow: Option<Addr<AuxPowActor>>,
+    
+    /// Reference to the difficulty manager actor (optional)
+    pub difficulty_manager: Option<Addr<DifficultyManager>>,
+    
     /// Reference to the root supervisor
     pub supervisor: Addr<RootSupervisor>,
 }
@@ -58,6 +65,8 @@ impl ActorAddresses {
             storage,
             network,
             sync: None,
+            auxpow: None,
+            difficulty_manager: None,
             supervisor,
         }
     }
@@ -70,6 +79,16 @@ impl ActorAddresses {
     /// Set the sync actor address (optional)
     pub fn set_sync_actor(&mut self, sync: Addr<SyncActor>) {
         self.sync = Some(sync);
+    }
+
+    /// Set the AuxPow actor address (optional, for mining)
+    pub fn set_auxpow_actor(&mut self, auxpow: Addr<AuxPowActor>) {
+        self.auxpow = Some(auxpow);
+    }
+
+    /// Set the difficulty manager actor address (optional, for mining)
+    pub fn set_difficulty_manager(&mut self, difficulty_manager: Addr<DifficultyManager>) {
+        self.difficulty_manager = Some(difficulty_manager);
     }
 }
 
