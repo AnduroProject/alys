@@ -9,13 +9,13 @@ use tokio::sync::RwLock;
 use tracing::*;
 use serde::{Deserialize, Serialize};
 
-use lighthouse_wrapper::execution_layer::{
+use lighthouse_facade::execution_layer::{
     auth::{Auth, JwtKey},
     HttpJsonRpc, BlockByNumberQuery, ForkchoiceState, PayloadAttributes,
     DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
 };
-use lighthouse_wrapper::sensitive_url::SensitiveUrl;
-use lighthouse_wrapper::types::{Address, ExecutionBlockHash, ExecutionPayload, MainnetEthSpec};
+use lighthouse_facade::sensitive_url::SensitiveUrl;
+use lighthouse_facade::types::{Address, ExecutionBlockHash, ExecutionPayload, MainnetEthSpec};
 
 use crate::types::*;
 use super::{config::EngineConfig, state::ClientHealthStatus, EngineError, EngineResult, ClientError};
@@ -355,19 +355,19 @@ impl ExecutionClient {
         // Get network ID
         let network_id = client.rpc_request::<String>("net_version", serde_json::Value::Null, Duration::from_secs(5))
             .await
-            .and_then(|s| s.parse::<u64>().map_err(|_| lighthouse_wrapper::execution_layer::Error::InvalidPayloadBody("Invalid network ID".to_string())))
+            .and_then(|s| s.parse::<u64>().map_err(|_| lighthouse_facade::execution_layer::Error::InvalidPayloadBody("Invalid network ID".to_string())))
             .unwrap_or(0);
         
         // Get chain ID
         let chain_id = client.rpc_request::<String>("eth_chainId", serde_json::Value::Null, Duration::from_secs(5))
             .await
-            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| lighthouse_wrapper::execution_layer::Error::InvalidPayloadBody("Invalid chain ID".to_string())))
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| lighthouse_facade::execution_layer::Error::InvalidPayloadBody("Invalid chain ID".to_string())))
             .unwrap_or(0);
         
         // Get latest block number
         let latest_block = client.rpc_request::<String>("eth_blockNumber", serde_json::Value::Null, Duration::from_secs(5))
             .await
-            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| lighthouse_wrapper::execution_layer::Error::InvalidPayloadBody("Invalid block number".to_string())))
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| lighthouse_facade::execution_layer::Error::InvalidPayloadBody("Invalid block number".to_string())))
             .unwrap_or(0);
         
         // Check sync status

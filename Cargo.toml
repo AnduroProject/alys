@@ -2,9 +2,7 @@
 members = [
     "app", 
  
-    "crates/lighthouse_wrapper", 
-    "crates/lighthouse_wrapper_v2",
-    "crates/lighthouse_compat",
+    "crates/lighthouse_facade",
     "crates/miner",
     "crates/actor_system",
     "tests"

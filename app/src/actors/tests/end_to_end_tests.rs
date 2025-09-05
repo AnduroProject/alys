@@ -73,7 +73,7 @@ mod end_to_end_tests {
                 slot_duration: Duration::from_secs(2),
                 max_blocks_without_pow: 10,
                 federation_threshold: 2,
-                authority_private_key: lighthouse_wrapper::bls::SecretKey::random(),
+                authority_private_key: lighthouse_facade::bls::SecretKey::random(),
                 chain_id: 212121,
                 test_mode: true,
             };
@@ -451,7 +451,7 @@ mod end_to_end_tests {
     }
 
     fn create_test_block_with_parent(height: u64, parent_hash: Hash256) -> SignedConsensusBlock {
-        use lighthouse_wrapper::types::{Signature as BlsSignature};
+        use lighthouse_facade::types::{Signature as BlsSignature};
         use ethereum_types::{H256, U256};
 
         let header = ConsensusBlockHeader {

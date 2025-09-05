@@ -34,7 +34,7 @@ pub use app::run;
 // for miner crate
 pub use auxpow::AuxPow;
 pub use auxpow_miner::AuxBlock;
-use lighthouse_wrapper::types;
+use lighthouse_facade as types;
 
 pub trait EthSpec: types::EthSpec + serde::Serialize + serde::de::DeserializeOwned {}
 impl EthSpec for types::MainnetEthSpec {}

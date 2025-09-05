@@ -4,10 +4,10 @@ use crate::{
     metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
 use ethers_core::types::U256;
-use lighthouse_wrapper::store::{
+use lighthouse_facade::store::{
     get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore,
 };
-use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
+use lighthouse_facade::types::{EthSpec, Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};

@@ -464,7 +464,7 @@ mod test {
         consensus::encode::{deserialize, serialize},
         hashes::{sha256d, Hash},
     };
-    use lighthouse_wrapper::types::{Hash256, Uint256};
+    use lighthouse_facade::types::{Hash256, Uint256};
 
     #[tokio::test]
     async fn test_miner() {

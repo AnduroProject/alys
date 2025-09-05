@@ -9,8 +9,8 @@ use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
-use lighthouse_wrapper::store::ItemStore;
-use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
+use lighthouse_facade::store::ItemStore;
+use lighthouse_facade::{MainnetEthSpec, Uint256};
 use rust_decimal::prelude::*; // Includes the `dec` macro when feature specified
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
@@ -72,7 +72,7 @@ pub struct AuxBlock {
     #[serde(serialize_with = "compact_target_to_hex")]
     #[serde(deserialize_with = "compact_target_from_hex")]
     pub bits: CompactTarget,
-    height: u64,
+    pub height: u64,
     _target: Target,
 }
 

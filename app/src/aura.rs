@@ -6,9 +6,9 @@ use crate::metrics::{
     AURA_SLOT_CLAIM_TOTALS, AURA_VERIFY_SIGNED_BLOCK,
 };
 use futures_timer::Delay;
-use lighthouse_wrapper::bls::{Keypair, PublicKey};
-use lighthouse_wrapper::store::ItemStore;
-use lighthouse_wrapper::types::MainnetEthSpec;
+use lighthouse_facade::bls::{Keypair, PublicKey};
+use lighthouse_facade::store::ItemStore;
+use lighthouse_facade::MainnetEthSpec;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::*;
@@ -283,7 +283,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use lighthouse_wrapper::bls::SecretKey;
+    use lighthouse_facade::bls::SecretKey;
 
     #[test]
     fn should_find_slot_author() {

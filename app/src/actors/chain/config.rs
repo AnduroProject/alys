@@ -7,7 +7,7 @@
 use std::time::Duration;
 use actor_system::SupervisionConfig;
 use super::state::FederationConfig;
-use lighthouse_wrapper::bls::SecretKey;
+use lighthouse_facade::bls::SecretKey;
 
 /// Configuration for ChainActor behavior and performance
 #[derive(Debug, Clone)]

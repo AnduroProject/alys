@@ -65,11 +65,11 @@ mod tests {
                 excess_blob_gas: Some(0),
             },
             lighthouse_metadata: LighthouseMetadata {
-                slot: lighthouse_wrapper::types::Slot::new(slot),
+                slot: lighthouse_facade::types::Slot::new(slot),
                 proposer_index: 0,
-                parent_root: lighthouse_wrapper::types::Hash256::zero(),
-                state_root: lighthouse_wrapper::types::Hash256::zero(),
-                body_root: lighthouse_wrapper::types::Hash256::zero(),
+                parent_root: lighthouse_facade::types::Hash256::zero(),
+                state_root: lighthouse_facade::types::Hash256::zero(),
+                body_root: lighthouse_facade::types::Hash256::zero(),
             },
             timing: BlockTiming {
                 imported_at: std::time::SystemTime::now(),

@@ -7,9 +7,9 @@ use crate::network::ApproveBlock;
 use async_trait::async_trait;
 use block_candidate_cache::{BlockCandidateCache, BlockCandidateCacheTrait};
 use candidate_state::CandidateState;
-use lighthouse_wrapper::bls::PublicKey;
-use lighthouse_wrapper::execution_layer::Hash256;
-use lighthouse_wrapper::store::MainnetEthSpec;
+use lighthouse_facade::bls::PublicKey;
+use lighthouse_facade::execution_layer::Hash256;
+use lighthouse_facade::store::MainnetEthSpec;
 use tokio::sync::RwLock;
 
 /// A wrapper around BlockCandidateCache that provides thread-safe access.

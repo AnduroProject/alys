@@ -11,17 +11,17 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{debug, info, trace, warn};
 
-use lighthouse_wrapper::execution_layer::{
+use lighthouse_facade::execution_layer::{
     auth::{Auth, JwtKey},
     BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc,
     PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
 };
-use lighthouse_wrapper::sensitive_url::SensitiveUrl;
-use lighthouse_wrapper::types::{
+use lighthouse_facade::sensitive_url::SensitiveUrl;
+use lighthouse_facade::types::{
     Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
     Uint256, Withdrawal,
 };
-use lighthouse_wrapper::{execution_layer, types};
+use lighthouse_facade::{execution_layer, types};
 use serde_json::json;
 use ssz_types::VariableList;
 

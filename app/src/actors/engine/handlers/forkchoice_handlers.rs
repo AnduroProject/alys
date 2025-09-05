@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use tracing::*;
 use actix::prelude::*;
 
-use lighthouse_wrapper::execution_layer::ForkchoiceState;
-use lighthouse_wrapper::types::{Address, MainnetEthSpec};
+use lighthouse_facade::execution_layer::ForkchoiceState;
+use lighthouse_facade::types::{Address, MainnetEthSpec};
 
 use crate::types::*;
 use super::super::{
@@ -56,7 +56,7 @@ impl Handler<ForkchoiceUpdatedMessage> for EngineActor {
             
             // Convert payload attributes if provided
             let payload_attributes = msg.payload_attributes.map(|attrs| {
-                lighthouse_wrapper::execution_layer::PayloadAttributes::new(
+                lighthouse_facade::execution_layer::PayloadAttributes::new(
                     attrs.timestamp,
                     attrs.prev_randao,
                     attrs.suggested_fee_recipient,
@@ -145,9 +145,9 @@ impl Handler<SetFinalizedBlockMessage> for EngineActor {
 
 /// Convert lighthouse payload status to our format
 fn convert_payload_status(
-    status: lighthouse_wrapper::execution_layer::PayloadStatus
+    status: lighthouse_facade::execution_layer::PayloadStatus
 ) -> PayloadStatusType {
-    use lighthouse_wrapper::execution_layer::PayloadStatus;
+    use lighthouse_facade::execution_layer::PayloadStatus;
     
     match status {
         PayloadStatus::Valid => PayloadStatusType::Valid,

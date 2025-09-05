@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use tracing::*;
 
-use lighthouse_wrapper::execution_layer::{
+use lighthouse_facade::execution_layer::{
     ExecutionPayload, PayloadStatus, PayloadAttributes, ForkchoiceState,
     ForkchoiceUpdatedResponse, ExecutePayloadResponse, NewPayloadResponse,
 };
-use lighthouse_wrapper::types::{Hash256, Address, MainnetEthSpec};
+use lighthouse_facade::types::{Hash256, Address, MainnetEthSpec};
 
 use crate::types::*;
 use super::super::{

@@ -452,7 +452,7 @@ mod tests {
     // Helper functions for creating test data
 
     fn create_test_block(height: u64, parent_hash: Option<Hash256>) -> SignedConsensusBlock {
-        use lighthouse_wrapper::types::{BeaconBlockHeader, Signature as BlsSignature, Hash256 as LhHash256};
+        use lighthouse_facade::types::{BeaconBlockHeader, Signature as BlsSignature, Hash256 as LhHash256};
         use ethereum_types::{H256, U256};
 
         let parent = parent_hash.unwrap_or_else(Hash256::zero);
@@ -536,7 +536,7 @@ mod test_configurations {
                 slot_duration: Duration::from_secs(2),
                 max_blocks_without_pow: 10,
                 federation_threshold: 2,
-                authority_private_key: lighthouse_wrapper::bls::SecretKey::random(),
+                authority_private_key: lighthouse_facade::bls::SecretKey::random(),
                 chain_id: 212121, // Test chain ID
                 test_mode: true,
             }

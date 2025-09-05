@@ -42,10 +42,10 @@ use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use eyre::{eyre, Report, Result};
 use libp2p::PeerId;
-use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
-use lighthouse_wrapper::store::ItemStore;
-use lighthouse_wrapper::store::KeyValueStoreOp;
-use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
+use lighthouse_facade::execution_layer::Error::MissingLatestValidHash;
+use lighthouse_facade::store::ItemStore;
+use lighthouse_facade::store::KeyValueStoreOp;
+use lighthouse_facade::{ExecutionBlockHash, Hash256, MainnetEthSpec};
 use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
@@ -1529,7 +1529,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let execution_payload = self
             .engine
             .get_payload_by_tag_from_engine(
-                lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag("0x0"),
+                lighthouse_facade::execution_layer::BlockByNumberQuery::Tag("0x0"),
             )
             .await
             .expect("Should have genesis");

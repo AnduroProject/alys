@@ -9,7 +9,7 @@ use actix::prelude::*;
 use tracing::*;
 
 use bitcoin::CompactTarget;
-use lighthouse_wrapper::types::{MainnetEthSpec, Uint256 as U256};
+use lighthouse_facade::types::{MainnetEthSpec, Uint256 as U256};
 use rust_decimal::prelude::*;
 
 use crate::{

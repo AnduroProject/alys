@@ -2,8 +2,8 @@ use crate::block::SignedConsensusBlock;
 use crate::error::Error;
 use crate::network::ApproveBlock;
 use crate::signatures::CheckedIndividualApproval;
-use lighthouse_wrapper::bls::PublicKey;
-use lighthouse_wrapper::store::MainnetEthSpec;
+use lighthouse_facade::bls::PublicKey;
+use lighthouse_facade::MainnetEthSpec;
 
 /// CandidateState enum represents the state of a block candidate.
 #[allow(clippy::large_enum_variant)]

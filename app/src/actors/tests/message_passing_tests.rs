@@ -292,7 +292,7 @@ mod tests {
 
     // Helper functions
     fn create_minimal_test_block(height: u64) -> SignedConsensusBlock {
-        use lighthouse_wrapper::types::{BeaconBlockHeader, Signature as BlsSignature};
+        use lighthouse_facade::types::{BeaconBlockHeader, Signature as BlsSignature};
         use ethereum_types::{H256, U256};
 
         let header = ConsensusBlockHeader {

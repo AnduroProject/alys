@@ -2,17 +2,16 @@ use crate::error::Error;
 use crate::metrics::{ENGINE_BUILD_BLOCK_CALLS, ENGINE_COMMIT_BLOCK_CALLS};
 use ethereum_types::H256;
 use ethers_core::types::TransactionReceipt;
-use lighthouse_wrapper::execution_layer::{
-    auth::{Auth, JwtKey},
-    BlockByNumberQuery, ExecutionBlockWithTransactions, ForkchoiceState, HttpJsonRpc,
-    PayloadAttributes, DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
+use lighthouse_facade::execution_layer::{
+    ForkchoiceState, PayloadAttributes
 };
-use lighthouse_wrapper::sensitive_url::SensitiveUrl;
-use lighthouse_wrapper::types::{
-    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
-    Uint256, Withdrawal,
+use lighthouse_facade::execution_layer::auth::JwtKey;
+use lighthouse_facade::sensitive_url::SensitiveUrl;
+use lighthouse_facade::{
+    Address, ExecutionBlockHash, ExecutionPayload, MainnetEthSpec,
+    Uint256
 };
-use lighthouse_wrapper::{execution_layer, types};
+use lighthouse_facade::execution_layer;
 use serde_json::json;
 use ssz_types::VariableList;
 use std::{

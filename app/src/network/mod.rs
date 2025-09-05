@@ -13,7 +13,7 @@ use libp2p::gossipsub::PublishError;
 use libp2p::swarm::{ConnectionId, DialError};
 use libp2p::{gossipsub, mdns, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux};
 use libp2p::{Multiaddr, PeerId, Swarm};
-use lighthouse_wrapper::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
+use lighthouse_facade::types::{BitVector, EthSpec, Hash256, MainnetEthSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};

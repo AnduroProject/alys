@@ -3,8 +3,8 @@ use crate::block_candidate::candidate_state::CandidateState;
 use crate::error::Error;
 use crate::network::ApproveBlock;
 use async_trait::async_trait;
-use lighthouse_wrapper::bls::PublicKey;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
+use lighthouse_facade::bls::PublicKey;
+use lighthouse_facade::{Hash256, MainnetEthSpec};
 use std::collections::HashMap;
 use tracing::trace;
 
@@ -191,7 +191,7 @@ mod tests {
     use crate::block::ConsensusBlock;
     use crate::block_candidate::candidate_state::CandidateState;
     use crate::signatures::AggregateApproval;
-    use lighthouse_wrapper::types;
+    use lighthouse_facade;
 
     fn create_test_block(height: u64, slot: u64) -> SignedConsensusBlock<MainnetEthSpec> {
         // Create a simple consensus block with only the fields we need for testing

@@ -2,7 +2,7 @@
 
 use crate::block::SignedConsensusBlock;
 use crate::network::{EnrAttestationBitfield, EnrSyncCommitteeBitfield};
-use lighthouse_wrapper::types::{EthSpec, Hash256};
+use lighthouse_facade::types::{EthSpec, Hash256};
 use regex::bytes::Regex;
 use serde::Serialize;
 use ssz_derive::{Decode, Encode};
