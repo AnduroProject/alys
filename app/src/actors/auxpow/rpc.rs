@@ -320,45 +320,6 @@ pub struct MiningInfo {
     pub hashespersec: f64,
 }
 
-/// RPC method registration helper
-/// 
-/// Registers all AuxPow RPC methods with the RPC server.
-/// This provides the standard Bitcoin mining RPC interface.
-pub fn register_auxpow_rpc_methods(
-    rpc_module: &mut jsonrpsee::RpcModule<AuxPowRpcContext>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Register createauxblock method
-    rpc_module.register_async_method("createauxblock", |params, ctx| async move {
-        let address = params.one::<String>()?;
-        ctx.create_aux_block_rpc(address).await
-    })?;
-
-    // Register submitauxblock method  
-    rpc_module.register_async_method("submitauxblock", |params, ctx| async move {
-        let (hash, auxpow) = params.parse::<(String, String)>()?;
-        ctx.submit_aux_block_rpc(hash, auxpow).await
-    })?;
-
-    // Register getauxblock method
-    rpc_module.register_async_method("getauxblock", |_params, ctx| async move {
-        ctx.get_aux_block_rpc().await
-    })?;
-
-    // Register getmininginfo method
-    rpc_module.register_async_method("getmininginfo", |_params, ctx| async move {
-        ctx.get_mining_info_rpc().await
-    })?;
-
-    // Register setgenerate method
-    rpc_module.register_async_method("setgenerate", |params, ctx| async move {
-        let generate = params.one::<bool>()?;
-        let genproclimit = params.opt_at::<u32>(1)?;
-        ctx.set_generate_rpc(generate, genproclimit).await
-    })?;
-
-    info!("Registered AuxPow RPC methods: createauxblock, submitauxblock, getauxblock, getmininginfo, setgenerate");
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
