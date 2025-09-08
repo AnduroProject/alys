@@ -43,6 +43,7 @@ pub mod facade;
 pub mod config;
 pub mod error;
 pub mod types;
+pub mod execution_layer;
 pub mod compatibility;
 pub mod simple_facade;
 pub mod conversion;
@@ -63,11 +64,33 @@ pub use crate::{
 
 // Re-export compatibility modules for backward compatibility
 pub use crate::types::{
-    bls,
-    execution_layer,
-    sensitive_url,
-    store,
+    // Basic types
+    Uint256, Hash256, BlockHash, PayloadId,
+    // Complex types  
+    ExecutionPayload, ExecutionPayloadCapella,
+    PayloadStatus, ForkchoiceState, PayloadAttributes,
+    Withdrawal, FixedVector, VariableList, Transactions, Withdrawals,
+    BitVector, BitList,
+    // Specs
+    MainnetEthSpec, EthSpec,
+    // Crypto
+    PublicKey, SecretKey, Signature, AggregateSignature, Keypair,
 };
+
+// Module re-exports - execution_layer is already available as a module
+
+// Compatibility module re-exports
+pub mod bls {
+    pub use crate::types::{PublicKey, SecretKey, Signature, AggregateSignature, Keypair};
+}
+
+pub mod sensitive_url {
+    pub use crate::execution_layer::SensitiveUrl;
+}
+
+pub mod store {
+    pub use crate::execution_layer::{get_key_for_col, LevelDB, MemoryStore, Store as ItemStore};
+}
 
 /// Prelude module for common imports
 pub mod prelude {

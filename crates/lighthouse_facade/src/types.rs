@@ -29,6 +29,17 @@ use lighthouse_v7_bls as v7_bls;
 pub type BlockHash = H256;
 pub type Hash256 = H256;
 pub type PayloadId = u64;
+pub type Uint256 = U256;
+
+// Additional commonly needed types
+pub type FixedVector<T> = Vec<T>; // Simplified for compatibility
+pub type VariableList<T> = Vec<T>; // Simplified for compatibility
+pub type Transactions = Vec<Vec<u8>>; // Transaction list
+pub type Withdrawals = Vec<Withdrawal>; // Withdrawals list
+
+// BitVector and BitList types for SSZ compatibility
+pub type BitVector = Vec<bool>;
+pub type BitList = Vec<bool>;
 
 // ExecutionBlockHash - use real Lighthouse types when available
 #[cfg(feature = "v7")]
@@ -186,6 +197,10 @@ pub struct ExecutionPayload {
     pub transactions: Vec<Vec<u8>>,
     pub withdrawals: Vec<Withdrawal>,
 }
+
+// Capella-specific execution payload for compatibility
+#[cfg(not(any(feature = "v4", feature = "v7")))]
+pub type ExecutionPayloadCapella = ExecutionPayload;
 
 #[cfg(not(any(feature = "v4", feature = "v7")))]
 impl ExecutionPayload {
