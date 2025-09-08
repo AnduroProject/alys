@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod app;
 mod aura;
 mod auxpow;
@@ -11,8 +13,8 @@ mod engine_v2; // Enhanced engine with Lighthouse compatibility
 mod error;
 mod metrics;
 mod network;
-mod rpc;
-mod rpc_v2; // V2 Actor-based RPC server
+pub mod rpc; // Unified RPC server
+mod rpc_v2; // V2 Actor-based RPC server (to be deprecated)
 mod signatures;
 mod bridge_compat; // Federation compatibility layer
 mod spec;
@@ -33,7 +35,7 @@ pub use app::run;
 // for miner crate
 pub use auxpow::AuxPow;
 pub use auxpow_miner::AuxBlock;
-use lighthouse_facade as types;
+use lighthouse_facade as lighthouse_types;
 
-pub trait EthSpec: types::EthSpec + serde::Serialize + serde::de::DeserializeOwned {}
-impl EthSpec for types::MainnetEthSpec {}
+pub trait EthSpec: lighthouse_types::EthSpec + serde::Serialize + serde::de::DeserializeOwned {}
+impl EthSpec for lighthouse_types::MainnetEthSpec {}

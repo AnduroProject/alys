@@ -411,21 +411,6 @@ impl App {
         // Start auxiliary services
         crate::metrics::start_server(self.metrics_port).await;
 
-        // V2 RPC Server - Actor-based implementation
-        info!(
-            "Starting V2 Actor-based RPC server on port {}",
-            self.rpc_port
-        );
-        crate::rpc_v2::run_server_v2(
-            chain_actor.clone(),
-            engine_actor.clone(),
-            storage_actor.clone(),
-            bitcoin_federation.taproot_address,
-            chain_spec.retarget_params,
-            self.rpc_port,
-        )
-        .await;
-        info!("✅ V2 RPC server started successfully!");
 
         // Step 10: Initialize V2 AuxPow Mining System
         if (self.mine || self.dev) && !self.no_mine {
@@ -476,7 +461,7 @@ impl App {
             actor_addresses.set_difficulty_manager(difficulty_manager.clone());
 
             // Add AuxPow RPC endpoints for external miners
-            let auxpow_rpc_context = AuxPowRpcContext::new(auxpow_actor);
+            let auxpow_rpc_context = AuxPowRpcContext::new(auxpow_actor.clone());
             // TODO: Register auxpow_rpc_context with RPC server when RPC integration is ready
 
             info!("✅ V2 AuxPow mining system initialized successfully!");
@@ -484,8 +469,62 @@ impl App {
                 "Mining address: {}, background mining enabled",
                 mining_address
             );
+            
+            // Unified RPC Server - Start with all actors available
+            info!(
+                "Starting Unified RPC server on port {}",
+                self.rpc_port
+            );
+            crate::rpc::run_unified_rpc_server(
+                chain_actor.clone(),
+                engine_actor.clone(),
+                storage_actor.clone(),
+                auxpow_actor.clone(),
+                bridge_actor.clone(),
+                bitcoin_federation.taproot_address,
+                self.rpc_port,
+            )
+            .await;
+            info!("✅ Unified RPC server started successfully!");
+            
         } else {
             info!("Mining disabled - no AuxPow system initialized");
+            
+            // For non-mining nodes, create a placeholder AuxPowActor with mining disabled
+            let auxpow_config = AuxPowConfig {
+                mining_address: EvmAddress::zero(),
+                mining_enabled: false,
+                sync_check_enabled: false,
+                work_refresh_interval: Duration::from_secs(30),
+                max_pending_work: 0,
+            };
+
+            let difficulty_manager = DifficultyManager::new(DifficultyConfig::default()).start();
+            
+            let auxpow_actor = AuxPowActor::new(
+                chain_actor.clone(),
+                difficulty_manager,
+                chain_spec.retarget_params.clone(),
+                auxpow_config,
+            )
+            .start();
+            
+            // Unified RPC Server - Start with mining disabled
+            info!(
+                "Starting Unified RPC server on port {} (mining disabled)",
+                self.rpc_port
+            );
+            crate::rpc::run_unified_rpc_server(
+                chain_actor.clone(),
+                engine_actor.clone(),
+                storage_actor.clone(),
+                auxpow_actor.clone(),
+                bridge_actor.clone(),
+                bitcoin_federation.taproot_address,
+                self.rpc_port,
+            )
+            .await;
+            info!("✅ Unified RPC server started successfully!");
         }
 
         info!("V2 Actor System initialization complete");

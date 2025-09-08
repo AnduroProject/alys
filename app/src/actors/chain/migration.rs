@@ -45,30 +45,6 @@ struct MigrationState {
     errors: Vec<String>,
 }
 
-/// Phases of the migration process
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MigrationPhase {
-    /// Not started
-    NotStarted,
-    
-    /// Preparing for migration
-    Preparing,
-    
-    /// Running in compatibility mode
-    Compatibility,
-    
-    /// Migrating state
-    MigratingState,
-    
-    /// Testing new implementation
-    Testing,
-    
-    /// Migration completed
-    Completed,
-    
-    /// Migration failed
-    Failed { reason: String },
-}
 
 /// Compatibility layer for legacy interfaces
 #[derive(Debug)]
@@ -99,7 +75,7 @@ impl ChainMigrationAdapter {
         Self {
             feature_flags,
             migration_state: MigrationState {
-                phase: MigrationPhase::NotStarted,
+                phase: MigrationPhase::LegacyOnly,
                 from_version: "1.0.0".to_string(),
                 to_version: "2.0.0".to_string(),
                 progress: 0.0,
@@ -115,7 +91,7 @@ impl ChainMigrationAdapter {
     
     /// Start the migration process
     pub async fn start_migration(&mut self) -> Result<(), MigrationError> {
-        self.migration_state.phase = MigrationPhase::Preparing;
+        self.migration_state.phase = MigrationPhase::ShadowMode;
         self.migration_state.started_at = std::time::SystemTime::now();
         
         // Check if migration is enabled via feature flags
@@ -124,25 +100,25 @@ impl ChainMigrationAdapter {
         }
         
         self.migration_state.progress = 0.1;
-        self.migration_state.phase = MigrationPhase::Compatibility;
+        self.migration_state.phase = MigrationPhase::ParallelMode;
         
         // Enable compatibility mode
         self.enable_compatibility_mode().await?;
         
         self.migration_state.progress = 0.5;
-        self.migration_state.phase = MigrationPhase::MigratingState;
+        self.migration_state.phase = MigrationPhase::ActorPrimary;
         
         // Migrate state
         self.migrate_chain_state().await?;
         
         self.migration_state.progress = 0.8;
-        self.migration_state.phase = MigrationPhase::Testing;
+        self.migration_state.phase = MigrationPhase::ActorPrimary;
         
         // Test new implementation
         self.test_new_implementation().await?;
         
         self.migration_state.progress = 1.0;
-        self.migration_state.phase = MigrationPhase::Completed;
+        self.migration_state.phase = MigrationPhase::ActorOnly;
         
         Ok(())
     }
@@ -206,12 +182,12 @@ impl ChainMigrationAdapter {
     
     /// Check if migration is completed
     pub fn is_completed(&self) -> bool {
-        matches!(self.migration_state.phase, MigrationPhase::Completed)
+        matches!(self.migration_state.phase, MigrationPhase::ActorOnly)
     }
     
     /// Check if migration failed
     pub fn has_failed(&self) -> bool {
-        matches!(self.migration_state.phase, MigrationPhase::Failed { .. })
+        matches!(self.migration_state.phase, MigrationPhase::Rollback { .. })
     }
     
     /// Get migration errors

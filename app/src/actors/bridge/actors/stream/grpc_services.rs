@@ -15,7 +15,21 @@ use crate::actors::bridge::{
 
 /// gRPC service definitions
 pub mod governance {
-    tonic::include_proto!("governance.bridge.v1");
+    // TODO: Add protobuf build setup and include generated code
+    // tonic::include_proto!("governance.bridge.v1");
+    
+    // Placeholder structures until protobuf build is configured
+    #[derive(Debug, Clone)]
+    pub struct GovernanceRequest {
+        pub id: String,
+        pub data: Vec<u8>,
+    }
+    
+    #[derive(Debug, Clone)]
+    pub struct GovernanceResponse {
+        pub status: String,
+        pub data: Vec<u8>,
+    }
 }
 
 /// Bridge governance service implementation

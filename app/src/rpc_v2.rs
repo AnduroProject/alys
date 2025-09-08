@@ -4,8 +4,7 @@
 //! direct Chain method calls. All blockchain queries are sent as messages to 
 //! the appropriate actors (ChainActor, EngineActor, etc.)
 
-use crate::auxpow::AuxPow;
-use crate::auxpow_miner::{AuxPowMiner, BitcoinConsensusParams, BlockIndex, ChainManager};
+use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::actors::chain::{ChainActor, messages::*};
 use crate::actors::chain::error::ChainError;
 use crate::actors::engine::{EngineActor};
@@ -13,9 +12,7 @@ use crate::actors::storage::{StorageActor};
 use crate::block::SignedConsensusBlock;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use bitcoin::address::NetworkChecked;
-use bitcoin::consensus::Decodable;
-use bitcoin::hashes::Hash;
-use bitcoin::{Address, BlockHash};
+use bitcoin::Address;
 use ethereum_types::Address as EvmAddress;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
@@ -31,8 +28,69 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use actix::prelude::*;
 
-// Re-use existing JSON-RPC structures
-use crate::rpc::{JsonRpcRequestV1, JsonRpcErrorV1, JsonRpcResponseV1};
+// JSON-RPC V1 structures (moved from deleted rpc.rs)
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonRpcRequestV1<'a> {
+    pub method: &'a str,
+    pub params: Option<&'a RawValue>,
+    pub id: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JsonRpcErrorV1 {
+    pub code: i32,
+    pub message: String,
+}
+
+impl JsonRpcErrorV1 {
+    fn invalid_request() -> Self {
+        Self {
+            code: -32600,
+            message: "Invalid Request".to_string(),
+        }
+    }
+
+    fn method_not_found() -> Self {
+        Self {
+            code: -32601,
+            message: "Method not found".to_string(),
+        }
+    }
+
+    fn invalid_params() -> Self {
+        Self {
+            code: -32602,
+            message: "Invalid params".to_string(),
+        }
+    }
+
+    fn block_not_found() -> Self {
+        Self {
+            code: -32604,
+            message: "Block not found".to_string(),
+        }
+    }
+
+    pub fn debug_error(error_msg: String) -> Self {
+        Self {
+            code: -32605,
+            message: error_msg,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct JsonRpcResponseV1 {
+    pub result: Option<Value>,
+    pub error: Option<JsonRpcErrorV1>,
+    pub id: Value,
+}
+
+impl From<JsonRpcResponseV1> for Body {
+    fn from(value: JsonRpcResponseV1) -> Self {
+        serde_json::to_string(&value).unwrap().into()
+    }
+}
 
 /// V2 RPC server context with actor addresses
 #[derive(Debug)]
@@ -45,16 +103,8 @@ pub struct RpcV2Context {
     pub storage_actor: Addr<StorageActor>,
     /// Federation address for peg operations
     pub federation_address: Address<NetworkChecked>,
-    /// Miner for auxiliary PoW operations
-    pub miner: Arc<Mutex<dyn MinerV2>>,
 }
 
-/// Trait for V2 miner operations (actor-compatible)
-#[async_trait::async_trait]
-pub trait MinerV2: Send + Sync {
-    async fn get_queued_auxpow(&self) -> Option<Value>;
-    async fn submit_auxpow(&mut self, hash: String, auxpow: AuxPow) -> Result<bool, String>;
-}
 
 /// V2 RPC server entry point
 pub async fn run_server_v2(
@@ -67,16 +117,12 @@ pub async fn run_server_v2(
 ) {
     let addr = SocketAddr::from(([0, 0, 0, 0], rpc_port));
     
-    // TODO: Create V2 miner that works with actors
-    // For now, create a placeholder
-    let miner: Arc<Mutex<dyn MinerV2>> = Arc::new(Mutex::new(PlaceholderMiner));
     
     let rpc_context = Arc::new(RpcV2Context {
         chain_actor: chain_actor.clone(),
         engine_actor: engine_actor.clone(),
         storage_actor: storage_actor.clone(),
         federation_address: federation_address.clone(),
-        miner: miner.clone(),
     });
 
     info!("Starting V2 Actor-based RPC server on {}", addr);
@@ -133,12 +179,6 @@ async fn http_req_json_rpc_v2(
         }
         "getblockbyhash" => {
             handle_get_block_by_hash_v2(json_req.params, id, &context).await
-        }
-        "getqueuedpow" => {
-            handle_get_queued_pow_v2(id, &context).await
-        }
-        "submitauxblock" => {
-            handle_submit_aux_block_v2(json_req.params, id, &context).await
         }
         "getfederationaddress" => {
             handle_get_federation_address_v2(id, &context).await
@@ -357,66 +397,6 @@ fn block_response_helper_v2(
     }
 }
 
-/// V2 handler for getqueuedpow
-async fn handle_get_queued_pow_v2(
-    id: Value,
-    context: &RpcV2Context,
-) -> Result<Response<Body>> {
-    let miner = context.miner.lock().await;
-    match miner.get_queued_auxpow().await {
-        Some(queued_pow) => {
-            RPC_REQUESTS
-                .with_label_values(&["getqueuedpow", "success"])
-                .inc();
-            Ok(Response::builder()
-                .status(hyper::StatusCode::OK)
-                .body(
-                    JsonRpcResponseV1 {
-                        result: Some(queued_pow),
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                )?)
-        }
-        None => {
-            RPC_REQUESTS
-                .with_label_values(&["getqueuedpow", "no_data"])
-                .inc();
-            Ok(Response::builder()
-                .status(hyper::StatusCode::NO_CONTENT)
-                .body(
-                    JsonRpcResponseV1 {
-                        result: Some(json!(null)),
-                        error: None,
-                        id,
-                    }
-                    .into(),
-                )?)
-        }
-    }
-}
-
-/// V2 handler for submitauxblock
-async fn handle_submit_aux_block_v2(
-    params: Option<&RawValue>,
-    id: Value,
-    context: &RpcV2Context,
-) -> Result<Response<Body>> {
-    // TODO: Implement submitauxblock with actor messages
-    // This would involve sending messages to ChainActor for block submission
-    warn!("submitauxblock not yet implemented in V2");
-    Ok(Response::builder()
-        .status(hyper::StatusCode::NOT_IMPLEMENTED)
-        .body(
-            JsonRpcResponseV1 {
-                result: None,
-                error: Some(JsonRpcErrorV1::debug_error("submitauxblock not implemented in V2".to_string())),
-                id,
-            }
-            .into(),
-        )?)
-}
 
 /// V2 handler for getfederationaddress
 async fn handle_get_federation_address_v2(
@@ -542,21 +522,6 @@ async fn handle_get_block_count_v2(
     }
 }
 
-/// Placeholder miner implementation for V2 transition
-struct PlaceholderMiner;
-
-#[async_trait::async_trait]
-impl MinerV2 for PlaceholderMiner {
-    async fn get_queued_auxpow(&self) -> Option<Value> {
-        warn!("PlaceholderMiner: get_queued_auxpow not implemented");
-        None
-    }
-    
-    async fn submit_auxpow(&mut self, _hash: String, _auxpow: AuxPow) -> Result<bool, String> {
-        warn!("PlaceholderMiner: submit_auxpow not implemented");
-        Err("Not implemented in placeholder".to_string())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -570,10 +535,4 @@ mod tests {
         info!("V2 RPC context structure validated");
     }
 
-    #[test] 
-    fn test_placeholder_miner() {
-        // Test placeholder miner compiles
-        let _miner = PlaceholderMiner;
-        info!("PlaceholderMiner structure validated");
-    }
 }
