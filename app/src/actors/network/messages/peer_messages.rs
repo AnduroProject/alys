@@ -46,6 +46,7 @@ impl NetworkMessage for GetPeerStatus {}
 pub struct UpdatePeerScore {
     pub peer_id: PeerId,
     pub score_update: ScoreUpdate,
+    pub score_event: PeerScoreEvent,
 }
 
 impl NetworkMessage for UpdatePeerScore {}
@@ -97,6 +98,44 @@ pub struct ScoreUpdate {
     pub success_rate: Option<f64>, // 0.0 to 1.0
     pub protocol_violation: bool,
     pub byzantine_behavior: bool,
+}
+
+/// Peer activity types for tracking peer contributions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerActivity {
+    BlocksProvided { 
+        count: u32,
+        timestamp: std::time::Instant,
+    },
+    TransactionsPropagated { 
+        count: u32,
+        timestamp: std::time::Instant,
+    },
+    SyncContribution {
+        bytes_provided: u64,
+        timestamp: std::time::Instant,
+    },
+    HeartbeatReceived {
+        timestamp: std::time::Instant,
+    },
+}
+
+/// Peer score events for scoring system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerScoreEvent {
+    ConnectionSuccess { 
+        latency_ms: u64,
+    },
+    ConnectionFailure,
+    ProtocolViolation { 
+        violation_type: String,
+    },
+    MessageSuccess { 
+        message_type: String,
+    },
+    UptimeUpdate { 
+        connected_duration: std::time::Duration,
+    },
 }
 
 /// Operation types for peer selection
