@@ -3,6 +3,8 @@
 //! Common utilities, fixtures, and helper functions for testing the network
 //! actor system components.
 
+pub mod sync_test_harness;
+
 #[cfg(test)]
 use std::time::Duration;
 #[cfg(test)]
@@ -43,15 +45,10 @@ pub fn test_peer_config() -> PeerConfig {
     config
 }
 
-/// Create test supervision configuration
+/// Create test supervisor configuration
 #[cfg(test)]
-pub fn test_supervision_config() -> NetworkSupervisionConfig {
-    let mut config = NetworkSupervisionConfig::default();
-    config.health_check_interval = Duration::from_millis(100);
-    config.sync_restart_policy = RestartPolicy::immediate();
-    config.network_restart_policy = RestartPolicy::immediate();
-    config.peer_restart_policy = RestartPolicy::immediate();
-    config
+pub fn test_supervisor_config() -> crate::actors::network::supervisor::NetworkSupervisorConfig {
+    crate::actors::network::supervisor::NetworkSupervisorConfig::default()
 }
 
 /// Create a temporary directory for checkpoint testing
@@ -627,3 +624,6 @@ impl TestPeerInfoBuilder {
         self.peer_info
     }
 }
+
+// Re-export sync test harness for convenience
+pub use sync_test_harness::*;

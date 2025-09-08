@@ -22,7 +22,6 @@ pub mod chain; // Organized chain actor module
 pub mod engine; // Organized engine actor module
 pub mod bridge; // Bridge actor system
 pub mod network; // Network actor system (SyncActor, NetworkActor, PeerActor)
-pub mod sync; // Sync actor system
 pub mod storage; // Organized storage actor module
 pub mod auxpow; // AuxPow mining actor system
 pub mod supervisor; // Root supervisor for all actors

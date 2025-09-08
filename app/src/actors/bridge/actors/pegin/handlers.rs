@@ -275,7 +275,7 @@ impl Handler<RegisterChainActor> for PegInActor {
 
 /// Handler for actor health checks
 #[derive(Message)]
-##[rtype(result = "super::actor::PegInActorStatus")]
+#[rtype(result = "super::actor::PegInActorStatus")]
 pub struct GetPegInStatus;
 
 impl Handler<GetPegInStatus> for PegInActor {

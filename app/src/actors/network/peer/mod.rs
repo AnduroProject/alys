@@ -10,8 +10,6 @@ pub mod scoring;
 pub mod connection;
 pub mod handlers;
 
-#[cfg(test)]
-pub mod tests;
 
 pub use actor::PeerActor;
 pub use config::{PeerConfig, ScoringConfig, PeerDiscoveryConfig};

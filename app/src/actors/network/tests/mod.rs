@@ -1,18 +1,15 @@
-//! Network Actor System Tests
+//! Network Actor Tests
 //! 
-//! Comprehensive test suite for the network actor system including unit tests,
+//! Comprehensive test suite for all network-related actors and their interactions.
+//! Organized following the bridge actor test pattern with helpers, unit tests,
 //! integration tests, performance tests, and chaos engineering.
 
-pub mod integration_tests;
-pub mod performance_tests;
-pub mod sync_tests;
-pub mod network_tests;
-pub mod peer_tests;
-pub mod chaos_tests;
+pub mod helpers;
+pub mod unit;
+pub mod integration;
+pub mod performance;
 
 #[cfg(test)]
-mod test_helpers;
+mod chaos;
 
-// Re-export common test utilities
-#[cfg(test)]
-pub use test_helpers::*;
+pub use helpers::*;

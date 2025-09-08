@@ -3,66 +3,60 @@
 // V2 Actor System imports
 use crate::actors::{
     bridge::{
-        config::BridgeSystemConfig,
-        supervision::BridgeSupervisor,
-        actors::bridge::BridgeActor,
+        actors::bridge::BridgeActor, config::BridgeSystemConfig, supervision::BridgeSupervisor,
     },
     chain::{
-        ChainActor, config::ChainActorConfig,
+        config::ChainActorConfig,
         state::{ActorAddresses, RootSupervisor},
+        ChainActor,
     },
-    engine::{EngineActor, config::EngineConfig},  
+    engine::{config::EngineConfig, EngineActor},
     network::{
-        NetworkSupervisor, SyncActor, NetworkActor, PeerActor,
-        network::config::NetworkConfig,
-        sync::config::SyncConfig,
+        network::config::NetworkConfig, sync::config::SyncConfig, NetworkActor, NetworkSupervisor,
+        PeerActor, SyncActor,
     },
-    storage::{StorageActor, actor::StorageConfig},
+    storage::{actor::StorageConfig, StorageActor},
 };
 
 // V2 Configuration and types
 use crate::{
-    auxpow_miner::BitcoinConsensusParams, // Keep for legacy compatibility
     actors::auxpow::{
-        AuxPowActor, DifficultyManager,
         config::{AuxPowConfig, DifficultyConfig},
         rpc::AuxPowRpcContext,
+        AuxPowActor, DifficultyManager,
     },
+    auxpow_miner::BitcoinConsensusParams, // Keep for legacy compatibility
+    config::*,
+    features::FeatureFlagManager,
     spec::{
         genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
     },
     store::{Storage, DEFAULT_ROOT_DIR},
     types::*,
-    config::*,
-    features::FeatureFlagManager,
 };
-use std::sync::Arc;
-use std::str::FromStr;
-use std::time::Duration;
 use ethereum_types::Address as EvmAddress;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 // Bridge compatibility layer
 use crate::bridge_compat::{
-    Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
-    Bridge, Federation,
+    BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner, Bridge, Federation,
+    Network,
 };
-use crate::actors::bridge::{
-    actors::bridge::BridgeActor,
-    config::BridgeSystemConfig,
-};
+// BridgeActor and BridgeSystemConfig already imported above
+use actix::{Actor, Addr, Supervisor, System};
 use clap::builder::ArgPredicate;
 use clap::Parser;
 use eyre::Result;
 use futures::pin_mut;
 use lighthouse_facade::bls::{Keypair, SecretKey};
 use lighthouse_facade::execution_layer::auth::JwtKey;
-use std::str::FromStr;
-use std::time::{Duration, SystemTime};
-use std::{future::Future, sync::Arc};
+use std::future::Future;
+use std::time::SystemTime;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
-use actix::{Actor, Addr, System, Supervisor};
 
 #[inline]
 pub fn run() -> Result<()> {
@@ -229,7 +223,7 @@ impl App {
 
     async fn execute(self) -> Result<()> {
         info!("Initializing Alys V2 Actor System");
-        
+
         // Initialize storage and check chain state
         let disk_store = Storage::new_disk(self.db_path);
         info!("Head: {:?}", disk_store.get_head());
@@ -254,33 +248,37 @@ impl App {
             threshold,
             self.bitcoin_network,
         );
-        info!("Using bitcoin deposit address {}", bitcoin_federation.taproot_address);
+        info!(
+            "Using bitcoin deposit address {}",
+            bitcoin_federation.taproot_address
+        );
 
         // Configure validator keys
-        let (maybe_aura_signer, maybe_bitcoin_signer) = if chain_spec.is_validator && !self.not_validator {
-            match (self.aura_secret_key, self.bitcoin_secret_key) {
-                (Some(aura_sk), Some(bitcoin_sk)) => {
-                    let aura_pk = aura_sk.public_key();
-                    info!("Using aura public key {aura_pk}");
-                    let aura_signer = Keypair::from_components(aura_pk, aura_sk);
+        let (maybe_aura_signer, maybe_bitcoin_signer) =
+            if chain_spec.is_validator && !self.not_validator {
+                match (self.aura_secret_key, self.bitcoin_secret_key) {
+                    (Some(aura_sk), Some(bitcoin_sk)) => {
+                        let aura_pk = aura_sk.public_key();
+                        info!("Using aura public key {aura_pk}");
+                        let aura_signer = Keypair::from_components(aura_pk, aura_sk);
 
-                    let bitcoin_pk = bitcoin_sk.public_key(&bitcoin::key::Secp256k1::new());
-                    info!("Using bitcoin public key {bitcoin_pk}");
-                    let bitcoin_signer = BitcoinSigner::new(bitcoin_sk);
+                        let bitcoin_pk = bitcoin_sk.public_key(&bitcoin::key::Secp256k1::new());
+                        info!("Using bitcoin public key {bitcoin_pk}");
+                        let bitcoin_signer = BitcoinSigner::new(bitcoin_sk);
 
-                    info!("Running authority");
-                    (Some(aura_signer), Some(bitcoin_signer))
+                        info!("Running authority");
+                        (Some(aura_signer), Some(bitcoin_signer))
+                    }
+                    (None, Some(_)) => panic!("Aura secret not configured"),
+                    (Some(_), None) => panic!("Bitcoin secret not configured"),
+                    (None, None) => {
+                        info!("Running full node");
+                        (None, None)
+                    }
                 }
-                (None, Some(_)) => panic!("Aura secret not configured"),
-                (Some(_), None) => panic!("Bitcoin secret not configured"),
-                (None, None) => {
-                    info!("Running full node");
-                    (None, None)
-                }
-            }
-        } else {
-            (None, None)
-        };
+            } else {
+                (None, None)
+            };
 
         // === V2 ACTOR SYSTEM INITIALIZATION ===
         info!("Starting V2 Actor System with Supervisor Tree");
@@ -289,7 +287,7 @@ impl App {
 
         // The V2 actor system follows this supervisor tree:
         // Root Supervisor
-        // ├── Chain Supervisor → ChainActor, EngineActor  
+        // ├── Chain Supervisor → ChainActor, EngineActor
         // ├── Network Supervisor → SyncActor, NetworkActor, PeerActor
         // ├── Bridge Supervisor → BridgeActor, StreamActor (already implemented)
         // └── Storage Supervisor → StorageActor
@@ -303,30 +301,32 @@ impl App {
 
         info!("V2 actors available:");
         info!("  - ChainActor: Located at app/src/actors/chain/");
-        info!("  - EngineActor: Located at app/src/actors/engine/");  
+        info!("  - EngineActor: Located at app/src/actors/engine/");
         info!("  - NetworkSupervisor: Located at app/src/actors/network/");
         info!("  - StorageActor: Located at app/src/actors/storage/");
-        info!("  - SyncActor: Located at app/src/actors/sync/");
+        info!("  - SyncActor: Located at app/src/actors/network/sync/");
         info!("  - Bridge actors: ✅ Already integrated and working");
 
         // V2 Actor System Implementation with proper supervisors and constructors
-        
+
         // Step 1: Initialize Root Supervisor for the entire system
         info!("Initializing Root Supervisor");
         let root_supervisor = RootSupervisor::new().start();
-        
-        // Step 2: Initialize Storage Actor  
+
+        // Step 2: Initialize Storage Actor
         info!("Initializing Storage Actor");
         let storage_config = StorageConfig::default();
         let storage_actor = StorageActor::new(storage_config)
             .map_err(|e| eyre::Error::msg(format!("Failed to create StorageActor: {}", e)))?
             .start();
 
-        // Step 3: Initialize Engine Actor  
+        // Step 3: Initialize Engine Actor
         info!("Initializing Engine Actor");
         let engine_config = EngineConfig {
             jwt_secret: self.jwt_secret,
-            engine_url: self.geth_url.unwrap_or_else(|| "http://localhost:8551".to_string()),
+            engine_url: self
+                .geth_url
+                .unwrap_or_else(|| "http://localhost:8551".to_string()),
             public_url: self.geth_execution_url,
             ..Default::default()
         };
@@ -338,7 +338,7 @@ impl App {
         info!("Initializing Network Actors");
         let network_config = NetworkConfig::default();
         let network_actor = NetworkActor::new(network_config).start();
-        
+
         let sync_config = SyncConfig::default();
         let sync_actor = SyncActor::new(sync_config).start();
 
@@ -384,20 +384,16 @@ impl App {
                 required_confirmations: chain_spec.required_btc_txn_confirmations,
             }),
         };
-        
-        let chain_actor = ChainActor::new(
-            chain_config,
-            actor_addresses,
-            feature_flags.clone(),
-        )
-        .map_err(|e| eyre::Error::msg(format!("Failed to create ChainActor: {}", e)))?
-        .start();
-        
+
+        let chain_actor = ChainActor::new(chain_config, actor_addresses, feature_flags.clone())
+            .map_err(|e| eyre::Error::msg(format!("Failed to create ChainActor: {}", e)))?
+            .start();
+
         info!("✅ V2 Actor System initialized successfully!");
         info!("  - Root Supervisor: Managing all actor lifecycle");
         info!("  - Storage Actor: ✅ Database and caching operations");
         info!("  - Engine Actor: ✅ Execution layer integration");
-        info!("  - Network Actor: ✅ P2P communication");  
+        info!("  - Network Actor: ✅ P2P communication");
         info!("  - Sync Actor: ✅ Blockchain synchronization");
         info!("  - Chain Actor: ✅ Consensus and block production");
         info!("  - Bridge Supervisor: ✅ Two-way peg operations");
@@ -414,23 +410,27 @@ impl App {
 
         // Start auxiliary services
         crate::metrics::start_server(self.metrics_port).await;
-        
+
         // V2 RPC Server - Actor-based implementation
-        info!("Starting V2 Actor-based RPC server on port {}", self.rpc_port);
+        info!(
+            "Starting V2 Actor-based RPC server on port {}",
+            self.rpc_port
+        );
         crate::rpc_v2::run_server_v2(
             chain_actor.clone(),
-            engine_actor.clone(), 
+            engine_actor.clone(),
             storage_actor.clone(),
             bitcoin_federation.taproot_address,
             chain_spec.retarget_params,
             self.rpc_port,
-        ).await;
+        )
+        .await;
         info!("✅ V2 RPC server started successfully!");
 
         // Step 10: Initialize V2 AuxPow Mining System
         if (self.mine || self.dev) && !self.no_mine {
             info!("Initializing V2 AuxPow mining system");
-            
+
             // Use default mining address (can be configured later via RPC)
             let mining_address = EvmAddress::zero();
 
@@ -442,15 +442,17 @@ impl App {
                 cache_cleanup_interval: Duration::from_secs(300),
             };
 
-            let difficulty_manager = DifficultyManager::restore_from_storage(
-                storage_actor.clone(),
-                difficulty_config,
-            ).await
-            .unwrap_or_else(|e| {
-                warn!("Failed to restore difficulty manager from storage: {:?}, creating new", e);
-                DifficultyManager::new(DifficultyConfig::default())
-            })
-            .start();
+            let difficulty_manager =
+                DifficultyManager::restore_from_storage(storage_actor.clone(), difficulty_config)
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!(
+                            "Failed to restore difficulty manager from storage: {:?}, creating new",
+                            e
+                        );
+                        DifficultyManager::new(DifficultyConfig::default())
+                    })
+                    .start();
 
             // Initialize AuxPowActor with mining configuration
             let auxpow_config = AuxPowConfig {
@@ -466,7 +468,8 @@ impl App {
                 difficulty_manager.clone(),
                 chain_spec.retarget_params.clone(),
                 auxpow_config,
-            ).start();
+            )
+            .start();
 
             // Update actor addresses for cross-actor communication
             actor_addresses.set_auxpow_actor(auxpow_actor.clone());
@@ -477,7 +480,10 @@ impl App {
             // TODO: Register auxpow_rpc_context with RPC server when RPC integration is ready
 
             info!("✅ V2 AuxPow mining system initialized successfully!");
-            info!("Mining address: {}, background mining enabled", mining_address);
+            info!(
+                "Mining address: {}, background mining enabled",
+                mining_address
+            );
         } else {
             info!("Mining disabled - no AuxPow system initialized");
         }

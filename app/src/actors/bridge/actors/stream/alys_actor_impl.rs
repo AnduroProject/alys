@@ -515,9 +515,4 @@ impl StreamActor {
     }
 }
 
-// Extend StreamActor struct to include actor_system_metrics
-impl StreamActor {
-    /// Add the actor_system_metrics field to the existing struct
-    /// This would typically be added to the struct definition
-    actor_system_metrics: ActorMetrics,
-}
+// actor_system_metrics field is already defined in the StreamActor struct in actor.rs
