@@ -26,7 +26,6 @@ pub mod integration;
 pub mod messages;
 pub mod serde_utils;
 pub mod types;
-pub mod workflows;
 
 // for main.rs
 pub use app::run;
