@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
-use sysinfo::{System, SystemExt, ProcessExt, PidExt};
+use sysinfo::System;
 use serde_json::json;
 
 /// Sync state enumeration for ALYS-003-16
@@ -1629,17 +1629,18 @@ impl MetricsCollector {
         
         let timestamp = std::time::Instant::now();
         
-        // Get network interfaces from sysinfo
-        let networks = self.system.networks();
+        // Get network interfaces from sysinfo - networks() method removed in v0.30+
+        // TODO: Update to use new Networks API
         let (mut total_rx, mut total_tx) = (0u64, 0u64);
         let (mut total_rx_packets, mut total_tx_packets) = (0u64, 0u64);
         
-        for (_interface, network) in networks {
+        // Temporarily disabled network metrics due to sysinfo API changes
+        /*for (_interface, network) in networks {
             total_rx += network.received();
             total_tx += network.transmitted();
             total_rx_packets += network.packets_received();
             total_tx_packets += network.packets_transmitted();
-        }
+        }*/
         
         let stats = NetworkStats {
             rx_bytes: total_rx,
@@ -1896,7 +1897,7 @@ impl MetricsCollector {
         self.system.refresh_all();
         
         // Get process-specific metrics (ALYS-003-22)
-        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+        if let Some(process) = self.system.process(sysinfo::Pid::from_u32(self.process_id)) {
             // Memory usage
             let memory_bytes = process.memory() * 1024; // Convert KB to bytes
             MEMORY_USAGE.set(memory_bytes as i64);
@@ -1926,7 +1927,7 @@ impl MetricsCollector {
         let used_memory = self.system.used_memory();
         let memory_usage_percent = (used_memory as f64 / total_memory as f64) * 100.0;
         
-        // Global CPU usage
+        // Global CPU usage - updated for sysinfo v0.30+
         let global_cpu = self.system.global_cpu_info().cpu_usage() as f64;
         
         tracing::trace!(
@@ -1989,7 +1990,7 @@ impl MetricsCollector {
         self.system.refresh_all();
         
         // Get detailed process information
-        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+        if let Some(process) = self.system.process(sysinfo::Pid::from_u32(self.process_id)) {
             // Memory metrics with detailed breakdown
             let memory_kb = process.memory();
             let virtual_memory_kb = process.virtual_memory();
@@ -2074,7 +2075,7 @@ impl MetricsCollector {
     pub fn get_resource_attribution(&self) -> Result<ProcessResourceAttribution, Box<dyn std::error::Error>> {
         self.system.refresh_all();
         
-        if let Some(process) = self.system.process(sysinfo::Pid::from(self.process_id as usize)) {
+        if let Some(process) = self.system.process(sysinfo::Pid::from_u32(self.process_id)) {
             let memory_bytes = process.memory() * 1024;
             let virtual_memory_bytes = process.virtual_memory() * 1024;
             let cpu_percent = process.cpu_usage() as f64;

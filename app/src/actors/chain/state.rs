@@ -4,14 +4,16 @@
 //! This module contains the complete state model including chain state, federation state,
 //! auxiliary proof-of-work state, and all supporting structures.
 
-use std::collections::{HashMap, VecDeque, HashSet};
+use std::collections::{HashMap, VecDeque, HashSet, BTreeMap};
 use std::time::{Duration, Instant, SystemTime};
 use uuid::Uuid;
 use actix::prelude::*;
 
 // Import types from other modules
 use crate::types::*;
-use crate::messages::chain_messages::*;
+use crate::auxpow::AuxPow;
+use super::messages::{self, FederationMember as MessageFederationMember};
+use crate::actors::engine::state::ExecutionState;
 
 /// Current chain state managed by the actor
 #[derive(Debug)]

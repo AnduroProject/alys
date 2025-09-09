@@ -69,6 +69,22 @@ pub mod fallback {
     /// Authentication module
     pub mod auth {
         pub use super::JwtKey;
+        
+        /// Authentication configuration
+        #[derive(Debug, Clone)]
+        pub struct Auth {
+            pub jwt_key: Option<JwtKey>,
+            pub endpoint: String,
+        }
+        
+        impl Default for Auth {
+            fn default() -> Self {
+                Self {
+                    jwt_key: None,
+                    endpoint: "http://localhost:8551".to_string(),
+                }
+            }
+        }
     }
     
     /// Execution layer error
@@ -88,6 +104,9 @@ pub mod fallback {
         
         #[error("Payload invalid: {message}")]
         PayloadInvalid { message: String },
+        
+        #[error("Missing latest valid hash")]
+        MissingLatestValidHash,
     }
     
     /// Payload status response

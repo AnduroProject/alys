@@ -11,7 +11,7 @@ use actor_system::{
     error::{ActorError, ActorResult},
 };
 
-use super::{StreamActor, ConnectionStatus};
+use super::{StreamActor, actor::ConnectionStatus};
 use crate::actors::bridge::shared::errors::BridgeError;
 
 /// Lifecycle metadata for StreamActor

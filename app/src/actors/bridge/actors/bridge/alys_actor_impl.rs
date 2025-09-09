@@ -21,7 +21,8 @@ use crate::actors::bridge::{
     actors::bridge::BridgeActor,
 };
 
-use super::{state::BridgeActorState, BridgeError};
+use super::state::BridgeActorState;
+use crate::actors::bridge::shared::errors::BridgeError;
 
 #[async_trait]
 impl AlysActor for BridgeActor {

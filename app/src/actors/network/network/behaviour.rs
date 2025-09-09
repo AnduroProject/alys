@@ -4,12 +4,12 @@
 //! gossipsub, Kademlia DHT, mDNS discovery, and custom federation protocols.
 
 use libp2p::{
-    gossipsub::{self, Gossipsub, GossipsubEvent, MessageAuthenticity, ValidationMode as GossipValidationMode},
-    kad::{self, Kademlia, KademliaEvent},
-    mdns::{self, tokio::Behaviour as Mdns, tokio::Event as MdnsEvent},
+    gossipsub::{self, Behaviour as Gossipsub, Event as GossipsubEvent, MessageAuthenticity, ValidationMode as GossipValidationMode},
+    kad::{self, Behaviour as Kademlia, Event as KademliaEvent},
+    mdns::{self, tokio::Behaviour as Mdns, Event as MdnsEvent},
     identify::{self, Behaviour as Identify, Event as IdentifyEvent},
     ping::{self, Behaviour as Ping, Event as PingEvent},
-    request_response::{self, RequestResponse, Event as RequestResponseEvent},
+    request_response::{self, Behaviour as RequestResponse, Event as RequestResponseEvent},
     swarm::NetworkBehaviour,
     PeerId, Multiaddr,
 };

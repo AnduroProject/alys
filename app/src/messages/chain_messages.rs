@@ -608,7 +608,7 @@ pub struct QueryChainState {
 }
 
 /// Types of chain state information
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StateInfoType {
     /// Basic block header information
     Header,

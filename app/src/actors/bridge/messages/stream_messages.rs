@@ -11,8 +11,17 @@ use super::pegout_messages::{SignatureSet, PegOutActor};
 // Import actor_system message traits
 use actor_system::message::{AlysMessage, MessagePriority};
 
-// Forward declaration for circular dependency handling
-pub struct StreamActor;
+// Import the actual actor instead of forward declaration
+pub use super::super::actors::stream::actor::StreamActor;
+
+/// Stream actor status for reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamActorStatus {
+    pub connected_nodes: Vec<String>,
+    pub active_connections: usize,
+    pub last_heartbeat: Option<SystemTime>,
+    pub status: String,
+}
 
 /// Stream actor messages (enhanced for bridge integration)
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
@@ -59,6 +68,15 @@ pub enum StreamMessage {
     UpdateGovernanceEndpoints {
         endpoints: Vec<String>,
     },
+    
+    /// Initialize the stream actor
+    Initialize,
+    
+    /// Get actor status
+    GetStatus,
+    
+    /// Shutdown the actor
+    Shutdown,
 }
 
 /// Stream response types
@@ -74,6 +92,9 @@ pub enum StreamResponse {
     PegOutActorRegistered,
     ReconnectionInitiated,
     EndpointsUpdated { count: usize },
+    Initialized,
+    StatusReported(StreamActorStatus),
+    Shutdown,
 }
 
 /// Peg-out signature request to governance

@@ -1,7 +1,7 @@
 pub mod block_candidate_cache;
 mod candidate_state;
 
-use crate::block::SignedConsensusBlock;
+use crate::types::blockchain::SignedConsensusBlock;
 use crate::error::Error;
 use crate::network::ApproveBlock;
 use async_trait::async_trait;

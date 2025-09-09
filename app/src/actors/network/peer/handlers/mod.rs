@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use actor_system::{ActorResult, ActorError};
 use crate::actors::network::messages::*;
+
+// Type alias for peer-specific actor results
+type PeerActorResult<T> = ActorResult<T>;
 use crate::actors::network::peer::{
     connection::{DisconnectionReason, ConnectionEvent},
     scoring::ProtocolViolation,

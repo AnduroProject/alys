@@ -1,4 +1,4 @@
-use crate::block::SignedConsensusBlock;
+use crate::types::blockchain::SignedConsensusBlock;
 use crate::error::Error;
 use crate::network::ApproveBlock;
 use crate::signatures::CheckedIndividualApproval;

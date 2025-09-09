@@ -5,14 +5,14 @@
 
 use libp2p::{
     kad::{
-        Kademlia, KademliaEvent, KademliaConfig, QueryResult, GetClosestPeersResult,
+        Behaviour as Kademlia, Event as KademliaEvent, Config as KademliaConfig, QueryResult, GetClosestPeersResult,
         BootstrapResult, Record, store::MemoryStore, AddProviderResult, GetProvidersResult,
         GetRecordResult, PutRecordResult, QueryId,
     },
-    mdns::{tokio::Mdns, tokio::Event as MdnsEvent},
+    mdns::{tokio::Behaviour as Mdns, Event as MdnsEvent},
     identity::Keypair,
     PeerId, Multiaddr,
-    swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters},
+    swarm::{NetworkBehaviour, ToSwarm},
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -177,7 +177,7 @@ impl AlysDiscovery {
     }
 
     /// Handle Kademlia events and convert to Alys discovery events
-    pub fn handle_kad_event(&mut self, event: KademliaEvent) -> Vec<AlysDiscoveryEvent> {
+    pub fn handle_kad_event(&mut self, event: KademliaEvent) -> Vec<DiscoveryProtocolEvent> {
         let mut alys_events = Vec::new();
 
         match event {
@@ -192,7 +192,7 @@ impl AlysDiscovery {
                             self.metrics.successful_bootstraps += 1;
                             tracing::info!("Bootstrap completed successfully");
                             
-                            alys_events.push(AlysDiscoveryEvent::BootstrapCompleted {
+                            alys_events.push(DiscoveryProtocolEvent::BootstrapCompleted {
                                 duration: query_info.map(|q| q.started_at.elapsed())
                                     .unwrap_or(Duration::from_secs(0)),
                             });
@@ -203,7 +203,7 @@ impl AlysDiscovery {
                         self.metrics.failed_bootstraps += 1;
                         tracing::warn!("Bootstrap failed: {}", e);
                         
-                        alys_events.push(AlysDiscoveryEvent::BootstrapFailed {
+                        alys_events.push(DiscoveryProtocolEvent::BootstrapFailed {
                             error: e.to_string(),
                         });
                     }
@@ -216,22 +216,22 @@ impl AlysDiscovery {
                             self.add_to_peer_cache(*peer_id, vec![], DiscoverySource::Kademlia);
                         }
                         
-                        alys_events.push(AlysDiscoveryEvent::PeersDiscovered {
+                        alys_events.push(DiscoveryProtocolEvent::PeersDiscovered {
                             peers,
                             source: DiscoverySource::Kademlia,
                         });
                     }
                     QueryResult::GetRecord(Ok(GetRecordResult { records, .. })) => {
                         tracing::debug!("Retrieved {} records from DHT", records.len());
-                        alys_events.push(AlysDiscoveryEvent::RecordsRetrieved { records });
+                        alys_events.push(DiscoveryProtocolEvent::RecordsRetrieved { records });
                     }
                     QueryResult::PutRecord(Ok(PutRecordResult { key, .. })) => {
                         tracing::debug!("Successfully stored record: {:?}", key);
-                        alys_events.push(AlysDiscoveryEvent::RecordStored { key });
+                        alys_events.push(DiscoveryProtocolEvent::RecordStored { key });
                     }
                     QueryResult::GetProviders(Ok(GetProvidersResult { providers, .. })) => {
                         tracing::debug!("Found {} providers", providers.len());
-                        alys_events.push(AlysDiscoveryEvent::ProvidersFound { providers });
+                        alys_events.push(DiscoveryProtocolEvent::ProvidersFound { providers });
                     }
                     result => {
                         // Handle other query results or failures
@@ -247,7 +247,7 @@ impl AlysDiscovery {
                 // Update peer cache
                 self.add_to_peer_cache(peer, addresses, DiscoverySource::Kademlia);
                 
-                alys_events.push(AlysDiscoveryEvent::RoutingTableUpdated {
+                alys_events.push(DiscoveryProtocolEvent::RoutingTableUpdated {
                     added_peer: peer,
                     removed_peer: old_peer,
                 });
@@ -256,11 +256,11 @@ impl AlysDiscovery {
                 tracing::debug!("Peer {} is unroutable", peer);
                 self.remove_from_peer_cache(&peer);
                 
-                alys_events.push(AlysDiscoveryEvent::PeerUnroutable { peer_id: peer });
+                alys_events.push(DiscoveryProtocolEvent::PeerUnroutable { peer_id: peer });
             }
             KademliaEvent::PendingRoutablePeer { peer, address } => {
                 tracing::debug!("Pending routable peer {} at {}", peer, address);
-                alys_events.push(AlysDiscoveryEvent::PeerRoutePending { peer_id: peer, address });
+                alys_events.push(DiscoveryProtocolEvent::PeerRoutePending { peer_id: peer, address });
             }
             _ => {
                 // Handle other Kademlia events as needed
@@ -272,7 +272,7 @@ impl AlysDiscovery {
     }
 
     /// Handle mDNS events and convert to Alys discovery events
-    pub fn handle_mdns_event(&mut self, event: MdnsEvent) -> Vec<AlysDiscoveryEvent> {
+    pub fn handle_mdns_event(&mut self, event: MdnsEvent) -> Vec<DiscoveryProtocolEvent> {
         let mut alys_events = Vec::new();
 
         match event {
@@ -291,7 +291,7 @@ impl AlysDiscovery {
                 }
                 
                 self.metrics.mdns_discoveries += discovered_peers.len() as u64;
-                alys_events.push(AlysDiscoveryEvent::PeersDiscovered {
+                alys_events.push(DiscoveryProtocolEvent::PeersDiscovered {
                     peers: discovered_peers,
                     source: DiscoverySource::Mdns,
                 });
@@ -306,7 +306,7 @@ impl AlysDiscovery {
                     }
                 }
                 
-                alys_events.push(AlysDiscoveryEvent::MdnsExpired);
+                alys_events.push(DiscoveryProtocolEvent::MdnsExpired);
             }
         }
 
@@ -453,7 +453,7 @@ pub struct DiscoveryMetrics {
 }
 
 #[derive(Debug)]
-pub enum AlysDiscoveryEvent {
+pub enum DiscoveryProtocolEvent {
     BootstrapCompleted {
         duration: Duration,
     },

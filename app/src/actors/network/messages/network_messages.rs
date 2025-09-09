@@ -3,9 +3,11 @@
 //! Defines all messages for P2P networking operations including peer discovery,
 //! message broadcasting, and protocol management.
 
-use actix::{Message, Result as ActorResult};
+use actix::Message;
+use std::result::Result;
 use serde::{Deserialize, Serialize};
 use libp2p::{PeerId, Multiaddr};
+use actor_system::error::ActorResult;
 use crate::actors::network::messages::{NetworkMessage, NetworkResult};
 
 /// Start the networking subsystem

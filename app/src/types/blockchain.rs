@@ -2,33 +2,55 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+use bitcoin::{BlockHash as BitcoinBlockHash, Txid, Transaction as BitcoinTransaction};
+use lighthouse_facade::types::{
+    EthSpec, ExecutionPayloadCapella, MainnetEthSpec, ExecutionPayload, ExecutionBlockHash,
+    FixedVector, VariableList, Uint256, Transactions, Withdrawals
+};
+use lighthouse_facade::bls::PublicKey;
+use crate::auxpow::AuxPow;
+use crate::auxpow_miner::BlockIndex;
+use crate::aura::Authority;
+use crate::signatures::{AggregateApproval, CheckedIndividualApproval, IndividualApproval};
+use crate::spec::ChainSpec;
+use crate::store::BlockRef;
+use crate::error::Error;
 
-/// A complete block in the Alys blockchain with Lighthouse V5 compatibility
-/// Enhanced with actor-friendly design and comprehensive metadata tracking
+/// Trait for converting between different block hash types
+pub trait ConvertBlockHash<H> {
+    fn to_block_hash(&self) -> H;
+}
+
+impl ConvertBlockHash<BitcoinBlockHash> for Hash256 {
+    fn to_block_hash(&self) -> BitcoinBlockHash {
+        BitcoinBlockHash::from_slice(self.as_bytes()).expect("Should have same length hash")
+    }
+}
+
+impl ConvertBlockHash<Hash256> for BitcoinBlockHash {
+    fn to_block_hash(&self) -> Hash256 {
+        Hash256::from_slice(self.as_byte_array())
+    }
+}
+
+/// A complete block in the Alys blockchain with backward compatibility
+/// This supports both legacy and V2 usage patterns
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsensusBlock {
+pub struct ConsensusBlock<T: EthSpec = MainnetEthSpec> {
     /// The block hash of the parent
     pub parent_hash: Hash256,
     /// Aura slot the block was produced in
     pub slot: u64,
     /// Proof of work header, used for finalization. Not every block is expected to have this.
     pub auxpow_header: Option<AuxPowHeader>,
-    /// Execution layer payload (from Geth/Reth)
-    pub execution_payload: ExecutionPayload,
+    /// Execution layer payload (Capella format for legacy compatibility)
+    pub execution_payload: ExecutionPayloadCapella<T>,
     /// Transactions that are sending funds to the bridge (Bitcoin txid, block hash)
-    pub pegins: Vec<(bitcoin::Txid, bitcoin::BlockHash)>,
+    pub pegins: Vec<(Txid, BitcoinBlockHash)>,
     /// Bitcoin payments for pegouts
     pub pegout_payment_proposal: Option<bitcoin::Transaction>,
     /// Finalized bitcoin payments. Only non-empty if there is an auxpow.
     pub finalized_pegouts: Vec<bitcoin::Transaction>,
-    /// Lighthouse V5 compatibility fields
-    pub lighthouse_metadata: LighthouseMetadata,
-    /// Block production timing information
-    pub timing: BlockTiming,
-    /// Validation status and checkpoints
-    pub validation_info: ValidationInfo,
-    /// Actor system metadata for tracing and monitoring
-    pub actor_metadata: ActorBlockMetadata,
 }
 
 /// Auxiliary Proof of Work header
@@ -50,23 +72,11 @@ pub struct AuxPowHeader {
     pub fee_recipient: Address,
 }
 
-/// Auxiliary Proof of Work structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuxPow {
-    /// The Bitcoin coinbase transaction
-    pub coinbase_tx: bitcoin::Transaction,
-    /// The merkle branch linking the coinbase tx to the block
-    pub merkle_branch: Vec<Hash256>,
-    /// The index of the coinbase tx in the merkle tree
-    pub merkle_index: u32,
-    /// The parent Bitcoin block header
-    pub parent_block_header: bitcoin::block::Header,
-}
 
 /// Signed consensus block with aggregate approval
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignedConsensusBlock {
-    pub message: ConsensusBlock,
+pub struct SignedConsensusBlock<T: EthSpec = MainnetEthSpec> {
+    pub message: ConsensusBlock<T>,
     /// Signed by the authority for that slot, plus the approvals of other authorities
     pub signature: AggregateApproval,
 }
@@ -85,6 +95,177 @@ pub struct AggregateApproval {
 pub struct IndividualApproval {
     pub signature: Signature,
     pub authority_index: u8,
+}
+
+// Implementation of BlockIndex trait for ConsensusBlock
+// NOTE: implementation assumes ConsensusBlock contains auxpow_header
+// i.e. it is only called for those blocks retrieved from storage
+impl BlockIndex for ConsensusBlock<MainnetEthSpec> {
+    fn block_hash(&self) -> BitcoinBlockHash {
+        self.signing_root().to_block_hash()
+    }
+
+    fn block_time(&self) -> u64 {
+        self.execution_payload.timestamp
+    }
+
+    fn bits(&self) -> u32 {
+        self.auxpow_header
+            .as_ref()
+            .map(|header| header.bits)
+            .expect("Should contain AuxPow")
+    }
+
+    fn chain_id(&self) -> u32 {
+        self.auxpow_header
+            .as_ref()
+            .map(|header| header.chain_id)
+            .expect("Should contain AuxPow")
+    }
+
+    fn height(&self) -> u64 {
+        self.execution_payload.block_number
+    }
+}
+
+impl Default for ConsensusBlock<MainnetEthSpec> {
+    fn default() -> Self {
+        Self {
+            parent_hash: Hash256::zero(),
+            slot: 0,
+            auxpow_header: None,
+            execution_payload: ExecutionPayloadCapella {
+                parent_hash: ExecutionBlockHash::zero(),
+                fee_recipient: Address::zero(),
+                state_root: Hash256::zero(),
+                receipts_root: Hash256::zero(),
+                logs_bloom: FixedVector::default(),
+                prev_randao: Hash256::zero(),
+                block_number: 0,
+                gas_limit: 0,
+                gas_used: 0,
+                timestamp: 0,
+                extra_data: VariableList::default(),
+                base_fee_per_gas: Uint256::zero(),
+                block_hash: ExecutionBlockHash::zero(),
+                transactions: Transactions::<MainnetEthSpec>::default(),
+                withdrawals: Withdrawals::<MainnetEthSpec>::default(),
+            },
+            pegins: vec![],
+            pegout_payment_proposal: None,
+            finalized_pegouts: vec![],
+        }
+    }
+}
+
+impl ConsensusBlock<MainnetEthSpec> {
+    pub fn new(
+        slot: u64,
+        payload: ExecutionPayload<MainnetEthSpec>,
+        prev: Hash256,
+        auxpow_header: Option<AuxPowHeader>,
+        pegins: Vec<(Txid, BitcoinBlockHash)>,
+        pegout_payment_proposal: Option<BitcoinTransaction>,
+        finalized_pegouts: Vec<BitcoinTransaction>,
+    ) -> Self {
+        Self {
+            slot,
+            parent_hash: prev,
+            execution_payload: payload.as_capella().unwrap().clone(),
+            auxpow_header,
+            pegins,
+            pegout_payment_proposal,
+            finalized_pegouts,
+        }
+    }
+
+    fn signing_root(&self) -> Hash256 {
+        tree_hash::merkle_root(&rmp_serde::to_vec(&self).unwrap(), 0)
+    }
+
+    pub fn sign(&self, authority: &Authority) -> CheckedIndividualApproval {
+        let signing_root = self.signing_root();
+        // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/validator_client/src/signing_method.rs#L163
+        let signature = authority.signer.sk.sign(signing_root);
+
+        IndividualApproval {
+            signature,
+            authority_index: authority.index,
+        }
+        .assume_checked()
+    }
+
+    pub fn sign_block(self, authority: &Authority) -> SignedConsensusBlock<MainnetEthSpec> {
+        let approval = self.sign(authority).into_aggregate();
+
+        SignedConsensusBlock {
+            message: self,
+            signature: approval,
+        }
+    }
+}
+
+impl SignedConsensusBlock<MainnetEthSpec> {
+    // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/beacon_chain/src/block_verification.rs#L1893
+    pub fn verify_signature(&self, public_keys: &[PublicKey]) -> bool {
+        let message = self.message.signing_root();
+        self.signature.verify(public_keys, message)
+    }
+
+    #[allow(dead_code)]
+    pub fn is_signed_by(&self, authority_index: u8) -> bool {
+        self.signature.is_signed_by(authority_index)
+    }
+
+    pub fn num_approvals(&self) -> usize {
+        self.signature.num_approvals()
+    }
+
+    pub fn canonical_root(&self) -> Hash256 {
+        self.message.signing_root()
+    }
+
+    pub fn add_approval(&mut self, approval: CheckedIndividualApproval) -> Result<(), Error> {
+        self.signature.add_approval(approval)
+    }
+
+    pub fn block_ref(&self) -> BlockRef {
+        BlockRef {
+            hash: self.canonical_root(),
+            height: self.message.execution_payload.block_number,
+        }
+    }
+
+    pub fn genesis(
+        chain_spec: ChainSpec,
+        execution_payload: ExecutionPayloadCapella<MainnetEthSpec>,
+    ) -> Self {
+        // sanity checks
+        if execution_payload.block_number != 0 {
+            panic!("Execution payload should start at zero");
+        }
+        // TODO: https://github.com/bitcoin/bitcoin/blob/aa9231fafe45513134ec8953a217cda07446fae8/src/test/pow_tests.cpp#L176C1-L176C68
+        Self {
+            message: ConsensusBlock {
+                parent_hash: Hash256::zero(),
+                slot: 0, // TODO: calculate slot
+                auxpow_header: Some(AuxPowHeader {
+                    range_start: Hash256::zero(),
+                    range_end: Hash256::zero(),
+                    bits: chain_spec.bits,
+                    chain_id: chain_spec.chain_id,
+                    height: 0,
+                    auxpow: None,
+                    fee_recipient: Address::zero(),
+                }),
+                execution_payload,
+                pegins: vec![],
+                pegout_payment_proposal: None,
+                finalized_pegouts: vec![],
+            },
+            signature: AggregateApproval::new(),
+        }
+    }
 }
 
 /// Block header containing metadata

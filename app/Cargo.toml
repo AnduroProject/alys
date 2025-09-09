@@ -57,6 +57,14 @@ tokio-util = { version = "0.6", features = ["codec", "compat", "time"] }
 tokio-io-timeout = "1"
 async-trait = { workspace = true }
 
+# Additional dependencies for compilation
+dashmap = "5.5"
+serde_yaml = "0.9"
+
+# Missing dependencies for compilation
+actix-rt = { workspace = true }
+parking_lot = "0.12"
+
 # V2 Actor System
 actix = { workspace = true }
 uuid = { workspace = true }
@@ -123,6 +131,11 @@ tonic-build = "0.10"
 tempfile = "3.8.1"
 criterion = { version = "0.5", features = ["html_reports"] }
 sha2 = "0.10"
+validator = "0.18"
+tracing-test = "0.2"
+hostname = "0.3"
+rustc_version = "0.4"
+dashmap = "5.5"
 
 [[bench]]
 name = "sync_benchmarks"

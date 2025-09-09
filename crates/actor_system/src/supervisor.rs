@@ -24,6 +24,39 @@ use std::{
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+/// Supervision configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SupervisionConfig {
+    /// Restart strategy for supervised actors
+    pub restart_strategy: RestartStrategy,
+    /// Maximum restart attempts within the time window
+    pub max_restarts: u32,
+    /// Time window for restart counting
+    pub restart_window: Duration,
+    /// Escalation strategy when limits are exceeded
+    pub escalation_strategy: EscalationStrategy,
+    /// Whether to restart child actors when supervisor restarts
+    pub restart_children: bool,
+    /// Timeout for actor stopping
+    pub stop_timeout: Duration,
+}
+
+impl Default for SupervisionConfig {
+    fn default() -> Self {
+        Self {
+            restart_strategy: RestartStrategy::default(),
+            max_restarts: 5,
+            restart_window: Duration::from_secs(60),
+            escalation_strategy: EscalationStrategy::Stop,
+            restart_children: true,
+            stop_timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+/// Supervision strategy type (alias for compatibility)
+pub type SupervisionStrategy = crate::supervision_tests::SupervisionStrategy;
+
 /// Restart strategy for supervised actors
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RestartStrategy {

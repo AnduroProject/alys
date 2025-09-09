@@ -7,6 +7,7 @@ use tracing::{info, warn, error};
 use uuid::Uuid;
 
 use super::actor::*;
+use super::metrics::BridgeCoordinationMetrics;
 use crate::actors::bridge::messages::*;
 use crate::types::*;
 

@@ -9,6 +9,9 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
+/// Actor message type alias for compatibility
+pub type AlysActorMessage = Box<dyn AlysMessage<Result = ()>>;
+
 /// Enhanced message trait with metadata and routing information
 pub trait AlysMessage: Message + Send + Sync + Clone + fmt::Debug {
     /// Get message type name

@@ -1,15 +1,17 @@
-use crate::block::SignedConsensusBlock;
-use crate::chain::Chain;
+use crate::types::blockchain::SignedConsensusBlock;
+use crate::actors::chain::ChainActor;
+use crate::actors::chain::messages::ProduceBlock;
+use actix::Addr;
 use crate::error::Error;
+use eyre;
+use lighthouse_facade::MainnetEthSpec;
 use crate::metrics::{
     AURA_CURRENT_SLOT, AURA_LATEST_SLOT_AUTHOR, AURA_PRODUCED_BLOCKS, AURA_SLOT_AUTHOR_RETRIEVALS,
     AURA_SLOT_CLAIM_TOTALS, AURA_VERIFY_SIGNED_BLOCK,
 };
 use futures_timer::Delay;
 use lighthouse_facade::bls::{Keypair, PublicKey};
-use lighthouse_facade::store::ItemStore;
-use lighthouse_facade::MainnetEthSpec;
-use std::sync::Arc;
+use actix::prelude::*;
 use std::time::Duration;
 use tracing::*;
 
@@ -175,21 +177,21 @@ pub fn time_until_next_slot(slot_duration: Duration) -> Duration {
     Duration::from_millis(remaining_millis as u64)
 }
 
-pub struct AuraSlotWorker<DB> {
+pub struct AuraSlotWorker {
     last_slot: u64,
     slot_duration: Duration,
     until_next_slot: Option<Delay>,
     authorities: Vec<PublicKey>,
     maybe_signer: Option<Keypair>,
-    chain: Arc<Chain<DB>>,
+    chain_actor: Addr<ChainActor>,
 }
 
-impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
+impl AuraSlotWorker {
     pub fn new(
         slot_duration: Duration,
         authorities: Vec<PublicKey>,
         maybe_signer: Option<Keypair>,
-        chain: Arc<Chain<DB>>,
+        chain_actor: Addr<ChainActor>,
     ) -> Self {
         Self {
             last_slot: 0,
@@ -197,7 +199,7 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
             until_next_slot: None,
             authorities,
             maybe_signer,
-            chain,
+            chain_actor,
         }
     }
 
@@ -227,16 +229,26 @@ impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
         let _ = self.claim_slot(slot, &self.authorities[..])?;
         debug!("My turn");
 
-        let res = self.chain.produce_block(slot, duration_now()).await;
+        let res = self.chain_actor.send(ProduceBlock {
+            slot,
+            timestamp: duration_now(),
+            force: false,
+            correlation_id: None,
+        }).await;
         match res {
-            Ok(_) => {
+            Ok(Ok(_)) => {
                 AURA_PRODUCED_BLOCKS.with_label_values(&["success"]).inc();
                 Some(Ok(()))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("Failed to produce block: {:?}", e);
                 AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
-                Some(Err(e))
+                Some(Err(e.into()))
+            }
+            Err(e) => {
+                error!("Failed to send message to ChainActor: {:?}", e);
+                AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
+                Some(Err(Error::GenericError(eyre::eyre!("Actor communication error: {}", e))))
             }
         }
     }

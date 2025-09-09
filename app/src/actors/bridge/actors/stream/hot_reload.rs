@@ -11,10 +11,7 @@ use notify::{Watcher, RecursiveMode, Event, EventKind, event::AccessKind};
 use validator::{Validate, ValidationErrors};
 use tracing::*;
 
-use super::{
-    config::AdvancedStreamConfig,
-    config::ConfigError,
-};
+use crate::config::{StreamConfig as AdvancedStreamConfig, ConfigError};
 
 /// Configuration change notification system
 #[derive(Debug, Clone)]
@@ -503,7 +500,7 @@ impl AdvancedStreamConfig {
     
     /// Validate security requirements
     async fn validate_security_requirements(&self) -> Result<(), ConfigError> {
-        use super::config::EnvironmentType;
+        use crate::config::Environment as EnvironmentType;
         
         // Validate TLS configuration in production
         if self.environment.environment_type == EnvironmentType::Production {

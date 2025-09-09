@@ -4,6 +4,7 @@
 //! storage backend for blocks, state, receipts, and other blockchain data.
 
 use crate::types::*;
+use super::messages::WriteOperation;
 use rocksdb::{DB, Options, ColumnFamily, ColumnFamilyDescriptor, WriteBatch, IteratorMode};
 use std::collections::HashMap;
 use std::path::Path;

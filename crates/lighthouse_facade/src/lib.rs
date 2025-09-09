@@ -70,18 +70,29 @@ pub use crate::types::{
     ExecutionPayload, ExecutionPayloadCapella,
     PayloadStatus, ForkchoiceState, PayloadAttributes,
     Withdrawal, FixedVector, VariableList, Transactions, Withdrawals,
-    BitVector, BitList,
+    BitVector, BitList, BeaconBlockHeader,
     // Specs
     MainnetEthSpec, EthSpec,
     // Crypto
     PublicKey, SecretKey, Signature, AggregateSignature, Keypair,
 };
 
+// Re-export Address for compatibility
+pub use ethereum_types::Address;
+
 // Module re-exports - execution_layer is already available as a module
 
 // Compatibility module re-exports
 pub mod bls {
     pub use crate::types::{PublicKey, SecretKey, Signature, AggregateSignature, Keypair};
+    
+    /// BLS signature set for batch verification
+    #[derive(Debug, Clone)]
+    pub struct SignatureSet {
+        pub public_key: PublicKey,
+        pub signature: Signature,
+        pub message: Vec<u8>,
+    }
 }
 
 pub mod sensitive_url {
@@ -90,6 +101,14 @@ pub mod sensitive_url {
 
 pub mod store {
     pub use crate::execution_layer::{get_key_for_col, LevelDB, MemoryStore, Store as ItemStore};
+    pub use crate::types::MainnetEthSpec;
+    
+    /// Key-value store operation
+    #[derive(Debug, Clone)]
+    pub enum KeyValueStoreOp {
+        PutKeyValue(Vec<u8>, Vec<u8>),
+        DeleteKey(Vec<u8>),
+    }
 }
 
 /// Prelude module for common imports

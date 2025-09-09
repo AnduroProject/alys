@@ -14,9 +14,11 @@ use futures::prelude::*;
 use futures::{Sink, SinkExt};
 use libp2p::swarm::handler::{
     ConnectionEvent, ConnectionHandler, ConnectionHandlerEvent, DialUpgradeError,
-    FullyNegotiatedInbound, FullyNegotiatedOutbound, KeepAlive, StreamUpgradeError,
+    FullyNegotiatedInbound, FullyNegotiatedOutbound, StreamUpgradeError,
     SubstreamProtocol,
 };
+// KeepAlive is now part of ConnectionHandlerEvent
+// use libp2p::swarm::KeepAlive;
 use libp2p::swarm::Stream;
 use slog::{crit, debug, trace, warn};
 use smallvec::SmallVec;
@@ -312,7 +314,6 @@ where
 {
     type FromBehaviour = RPCSend<Id, TSpec>;
     type ToBehaviour = HandlerEvent<Id, TSpec>;
-    type Error = RPCError;
     type InboundProtocol = RPCProtocol<TSpec>;
     type OutboundProtocol = OutboundRequestContainer<TSpec>;
     type OutboundOpenInfo = (Id, OutboundRequest<TSpec>); // Keep track of the id and the request
@@ -334,7 +335,7 @@ where
         }
     }
 
-    fn connection_keep_alive(&self) -> KeepAlive {
+    fn connection_keep_alive(&self) -> bool {
         // Check that we don't have outbound items pending for dialing, nor dialing, nor
         // established. Also check that there are no established inbound substreams.
         // Errors and events need to be reported back, so check those too.
@@ -353,9 +354,9 @@ where
             _ => false,
         };
         if should_shutdown {
-            KeepAlive::No
+            false
         } else {
-            KeepAlive::Yes
+            true
         }
     }
 
@@ -367,7 +368,6 @@ where
             Self::OutboundProtocol,
             Self::OutboundOpenInfo,
             Self::ToBehaviour,
-            Self::Error,
         >,
     > {
         if let Some(waker) = &self.waker {

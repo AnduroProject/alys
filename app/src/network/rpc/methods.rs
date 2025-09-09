@@ -1,6 +1,6 @@
 //! Available RPC methods types and ids.
 
-use crate::block::SignedConsensusBlock;
+use crate::types::blockchain::SignedConsensusBlock;
 use crate::network::{EnrAttestationBitfield, EnrSyncCommitteeBitfield};
 use lighthouse_facade::types::{EthSpec, Hash256};
 use regex::bytes::Regex;

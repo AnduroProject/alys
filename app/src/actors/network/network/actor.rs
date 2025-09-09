@@ -222,8 +222,8 @@ impl NetworkActor {
     }
 
     /// Handle gossipsub events
-    fn handle_gossipsub_event(&mut self, event: libp2p::gossipsub::GossipsubEvent) {
-        use libp2p::gossipsub::GossipsubEvent;
+    fn handle_gossipsub_event(&mut self, event: libp2p::gossipsub::Event) {
+        use libp2p::gossipsub::Event as GossipsubEvent;
 
         match event {
             GossipsubEvent::Message { propagation_source, message_id, message } => {
@@ -274,8 +274,8 @@ impl NetworkActor {
     }
 
     /// Handle Kademlia DHT events
-    fn handle_kademlia_event(&mut self, event: libp2p::kad::KademliaEvent) {
-        use libp2p::kad::KademliaEvent;
+    fn handle_kademlia_event(&mut self, event: libp2p::kad::Event<'_>) {
+        use libp2p::kad::Event as KademliaEvent;
 
         match event {
             KademliaEvent::OutboundQueryProgressed { result, .. } => {
@@ -305,8 +305,8 @@ impl NetworkActor {
     }
 
     /// Handle mDNS events
-    fn handle_mdns_event(&mut self, event: libp2p::mdns::tokio::Event) {
-        use libp2p::mdns::tokio::Event;
+    fn handle_mdns_event(&mut self, event: libp2p::mdns::Event) {
+        use libp2p::mdns::Event;
 
         match event {
             Event::Discovered(list) => {

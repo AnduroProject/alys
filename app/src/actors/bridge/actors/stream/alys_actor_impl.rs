@@ -25,9 +25,8 @@ use crate::actors::bridge::{
 };
 use super::{
     StreamActor, 
-    GovernanceConnection, 
-    ConnectionStatus,
-    StreamMetrics,
+    actor::{GovernanceConnection, ConnectionStatus},
+    metrics::StreamMetrics,
 };
 
 /// State structure for actor_system compatibility

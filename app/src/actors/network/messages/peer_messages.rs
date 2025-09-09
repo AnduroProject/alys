@@ -3,9 +3,11 @@
 //! Defines all messages for peer management operations including connection
 //! establishment, peer scoring, and discovery coordination.
 
-use actix::{Message, Result as ActorResult};
+use actix::Message;
+use std::result::Result;
 use serde::{Deserialize, Serialize};
 use libp2p::{PeerId, Multiaddr};
+use actor_system::error::ActorResult;
 use crate::actors::network::messages::{NetworkMessage, NetworkResult};
 
 /// Connect to a specific peer

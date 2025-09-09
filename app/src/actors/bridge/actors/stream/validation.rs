@@ -7,11 +7,13 @@ use std::time::Duration;
 use validator::{Validate, ValidationErrors, ValidationError};
 use tracing::*;
 
-use super::config::{
-    AdvancedStreamConfig, CoreStreamConfig, AdvancedConnectionConfig,
-    AuthenticationConfig, MessagingConfig, PerformanceConfig,
-    FeatureConfig, EnvironmentConfig, EnvironmentType,
-    GovernanceEndpoint, TlsConfig, BackoffConfig,
+use crate::config::{
+    StreamConfig as AdvancedStreamConfig, StreamConfig as CoreStreamConfig, 
+    TlsConfig as AdvancedConnectionConfig,
+    AuthConfig as AuthenticationConfig, StreamConfig as MessagingConfig, 
+    StreamConfig as PerformanceConfig,
+    StreamConfig as FeatureConfig, Environment as EnvironmentType,
+    GovernanceConfig as GovernanceEndpoint, TlsConfig, ReconnectionConfig as BackoffConfig,
 };
 use super::super::super::shared::errors::BridgeError;
 

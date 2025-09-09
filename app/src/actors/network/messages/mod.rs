@@ -3,7 +3,8 @@
 //! This module defines the complete message protocol for the network actor system,
 //! including message envelopes, correlation tracking, and priority management.
 
-use actix::{Message, Result as ActorResult};
+use actix::Message;
+use std::result::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use uuid::Uuid;

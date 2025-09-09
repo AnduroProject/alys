@@ -255,15 +255,15 @@ impl NetworkSupervisor {
         tracing::warn!("Actor {} is unhealthy, applying restart policy: {:?}", actor_name, restart_policy);
 
         match restart_policy.strategy {
-            RestartStrategy::Immediate => {
+            NetworkRestartStrategy::Immediate => {
                 self.restart_actor_immediately(actor_name).await?;
             }
-            RestartStrategy::Delayed => {
+            NetworkRestartStrategy::Delayed => {
                 // Schedule delayed restart
                 tracing::info!("Scheduling delayed restart for {} in {:?}", actor_name, restart_policy.delay);
                 // In a real implementation, we'd schedule this
             }
-            RestartStrategy::Exponential => {
+            NetworkRestartStrategy::Exponential => {
                 // Calculate exponential backoff
                 let failures = self.health_status.get(actor_name)
                     .map(|s| s.consecutive_failures)
@@ -271,7 +271,7 @@ impl NetworkSupervisor {
                 let delay = restart_policy.delay * 2_u32.pow(failures.min(10));
                 tracing::info!("Scheduling exponential backoff restart for {} in {:?}", actor_name, delay);
             }
-            RestartStrategy::Never => {
+            NetworkRestartStrategy::Never => {
                 tracing::warn!("Actor {} configured with Never restart policy, not restarting", actor_name);
             }
         }
@@ -485,7 +485,7 @@ impl Default for NetworkSupervisionConfig {
 /// Restart policy for actors
 #[derive(Debug, Clone)]
 pub struct RestartPolicy {
-    pub strategy: RestartStrategy,
+    pub strategy: NetworkRestartStrategy,
     pub delay: Duration,
     pub max_retries: u32,
     pub retry_window: Duration,
@@ -494,7 +494,7 @@ pub struct RestartPolicy {
 impl RestartPolicy {
     pub fn immediate() -> Self {
         Self {
-            strategy: RestartStrategy::Immediate,
+            strategy: NetworkRestartStrategy::Immediate,
             delay: Duration::from_secs(0),
             max_retries: 5,
             retry_window: Duration::from_secs(60),
@@ -503,7 +503,7 @@ impl RestartPolicy {
 
     pub fn delayed(delay: Duration) -> Self {
         Self {
-            strategy: RestartStrategy::Delayed,
+            strategy: NetworkRestartStrategy::Delayed,
             delay,
             max_retries: 3,
             retry_window: Duration::from_secs(300),
@@ -512,7 +512,7 @@ impl RestartPolicy {
 
     pub fn exponential_backoff() -> Self {
         Self {
-            strategy: RestartStrategy::Exponential,
+            strategy: NetworkRestartStrategy::Exponential,
             delay: Duration::from_secs(1),
             max_retries: 5,
             retry_window: Duration::from_secs(600),
@@ -521,7 +521,7 @@ impl RestartPolicy {
 
     pub fn never() -> Self {
         Self {
-            strategy: RestartStrategy::Never,
+            strategy: NetworkRestartStrategy::Never,
             delay: Duration::from_secs(0),
             max_retries: 0,
             retry_window: Duration::from_secs(0),
@@ -535,9 +535,9 @@ impl Default for RestartPolicy {
     }
 }
 
-/// Restart strategy enumeration
+/// Network-specific restart strategy enumeration
 #[derive(Debug, Clone)]
-pub enum RestartStrategy {
+pub enum NetworkRestartStrategy {
     Immediate,
     Delayed,
     Exponential,
@@ -612,19 +612,19 @@ mod tests {
     #[test]
     fn restart_policy_types() {
         let immediate = RestartPolicy::immediate();
-        assert!(matches!(immediate.strategy, RestartStrategy::Immediate));
+        assert!(matches!(immediate.strategy, NetworkRestartStrategy::Immediate));
         assert_eq!(immediate.delay, Duration::from_secs(0));
 
         let delayed = RestartPolicy::delayed(Duration::from_secs(10));
-        assert!(matches!(delayed.strategy, RestartStrategy::Delayed));
+        assert!(matches!(delayed.strategy, NetworkRestartStrategy::Delayed));
         assert_eq!(delayed.delay, Duration::from_secs(10));
 
         let exponential = RestartPolicy::exponential_backoff();
-        assert!(matches!(exponential.strategy, RestartStrategy::Exponential));
+        assert!(matches!(exponential.strategy, NetworkRestartStrategy::Exponential));
         assert_eq!(exponential.delay, Duration::from_secs(1));
 
         let never = RestartPolicy::never();
-        assert!(matches!(never.strategy, RestartStrategy::Never));
+        assert!(matches!(never.strategy, NetworkRestartStrategy::Never));
         assert_eq!(never.max_retries, 0);
     }
 

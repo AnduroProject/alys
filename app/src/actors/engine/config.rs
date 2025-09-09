@@ -6,6 +6,7 @@
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use crate::types::*;
+use crate::types::errors::EngineError;
 
 /// Configuration for the EngineActor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,16 +228,16 @@ impl Default for CircuitBreakerConfig {
 
 impl EngineConfig {
     /// Load configuration from environment variables with fallback to defaults
-    pub fn from_env() -> Result<Self, crate::EngineError> {
+    pub fn from_env() -> Result<Self, EngineError> {
         let mut config = Self::default();
         
         // Load JWT secret from environment
         if let Ok(jwt_hex) = std::env::var("ENGINE_JWT_SECRET") {
             let jwt_bytes = hex::decode(jwt_hex)
-                .map_err(|e| crate::EngineError::ConfigError(format!("Invalid JWT secret hex: {}", e)))?;
+                .map_err(|e| EngineError::ConfigError(format!("Invalid JWT secret hex: {}", e)))?;
             
             if jwt_bytes.len() != 32 {
-                return Err(crate::EngineError::ConfigError(
+                return Err(EngineError::ConfigError(
                     "JWT secret must be 32 bytes".to_string()
                 ));
             }
@@ -274,43 +275,43 @@ impl EngineConfig {
     }
     
     /// Validate configuration parameters
-    pub fn validate(&self) -> Result<(), crate::EngineError> {
+    pub fn validate(&self) -> Result<(), EngineError> {
         // Validate JWT secret is not all zeros
         if self.jwt_secret == [0u8; 32] {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "JWT secret must be properly configured".to_string()
             ));
         }
         
         // Validate URLs
         if self.engine_url.is_empty() {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "Engine URL cannot be empty".to_string()
             ));
         }
         
         // Validate timeouts are reasonable
         if self.engine_timeout < Duration::from_millis(100) {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "Engine timeout too short (minimum 100ms)".to_string()
             ));
         }
         
         if self.payload_build_timeout > Duration::from_secs(5) {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "Payload build timeout too long (maximum 5s)".to_string()
             ));
         }
         
         // Validate performance parameters
         if self.performance.connection_pool_size == 0 {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "Connection pool size must be at least 1".to_string()
             ));
         }
         
         if self.max_concurrent_payloads == 0 {
-            return Err(crate::EngineError::ConfigError(
+            return Err(EngineError::ConfigError(
                 "Max concurrent payloads must be at least 1".to_string()
             ));
         }

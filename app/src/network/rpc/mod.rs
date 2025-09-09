@@ -8,7 +8,7 @@ use crate::EthSpec;
 use futures::future::FutureExt;
 use handler::{HandlerEvent, RPCHandler};
 use libp2p::swarm::{
-    handler::ConnectionHandler, ConnectionId, NetworkBehaviour, NotifyHandler, PollParameters,
+    handler::ConnectionHandler, ConnectionId, NetworkBehaviour, NotifyHandler,
     ToSwarm,
 };
 use libp2p::swarm::{FromSwarm, SubstreamProtocol, THandlerInEvent};

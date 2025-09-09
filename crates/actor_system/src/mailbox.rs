@@ -22,6 +22,27 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+/// Strategy for handling mailbox overflow
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverflowStrategy {
+    /// Drop the oldest message
+    DropOldest,
+    /// Drop the newest message
+    DropNewest,
+    /// Drop messages based on priority (lowest priority first)
+    DropByPriority,
+    /// Block until space is available
+    Block,
+    /// Fail immediately
+    Fail,
+}
+
+impl Default for OverflowStrategy {
+    fn default() -> Self {
+        OverflowStrategy::Block
+    }
+}
+
 /// Mailbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MailboxConfig {

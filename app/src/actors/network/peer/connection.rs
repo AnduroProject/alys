@@ -5,10 +5,11 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
-use libp2p::{PeerId, Multiaddr, ConnectedPoint};
+use libp2p::{PeerId, Multiaddr};
+use libp2p::swarm::{ConnectionId, ConnectedPoint};
 use tokio::sync::mpsc;
 
-use actor_system::ActorResult;
+use actor_system::error::ActorResult;
 use crate::actors::network::peer::config::PeerConfig;
 
 /// Connection manager for peer connections

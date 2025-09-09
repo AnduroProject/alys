@@ -3,13 +3,13 @@
 //! Messages for Bitcoin deposit processing and validation
 
 use actix::prelude::*;
-use bitcoin::{Transaction, Txid};
+use bitcoin::{Transaction, Txid, TxOut};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use crate::types::*;
 
-// Forward declaration for circular dependency handling
-pub struct PegInActor;
+// Import the actual actor instead of forward declaration
+pub use super::super::actors::pegin::actor::{PegInActor, PegInActorStatus};
 
 /// Peg-in workflow messages
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
@@ -64,6 +64,15 @@ pub enum PegInMessage {
         pegin_id: String,
         reason: String,
     },
+    
+    /// Initialize the peg-in actor
+    Initialize,
+    
+    /// Get actor status
+    GetStatus,
+    
+    /// Shutdown the actor
+    Shutdown,
 }
 
 /// Peg-in response types
@@ -78,6 +87,9 @@ pub enum PegInResponse {
     PendingDeposits(Vec<PendingDeposit>),
     DepositRetried { pegin_id: String },
     DepositCancelled { pegin_id: String },
+    Initialized,
+    StatusReported(PegInActorStatus),
+    Shutdown,
 }
 
 /// Deposit transaction details

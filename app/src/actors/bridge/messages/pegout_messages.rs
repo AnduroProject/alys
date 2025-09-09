@@ -3,13 +3,22 @@
 //! Messages for Bitcoin withdrawal processing and signature coordination
 
 use actix::prelude::*;
-use bitcoin::{Transaction, Txid, Address as BtcAddress};
+use bitcoin::{Transaction, Txid, Address as BtcAddress, Witness};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use crate::types::*;
 
-// Forward declaration for circular dependency handling  
-pub struct PegOutActor;
+// Import the actual actor instead of forward declaration
+pub use super::super::actors::pegout::actor::{PegOutActor, PegOutActorStatus};
+
+/// UTXO selected for spending in peg-out transaction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectedUtxo {
+    pub txid: Txid,
+    pub vout: u32,
+    pub value: u64, // satoshis
+    pub script_pubkey: bitcoin::Script,
+}
 
 /// Peg-out workflow messages
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
@@ -78,6 +87,46 @@ pub enum PegOutMessage {
         txid: Txid,
         confirmations: u32,
     },
+    
+    /// Process withdrawal request
+    ProcessWithdrawal {
+        pegout_id: String,
+        amount: u64,
+        destination: BtcAddress,
+    },
+    
+    /// Select UTXOs for transaction
+    SelectUtxos {
+        pegout_id: String,
+        required_amount: u64,
+    },
+    
+    /// Build transaction
+    BuildTransaction {
+        pegout_id: String,
+        utxos: Vec<SelectedUtxo>,
+    },
+    
+    /// Collect signatures
+    CollectSignatures {
+        pegout_id: String,
+        unsigned_tx: Transaction,
+    },
+    
+    /// Monitor confirmations
+    MonitorConfirmations {
+        pegout_id: String,
+        txid: Txid,
+    },
+    
+    /// Initialize the peg-out actor
+    Initialize,
+    
+    /// Get actor status
+    GetStatus,
+    
+    /// Shutdown the actor
+    Shutdown,
 }
 
 /// Peg-out response types
@@ -94,6 +143,14 @@ pub enum PegOutResponse {
     PegOutRetried { pegout_id: String },
     PegOutCancelled { pegout_id: String },
     ConfirmationsUpdated { pegout_id: String, confirmations: u32 },
+    WithdrawalProcessed { pegout_id: String },
+    UtxosSelected { pegout_id: String, utxos: Vec<SelectedUtxo> },
+    TransactionBuilt { pegout_id: String, unsigned_tx: Transaction },
+    SignaturesCollected { pegout_id: String, signatures: SignatureSet },
+    ConfirmationsMonitored { pegout_id: String, confirmations: u32 },
+    Initialized,
+    StatusReported(PegOutActorStatus),
+    Shutdown,
 }
 
 /// Burn event details

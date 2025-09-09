@@ -10,11 +10,14 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
-use super::config::{
-    AdvancedStreamConfig, EnvironmentType, CoreStreamConfig,
-    AdvancedConnectionConfig, AuthenticationConfig, MessagingConfig,
-    PerformanceConfig, FeatureConfig, MonitoringConfig, SecurityConfig,
-    GovernanceEndpoint,
+use crate::config::{
+    StreamConfig as AdvancedStreamConfig, Environment as EnvironmentType, 
+    StreamConfig as CoreStreamConfig,
+    TlsConfig as AdvancedConnectionConfig, AuthConfig as AuthenticationConfig, 
+    StreamConfig as MessagingConfig,
+    StreamConfig as PerformanceConfig, StreamConfig as FeatureConfig, 
+    MonitoringConfig, SecurityConfig,
+    GovernanceConfig as GovernanceEndpoint,
 };
 use super::super::super::shared::errors::ConfigError;
 

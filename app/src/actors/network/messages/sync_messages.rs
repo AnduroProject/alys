@@ -3,9 +3,11 @@
 //! Defines all messages for blockchain synchronization operations including
 //! block requests, sync status, and production eligibility checks.
 
-use actix::{Message, Result as ActorResult};
+use actix::Message;
+use std::result::Result;
 use serde::{Deserialize, Serialize};
 use ethereum_types::H256;
+use actor_system::error::ActorResult;
 use crate::actors::network::messages::{NetworkMessage, NetworkResult};
 
 /// Sync operation modes with different performance characteristics

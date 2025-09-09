@@ -18,9 +18,11 @@
 //! All messages support distributed tracing, correlation IDs, and actor supervision patterns.
 
 use crate::types::*;
+use crate::auxpow::AuxPow;
 use actix::prelude::*;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
+use lighthouse_facade::types::MainnetEthSpec;
 
 /// Message to import a block into the chain with comprehensive validation
 /// This is the primary message for processing incoming blocks from peers or local production
@@ -608,7 +610,7 @@ pub struct QueryChainState {
 }
 
 /// Types of chain state information
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StateInfoType {
     /// Basic block header information
     Header,

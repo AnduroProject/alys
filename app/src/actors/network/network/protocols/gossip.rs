@@ -5,8 +5,8 @@
 
 use libp2p::{
     gossipsub::{
-        self, Gossipsub, GossipsubEvent, GossipsubConfigBuilder, MessageAuthenticity,
-        ValidationMode, MessageId, TopicHash, Topic, GossipsubMessage,
+        self, Behaviour as Gossipsub, Event as GossipsubEvent, ConfigBuilder as GossipsubConfigBuilder, MessageAuthenticity,
+        ValidationMode, MessageId, TopicHash, Topic, Message as GossipsubMessage,
     },
     identity::Keypair,
     PeerId,

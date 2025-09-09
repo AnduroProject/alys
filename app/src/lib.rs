@@ -4,17 +4,12 @@ mod app;
 mod aura;
 mod auxpow;
 mod auxpow_miner;
-mod block;
 mod block_candidate;
 mod block_hash_cache;
-mod chain;
-mod engine;
-mod engine_v2; // Enhanced engine with Lighthouse compatibility
 mod error;
 mod metrics;
 mod network;
 pub mod rpc; // Unified RPC server
-mod rpc_v2; // V2 Actor-based RPC server (to be deprecated)
 mod signatures;
 mod bridge_compat; // Federation compatibility layer
 mod spec;

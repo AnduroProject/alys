@@ -8,6 +8,7 @@ use tracing::*;
 use actix::prelude::*;
 
 use crate::types::*;
+use crate::integration::ethereum::ExecutionResult;
 use super::{
     actor::EngineActor,
     messages::*,

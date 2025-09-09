@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use ethereum_types::{H256 as TxHash, Address, U256, H256};
+use ethers_core::types::{TransactionReceipt, Log, Transaction as ExecutionTransaction, Block as ExecutionBlock};
 
 /// Execution client abstraction for Geth/Reth compatibility
 #[async_trait]
@@ -264,7 +266,7 @@ pub struct FeeHistoryEntry {
 }
 
 /// Performance metrics
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct ExecutionClientMetrics {
     pub total_requests: u64,
     pub successful_requests: u64,
@@ -339,7 +341,7 @@ pub struct CallRequest {
 }
 
 /// Block number specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum BlockNumber {
     Number(u64),
@@ -376,6 +378,7 @@ impl ExecutionClient {
             .connect_timeout(Duration::from_secs(config.connection_timeout_secs))
             .build()
             .map_err(|e| EngineError::ConnectionFailed {
+                url: config.endpoint_url.clone(),
                 reason: format!("Failed to create HTTP client: {}", e),
             })?;
         
@@ -387,12 +390,12 @@ impl ExecutionClient {
         }));
         
         let state_cache = Arc::new(RwLock::new(StateCache {
-            blocks: lru::LruCache::new(config.cache_size),
-            transactions: lru::LruCache::new(config.cache_size),
-            receipts: lru::LruCache::new(config.cache_size),
-            accounts: lru::LruCache::new(config.cache_size * 2),
-            storage: lru::LruCache::new(config.cache_size * 4),
-            code: lru::LruCache::new(config.cache_size),
+            blocks: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size).unwrap()),
+            transactions: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size).unwrap()),
+            receipts: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size).unwrap()),
+            accounts: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size * 2).unwrap()),
+            storage: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size * 4).unwrap()),
+            code: lru::LruCache::new(std::num::NonZeroUsize::new(config.cache_size).unwrap()),
             cache_stats: CacheStats::default(),
         }));
         
@@ -486,11 +489,13 @@ impl ExecutionClient {
             .send()
             .await
             .map_err(|e| EngineError::RequestFailed {
+                request: "HTTP request".to_string(),
                 reason: format!("HTTP request failed: {}", e),
             })?;
         
         let rpc_response: serde_json::Value = response.json().await
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse response".to_string(),
                 reason: format!("Failed to parse response: {}", e),
             })?;
         
@@ -499,19 +504,23 @@ impl ExecutionClient {
                 let mut metrics = self.metrics.write().await;
                 metrics.failed_requests += 1;
                 return Err(EngineError::RpcError {
-                    code: error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1),
-                    message: error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error").to_string(),
+                    method: "JSON-RPC call".to_string(),
+                    reason: format!("RPC error {}: {}", 
+                        error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1),
+                        error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error")),
                 });
             }
         }
         
         let result = rpc_response.get("result")
             .ok_or_else(|| EngineError::RequestFailed {
+                request: "RPC result".to_string(),
                 reason: "No result in RPC response".to_string(),
             })?;
         
         let parsed_result = serde_json::from_value(result.clone())
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse result".to_string(),
                 reason: format!("Failed to deserialize result: {}", e),
             })?;
         

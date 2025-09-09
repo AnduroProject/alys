@@ -1,16 +1,17 @@
-use crate::block::{AuxPowHeader, SignedConsensusBlock};
+use crate::types::blockchain::{AuxPowHeader, SignedConsensusBlock, ConsensusBlock};
 use crate::error::AuxPowMiningError::HashRetrievalError;
 use crate::error::{BlockErrorBlockTypes, Error};
 use crate::metrics::{
     AUXPOW_CREATE_BLOCK_CALLS, AUXPOW_HASHES_PROCESSED, AUXPOW_SUBMIT_BLOCK_CALLS,
 };
-use crate::{auxpow::AuxPow, chain::Chain};
+use crate::{auxpow::AuxPow, actors::chain::ChainActor};
+use crate::actors::chain::messages::*;
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
-use lighthouse_facade::store::ItemStore;
 use lighthouse_facade::{MainnetEthSpec, Uint256};
+use actix::Addr;
 use rust_decimal::prelude::*; // Includes the `dec` macro when feature specified
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
@@ -323,6 +324,115 @@ pub fn get_next_work_required<BI: BlockIndex>(
     Ok(next_work)
 }
 
+/// Adapter wrapper to make ChainActor implement ChainManager trait
+pub struct ChainActorManager {
+    chain_actor: Addr<ChainActor>,
+}
+
+impl ChainActorManager {
+    pub fn new(chain_actor: Addr<ChainActor>) -> Self {
+        Self { chain_actor }
+    }
+}
+
+#[async_trait::async_trait]
+impl ChainManager<ConsensusBlock<MainnetEthSpec>> for ChainActorManager {
+    async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>> {
+        let result = self.chain_actor.send(GetAggregateHashes).await
+            .map_err(|e| eyre!("Actor communication error: {}", e))?
+            .map_err(|e| eyre!("Chain error: {:?}", e))?;
+        Ok(result)
+    }
+
+    fn get_last_finalized_block(&self) -> ConsensusBlock<MainnetEthSpec> {
+        // Note: This method is synchronous but we need async actor communication
+        // For now, we'll need to handle this differently or make the trait async
+        // Let's use a blocking approach for compatibility
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            self.chain_actor.send(GetLastFinalizedBlock).await
+                .map_err(|e| eyre!("Actor communication error: {}", e))
+                .and_then(|result| result.map_err(|e| eyre!("Chain error: {:?}", e)))
+                .unwrap()
+        })
+    }
+
+    fn get_block_by_hash(&self, hash: &BlockHash) -> Result<ConsensusBlock<MainnetEthSpec>> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let result = self.chain_actor.send(GetBlockByHashForMining { hash: *hash }).await
+                .map_err(|e| eyre!("Actor communication error: {}", e))?
+                .map_err(|e| eyre!("Chain error: {:?}", e))?;
+            
+            result.ok_or_else(|| eyre!("Block not found"))
+        })
+    }
+
+    async fn get_queued_auxpow(&self) -> Option<AuxPowHeader> {
+        self.chain_actor.send(GetQueuedAuxpow).await.ok().flatten()
+    }
+
+    fn get_block_at_height(&self, height: u64) -> Result<ConsensusBlock<MainnetEthSpec>> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let result = self.chain_actor.send(GetBlockByHeight { height }).await
+                .map_err(|e| eyre!("Actor communication error: {}", e))?
+                .map_err(|e| eyre!("Chain error: {:?}", e))?;
+            
+            result.map(|block| block.message).ok_or_else(|| eyre!("Block not found"))
+        })
+    }
+
+    async fn push_auxpow(
+        &self,
+        start_hash: BlockHash,
+        end_hash: BlockHash,
+        bits: u32,
+        chain_id: u32,
+        height: u64,
+        auxpow: AuxPow,
+        address: EvmAddress,
+    ) -> bool {
+        let result = self.chain_actor.send(PushAuxPow {
+            start_hash,
+            end_hash,
+            bits,
+            chain_id,
+            height,
+            auxpow,
+            address,
+        }).await;
+        
+        matches!(result, Ok(Ok(true)))
+    }
+
+    async fn is_synced(&self) -> bool {
+        self.chain_actor.send(IsSynced).await
+            .unwrap_or(Ok(false))
+            .unwrap_or(false)
+    }
+
+    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let status = self.chain_actor.send(GetChainStatus::basic()).await
+                .map_err(|e| Error::GenericError(eyre!("Actor communication error: {}", e)))?
+                .map_err(|e| Error::GenericError(eyre!("Chain error: {:?}", e)))?;
+            
+            if let Some(head_ref) = status.head {
+                // We need to get the actual block data
+                self.chain_actor.send(GetBlockByHash { hash: head_ref.hash }).await
+                    .map_err(|e| Error::GenericError(eyre!("Actor communication error: {}", e)))?
+                    .map_err(|e| Error::GenericError(eyre!("Chain error: {:?}", e)))?
+                    .ok_or_else(|| Error::GenericError(eyre!("Head block not found")))
+            } else {
+                Err(Error::GenericError(eyre!("No head block")))
+            }
+        })
+    }
+}
+
+
 struct AuxInfo {
     last_hash: BlockHash,
     start_hash: BlockHash,
@@ -503,9 +613,11 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     }
 }
 
-pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB>>) {
+pub fn spawn_background_miner(chain_actor: Addr<ChainActor>) {
     let task = async move {
-        let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
+        let chain_manager = Arc::new(ChainActorManager::new(chain_actor));
+        let retarget_params = BitcoinConsensusParams::default(); // TODO: Get from config
+        let mut miner = AuxPowMiner::new(chain_manager.clone(), retarget_params);
         loop {
             trace!("Calling create_aux_block");
             // TODO: set miner address

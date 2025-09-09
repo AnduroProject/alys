@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 use actor_system::{
-    SupervisionPolicy, SupervisionStrategy, RestartStrategy,
-    BlockchainSupervisionPolicy, BlockchainRestartStrategy,
+    supervisor::{SupervisionPolicy, BlockchainSupervisionPolicy}, SupervisorStrategy, RestartStrategy,
+    SupervisionDecision, SupervisionConfig,
 };
 use super::config::ChainActorConfig;
 

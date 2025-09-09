@@ -9,7 +9,7 @@ use std::net::IpAddr;
 use libp2p::{PeerId, Multiaddr};
 use serde::{Deserialize, Serialize};
 
-use actor_system::ActorResult;
+use actor_system::error::ActorResult;
 use crate::actors::network::peer::config::PeerConfig;
 
 /// Persistent peer information store

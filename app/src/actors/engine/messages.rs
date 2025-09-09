@@ -15,7 +15,7 @@ use super::state::{ExecutionState, PayloadStatus, TraceContext};
 pub type PayloadId = String;
 
 /// Type alias for message result handling
-pub type MessageResult<T> = Result<T, crate::EngineError>;
+pub type MessageResult<T> = Result<T, crate::types::errors::EngineError>;
 
 // ============================================================================
 // Engine API Messages (Core Execution Layer Operations)

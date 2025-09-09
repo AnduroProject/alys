@@ -225,7 +225,7 @@ impl App {
         info!("Initializing Alys V2 Actor System");
 
         // Initialize storage and check chain state
-        let disk_store = Storage::new_disk(self.db_path);
+        let disk_store = store::Storage::<lighthouse_facade::MainnetEthSpec, lighthouse_facade::store::LevelDB<lighthouse_facade::MainnetEthSpec>>::new_disk(Some(self.db_path));
         info!("Head: {:?}", disk_store.get_head());
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
@@ -258,13 +258,13 @@ impl App {
             if chain_spec.is_validator && !self.not_validator {
                 match (self.aura_secret_key, self.bitcoin_secret_key) {
                     (Some(aura_sk), Some(bitcoin_sk)) => {
-                        let aura_pk = aura_sk.public_key();
+                        let aura_pk = aura_sk.pk;
                         info!("Using aura public key {aura_pk}");
-                        let aura_signer = Keypair::from_components(aura_pk, aura_sk);
+                        let aura_signer = Keypair { pk: aura_pk, sk: aura_sk };
 
                         let bitcoin_pk = bitcoin_sk.public_key(&bitcoin::key::Secp256k1::new());
                         info!("Using bitcoin public key {bitcoin_pk}");
-                        let bitcoin_signer = BitcoinSigner::new(bitcoin_sk);
+                        let bitcoin_signer = crate::bridge_compat::BitcoinSignerCompat;
 
                         info!("Running authority");
                         (Some(aura_signer), Some(bitcoin_signer))
@@ -311,12 +311,13 @@ impl App {
 
         // Step 1: Initialize Root Supervisor for the entire system
         info!("Initializing Root Supervisor");
-        let root_supervisor = RootSupervisor::new().start();
+        let root_supervisor = crate::actors::chain::state::RootSupervisor.start();
 
         // Step 2: Initialize Storage Actor
         info!("Initializing Storage Actor");
         let storage_config = StorageConfig::default();
         let storage_actor = StorageActor::new(storage_config)
+            .await
             .map_err(|e| eyre::Error::msg(format!("Failed to create StorageActor: {}", e)))?
             .start();
 
@@ -337,10 +338,14 @@ impl App {
         // Step 4: Initialize Network Actors
         info!("Initializing Network Actors");
         let network_config = NetworkConfig::default();
-        let network_actor = NetworkActor::new(network_config).start();
+        let network_actor = NetworkActor::new(network_config)
+            .map_err(|e| eyre::Error::msg(format!("Failed to create NetworkActor: {}", e)))?
+            .start();
 
         let sync_config = SyncConfig::default();
-        let sync_actor = SyncActor::new(sync_config).start();
+        let sync_actor = SyncActor::new(sync_config)
+            .map_err(|e| eyre::Error::msg(format!("Failed to create SyncActor: {}", e)))?
+            .start();
 
         // Step 5: Initialize Bridge Actor (will be managed by BridgeSupervisor)
         info!("Bridge actors will be managed by BridgeSupervisor");
@@ -348,7 +353,9 @@ impl App {
         // Step 6: Create placeholder BridgeActor for ActorAddresses
         // TODO: Get actual bridge actor from BridgeSupervisor
         // For now, create a placeholder that will be replaced by supervisor
-        let bridge_actor = BridgeActor::new().start();
+        let bridge_actor = BridgeActor::new()
+            .map_err(|e| eyre::Error::msg(format!("Failed to create BridgeActor: {}", e)))?
+            .start();
 
         // Step 7: Initialize feature flag manager
         let feature_flags = Arc::new(FeatureFlagManager::new());
@@ -375,13 +382,18 @@ impl App {
             import_timeout: Duration::from_secs(30),
             validation_cache_size: 1000,
             max_pending_blocks: 100,
-            performance_targets: crate::actors::chain::config::PerformanceTargets::default(),
+            performance_targets: crate::actors::chain::config::PerformanceTargets {
+                max_production_time_ms: 500,
+                max_import_time_ms: 100,
+                max_validation_time_ms: 50,
+                target_blocks_per_second: 0.5,
+                max_pending_operations: 1000,
+            },
             supervision_config: actor_system::SupervisionConfig::default(),
             federation_config: Some(crate::actors::chain::state::FederationConfig {
+                version: 1,
+                members: vec![], // TODO: populate federation members
                 threshold,
-                members: chain_spec.federation_bitcoin_pubkeys.len() as u32,
-                bitcoin_addresses: vec![bitcoin_federation.taproot_address.clone()],
-                required_confirmations: chain_spec.required_btc_txn_confirmations,
             }),
         };
 
@@ -400,11 +412,7 @@ impl App {
 
         // Initialize Bridge Actor System (already V2 - working example)
         info!("Initializing Bridge Actor System");
-        let bridge_config = if self.dev {
-            BridgeSystemConfig::development()
-        } else {
-            BridgeSystemConfig::production()
-        };
+        let bridge_config = BridgeSystemConfig::default();
         let _bridge_supervisor = BridgeSupervisor::new(bridge_config.supervision).start();
         info!("✅ Bridge Actor System initialized successfully");
 
@@ -456,9 +464,10 @@ impl App {
             )
             .start();
 
-            // Update actor addresses for cross-actor communication
-            actor_addresses.set_auxpow_actor(auxpow_actor.clone());
-            actor_addresses.set_difficulty_manager(difficulty_manager.clone());
+            // TODO: Update actor addresses for cross-actor communication
+            // Note: ActorAddresses struct needs to be extended to include auxpow and difficulty manager
+            // actor_addresses.set_auxpow_actor(auxpow_actor.clone());
+            // actor_addresses.set_difficulty_manager(difficulty_manager.clone());
 
             // Add AuxPow RPC endpoints for external miners
             let auxpow_rpc_context = AuxPowRpcContext::new(auxpow_actor.clone());

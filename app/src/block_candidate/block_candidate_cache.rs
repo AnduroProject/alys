@@ -1,4 +1,4 @@
-use crate::block::SignedConsensusBlock;
+use crate::types::blockchain::SignedConsensusBlock;
 use crate::block_candidate::candidate_state::CandidateState;
 use crate::error::Error;
 use crate::network::ApproveBlock;
@@ -188,7 +188,7 @@ impl BlockCandidateCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::ConsensusBlock;
+    use crate::types::blockchain::ConsensusBlock;
     use crate::block_candidate::candidate_state::CandidateState;
     use crate::signatures::AggregateApproval;
     use lighthouse_facade;

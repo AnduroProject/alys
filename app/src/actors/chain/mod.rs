@@ -40,10 +40,10 @@ pub use supervision::ChainSupervisionStrategy;
 pub use migration::ChainMigrationAdapter;
 pub use validation::ChainValidator;
 
-// Re-export handler types
-pub use handlers::{
-    BlockHandler,
-    ConsensusHandler, 
-    AuxPowHandler,
-    PegHandler,
-};
+// Re-export handler types - commented out as these types don't exist
+// pub use handlers::{
+//     BlockHandler,
+//     ConsensusHandler, 
+//     AuxPowHandler,
+//     PegHandler,
+// };

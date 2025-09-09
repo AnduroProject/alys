@@ -14,7 +14,7 @@ use actix::prelude::*;
 // Import from our organized modules
 use super::{
     config::ChainActorConfig,
-    state::*,
+    state::{self, ChainState as LocalChainState, ActorAddresses, ValidationCache, ActorHealthMonitor, BlockProductionState, BroadcastTracker, PendingBlockInfo, BlockCandidate, FederationState, AuxPowState, BlockSubscriber},
     messages::*,
     metrics::ChainActorMetrics,
 };
@@ -43,7 +43,7 @@ pub struct ChainActor {
     pub config: ChainActorConfig,
     
     /// Current chain state (owned by actor, no sharing)
-    pub chain_state: ChainState,
+    pub chain_state: LocalChainState,
     
     /// Pending blocks awaiting processing or validation
     pub pending_blocks: HashMap<Hash256, PendingBlockInfo>,
@@ -76,7 +76,7 @@ pub struct ChainActor {
     pub health_monitor: ActorHealthMonitor,
     
     /// Distributed tracing context
-    pub trace_context: TraceContext,
+    pub trace_context: crate::types::TraceContext,
     
     /// Block production state
     pub production_state: BlockProductionState,
@@ -148,7 +148,7 @@ impl ChainActor {
         let genesis = BlockRef::genesis(Hash256::zero());
         
         // Initialize chain state
-        let chain_state = ChainState::new(genesis.clone());
+        let chain_state = LocalChainState::new(genesis.clone());
         
         // Initialize federation state
         let federation_config = config.federation_config.clone();
@@ -179,7 +179,7 @@ impl ChainActor {
             actor_addresses,
             validation_cache,
             health_monitor,
-            trace_context: TraceContext::default(),
+            trace_context: crate::types::TraceContext::default(),
             production_state: BlockProductionState::default(),
             broadcast_tracker: BroadcastTracker::default(),
         })

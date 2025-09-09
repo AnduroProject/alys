@@ -50,9 +50,9 @@ pub enum BridgeError {
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
     
-    /// Validation errors
+    /// Simple validation errors
     #[error("Validation error: {0}")]
-    ValidationError(String),
+    SimpleValidationError(String),
 
     /// Serialization/deserialization errors
     #[error("Serialization error: {0}")]

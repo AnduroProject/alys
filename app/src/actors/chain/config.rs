@@ -250,5 +250,4 @@ pub enum ConfigError {
     InvalidPerformanceTarget(String),
 }
 
-// Temporary placeholder for SecretKey until we import the proper type
-use crate::types::SecretKey;
+use secp256k1::SecretKey;

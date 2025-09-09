@@ -15,6 +15,8 @@
 //! - Block production halts if no PoW is received for 10,000 blocks
 //! - Governance events from Anduro stream must be processed continuously
 
+use std::time::Duration;
+
 pub mod actor;
 pub mod messages;
 pub mod metrics;

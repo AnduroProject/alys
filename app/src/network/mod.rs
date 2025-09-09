@@ -3,7 +3,7 @@ use error::Error;
 
 pub mod rpc;
 
-use crate::block::{AuxPowHeader, SignedConsensusBlock};
+use crate::types::blockchain::{AuxPowHeader, SignedConsensusBlock};
 use crate::network::rpc::RPC;
 use crate::signatures::IndividualApproval;
 use bitcoin::Txid;
@@ -32,8 +32,8 @@ use self::rpc::{
     HandlerErr, NetworkParams, RPCCodedResponse, RPCMessage, RPCReceived, RPCResponse, SubstreamId,
 };
 
-pub type EnrAttestationBitfield<T> = BitVector<<T as EthSpec>::SubnetBitfieldLength>;
-pub type EnrSyncCommitteeBitfield<T> = BitVector<<T as EthSpec>::SyncCommitteeSubnetCount>;
+pub type EnrAttestationBitfield = BitVector<64>; // MainnetEthSpec SubnetBitfieldLength
+pub type EnrSyncCommitteeBitfield = BitVector<4>; // MainnetEthSpec SyncCommitteeSubnetCount
 
 const RECONNECT_INTERVAL_SECS: u64 = 5;
 const RECONNECT_MAX_ATTEMPTS: u32 = 12;

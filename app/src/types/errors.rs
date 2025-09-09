@@ -41,6 +41,12 @@ pub enum ChainError {
     NotValidator,
     InvalidSignature,
     ConsensusFailure { reason: String },
+    NotOurSlot { slot: u64 },
+    ProductionPaused { reason: String },
+    InvalidFederation { reason: String },
+    Unauthorized { operation: String },
+    InvalidFinalization { reason: String },
+    InternalError { component: String, reason: String },
     
     // Validation errors
     ValidationFailed { reason: String },
@@ -106,6 +112,9 @@ pub enum SyncError {
     SyncStalled { reason: String },
     SyncAborted { reason: String },
     TargetUnreachable { target_block: u64, reason: String },
+    
+    // Validation errors
+    Validation { item: String, reason: String },
 }
 
 /// Storage-related errors
@@ -115,6 +124,7 @@ pub enum StorageError {
     DatabaseConnectionFailed { path: String, reason: String },
     DatabaseCorrupted { database: String },
     DatabaseLocked { database: String },
+    DatabaseError { database: String, operation: String, reason: String },
     
     // Operation errors
     ReadFailed { key: String, reason: String },
@@ -132,6 +142,10 @@ pub enum StorageError {
     // Data integrity errors
     ChecksumMismatch { expected: String, actual: String },
     DataCorruption { item: String },
+    
+    // Database operation errors
+    Database { operation: String, reason: String },
+    SerializationError { data_type: String, reason: String },
     
     // Index errors
     IndexCorrupted { index: String },
@@ -190,6 +204,7 @@ pub enum BridgeError {
     AmountTooHigh,
     InvalidBitcoinAddress,
     NoRelevantOutputs,
+    InsufficientFunds { required: u64, available: u64 },
     
     // UTXO errors
     InsufficientUtxos { required: u64, available: u64 },
@@ -203,6 +218,9 @@ pub enum BridgeError {
     // Fee errors
     FeeEstimationFailed { reason: String },
     FeeTooHigh { fee: u64, limit: u64 },
+    
+    // Communication errors
+    ActorCommunication { actor: String, reason: String },
 }
 
 /// Engine (execution layer) errors
@@ -226,6 +244,7 @@ pub enum EngineError {
     // RPC errors
     RpcError { method: String, reason: String },
     RpcTimeout { method: String, timeout: std::time::Duration },
+    RequestFailed { request: String, reason: String },
 }
 
 /// General error wrapper that can hold any specific error type
@@ -357,6 +376,92 @@ impl fmt::Display for BridgeError {
     }
 }
 
+impl fmt::Display for SyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SyncError::Configuration { message } => {
+                write!(f, "Sync configuration error: {}", message)
+            }
+            SyncError::Network { peer_id, reason } => {
+                write!(f, "Sync network error from peer {}: {}", peer_id, reason)
+            }
+            SyncError::Consensus { reason } => {
+                write!(f, "Sync consensus error: {}", reason)
+            }
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StorageError::DatabaseConnectionFailed { path, reason } => {
+                write!(f, "Database connection failed for {}: {}", path, reason)
+            }
+            StorageError::ReadFailed { key, reason } => {
+                write!(f, "Read failed for key {}: {}", key, reason)
+            }
+            StorageError::WriteFailed { key, reason } => {
+                write!(f, "Write failed for key {}: {}", key, reason)
+            }
+            StorageError::DatabaseError { database, operation, reason } => {
+                write!(f, "Database error in {} during {}: {}", database, operation, reason)
+            }
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl fmt::Display for StreamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StreamError::ConnectionError { endpoint, reason } => {
+                write!(f, "Stream connection error to {}: {}", endpoint, reason)
+            }
+            StreamError::ProtocolError { message } => {
+                write!(f, "Stream protocol error: {}", message)
+            }
+            StreamError::AuthenticationFailed { endpoint } => {
+                write!(f, "Stream authentication failed for endpoint: {}", endpoint)
+            }
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EngineError::ExecutionFailed { reason } => {
+                write!(f, "Engine execution failed: {}", reason)
+            }
+            EngineError::InvalidPayload { reason } => {
+                write!(f, "Invalid engine payload: {}", reason)
+            }
+            EngineError::ConnectionError { endpoint, reason } => {
+                write!(f, "Engine connection error to {}: {}", endpoint, reason)
+            }
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl fmt::Display for AlysError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AlysError::System(err) => write!(f, "System error: {}", err),
+            AlysError::Chain(err) => write!(f, "Chain error: {}", err),
+            AlysError::Network(err) => write!(f, "Network error: {}", err),
+            AlysError::Sync(err) => write!(f, "Sync error: {}", err),
+            AlysError::Storage(err) => write!(f, "Storage error: {}", err),
+            AlysError::Stream(err) => write!(f, "Stream error: {}", err),
+            AlysError::Bridge(err) => write!(f, "Bridge error: {}", err),
+            AlysError::Engine(err) => write!(f, "Engine error: {}", err),
+        }
+    }
+}
+
 // Implement std::error::Error trait for all error types
 impl std::error::Error for SystemError {}
 impl std::error::Error for ChainError {}
@@ -414,6 +519,34 @@ impl From<BridgeError> for AlysError {
 impl From<EngineError> for AlysError {
     fn from(err: EngineError) -> Self {
         AlysError::Engine(err)
+    }
+}
+
+// Additional conversion implementations for cross-module compatibility
+impl From<crate::actors::network::sync::errors::SyncError> for SyncError {
+    fn from(err: crate::actors::network::sync::errors::SyncError) -> Self {
+        // Convert from the sync module's specific SyncError to the general one
+        match err {
+            crate::actors::network::sync::errors::SyncError::Configuration { message } => {
+                SyncError::SyncAborted { reason: format!("Configuration: {}", message) }
+            }
+            crate::actors::network::sync::errors::SyncError::Network { peer_id, reason } => {
+                SyncError::PeerMisbehavior { peer_id, reason }
+            }
+            crate::actors::network::sync::errors::SyncError::Consensus { reason } => {
+                SyncError::SyncStalled { reason }
+            }
+            _ => SyncError::SyncAborted { reason: format!("{:?}", err) }
+        }
+    }
+}
+
+impl From<ChainError> for crate::actors::bridge::shared::errors::MigrationError {
+    fn from(err: ChainError) -> Self {
+        // This is a placeholder conversion - adjust based on actual MigrationError definition
+        crate::actors::bridge::shared::errors::MigrationError::ChainError { 
+            reason: format!("{:?}", err) 
+        }
     }
 }
 

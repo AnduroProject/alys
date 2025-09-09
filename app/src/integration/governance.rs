@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, RwLock};
+use async_trait::async_trait;
 use tokio_stream::StreamExt;
 use tonic::{transport::Channel, Request, Response, Status, Streaming};
 use uuid::Uuid;
@@ -148,19 +149,19 @@ pub struct GovernanceGrpcClient {
     connections: std::sync::RwLock<HashMap<String, GovernanceConnectionHandle>>,
     message_sender: mpsc::Sender<GovernanceMessage>,
     message_receiver: std::sync::Mutex<Option<mpsc::Receiver<GovernanceMessage>>>,
-    tls_config: Option<ClientTlsConfig>,
+    tls_enabled: bool,
 }
 
 impl GovernanceGrpcClient {
     /// Create new governance gRPC client
-    pub fn new(tls_config: Option<ClientTlsConfig>) -> Self {
+    pub fn new(tls_enabled: bool) -> Self {
         let (tx, rx) = mpsc::channel(1000);
         
         Self {
             connections: std::sync::RwLock::new(HashMap::new()),
             message_sender: tx,
             message_receiver: std::sync::Mutex::new(Some(rx)),
-            tls_config,
+            tls_enabled,
         }
     }
     
@@ -401,25 +402,21 @@ pub struct GovernanceIntegrationFactory;
 
 impl GovernanceIntegrationFactory {
     /// Create governance integration with optional TLS
-    pub fn create(tls_config: Option<ClientTlsConfig>) -> Box<dyn GovernanceIntegration> {
+    pub fn create(tls_enabled: bool) -> Box<dyn GovernanceIntegration> {
         Box::new(GovernanceGrpcClient::new(tls_config))
     }
     
     /// Create governance integration from config
     pub fn from_config(config: &GovernanceConfig) -> Box<dyn GovernanceIntegration> {
-        let tls_config = config.tls_config.as_ref().map(|tls| {
-            // Convert TLS config to tonic ClientTlsConfig
-            // This would read certificates and configure TLS properly
-            ClientTlsConfig::new()
-        });
+        let tls_enabled = config.tls_config.is_some();
         
-        Self::create(tls_config)
+        Self::create(tls_enabled)
     }
 }
 
-/// Governance configuration
+/// Integration-specific governance configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GovernanceConfig {
+pub struct GovernanceIntegrationConfig {
     pub endpoints: Vec<String>,
     pub tls_config: Option<GovernanceTlsConfig>,
     pub connection_timeout: std::time::Duration,
@@ -439,7 +436,7 @@ pub struct GovernanceTlsConfig {
     pub verify_server: bool,
 }
 
-impl Default for GovernanceConfig {
+impl Default for GovernanceIntegrationConfig {
     fn default() -> Self {
         Self {
             endpoints: vec!["https://governance.anduro.io:443".to_string()],

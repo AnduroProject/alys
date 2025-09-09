@@ -1012,10 +1012,10 @@ pub struct BatchConfig {
     pub priority: ValidationPriority,
 }
 
-/// Validation result message
+/// Validation result message for actor communication
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 #[rtype(result = "()")]
-pub struct ValidationResult {
+pub struct ValidationResultMessage {
     /// Block hash that was validated
     pub block_hash: BlockHash,
     /// Whether validation passed
@@ -1035,7 +1035,7 @@ pub struct BatchResult {
     /// Batch ID
     pub batch_id: u64,
     /// Individual validation results
-    pub results: Vec<ValidationResult>,
+    pub results: Vec<ValidationResultMessage>,
     /// Batch processing metrics
     pub metrics: BatchMetrics,
     /// Source peer for the batch
@@ -1095,10 +1095,10 @@ impl Default for ValidationPriority {
     }
 }
 
-/// Checkpoint management messages
+/// Advanced checkpoint creation with metadata
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 #[rtype(result = "SyncResult<String>")]
-pub struct CreateCheckpoint {
+pub struct CreateAdvancedCheckpoint {
     /// Height to create checkpoint at (None = current height)
     pub height: Option<u64>,
     /// Checkpoint type
@@ -1113,7 +1113,7 @@ pub struct CreateCheckpoint {
 
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 #[rtype(result = "SyncResult<Option<RecoveryResult>>")]
-pub struct RecoverFromCheckpoint {
+pub struct RecoverFromAdvancedCheckpoint {
     /// Specific checkpoint ID to recover from (None = latest)
     pub checkpoint_id: Option<String>,
     /// Recovery strategy to use
@@ -1128,7 +1128,7 @@ pub struct RecoverFromCheckpoint {
 
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 #[rtype(result = "SyncResult<Vec<CheckpointInfo>>")]
-pub struct ListCheckpoints {
+pub struct ListAdvancedCheckpoints {
     /// Maximum number of checkpoints to return
     pub limit: Option<usize>,
     /// Include detailed checkpoint information

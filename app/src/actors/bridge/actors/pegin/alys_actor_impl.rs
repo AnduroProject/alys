@@ -21,12 +21,13 @@ use crate::actors::bridge::{
     actors::pegin::PegInActor,
 };
 
-use super::{state::PegInActorState, PegInError};
+use super::state::PegInActorState;
+use crate::actors::bridge::shared::errors::BridgeError;
 
 #[async_trait]
 impl AlysActor for PegInActor {
     type Config = PegInConfig;
-    type Error = PegInError;
+    type Error = BridgeError;
     type Message = PegInMessage;
     type State = PegInActorState;
 

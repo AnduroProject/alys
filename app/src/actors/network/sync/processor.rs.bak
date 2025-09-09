@@ -549,11 +549,11 @@ impl Actor for ValidationWorker {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
-        tracing::info!("ValidationWorker {} started", self.id);
+        log::info!("ValidationWorker {} started", self.id);
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        tracing::info!("ValidationWorker {} stopped", self.id);
+        log::info!("ValidationWorker {} stopped", self.id);
     }
 }
 
@@ -725,7 +725,7 @@ impl Handler<ValidateBlockMessage> for ValidationWorker {
             
             // Here we would send the result back to the processor
             // This would typically involve a callback or result channel
-            tracing::debug!("Worker {} completed validation: {:?}", worker_id, result.is_valid);
+            log::debug!("Worker {} completed validation: {:?}", worker_id, result.is_valid);
         }
         .into_actor(self)
         .boxed_local()
@@ -740,7 +740,7 @@ impl Handler<ShutdownWorker> for ValidationWorker {
     type Result = ();
 
     fn handle(&mut self, _msg: ShutdownWorker, ctx: &mut Self::Context) -> Self::Result {
-        tracing::info!("ValidationWorker {} shutting down", self.id);
+        log::info!("ValidationWorker {} shutting down", self.id);
         ctx.stop();
     }
 }

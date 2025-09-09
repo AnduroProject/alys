@@ -3,6 +3,7 @@
 use hyper::Body;
 use serde::{Deserialize, Serialize};
 use serde_json::{value::RawValue, Value};
+use crate::actors::auxpow::error::AuxPowError;
 
 /// JSON-RPC V1 request structure
 #[derive(Debug, Clone, Deserialize)]
@@ -105,6 +106,16 @@ impl RpcError {
             code: -32608,
             message: "Chain is syncing".to_string(),
             data: None,
+        }
+    }
+}
+
+impl From<AuxPowError> for RpcError {
+    fn from(err: AuxPowError) -> Self {
+        match err {
+            AuxPowError::ChainSyncing => RpcError::chain_syncing(),
+            AuxPowError::HashRetrievalError => RpcError::internal_error("Hash retrieval failed"),
+            _ => RpcError::internal_error(&err.to_string()),
         }
     }
 }

@@ -1,9 +1,6 @@
 //! Unified RPC error handling
 
-use crate::actors::{
-    chain::error::ChainError,
-    auxpow::error::AuxPowError,
-};
+use crate::types::errors::{ChainError, AlysError as AuxPowError};
 use super::RpcError;
 
 /// Convert ChainActor errors to RPC errors

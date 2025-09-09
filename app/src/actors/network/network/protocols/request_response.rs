@@ -5,8 +5,8 @@
 
 use libp2p::{
     request_response::{
-        self, RequestResponse, RequestResponseConfig, RequestResponseEvent, 
-        RequestResponseMessage, ResponseChannel, RequestId, OutboundRequestId,
+        self, Behaviour as RequestResponse, Config as RequestResponseConfig, Event as RequestResponseEvent, 
+        Message as RequestResponseMessage, ResponseChannel, RequestId, OutboundRequestId,
     },
     core::{ProtocolName, upgrade::{read_length_prefixed, write_length_prefixed}},
     futures::prelude::*,

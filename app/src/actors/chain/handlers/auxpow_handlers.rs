@@ -11,6 +11,13 @@ use tracing::*;
 use crate::types::*;
 use super::super::{ChainActor, messages::*, state::*};
 
+/// Message for submitting auxiliary proof-of-work header
+#[derive(Message)]
+#[rtype(result = "Result<(), ChainError>")]
+pub struct SubmitAuxPowHeader {
+    pub pow_header: AuxPowHeader,
+}
+
 /// Configuration for finalization management
 #[derive(Debug, Clone)]
 pub struct FinalizationConfig {
@@ -218,7 +225,7 @@ impl ChainActor {
             self.chain_state.finalized = Some(final_block.clone());
             
             // Notify other actors of finalization
-            self.notify_finalization_to_actors(target_height, &blocks_to_finalize).await?;
+            self.notify_finalization_to_actors(target_height, &blocks_to_finalize, &pow_header).await?;
 
             // Update metrics
             self.metrics.record_blocks_finalized(blocks_to_finalize.len() as u64);
@@ -291,12 +298,15 @@ impl ChainActor {
         &self,
         finalized_height: u64,
         blocks: &[BlockRef],
+        pow_header: &AuxPowHeader,
     ) -> Result<(), ChainError> {
         // Notify engine actor
         if let Some(engine_addr) = &self.actor_addresses.engine {
             engine_addr.send(FinalizeBlocks {
-                blocks: blocks.to_vec(),
-                pow_proof: self.chain_state.pending_pow.clone().unwrap_or_default(),
+                pow_header: pow_header.clone(),
+                target_height: finalized_height,
+                halt_on_failure: false,
+                correlation_id: None,
             }).await?;
         }
 

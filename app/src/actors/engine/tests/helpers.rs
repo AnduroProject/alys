@@ -17,6 +17,10 @@ use super::super::{
 };
 use super::mocks::{MockExecutionClient, MockClientConfig};
 
+/// Test result types for payload operations
+pub type BuildPayloadResult = Hash256; // Returns payload hash on success
+pub type ExecutePayloadResult = bool; // Returns execution success status
+
 /// Test helper for creating and managing EngineActor instances
 pub struct EngineActorTestHelper {
     /// The actor address

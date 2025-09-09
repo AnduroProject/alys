@@ -24,6 +24,7 @@ hex = "0.4.3"
 
 # V2 Actor System dependencies
 actix = "0.13"
+actix-rt = "2.9"
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 num_cpus = "1.0"
