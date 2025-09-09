@@ -249,5 +249,3 @@ pub enum ConfigError {
     #[error("Invalid performance target: {0}")]
     InvalidPerformanceTarget(String),
 }
-
-use secp256k1::SecretKey;
