@@ -18,7 +18,7 @@
 //! All messages support distributed tracing, correlation IDs, and actor supervision patterns.
 
 use crate::types::*;
-use crate::auxpow::AuxPow;
+use crate::actors::auxpow::types::AuxPow;
 use actix::prelude::*;
 use std::time::{Duration, SystemTime};
 use serde::{Serialize, Deserialize};

@@ -12,8 +12,8 @@ use bitcoin::{BlockHash, CompactTarget};
 use ethereum_types::Address as EvmAddress;
 
 use crate::{
-    auxpow::AuxPow,
-    auxpow_miner::{AuxBlock, BitcoinConsensusParams},
+    actors::auxpow::types::AuxPow,
+    actors::auxpow::config::{AuxBlock, BitcoinConsensusParams},
     metrics::{
         AUXPOW_CREATE_BLOCK_CALLS, AUXPOW_HASHES_PROCESSED, AUXPOW_SUBMIT_BLOCK_CALLS,
     },

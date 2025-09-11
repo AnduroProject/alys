@@ -29,7 +29,7 @@ use lighthouse_facade::types::{
     FixedVector, VariableList, Uint256, Transactions, Withdrawals
 };
 use lighthouse_facade::bls::PublicKey;
-use crate::auxpow::AuxPow;
+use crate::actors::auxpow::types::AuxPow;
 use crate::actors::auxpow::config::BlockIndex;
 use crate::types::consensus::Authority;
 use crate::signatures::{AggregateApproval as SignatureAggregateApproval, CheckedIndividualApproval, IndividualApproval as SignatureIndividualApproval};

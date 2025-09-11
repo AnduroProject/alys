@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::Error as _;
 use serde::ser::Error as _;
 use crate::types::blockchain::AuxPowHeader;
-use crate::auxpow::AuxPow;
+use crate::actors::auxpow::types::AuxPow;
 use eyre::Result;
 
 // Serialization helpers for AuxBlock (migrated from legacy auxpow_miner.rs)

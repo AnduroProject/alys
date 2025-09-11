@@ -12,8 +12,8 @@ use ethereum_types::Address as EvmAddress;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    auxpow::AuxPow,
-    auxpow_miner::AuxBlock,
+    actors::auxpow::types::AuxPow,
+    actors::auxpow::config::AuxBlock,
 };
 
 use super::{

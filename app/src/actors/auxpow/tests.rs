@@ -12,7 +12,7 @@ mod tests {
     use ethereum_types::Address as EvmAddress;
 
     use crate::{
-        auxpow_miner::BitcoinConsensusParams,
+        actors::auxpow::config::BitcoinConsensusParams,
         actors::auxpow::{
             AuxPowActor, DifficultyManager,
             config::{AuxPowConfig, DifficultyConfig},

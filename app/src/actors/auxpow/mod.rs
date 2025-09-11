@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod metrics;
 pub mod rpc;
+pub mod types;
 
 #[cfg(test)]
 pub mod tests;
@@ -23,3 +24,4 @@ pub use config::*;
 pub use error::*;
 pub use metrics::*;
 pub use rpc::*;
+pub use types::*;

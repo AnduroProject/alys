@@ -1,7 +1,6 @@
 #![recursion_limit = "256"]
 
 mod app;
-mod auxpow;
 mod block_hash_cache;
 mod error;
 mod metrics;
@@ -23,7 +22,7 @@ pub mod types;
 pub use app::run;
 
 // for miner crate
-pub use auxpow::AuxPow;
+pub use actors::auxpow::types::AuxPow;
 pub use actors::auxpow::config::AuxBlock;
 use lighthouse_facade as lighthouse_types;
 

@@ -11,7 +11,7 @@ use actix::prelude::*;
 
 // Import types from other modules
 use crate::types::*;
-use crate::auxpow::AuxPow;
+use crate::actors::auxpow::types::AuxPow;
 use super::messages::{self, FederationMember as MessageFederationMember};
 use crate::actors::engine::state::ExecutionState;
 

@@ -13,7 +13,7 @@ use lighthouse_facade::types::{MainnetEthSpec, Uint256 as U256};
 use rust_decimal::prelude::*;
 
 use crate::{
-    auxpow_miner::{BitcoinConsensusParams, get_next_work_required},
+    actors::auxpow::config::BitcoinConsensusParams,
     actors::storage::StorageActor,
     types::*,
 };

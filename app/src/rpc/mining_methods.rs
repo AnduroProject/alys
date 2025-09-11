@@ -333,7 +333,7 @@ fn extract_address_param(req: &JsonRpcRequest) -> Result<EvmAddress, RpcError> {
 }
 
 /// Extract submitauxblock parameters (hash and auxpow hex)
-fn extract_submit_params(req: &JsonRpcRequest) -> Result<(bitcoin::BlockHash, crate::auxpow::AuxPow), RpcError> {
+fn extract_submit_params(req: &JsonRpcRequest) -> Result<(bitcoin::BlockHash, crate::actors::auxpow::types::AuxPow), RpcError> {
     let params = req.params.as_ref().ok_or_else(|| RpcError::invalid_params())?;
     
     let params_array = params.as_array().ok_or_else(|| RpcError::invalid_params())?;
@@ -354,7 +354,7 @@ fn extract_submit_params(req: &JsonRpcRequest) -> Result<(bitcoin::BlockHash, cr
         .map_err(|_| RpcError::invalid_params())?;
     
     // Deserialize auxpow structure
-    let auxpow = crate::auxpow::AuxPow::consensus_decode(&mut auxpow_bytes.as_slice())
+    let auxpow = crate::actors::auxpow::types::AuxPow::consensus_decode(&mut auxpow_bytes.as_slice())
         .map_err(|_| RpcError::invalid_params())?;
     
     Ok((hash, auxpow))

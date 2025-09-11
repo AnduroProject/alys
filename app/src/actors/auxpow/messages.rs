@@ -9,8 +9,8 @@ use ethereum_types::Address as EvmAddress;
 use std::time::Duration;
 
 use crate::{
-    auxpow::AuxPow,
-    auxpow_miner::AuxBlock,
+    actors::auxpow::types::AuxPow,
+    actors::auxpow::config::AuxBlock,
     types::blockchain::{AuxPowHeader, ConsensusBlock},
     types::*,
 };
