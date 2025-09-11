@@ -467,7 +467,7 @@ impl BridgeWorkflowOrchestrator {
             warn!("Detected {} state inconsistencies", inconsistencies.len());
             // Handle critical inconsistencies
             for inconsistency in &inconsistencies {
-                if matches!(inconsistency.severity, super::state_sync::InconsistencySeverity::Critical) {
+                if matches!(inconsistency.severity, crate::actors::bridge::integration::state_sync::InconsistencySeverity::Critical) {
                     error!("Critical state inconsistency detected: {:?}", inconsistency);
                 }
             }

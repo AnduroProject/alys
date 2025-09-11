@@ -642,7 +642,7 @@ impl SyncMetrics {
     }
     
     /// Update metrics from sync progress
-    pub fn update_from_progress(&mut self, progress: &SyncProgress) {
+    pub fn update_from_progress(&mut self, progress: &super::messages::SyncProgress) {
         self.sync_state_metrics.current_height = progress.current_height;
         self.sync_state_metrics.target_height = progress.target_height;
         self.sync_state_metrics.blocks_behind = progress.blocks_behind;

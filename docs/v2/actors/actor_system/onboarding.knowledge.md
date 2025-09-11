@@ -135,101 +135,399 @@ flowchart TD
 - **Supervision**: Hierarchical failure handling and recovery
 - **Location Transparency**: Actors communicate via addresses, not direct references
 
-#### Blockchain-Aware Extensions
-- **Timing Constraints**: 2-second block production requirements
-- **Federation Coordination**: Multi-sig consensus for peg operations
-- **Priority Processing**: Consensus-critical vs background operations
-- **Event Propagation**: Blockchain state change notifications
+#### Blockchain-Aware Extensions  
+- **Timing Constraints**: 2-second block production with sub-100ms consensus latency
+- **Federation Coordination**: Multi-sig consensus for peg operations with health monitoring
+- **Priority Processing**: Four-tier priority system (Consensus > Bridge > Network > Background)
+- **Event Propagation**: Comprehensive blockchain event system with distributed tracing
+- **Readiness Validation**: Real-time blockchain readiness assessment for consensus participation
 
 ### 🌳 **Trunk: Core Modules**
 
 #### **`actor.rs`** - Foundation Traits
+
+The `actor.rs` module provides the core actor trait definitions and management infrastructure for the Alys V2 actor system. See the comprehensive [AlysActor Deep Dive](./alys_actor_deep_dive.md) for detailed educational content.
+
 ```rust
-// Base actor trait with lifecycle management
-pub trait AlysActor: Actor<Context = Context<Self>> + LifecycleAware {
-    type Config;
+/// Core trait for Alys actors with standardized interface
+#[async_trait]
+pub trait AlysActor: Actor + LifecycleAware + Send + Sync + 'static {
+    /// Configuration type for this actor
+    type Config: Clone + Send + Sync + 'static;
     
-    fn new(config: Self::Config) -> ActorResult<Self>;
-    fn actor_type() -> &'static str;
+    /// Error type for this actor (unified with ActorError)
+    type Error: Into<ActorError> + std::error::Error + Send + Sync + 'static;
+    
+    /// Message types this actor can handle
+    type Message: AlysMessage + 'static;
+    
+    /// State type for this actor
+    type State: Clone + Send + Sync + 'static;
+    
+    /// Create new actor instance with configuration
+    fn new(config: Self::Config) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
+
+    /// Get actor type name
+    fn actor_type(&self) -> String;
+    
+    /// Get actor configuration
+    fn config(&self) -> &Self::Config;
+    
+    /// Get actor metrics
+    fn metrics(&self) -> &ActorMetrics;
+    
+    /// Get current actor state
+    async fn get_state(&self) -> Self::State;
+    
+    /// Set actor state
+    async fn set_state(&mut self, state: Self::State) -> ActorResult<()>;
+    
+    /// Get actor mailbox configuration
+    fn mailbox_config(&self) -> MailboxConfig {
+        MailboxConfig::default()
+    }
+    
+    /// Get supervision policy for this actor
+    fn supervision_policy(&self) -> SupervisionPolicy {
+        SupervisionPolicy::default()
+    }
+    
+    /// Get actor dependencies (other actors this actor depends on)
+    fn dependencies(&self) -> Vec<String> {
+        Vec::new()
+    }
+    
+    /// Handle supervisor message
+    async fn handle_supervisor_message(&mut self, msg: SupervisorMessage) -> ActorResult<()>;
+    
+    /// Pre-process message before handling
+    async fn pre_process_message(&mut self, envelope: &MessageEnvelope<Self::Message>) -> ActorResult<()>;
+    
+    /// Post-process message after handling
+    async fn post_process_message(&mut self, envelope: &MessageEnvelope<Self::Message>, result: &<Self::Message as Message>::Result) -> ActorResult<()>;
+    
+    /// Handle message processing error
+    async fn handle_message_error(&mut self, envelope: &MessageEnvelope<Self::Message>, error: &ActorError) -> ActorResult<()>;
 }
 
-// Blockchain-aware extension
-pub trait BlockchainAwareActor: AlysActor {
-    fn timing_constraints(&self) -> BlockchainTimingConstraints;
-    fn blockchain_priority(&self) -> BlockchainActorPriority;
-    async fn handle_blockchain_event(&mut self, event: BlockchainEvent) -> ActorResult<()>;
+/// Extended actor trait with additional capabilities
+#[async_trait]
+pub trait ExtendedAlysActor: AlysActor {
+    /// Custom initialization logic
+    async fn custom_initialize(&mut self) -> ActorResult<()> {
+        Ok(())
+    }
+    
+    /// Handle critical errors that may require restart
+    async fn handle_critical_error(&mut self, error: ActorError) -> ActorResult<bool> {
+        // Return true to request restart, false to continue
+        Ok(error.severity().is_critical())
+    }
+    
+    /// Perform periodic maintenance tasks
+    async fn maintenance_task(&mut self) -> ActorResult<()> {
+        Ok(())
+    }
+    
+    /// Export custom metrics
+    async fn export_metrics(&self) -> ActorResult<serde_json::Value>;
+    
+    /// Handle resource cleanup on restart
+    async fn cleanup_resources(&mut self) -> ActorResult<()> {
+        Ok(())
+    }
 }
 ```
+
+**Key Features:**
+- **Unified Interface**: All actors implement `AlysActor` with standardized lifecycle and message handling
+- **Type Safety**: Strong typing for configurations, errors, messages, and state
+- **Lifecycle Integration**: Built-in integration with lifecycle management and supervision
+- **Message Processing**: Enhanced message handling with pre/post processing and error handling
+- **Metrics & Observability**: Integrated metrics collection and health monitoring
+- **Extensibility**: `ExtendedAlysActor` provides additional capabilities for advanced use cases
 
 #### **`supervisor.rs`** - Supervision Trees
+
+The `supervisor.rs` module provides a comprehensive hierarchical supervision system with blockchain-aware fault tolerance and automatic restart capabilities. See the comprehensive [Supervisor Deep Dive](./supervisor_deep_dive.md) for detailed educational content.
+
 ```rust
-pub struct SupervisorActor {
-    children: HashMap<String, ChildActorInfo>,
-    restart_strategy: RestartStrategy,
-    escalation_strategy: EscalationStrategy,
+/// Enhanced supervision system with blockchain timing awareness
+pub struct Supervisor {
+    /// Supervision tree state containing all child actors
+    tree: SupervisionTree,
 }
 
-// Key supervision patterns
+/// Comprehensive supervision tree state
+#[derive(Debug)]
+pub struct SupervisionTree {
+    /// Supervisor identifier
+    pub supervisor_id: String,
+    /// Child actors being supervised with full metadata
+    pub children: HashMap<String, ChildActorInfo>,
+    /// Parent supervisor for escalation hierarchy
+    pub parent: Option<Recipient<SupervisorMessage>>,
+    /// Default supervision policy for new children
+    pub default_policy: SupervisionPolicy,
+    /// Tree-wide supervision metrics
+    pub tree_metrics: SupervisionMetrics,
+}
+
+/// Advanced restart strategies with blockchain-aware timing
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RestartStrategy {
-    ExponentialBackoff { initial_delay: Duration, max_delay: Duration },
-    FixedDelay(Duration),
-    Immediate,
+    /// Never restart the actor
     Never,
+    /// Restart immediately on failure
+    Immediate,
+    /// Restart after a fixed delay
+    Delayed { delay: Duration },
+    /// Exponential backoff with jitter for resilient recovery
+    ExponentialBackoff {
+        initial_delay: Duration,
+        max_delay: Duration,
+        multiplier: f64,
+    },
+    /// Progressive delay with max attempts
+    Progressive {
+        initial_delay: Duration,
+        max_attempts: u32,
+        delay_multiplier: f64,
+    },
+}
+
+/// Enhanced escalation strategies for failure handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EscalationStrategy {
+    /// Stop the supervisor
+    Stop,
+    /// Restart the entire supervision tree
+    RestartTree,
+    /// Escalate to parent supervisor
+    EscalateToParent,
+    /// Continue without the failed actor
+    ContinueWithoutActor,
+}
+
+/// Blockchain-aware supervision policy with federation support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockchainSupervisionPolicy {
+    /// Base supervision policy
+    pub base_policy: SupervisionPolicy,
+    /// Blockchain-specific restart strategy
+    pub blockchain_restart: BlockchainRestartStrategy,
+    /// Federation health requirements for consensus operations
+    pub federation_requirements: Option<FederationHealthRequirement>,
+    /// Blockchain timing constraints (2-second blocks, sub-100ms consensus)
+    pub timing_constraints: BlockchainTimingConstraints,
+    /// Priority level for supervision decisions
+    pub priority: BlockchainActorPriority,
+    /// Whether this actor is consensus-critical
+    pub consensus_critical: bool,
 }
 ```
 
-#### **`mailbox.rs`** - Message Queuing
+**Key Features:**
+- **Hierarchical Supervision**: Full parent-child supervision trees with escalation policies
+- **Blockchain Timing**: Restart strategies aware of 2-second block constraints and federation timeouts  
+- **Advanced Restart Patterns**: Exponential backoff, progressive delays, immediate restarts
+- **Federation Integration**: Supervision policies that consider federation health and consensus requirements
+- **Metrics & Observability**: Comprehensive supervision metrics with health tracking
+- **Fault Isolation**: Configurable failure isolation to prevent cascade failures
+
+#### **`mailbox.rs`** - Enhanced Message Queuing
+
+The `mailbox.rs` module provides sophisticated message queuing with priority handling, backpressure control, and comprehensive metrics. See the comprehensive [Enhanced Mailbox Deep Dive](./enhanced_mailbox_deep_dive.md) for detailed educational content.
+
 ```rust
-pub struct EnhancedMailbox {
-    priority_queues: [VecDeque<MessageEnvelope>; 4], // Per priority level
-    flow_control: FlowControlState,
-    metrics: MailboxMetrics,
+/// Enhanced mailbox with backpressure and priority handling
+pub struct EnhancedMailbox<M>
+where
+    M: AlysMessage + 'static,
+{
+    /// Mailbox configuration
+    config: MailboxConfig,
+    /// Message queue with priority support
+    queue: Arc<parking_lot::Mutex<PriorityQueue<M>>>,
+    /// Backpressure semaphore for flow control
+    backpressure_semaphore: Arc<Semaphore>,
+    /// Current mailbox metrics
+    metrics: Arc<MailboxMetrics>,
+    /// Backpressure state tracking
+    backpressure_state: Arc<std::sync::atomic::AtomicU8>,
+    /// Message processing channel
+    message_tx: mpsc::UnboundedSender<QueuedMessage<M>>,
+    /// Message processing receiver
+    message_rx: Arc<parking_lot::Mutex<Option<mpsc::UnboundedReceiver<QueuedMessage<M>>>>>,
 }
 
-pub struct MessageEnvelope {
-    message: Box<dyn Any + Send>,
-    priority: MessagePriority,
-    correlation_id: Option<Uuid>,
-    timestamp: SystemTime,
+/// Priority queue implementation for messages
+pub struct PriorityQueue<M>
+where
+    M: AlysMessage,
+{
+    /// Priority heap for high/critical messages (Emergency, Critical, High)
+    high_priority: BinaryHeap<QueuedMessage<M>>,
+    /// FIFO queue for normal priority messages
+    normal_priority: VecDeque<QueuedMessage<M>>,
+    /// FIFO queue for low priority messages (Low, Background)
+    low_priority: VecDeque<QueuedMessage<M>>,
+    /// Total message count across all queues
+    total_count: usize,
 }
+
+/// Message wrapper with metadata for queuing
+pub struct QueuedMessage<M>
+where
+    M: AlysMessage,
+{
+    /// Enhanced message envelope with tracing
+    pub envelope: MessageEnvelope<M>,
+    /// Queue entry timestamp
+    pub queued_at: SystemTime,
+    /// Unique message ID for tracking
+    pub message_id: Uuid,
+    /// Optional response channel for request-response pattern
+    pub response_tx: Option<oneshot::Sender<M::Result>>,
+}
+
+/// Mailbox configuration with comprehensive options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxConfig {
+    /// Maximum number of messages in mailbox
+    pub capacity: usize,
+    /// Enable priority queue for messages
+    pub enable_priority: bool,
+    /// Maximum processing time per message
+    pub processing_timeout: Duration,
+    /// Backpressure threshold (percentage of capacity)
+    pub backpressure_threshold: f64,
+    /// Drop old messages when full
+    pub drop_on_full: bool,
+    /// Metrics collection interval
+    pub metrics_interval: Duration,
+}
+
+/// Backpressure state for flow control
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackpressureState {
+    /// Normal operation (< 50% capacity)
+    Normal,
+    /// Warning level (50-80% capacity)
+    Warning,
+    /// Critical level (80-100% capacity)
+    Critical,
+    /// Blocked (at capacity)
+    Blocked,
+}
+
+/// Strategy for handling mailbox overflow
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowStrategy {
+    /// Drop the oldest message
+    DropOldest,
+    /// Drop the newest message
+    DropNewest,
+    /// Drop messages based on priority (lowest priority first)
+    DropByPriority,
+    /// Block until space is available
+    Block,
+    /// Fail immediately
+    Fail,
+}
+```
+
+**Key Features:**
+- **Priority Processing**: Three-tier priority system with binary heap for high-priority messages
+- **Backpressure Control**: Semaphore-based flow control with configurable thresholds  
+- **Request-Response Pattern**: Built-in support for async request-response messaging
+- **Comprehensive Metrics**: Message counts, processing times, queue utilization tracking
+- **Overflow Handling**: Multiple strategies for handling mailbox overflow conditions
+- **Thread-Safe Operations**: Concurrent access with parking_lot mutex for performance
+- **Configuration Flexibility**: Per-actor-type mailbox configuration via MailboxManager
 ```
 
 ### 🌿 **Branches: Subsystems**
 
-#### **Message Router**
-- **Priority Queuing**: Consensus > Bridge > Network > Background
-- **Flow Control**: Backpressure handling for overloaded actors
-- **Correlation Tracking**: Distributed tracing across actor boundaries
-- **Dead Letter Handling**: Undeliverable message recovery
+#### **Message Router & Communication Bus**
 
-#### **Health Monitoring**
-- **Periodic Health Checks**: Configurable intervals per actor type
-- **Performance Metrics**: Latency, throughput, error rates
-- **Resource Monitoring**: Memory usage, queue depths
-- **Alerting Integration**: Prometheus metrics export
+The message routing system provides centralized communication and event distribution across all actors. See the comprehensive [Message Router Deep Dive](./message_router_deep_dive.md) for detailed educational content.
 
-#### **Blockchain Integration**
-- **Event Subscription**: Block production, finalization, federation changes
-- **Timing Enforcement**: 2-second block constraint validation
-- **Federation Awareness**: Multi-sig threshold and member tracking
-- **Consensus Coordination**: Priority handling for consensus actors
+**Core Components:**
+- **CommunicationBus** (`crates/actor_system/src/bus.rs`): Centralized message distribution with topic-based subscriptions
+- **AlysMessage Trait** (`crates/actor_system/src/message.rs`): Enhanced message interface with priority, timeout, and retry capabilities
+- **MessageEnvelope**: Message wrapper with metadata, routing information, and distributed tracing context
+
+**Key Features:**
+- **Six-Tier Priority System**: Emergency > Critical > High > Normal > Low > Background
+- **Topic-Based Pub/Sub**: Scalable event distribution with configurable subscriber limits (max 1000 per topic)
+- **Message Persistence**: Optional message history retention (configurable, default 10,000 messages)
+- **Delivery Guarantees**: Configurable retry mechanisms with exponential backoff (max 3 attempts)
+- **Flow Control**: Backpressure handling with delivery timeout enforcement (default 30s)
+- **Distributed Tracing**: Full message correlation tracking across actor boundaries
+
+#### **Health Monitoring & Metrics**
+
+Comprehensive actor health monitoring with production-ready observability. See the comprehensive [Health Monitoring Deep Dive](./health_monitoring_deep_dive.md) for detailed educational content.
+
+**Core Components:**
+- **ActorMetrics** (`crates/actor_system/src/metrics.rs`): Per-actor performance and health metrics collection
+- **BusMetrics**: Communication bus performance tracking with atomic counters
+- **SupervisionMetrics**: Supervision tree health and restart statistics
+
+**Key Features:**
+- **Performance Tracking**: Message processing times, throughput, mailbox utilization, CPU/memory usage
+- **Error Classification**: Categorized error counting with custom error type tracking via DashMap
+- **Custom Metrics**: Extensible counter and gauge system for application-specific metrics
+- **Lifecycle Monitoring**: State transition tracking, restart counting, activity timestamps
+- **Prometheus Integration**: Native metrics export in Prometheus format for production monitoring
+- **Health Check Framework**: Configurable health check intervals with automatic failure detection
+
+#### **Blockchain Integration & Event System**
+
+Blockchain-aware actor extensions with timing constraints and federation coordination. See the comprehensive [Blockchain Integration Deep Dive](./blockchain_integration_deep_dive.md) for detailed educational content.
+
+**Core Components:**
+- **BlockchainAwareActor** (`crates/actor_system/src/blockchain.rs`): Actor trait with blockchain-specific capabilities
+- **BlockchainEvent System**: Comprehensive blockchain event types (BlockProduced, BlockFinalized, FederationChange, ConsensusFailure)
+- **BlockchainReadiness**: Real-time blockchain operational status validation
+
+**Key Features:**
+- **Timing Constraint Enforcement**: 2-second block production windows with sub-100ms consensus latency requirements
+- **Federation Health Monitoring**: Multi-sig threshold tracking and member health validation (default 3 of 5 consensus)
+- **Priority-Based Actor Classification**: Four-tier system (Consensus > Bridge > Network > Background) for operation prioritization
+- **Sync Status Management**: Real-time synchronization progress tracking with 99.5% sync threshold for block production
+- **Event Subscription System**: Topic-based blockchain event distribution with type-safe message handling
+- **Readiness Validation**: Continuous assessment of actor capability for block production and validation operations
 
 ## 4. Codebase Walkthrough
 
 ### Directory Structure
 ```
 crates/actor_system/src/
-├── actor.rs              # Base actor traits and lifecycle
-├── supervisor.rs         # Supervision trees and restart logic
-├── mailbox.rs           # Message queuing and flow control
-├── message.rs           # Message envelopes and routing
-├── blockchain.rs        # Blockchain-aware actor extensions
-├── registry.rs          # Actor registration and discovery
-├── error.rs             # Error types and severity handling
-├── metrics.rs           # Performance monitoring
-├── testing.rs           # Test utilities and mocks
-├── serialization.rs     # Message serialization
-└── lib.rs              # Public API and prelude
+├── actor.rs                    # Core actor traits (AlysActor, ExtendedAlysActor)
+├── lifecycle.rs               # Lifecycle management and state transitions
+├── supervisor.rs              # Supervision trees and restart logic  
+├── supervisors.rs            # Supervisor implementations
+├── supervision.rs            # Supervision policies and strategies
+├── mailbox.rs                # Message queuing and flow control
+├── message.rs                # Enhanced message types and routing
+├── blockchain.rs             # Blockchain-aware actor extensions
+├── registry.rs               # Actor registration and discovery
+├── system.rs                 # Actor system coordination
+├── bus.rs                    # Event bus and message routing
+├── error.rs                  # Comprehensive error types
+├── metrics.rs                # Performance monitoring and metrics
+├── testing.rs                # Test utilities and mocks
+├── actor_macros.rs          # Convenience macros for actors
+├── serialization.rs         # Message serialization
+├── prometheus_integration.rs # Prometheus metrics integration
+├── prelude.rs               # Common imports and re-exports
+├── integration_tests.rs     # Integration test utilities
+├── supervision_tests.rs     # Supervision-specific tests
+└── lib.rs                   # Public API and exports
 ```
 
 ### Core Integration Points
@@ -254,6 +552,36 @@ impl Actor for SupervisorActor {
 
 #### **Blockchain Component Integration**
 ```rust
+/// Enhanced actor trait with blockchain-specific capabilities
+#[async_trait]
+pub trait BlockchainAwareActor: AlysActor {
+    /// Get blockchain timing constraints for this actor
+    fn timing_constraints(&self) -> BlockchainTimingConstraints {
+        BlockchainTimingConstraints::default()
+    }
+    
+    /// Get federation configuration if this actor participates in federation
+    fn federation_config(&self) -> Option<FederationConfig> {
+        None
+    }
+    
+    /// Get blockchain-specific priority level
+    fn blockchain_priority(&self) -> BlockchainActorPriority {
+        BlockchainActorPriority::Background
+    }
+    
+    /// Check if actor is critical for consensus operations
+    fn is_consensus_critical(&self) -> bool {
+        self.blockchain_priority() == BlockchainActorPriority::Consensus
+    }
+    
+    /// Handle blockchain-specific events (block production, finalization, etc.)
+    async fn handle_blockchain_event(&mut self, event: BlockchainEvent) -> ActorResult<()>;
+    
+    /// Validate that actor can operate under current blockchain conditions
+    async fn validate_blockchain_readiness(&self) -> ActorResult<BlockchainReadiness>;
+}
+
 // ChainActor integration example
 impl BlockchainAwareActor for ChainActor {
     fn timing_constraints(&self) -> BlockchainTimingConstraints {
@@ -265,59 +593,306 @@ impl BlockchainAwareActor for ChainActor {
         }
     }
     
+    fn federation_config(&self) -> Option<FederationConfig> {
+        Some(FederationConfig {
+            members: self.state.federation_members.clone(),
+            threshold: self.state.federation_threshold,
+            health_interval: Duration::from_secs(30),
+            min_healthy: 3,
+        })
+    }
+    
     fn blockchain_priority(&self) -> BlockchainActorPriority {
         BlockchainActorPriority::Consensus // Highest priority
+    }
+    
+    fn is_consensus_critical(&self) -> bool {
+        true // ChainActor is critical for consensus
+    }
+    
+    async fn handle_blockchain_event(&mut self, event: BlockchainEvent) -> ActorResult<()> {
+        match event {
+            BlockchainEvent::BlockProduced { height, hash } => {
+                info!(height = height, hash = ?hash, "Block produced event received");
+                self.state.current_height = height;
+                self.state.last_block_hash = hash;
+                self.process_block_produced(height, hash).await
+            }
+            BlockchainEvent::FederationChange { members, threshold } => {
+                info!(members = ?members, threshold = threshold, "Federation change");
+                self.state.federation_members = members;
+                self.state.federation_threshold = threshold;
+                self.validate_federation_config().await
+            }
+            BlockchainEvent::ConsensusFailure { reason } => {
+                error!(reason = %reason, "Consensus failure event received");
+                self.handle_consensus_failure(reason).await
+            }
+            _ => Ok(())
+        }
+    }
+    
+    async fn validate_blockchain_readiness(&self) -> ActorResult<BlockchainReadiness> {
+        let federation_healthy = self.count_healthy_federation_members().await? 
+            >= self.state.federation_threshold;
+            
+        Ok(BlockchainReadiness {
+            can_produce_blocks: federation_healthy && self.is_synced(),
+            can_validate_blocks: true,
+            federation_healthy,
+            sync_status: self.state.sync_status,
+            last_validated: SystemTime::now(),
+        })
     }
 }
 ```
 
+**BlockchainAwareActor Features:**
+- **Timing Constraints**: Configurable blockchain timing requirements per actor
+- **Federation Integration**: Optional federation participation with health monitoring  
+- **Priority System**: Four-tier priority system for blockchain operations
+- **Event Handling**: Comprehensive blockchain event processing with async support
+- **Readiness Validation**: Real-time assessment of blockchain operational readiness
+- **Consensus Criticality**: Built-in identification of consensus-critical actors
+
 ### Message Type Examples
 
-#### **Primary Messages**
-```rust
-// Health monitoring
-#[derive(Message, Debug)]
-#[rtype(result = "ActorResult<HealthStatus>")]
-pub struct HealthCheck;
+#### **Enhanced Message System**
 
-// Actor management  
-#[derive(Message, Debug)]
-#[rtype(result = "ActorResult<()>")]
-pub struct RegisterActor {
-    pub name: String,
-    pub address: Recipient<HealthCheck>,
-    pub priority: BlockchainActorPriority,
+**AlysMessage Trait - Foundation for Enhanced Messaging:**
+```rust
+/// Enhanced message trait with metadata and routing information
+pub trait AlysMessage: Message + Send + Sync + Clone + fmt::Debug {
+    /// Get message type name
+    fn message_type(&self) -> &'static str {
+        type_name::<Self>()
+    }
+    
+    /// Get message priority
+    fn priority(&self) -> MessagePriority {
+        MessagePriority::Normal
+    }
+    
+    /// Get message timeout
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(30)
+    }
+    
+    /// Check if message can be retried on failure
+    fn is_retryable(&self) -> bool {
+        true
+    }
+    
+    /// Get maximum retry attempts
+    fn max_retries(&self) -> u32 {
+        3
+    }
 }
 
-// Error handling
-#[derive(Message, Debug)]
-#[rtype(result = "()")]
-pub struct ActorFailed {
-    pub actor_name: String,
-    pub error: ActorError,
-    pub restart_attempt: u32,
+/// Message priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MessagePriority {
+    Background = 0,  // Lowest priority - background tasks
+    Low = 1,         // Low priority - maintenance tasks
+    Normal = 2,      // Normal priority - regular operations
+    High = 3,        // High priority - important operations
+    Critical = 4,    // Critical priority - system-critical operations
+    Emergency = 5,   // Emergency priority - requires immediate attention
+}
+```
+
+**Message Envelope with Distributed Tracing:**
+```rust
+/// Message envelope with metadata and routing information
+pub struct MessageEnvelope<T> where T: AlysMessage {
+    pub id: Uuid,                    // Unique message ID
+    pub payload: T,                  // The actual message payload
+    pub metadata: MessageMetadata,   // Enhanced metadata with tracing
+    pub routing: MessageRouting,     // Routing information
+}
+
+/// Message metadata with enhanced distributed tracing
+pub struct MessageMetadata {
+    pub created_at: SystemTime,
+    pub priority: MessagePriority,
+    pub timeout: Duration,
+    pub retry_attempt: u32,
+    pub max_retries: u32,
+    pub retryable: bool,
+    pub correlation_id: Option<Uuid>,
+    pub trace_context: TraceContext,     // Distributed tracing
+    pub causality: CausalityInfo,        // Message causality
+    pub performance: MessagePerformanceMetrics,
+    pub lineage: MessageLineage,         // Parent-child relationships
+    pub attributes: HashMap<String, serde_json::Value>,
+}
+```
+
+**Standard Message Types:**
+```rust
+// Health monitoring with enhanced metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckMessage;
+
+impl AlysMessage for HealthCheckMessage {
+    fn message_type(&self) -> &'static str {
+        "HealthCheck"
+    }
+    
+    fn priority(&self) -> MessagePriority {
+        MessagePriority::Low
+    }
+    
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(5)
+    }
+}
+
+// Lifecycle management messages
+#[derive(Debug, Clone)]
+pub enum LifecycleMessage {
+    Initialize,
+    Start,
+    Pause,
+    Resume,
+    Stop { timeout: Duration },
+    ForceStop,
+    HealthCheck,
+    GetState,
+    GetStateHistory,
+}
+
+impl AlysMessage for LifecycleMessage {
+    fn priority(&self) -> MessagePriority {
+        match self {
+            LifecycleMessage::ForceStop => MessagePriority::Emergency,
+            LifecycleMessage::Stop { .. } => MessagePriority::Critical,
+            LifecycleMessage::Initialize | LifecycleMessage::Start => MessagePriority::High,
+            LifecycleMessage::HealthCheck => MessagePriority::Low,
+            _ => MessagePriority::Normal,
+        }
+    }
 }
 ```
 
 #### **Blockchain Event Messages**
 ```rust
-#[derive(Message, Debug, Clone)]
-#[rtype(result = "ActorResult<()>")]
+/// Blockchain events that actors can subscribe to
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BlockchainEvent {
+    /// New block has been produced
     BlockProduced { height: u64, hash: [u8; 32] },
+    /// Block has been finalized via AuxPoW
     BlockFinalized { height: u64, hash: [u8; 32] },
+    /// Federation membership has changed
     FederationChange { members: Vec<String>, threshold: usize },
+    /// Consensus operation failed
     ConsensusFailure { reason: String },
 }
 
-// Event subscription management
-#[derive(Message, Debug)]
+impl Message for BlockchainEvent {
+    type Result = ActorResult<()>;
+}
+
+/// Types of blockchain events actors can subscribe to
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BlockchainEventType {
+    BlockProduction,
+    BlockFinalization,
+    FederationChanges,
+    ConsensusFailures,
+    SyncStatusChanges,
+}
+
+/// Message for subscribing to blockchain events
+#[derive(Debug, Clone, Message)]
 #[rtype(result = "ActorResult<()>")]
 pub struct SubscribeToBlockchainEvents {
-    pub subscriber: Recipient<BlockchainEvent>,
+    pub subscriber: actix::Recipient<BlockchainEvent>,
     pub event_types: Vec<BlockchainEventType>,
 }
+
+/// Message for updating blockchain readiness status
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "ActorResult<BlockchainReadiness>")]
+pub struct CheckBlockchainReadiness;
 ```
+
+#### **Lifecycle Management System**
+
+**Actor Lifecycle States:**
+```rust
+/// Actor lifecycle states
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActorState {
+    /// Actor is initializing
+    Initializing,
+    /// Actor is running and healthy
+    Running,
+    /// Actor is paused
+    Paused,
+    /// Actor is shutting down gracefully
+    Stopping,
+    /// Actor has stopped
+    Stopped,
+    /// Actor failed and needs restart
+    Failed,
+    /// Actor is restarting
+    Restarting,
+}
+
+/// Actor lifecycle configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifecycleConfig {
+    /// Maximum time for initialization
+    pub init_timeout: Duration,
+    /// Maximum time for graceful shutdown
+    pub shutdown_timeout: Duration,
+    /// Health check interval
+    pub health_check_interval: Duration,
+    /// Enable automatic health checks
+    pub auto_health_check: bool,
+    /// Maximum consecutive health check failures before marking failed
+    pub max_health_failures: u32,
+    /// Enable state transition logging
+    pub log_state_transitions: bool,
+}
+```
+
+**LifecycleAware Trait:**
+```rust
+/// Trait for lifecycle-aware actors
+#[async_trait]
+pub trait LifecycleAware: Actor {
+    /// Initialize the actor (called after construction)
+    async fn initialize(&mut self) -> ActorResult<()>;
+
+    /// Handle actor startup (called after initialization)
+    async fn on_start(&mut self) -> ActorResult<()>;
+
+    /// Handle pause request
+    async fn on_pause(&mut self) -> ActorResult<()>;
+
+    /// Handle resume request
+    async fn on_resume(&mut self) -> ActorResult<()>;
+
+    /// Handle shutdown request
+    async fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()>;
+
+    /// Perform health check
+    async fn health_check(&self) -> ActorResult<bool>;
+
+    /// Handle state transition
+    async fn on_state_change(&mut self, from: ActorState, to: ActorState) -> ActorResult<()>;
+
+    /// Get actor type name
+    fn actor_type(&self) -> &str;
+
+    /// Get actor configuration
+    fn lifecycle_config(&self) -> LifecycleConfig {
+        LifecycleConfig::default()
+    }
+}
 
 ## 5. Procedural Debugging & Worked Examples
 

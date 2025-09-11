@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::{
     auxpow::AuxPow,
     auxpow_miner::AuxBlock,
-    block::{AuxPowHeader, ConsensusBlock},
+    types::blockchain::{AuxPowHeader, ConsensusBlock},
     types::*,
 };
 
@@ -93,7 +93,7 @@ pub struct MiningStatus {
 #[rtype(result = "Result<CompactTarget, DifficultyError>")]
 pub struct GetNextWorkRequired {
     /// Last block with AuxPow (exact legacy parameter)
-    pub index_last: ConsensusBlock<MainnetEthSpec>,
+    pub index_last: ConsensusBlock,
     /// Current chain head height (exact legacy parameter)
     pub chain_head_height: u64,
 }
@@ -178,14 +178,14 @@ pub struct GetAggregateHashes;
 ///
 /// Returns the most recent finalized consensus block.
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<ConsensusBlock<MainnetEthSpec>, ChainError>")]
+#[rtype(result = "Result<ConsensusBlock, ChainError>")]
 pub struct GetLastFinalizedBlock;
 
 /// Direct port of ChainManager::get_block_by_hash for mining
 ///
 /// Retrieves specific block by hash for validation purposes.
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<Option<ConsensusBlock<MainnetEthSpec>>, ChainError>")]
+#[rtype(result = "Result<Option<ConsensusBlock>, ChainError>")]
 pub struct GetBlockByHashForMining {
     pub hash: BlockHash,
 }

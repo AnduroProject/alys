@@ -32,8 +32,8 @@ use self::rpc::{
     HandlerErr, NetworkParams, RPCCodedResponse, RPCMessage, RPCReceived, RPCResponse, SubstreamId,
 };
 
-pub type EnrAttestationBitfield = BitVector<64>; // MainnetEthSpec SubnetBitfieldLength
-pub type EnrSyncCommitteeBitfield = BitVector<4>; // MainnetEthSpec SyncCommitteeSubnetCount
+pub type EnrAttestationBitfield = BitVector; // MainnetEthSpec SubnetBitfieldLength
+pub type EnrSyncCommitteeBitfield = BitVector; // MainnetEthSpec SyncCommitteeSubnetCount
 
 const RECONNECT_INTERVAL_SECS: u64 = 5;
 const RECONNECT_MAX_ATTEMPTS: u32 = 12;
@@ -85,7 +85,7 @@ pub struct ApproveBlock {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PubsubMessage {
-    ConsensusBlock(SignedConsensusBlock<MainnetEthSpec>),
+    ConsensusBlock(SignedConsensusBlock),
     ApproveBlock(ApproveBlock),
     QueuePow(AuxPowHeader),
     PegoutSignatures(HashMap<Txid, SingleMemberTransactionSignatures>),

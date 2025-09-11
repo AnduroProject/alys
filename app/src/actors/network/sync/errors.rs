@@ -9,7 +9,8 @@ use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::types::*;
 
-// SyncResult is defined in crate::types::errors
+// Re-export SyncResult from crate::types::errors  
+pub use crate::types::SyncResult;
 
 /// Comprehensive error types for SyncActor operations
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]

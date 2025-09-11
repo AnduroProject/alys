@@ -15,7 +15,9 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use ethereum_types::{H256 as TxHash, Address, U256, H256};
-use ethers_core::types::{TransactionReceipt, Log, Transaction as ExecutionTransaction, Block as ExecutionBlock};
+use ethers_core::types::{TransactionReceipt, Log, Transaction as ExecutionTransaction, Block};
+
+pub type ExecutionBlock = Block<ExecutionTransaction>;
 
 /// Execution client abstraction for Geth/Reth compatibility
 #[async_trait]
@@ -598,6 +600,7 @@ impl ExecutionIntegration for ExecutionClient {
         let chain_id: String = self.rpc_call("eth_chainId", serde_json::json!([])).await?;
         u64::from_str_radix(&chain_id[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse chain ID".to_string(),
                 reason: format!("Invalid chain ID: {}", e),
             })
     }
@@ -606,6 +609,7 @@ impl ExecutionIntegration for ExecutionClient {
         let block_number: String = self.rpc_call("eth_blockNumber", serde_json::json!([])).await?;
         u64::from_str_radix(&block_number[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse block number".to_string(),
                 reason: format!("Invalid block number: {}", e),
             })
     }
@@ -627,6 +631,7 @@ impl ExecutionIntegration for ExecutionClient {
         if let Some(block_json) = result {
             let block: ExecutionBlock = serde_json::from_value(block_json)
                 .map_err(|e| EngineError::RequestFailed {
+                    request: "Parse block".to_string(),
                     reason: format!("Failed to parse block: {}", e),
                 })?;
             
@@ -652,6 +657,7 @@ impl ExecutionIntegration for ExecutionClient {
         if let Some(block_json) = result {
             let block: ExecutionBlock = serde_json::from_value(block_json)
                 .map_err(|e| EngineError::RequestFailed {
+                    request: "Parse block".to_string(),
                     reason: format!("Failed to parse block: {}", e),
                 })?;
             Ok(Some(block))
@@ -677,6 +683,7 @@ impl ExecutionIntegration for ExecutionClient {
         if let Some(tx_json) = result {
             let tx: ExecutionTransaction = serde_json::from_value(tx_json)
                 .map_err(|e| EngineError::RequestFailed {
+                    request: "Parse transaction".to_string(),
                     reason: format!("Failed to parse transaction: {}", e),
                 })?;
             
@@ -710,6 +717,7 @@ impl ExecutionIntegration for ExecutionClient {
         if let Some(receipt_json) = result {
             let receipt: TransactionReceipt = serde_json::from_value(receipt_json)
                 .map_err(|e| EngineError::RequestFailed {
+                    request: "Parse receipt".to_string(),
                     reason: format!("Failed to parse receipt: {}", e),
                 })?;
             
@@ -732,6 +740,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         hash.parse()
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse transaction hash".to_string(),
                 reason: format!("Invalid transaction hash: {}", e),
             })
     }
@@ -744,6 +753,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         U256::from_str_radix(&balance_hex[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse balance".to_string(),
                 reason: format!("Invalid balance: {}", e),
             })
     }
@@ -756,6 +766,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         u64::from_str_radix(&nonce_hex[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse nonce".to_string(),
                 reason: format!("Invalid nonce: {}", e),
             })
     }
@@ -768,6 +779,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         storage_hex.parse()
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse storage value".to_string(),
                 reason: format!("Invalid storage value: {}", e),
             })
     }
@@ -780,6 +792,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         hex::decode(&code_hex[2..])
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse code hex".to_string(),
                 reason: format!("Invalid code hex: {}", e),
             })
     }
@@ -789,6 +802,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         hex::decode(&result_hex[2..])
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse call result".to_string(),
                 reason: format!("Invalid call result: {}", e),
             })
     }
@@ -801,6 +815,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         u64::from_str_radix(&gas_hex[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse gas estimate".to_string(),
                 reason: format!("Invalid gas estimate: {}", e),
             })
     }
@@ -810,6 +825,7 @@ impl ExecutionIntegration for ExecutionClient {
         
         U256::from_str_radix(&price_hex[2..], 16)
             .map_err(|e| EngineError::RequestFailed {
+                request: "Parse gas price".to_string(),
                 reason: format!("Invalid gas price: {}", e),
             })
     }
@@ -844,6 +860,7 @@ impl ExecutionIntegration for ExecutionClient {
         if let Some(sync_json) = result {
             let sync_status: SyncStatus = serde_json::from_value(sync_json)
                 .map_err(|e| EngineError::RequestFailed {
+                    request: "Parse sync status".to_string(),
                     reason: format!("Failed to parse sync status: {}", e),
                 })?;
             Ok(Some(sync_status))

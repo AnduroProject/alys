@@ -34,7 +34,7 @@ pub struct PegInActor {
     pending_deposits: HashMap<Txid, PendingDeposit>,
     
     /// Confirmation tracking system
-    confirmation_tracker: ConfirmationTracker,
+    confirmation_tracker: super::confirmation::ConfirmationTracker,
     
     /// Validation engine
     validator: DepositValidator,
@@ -93,7 +93,7 @@ impl PegInActor {
         bitcoin_client: Arc<dyn BitcoinRpc>,
         monitored_addresses: Vec<BtcAddress>,
     ) -> Result<Self, PegInError> {
-        let confirmation_tracker = ConfirmationTracker::new(config.confirmation_threshold);
+        let confirmation_tracker = super::confirmation::ConfirmationTracker::new(config.confirmation_threshold);
         let validator = DepositValidator::new(monitored_addresses.clone())?;
         let metrics = PegInMetrics::new()?;
         let performance_tracker = OperationTracker::new();
@@ -412,7 +412,7 @@ impl PegInActor {
     }
 
     /// Execute retry operation
-    fn execute_retry_operation(&mut self, mut retry_op: RetryableOperation) {
+    async fn execute_retry_operation(&mut self, mut retry_op: RetryableOperation) {
         retry_op.retry_count += 1;
         retry_op.last_attempt = SystemTime::now();
 

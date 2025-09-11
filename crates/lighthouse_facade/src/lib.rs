@@ -70,7 +70,7 @@ pub use crate::types::{
     ExecutionPayload, ExecutionPayloadCapella,
     PayloadStatus, ForkchoiceState, PayloadAttributes,
     Withdrawal, FixedVector, VariableList, Transactions, Withdrawals,
-    BitVector, BitList, BeaconBlockHeader,
+    BitVector, BitList, BeaconBlockHeader, ForkName,
     // Specs
     MainnetEthSpec, EthSpec,
     // Crypto

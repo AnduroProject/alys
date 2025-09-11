@@ -9,7 +9,7 @@ use actix::prelude::*;
 use crate::types::*;
 use super::super::{
     actor::{EngineActor, HealthCheckResult},
-    messages::*,
+    messages::{MessageResult, *},
     state::ExecutionState,
     client::{HealthCheck, ClientCapabilities},
     EngineError, EngineResult,

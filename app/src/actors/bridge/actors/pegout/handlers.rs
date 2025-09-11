@@ -6,7 +6,7 @@ use actix::prelude::*;
 use tracing::{info, warn, error};
 
 use super::actor::{PegOutActor, PegOutError};
-use crate::actors::bridge::messages::*;
+use crate::actors::bridge::{messages::*, shared::errors::BridgeError};
 
 /// Handler for PegOut messages
 impl Handler<PegOutMessage> for PegOutActor {
@@ -79,3 +79,8 @@ impl Handler<PegOutMessage> for PegOutActor {
         }
     }
 }
+
+/// Get PegOut status message
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<PegOutStatus, BridgeError>")]
+pub struct GetPegOutStatus;

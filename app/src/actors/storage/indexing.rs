@@ -9,6 +9,32 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::*;
 use serde::{Serialize, Deserialize};
+use ethereum_types::{H256, Address};
+
+/// Ethereum transaction representation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EthereumTransaction {
+    pub hash: H256,
+    pub from: Address,
+    pub to: Option<Address>,
+    pub value: ethereum_types::U256,
+    pub gas: u64,
+    pub gas_price: ethereum_types::U256,
+    pub nonce: u64,
+    pub input: Vec<u8>,
+}
+
+/// Ethereum log entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EthereumLog {
+    pub address: Address,
+    pub topics: Vec<H256>,
+    pub data: Vec<u8>,
+    pub block_hash: H256,
+    pub block_number: u64,
+    pub transaction_hash: H256,
+    pub log_index: u32,
+}
 
 /// Indexing errors
 #[derive(Debug, thiserror::Error)]

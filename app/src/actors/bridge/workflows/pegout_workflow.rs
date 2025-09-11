@@ -12,11 +12,12 @@ use crate::actors::bridge::{
     actors::{bridge::BridgeActor, pegout::PegOutActor},
     integration::{CoordinationManager, StateSyncManager},
     shared::{
-        validation::{ValidationEngine, ValidationResult},
-        utxo::UtxoSelectionStrategy,
+        validation::{BitcoinTransactionValidator, ValidationResult},
+        utxo::SelectionStrategy,
         federation::FederationConfig,
     },
 };
+use crate::config::hot_reload::ValidationEngine;
 
 /// Complete peg-out workflow orchestrator
 pub struct PegOutWorkflowOrchestrator {
@@ -49,7 +50,7 @@ pub struct PegOutWorkflow {
     pub collected_signatures: u32,
     pub error_count: u32,
     pub retry_attempts: HashMap<PegOutWorkflowStep, u32>,
-    pub validation_results: Vec<ValidationResult>,
+    pub validation_results: Vec<ValidationResult<()>>,
     pub step_history: Vec<WorkflowStepRecord>,
     pub bitcoin_transaction: Option<bitcoin::Transaction>,
     pub selected_utxos: Vec<bitcoin::OutPoint>,
@@ -316,7 +317,7 @@ impl PegOutWorkflowOrchestrator {
         let selection_msg = PegOutMessage::SelectUtxos {
             amount: workflow.amount,
             fee_rate: workflow.fee_rate,
-            strategy: UtxoSelectionStrategy::BranchAndBound,
+            strategy: SelectionStrategy::BranchAndBound,
         };
 
         let utxos = self.pegout_actor.send(selection_msg).await

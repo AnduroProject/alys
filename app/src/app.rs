@@ -27,7 +27,6 @@ use crate::{
     },
     auxpow_miner::BitcoinConsensusParams, // Keep for legacy compatibility
     config::*,
-    features::FeatureFlagManager,
     spec::{
         genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
     },
@@ -225,7 +224,7 @@ impl App {
         info!("Initializing Alys V2 Actor System");
 
         // Initialize storage and check chain state
-        let disk_store = store::Storage::<lighthouse_facade::MainnetEthSpec, lighthouse_facade::store::LevelDB<lighthouse_facade::MainnetEthSpec>>::new_disk(Some(self.db_path));
+        let disk_store = crate::store::Storage::<lighthouse_facade::MainnetEthSpec, lighthouse_facade::store::LevelDB<lighthouse_facade::MainnetEthSpec>>::new_disk(self.db_path);
         info!("Head: {:?}", disk_store.get_head());
         info!("Finalized: {:?}", disk_store.get_latest_pow_block());
 
@@ -357,12 +356,9 @@ impl App {
             .map_err(|e| eyre::Error::msg(format!("Failed to create BridgeActor: {}", e)))?
             .start();
 
-        // Step 7: Initialize feature flag manager
-        let feature_flags = Arc::new(FeatureFlagManager::new());
-
-        // Step 8: Create ActorAddresses for ChainActor integration
+        // Step 7: Create ActorAddresses for ChainActor integration
         let actor_addresses = ActorAddresses {
-            engine: engine_actor.clone(),
+            engine: crate::actors::chain::state::EngineActor.start(),
             bridge: bridge_actor,
             storage: storage_actor.clone(),
             network: network_actor,
@@ -397,7 +393,7 @@ impl App {
             }),
         };
 
-        let chain_actor = ChainActor::new(chain_config, actor_addresses, feature_flags.clone())
+        let chain_actor = ChainActor::new(chain_config, actor_addresses)
             .map_err(|e| eyre::Error::msg(format!("Failed to create ChainActor: {}", e)))?
             .start();
 

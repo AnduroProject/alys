@@ -10,7 +10,7 @@ use tracing::{info, warn, error, debug};
 
 use crate::actors::bridge::{
     messages::DepositTransaction,
-    shared::validation::*,
+    shared::{validation::*, constants::{MIN_PEGIN_AMOUNT, DUST_LIMIT}},
 };
 
 /// Deposit validator for peg-in operations

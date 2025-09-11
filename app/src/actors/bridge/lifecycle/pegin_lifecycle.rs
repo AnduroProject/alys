@@ -12,10 +12,9 @@ use crate::actors::bridge::{
     shared::errors::BridgeError,
     config::PegInConfig,
 };
-use crate::actors::bridge::shared::lifecycle::{
-    ActorLifecycle, LifecyclePhase, LifecycleMetrics, LifecycleError,
-    LifecycleEvent, LifecycleCommand, LifecycleState, LifecycleHooks,
-    StartupHook, ShutdownHook, RestartHook, HealthCheckHook
+use actor_system::{
+    lifecycle::{LifecycleAware, ActorState, LifecycleMetadata},
+    error::ActorError,
 };
 
 /// Lifecycle manager for PegIn actors
@@ -24,13 +23,13 @@ pub struct PegInLifecycle {
     actor_ref: Option<Addr<PegInActor>>,
     
     /// Current lifecycle phase
-    phase: LifecyclePhase,
+    phase: ActorState,
     
     /// Configuration
     config: PegInConfig,
     
     /// Metrics collection
-    metrics: LifecycleMetrics,
+    metrics: LifecycleMetadata,
     
     /// Lifecycle hooks
     hooks: PegInLifecycleHooks,
@@ -72,9 +71,9 @@ impl PegInLifecycle {
     pub fn new(config: PegInConfig) -> Self {
         Self {
             actor_ref: None,
-            phase: LifecyclePhase::Initialized,
+            phase: ActorState::Initialized,
             config,
-            metrics: LifecycleMetrics::new("pegin"),
+            metrics: LifecycleMetadata::new("pegin"),
             hooks: PegInLifecycleHooks::default(),
             startup_start: None,
             last_health_check: None,
@@ -89,7 +88,7 @@ impl PegInLifecycle {
     }
     
     /// Perform PegIn-specific startup checks
-    async fn pegin_startup_checks(&self) -> Result<(), LifecycleError> {
+    async fn pegin_startup_checks(&self) -> Result<(), ActorError> {
         info!("Performing PegIn startup checks");
         
         // Bitcoin connection check
@@ -97,13 +96,13 @@ impl PegInLifecycle {
             match check() {
                 Ok(connected) => {
                     if !connected {
-                        return Err(LifecycleError::StartupFailed(
+                        return Err(ActorError::StartupFailed(
                             "Bitcoin connection not available".to_string()
                         ));
                     }
                 },
                 Err(e) => {
-                    return Err(LifecycleError::StartupFailed(
+                    return Err(ActorError::StartupFailed(
                         format!("Bitcoin connection check failed: {}", e)
                     ));
                 }
@@ -113,7 +112,7 @@ impl PegInLifecycle {
         // Queue validation
         if let Some(validate) = &self.hooks.queue_validation {
             if let Err(e) = validate() {
-                return Err(LifecycleError::StartupFailed(
+                return Err(ActorError::StartupFailed(
                     format!("PegIn queue validation failed: {}", e)
                 ));
             }
@@ -122,7 +121,7 @@ impl PegInLifecycle {
         // Signature setup
         if let Some(setup) = &self.hooks.signature_setup {
             if let Err(e) = setup() {
-                return Err(LifecycleError::StartupFailed(
+                return Err(ActorError::StartupFailed(
                     format!("Signature setup failed: {}", e)
                 ));
             }
@@ -132,7 +131,7 @@ impl PegInLifecycle {
     }
     
     /// Perform health check
-    async fn health_check(&mut self) -> Result<bool, LifecycleError> {
+    async fn health_check(&mut self) -> Result<bool, ActorError> {
         if let Some(actor_ref) = &self.actor_ref {
             match actor_ref.send(crate::actors::bridge::actors::pegin::handlers::GetPegInStatus).await {
                 Ok(status) => {
@@ -143,111 +142,15 @@ impl PegInLifecycle {
                 Err(e) => {
                     warn!("PegIn health check failed: {}", e);
                     self.metrics.record_health_check(false);
-                    Err(LifecycleError::HealthCheckFailed(format!("Actor communication failed: {}", e)))
+                    Err(ActorError::HealthCheckFailed(format!("Actor communication failed: {}", e)))
                 }
             }
         } else {
-            Err(LifecycleError::HealthCheckFailed("No actor reference available".to_string()))
+            Err(ActorError::HealthCheckFailed("No actor reference available".to_string()))
         }
     }
 }
 
-impl ActorLifecycle for PegInLifecycle {
-    type Actor = PegInActor;
-    type Config = PegInConfig;
-    type Error = LifecycleError;
-    
-    fn actor_name(&self) -> &'static str {
-        "PegInActor"
-    }
-    
-    fn current_phase(&self) -> LifecyclePhase {
-        self.phase
-    }
-    
-    fn metrics(&self) -> &LifecycleMetrics {
-        &self.metrics
-    }
-    
-    async fn start(&mut self) -> Result<Addr<Self::Actor>, Self::Error> {
-        info!("Starting PegIn actor lifecycle");
-        self.phase = LifecyclePhase::Starting;
-        self.startup_start = Some(Instant::now());
-        
-        // Perform startup checks
-        self.pegin_startup_checks().await?;
-        
-        // Create and start actor
-        let actor = PegInActor::new(self.config.clone())
-            .map_err(|e| LifecycleError::StartupFailed(format!("Actor creation failed: {}", e)))?;
-        
-        let addr = actor.start();
-        self.actor_ref = Some(addr.clone());
-        self.phase = LifecyclePhase::Running;
-        
-        // Record startup metrics
-        if let Some(start_time) = self.startup_start {
-            let startup_duration = start_time.elapsed();
-            self.metrics.record_startup(startup_duration);
-            info!("PegIn actor started in {:?}", startup_duration);
-        }
-        
-        Ok(addr)
-    }
-    
-    async fn stop(&mut self) -> Result<(), Self::Error> {
-        info!("Stopping PegIn actor");
-        self.phase = LifecyclePhase::Stopping;
-        
-        if let Some(actor_ref) = self.actor_ref.take() {
-            // Graceful shutdown with timeout
-            let shutdown_timeout = Duration::from_secs(30);
-            
-            match tokio::time::timeout(shutdown_timeout, async {
-                actor_ref.send(actix::prelude::System::current().stop()).await
-            }).await {
-                Ok(_) => {
-                    info!("PegIn actor stopped gracefully");
-                    self.phase = LifecyclePhase::Stopped;
-                    self.metrics.record_shutdown();
-                    Ok(())
-                },
-                Err(_) => {
-                    warn!("PegIn actor shutdown timeout, forcing stop");
-                    self.phase = LifecyclePhase::Failed;
-                    Err(LifecycleError::ShutdownTimeout)
-                }
-            }
-        } else {
-            warn!("No PegIn actor reference to stop");
-            self.phase = LifecyclePhase::Stopped;
-            Ok(())
-        }
-    }
-    
-    async fn restart(&mut self) -> Result<Addr<Self::Actor>, Self::Error> {
-        info!("Restarting PegIn actor (attempt #{})", self.restart_count + 1);
-        self.restart_count += 1;
-        
-        // Stop current instance
-        if let Err(e) = self.stop().await {
-            warn!("Error stopping PegIn actor during restart: {}", e);
-        }
-        
-        // Brief delay before restart
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-        
-        // Start new instance
-        let addr = self.start().await?;
-        self.metrics.record_restart(self.restart_count);
-        
-        Ok(addr)
-    }
-    
-    async fn health_check(&mut self) -> Result<bool, Self::Error> {
-        self.health_check().await
-    }
-}
 
 /// Builder for PegIn lifecycle configuration
 pub struct PegInLifecycleBuilder {

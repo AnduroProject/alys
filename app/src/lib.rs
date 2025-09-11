@@ -4,7 +4,6 @@ mod app;
 mod aura;
 mod auxpow;
 mod auxpow_miner;
-mod block_candidate;
 mod block_hash_cache;
 mod error;
 mod metrics;
@@ -18,7 +17,6 @@ mod store;
 // V2 Actor System modules
 pub mod actors;
 pub mod config;
-pub mod features;
 pub mod integration;
 pub mod messages;
 pub mod serde_utils;
@@ -32,5 +30,5 @@ pub use auxpow::AuxPow;
 pub use auxpow_miner::AuxBlock;
 use lighthouse_facade as lighthouse_types;
 
-pub trait EthSpec: lighthouse_types::EthSpec + serde::Serialize + serde::de::DeserializeOwned {}
+pub trait EthSpec: lighthouse_types::EthSpec {}
 impl EthSpec for lighthouse_types::MainnetEthSpec {}

@@ -295,7 +295,7 @@ async fn handle_get_queued_pow(
         .with_label_values(&["getqueuedpow", "called"])
         .inc();
 
-    let get_queued_msg = GetQueuedAuxPow;
+    let get_queued_msg = GetQueuedAuxpow;
     
     match context.auxpow_actor.send(get_queued_msg).await {
         Ok(Some(queued_pow)) => {

@@ -6,16 +6,12 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use super::{ChainActor, config::ChainActorConfig, state::*};
+use super::{ChainActor, config::ChainActorConfig, state::*, messages::ImportBlock};
 use crate::types::*;
-use crate::features::FeatureFlagManager;
 
 /// Migration adapter for transitioning from legacy Chain to ChainActor
 #[derive(Debug)]
 pub struct ChainMigrationAdapter {
-    /// Feature flags for controlling migration
-    feature_flags: Arc<FeatureFlagManager>,
-    
     /// Migration state tracking
     migration_state: MigrationState,
     
@@ -71,9 +67,8 @@ struct StateTransform {
 
 impl ChainMigrationAdapter {
     /// Create a new migration adapter
-    pub fn new(feature_flags: Arc<FeatureFlagManager>) -> Self {
+    pub fn new() -> Self {
         Self {
-            feature_flags,
             migration_state: MigrationState {
                 phase: MigrationPhase::LegacyOnly,
                 from_version: "1.0.0".to_string(),
@@ -93,11 +88,6 @@ impl ChainMigrationAdapter {
     pub async fn start_migration(&mut self) -> Result<(), MigrationError> {
         self.migration_state.phase = MigrationPhase::ShadowMode;
         self.migration_state.started_at = std::time::SystemTime::now();
-        
-        // Check if migration is enabled via feature flags
-        if !self.feature_flags.is_enabled(&crate::features::FeatureFlag::ActorMigration) {
-            return Err(MigrationError::MigrationDisabled);
-        }
         
         self.migration_state.progress = 0.1;
         self.migration_state.phase = MigrationPhase::ParallelMode;
@@ -206,16 +196,13 @@ pub struct ChainMigrationController {
     phase_start_time: std::time::Instant,
     
     /// Legacy chain instance (for parallel/fallback)
-    legacy_chain: Option<Arc<std::sync::RwLock<crate::chain::Chain>>>,
+    legacy_chain: Option<Arc<std::sync::RwLock<crate::actors::chain::ChainActor>>>,
     
     /// New chain actor
     chain_actor: Option<actix::Addr<ChainActor>>,
     
     /// Migration metrics
     metrics: MigrationMetrics,
-    
-    /// Feature flags for controlling rollout
-    feature_flags: Arc<dyn FeatureFlagProvider>,
     
     /// Configuration parameters
     config: MigrationConfig,
@@ -334,14 +321,6 @@ impl Default for MigrationMetrics {
     }
 }
 
-/// Feature flag provider trait for testing and production
-pub trait FeatureFlagProvider: Send + Sync {
-    /// Check if a feature is enabled
-    fn is_enabled(&self, flag: &str) -> bool;
-    
-    /// Get feature flag value as float
-    fn get_float(&self, flag: &str, default: f64) -> f64;
-}
 
 /// Current migration metrics snapshot
 #[derive(Debug, Clone)]
@@ -358,9 +337,8 @@ pub struct MetricsSnapshot {
 impl ChainMigrationController {
     /// Create new migration controller
     pub fn new(
-        legacy_chain: Arc<std::sync::RwLock<crate::chain::Chain>>,
+        legacy_chain: Arc<std::sync::RwLock<crate::actors::chain::ChainActor>>,
         config: MigrationConfig,
-        feature_flags: Arc<dyn FeatureFlagProvider>,
     ) -> Self {
         Self {
             current_phase: MigrationPhase::LegacyOnly,
@@ -368,7 +346,6 @@ impl ChainMigrationController {
             legacy_chain: Some(legacy_chain),
             chain_actor: None,
             metrics: MigrationMetrics::default(),
-            feature_flags,
             config,
         }
     }
@@ -687,7 +664,7 @@ impl ChainMigrationController {
                     self.metrics.actor_total_time.fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
                     Ok(())
                 }
-                Ok(Err(e)) | Err(_) => {
+                Ok(Err(e)) | Err(e) => {
                     self.metrics.actor_operations.fetch_add(1, Ordering::Relaxed);
                     self.metrics.actor_errors.fetch_add(1, Ordering::Relaxed);
                     

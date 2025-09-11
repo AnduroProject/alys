@@ -47,7 +47,7 @@ impl AlysActor for StreamActor {
     type Message = StreamMessage;
     type State = StreamActorState;
 
-    async fn new(config: Self::Config) -> ActorResult<Self> {
+    fn new(config: Self::Config) -> Result<Self, Self::Error> {
         info!("Creating StreamActor with actor_system integration");
         
         let reconnection_manager = super::ReconnectionManager::new(
@@ -56,15 +56,13 @@ impl AlysActor for StreamActor {
         );
         
         let metrics = StreamMetrics::new()
-            .map_err(|e| ActorError::StartupFailed {
-                actor_type: "StreamActor".to_string(),
-                reason: format!("Failed to initialize metrics: {:?}", e),
+            .map_err(|e| BridgeError::StreamError { 
+                message: format!("Failed to initialize metrics: {:?}", e),
             })?;
 
         let actor_system_metrics = ActorMetrics::new("bridge_stream_actor", "v1.0.0")
-            .map_err(|e| ActorError::StartupFailed {
-                actor_type: "StreamActor".to_string(), 
-                reason: format!("Failed to initialize actor_system metrics: {:?}", e),
+            .map_err(|e| BridgeError::StreamError {
+                message: format!("Failed to initialize actor_system metrics: {:?}", e),
             })?;
 
         Ok(Self {
@@ -82,43 +80,43 @@ impl AlysActor for StreamActor {
         })
     }
 
-    fn actor_type() -> String {
+    fn actor_type(&self) -> String {
         "StreamActor".to_string()
     }
 
-    fn version() -> String {
-        "v1.0.0".to_string()
+    fn config(&self) -> &Self::Config {
+        &self.config
     }
-
-    async fn health_check(&self) -> Result<bool, Self::Error> {
-        let healthy_connections = self.governance_connections
-            .values()
-            .filter(|conn| matches!(conn.status, super::NodeConnectionStatus::Connected))
-            .count();
-        
-        let total_connections = self.governance_connections.len();
-        let health_threshold = 0.5; // At least 50% connections healthy
-
-        if total_connections == 0 {
-            return Ok(false); // No connections configured
-        }
-
-        let health_ratio = healthy_connections as f64 / total_connections as f64;
-        Ok(health_ratio >= health_threshold)
+    
+    fn config_mut(&mut self) -> &mut Self::Config {
+        &mut self.config
     }
-
-    fn current_state(&self) -> Self::State {
-        let metrics_snapshot = self.actor_system_metrics.snapshot()
-            .unwrap_or_default();
+    
+    fn metrics(&self) -> &ActorMetrics {
+        &self.actor_system_metrics
+    }
+    
+    fn metrics_mut(&mut self) -> &mut ActorMetrics {
+        &mut self.actor_system_metrics
+    }
+    
+    async fn get_state(&self) -> Self::State {
+        let metrics_snapshot = self.actor_system_metrics.snapshot();
 
         StreamActorState {
-            lifecycle_state: ActorState::Running, // Will be managed by LifecycleAware
+            lifecycle_state: ActorState::Running,
             connection_status: self.connection_status.clone(),
             active_connections: self.governance_connections.len(),
-            pending_requests: self.request_tracker.pending_count(),
+            pending_requests: 0, // self.request_tracker.pending_count(),
             last_heartbeat: self.last_heartbeat,
             metrics_snapshot,
         }
+    }
+    
+    async fn set_state(&mut self, state: Self::State) -> ActorResult<()> {
+        self.connection_status = state.connection_status;
+        self.last_heartbeat = state.last_heartbeat;
+        Ok(())
     }
 
     fn mailbox_config(&self) -> MailboxConfig {
@@ -142,174 +140,17 @@ impl AlysActor for StreamActor {
         }
     }
 
-    async fn on_message_received(&mut self, envelope: &MessageEnvelope<Self::Message>) -> ActorResult<()> {
-        debug!("StreamActor received message: {:?}", envelope.message_type());
-        self.actor_system_metrics.record_message_received();
-        
-        // Update last activity
-        if let Ok(mut state) = self.get_mutable_state() {
-            state.last_activity = SystemTime::now();
-        }
-        
-        Ok(())
-    }
-
-    async fn on_message_processed(&mut self, envelope: &MessageEnvelope<Self::Message>, success: bool) -> ActorResult<()> {
-        if success {
-            self.actor_system_metrics.record_message_processed();
-            debug!("StreamActor successfully processed message: {:?}", envelope.message_type());
-        } else {
-            self.actor_system_metrics.record_message_failed();
-            warn!("StreamActor failed to process message: {:?}", envelope.message_type());
-        }
-        Ok(())
-    }
-
-    async fn pre_message_hook(&mut self, envelope: &MessageEnvelope<Self::Message>) -> ActorResult<bool> {
-        // Rate limiting check
-        if let Some(rate_limit) = &self.config.rate_limit_config {
-            if !rate_limit.allow_message(&envelope.message_type()) {
-                warn!("Rate limit exceeded for message type: {:?}", envelope.message_type());
-                return Ok(false); // Block message processing
-            }
-        }
-
-        // Connection health check for governance messages
-        match &envelope.message {
-            StreamMessage::RequestPegOutSignatures { .. } |
-            StreamMessage::SendHeartbeat |
-            StreamMessage::HandleFederationUpdate { .. } => {
-                if !self.has_healthy_connections() {
-                    warn!("No healthy governance connections, deferring message");
-                    return Ok(false); // Will be retried when connections recover
-                }
-            }
-            _ => {} // Local messages don't need connection checks
-        }
-
-        Ok(true)
-    }
-
-    async fn post_message_hook(&mut self, envelope: &MessageEnvelope<Self::Message>, result: &ActorResult<()>) -> ActorResult<()> {
-        // Log processing time
-        if let Some(start_time) = envelope.metadata.get("start_time") {
-            if let Ok(start) = start_time.parse::<u64>() {
-                let duration = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64 - start;
-                
-                self.actor_system_metrics.record_processing_time(Duration::from_millis(duration));
-            }
-        }
-
-        // Handle errors
-        if let Err(error) = result {
-            error!("StreamActor message processing error: {:?}", error);
-            
-            // Increment error counter for specific message types
-            match &envelope.message {
-                StreamMessage::RequestPegOutSignatures { .. } => {
-                    self.metrics.record_signature_request_error();
-                }
-                StreamMessage::SendHeartbeat => {
-                    self.metrics.record_heartbeat_failed();
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    fn get_dependencies(&self) -> Vec<String> {
+    fn dependencies(&self) -> Vec<String> {
         vec![
             "bridge_actor".to_string(),
             "pegout_actor".to_string(),
         ]
     }
-
-    fn provides_services(&self) -> Vec<String> {
-        vec![
-            "governance_communication".to_string(),
-            "signature_requests".to_string(),
-            "federation_updates".to_string(),
-            "heartbeat_monitoring".to_string(),
-        ]
-    }
-
-    async fn validate_config(config: &Self::Config) -> ActorResult<()> {
-        if config.governance_endpoints.is_empty() {
-            return Err(ActorError::ConfigurationError {
-                parameter: "governance_endpoints".to_string(),
-                reason: "At least one governance endpoint must be configured".to_string(),
-            });
-        }
-
-        if config.heartbeat_interval < Duration::from_secs(10) {
-            return Err(ActorError::ConfigurationError {
-                parameter: "heartbeat_interval".to_string(),
-                reason: "Heartbeat interval must be at least 10 seconds".to_string(),
-            });
-        }
-
-        if config.connection_timeout < Duration::from_secs(30) {
-            return Err(ActorError::ConfigurationError {
-                parameter: "connection_timeout".to_string(),
-                reason: "Connection timeout must be at least 30 seconds".to_string(),
-            });
-        }
-
-        if let Some(max_connections) = config.max_governance_connections {
-            if max_connections == 0 {
-                return Err(ActorError::ConfigurationError {
-                    parameter: "max_governance_connections".to_string(),
-                    reason: "Must allow at least 1 governance connection".to_string(),
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    fn get_metrics(&self) -> ActorMetrics {
-        self.actor_system_metrics.clone()
-    }
-
-    async fn update_config(&mut self, new_config: Self::Config) -> ActorResult<()> {
-        info!("Updating StreamActor configuration");
-
-        // Validate new configuration
-        Self::validate_config(&new_config).await?;
-
-        // Check what changed
-        let endpoints_changed = self.config.governance_endpoints != new_config.governance_endpoints;
-        let connection_params_changed = 
-            self.config.heartbeat_interval != new_config.heartbeat_interval ||
-            self.config.connection_timeout != new_config.connection_timeout;
-
-        // Update configuration
-        self.config = new_config;
-
-        // Handle configuration changes
-        if endpoints_changed {
-            info!("Governance endpoints changed, reconnecting...");
-            self.reconnect_to_governance_nodes().await?;
-        }
-
-        if connection_params_changed {
-            info!("Connection parameters changed, updating timers");
-            self.update_connection_timers().await?;
-        }
-
-        self.actor_system_metrics.record_config_update();
-        Ok(())
-    }
 }
 
 #[async_trait]
 impl ExtendedAlysActor for StreamActor {
-    async fn custom_initialization(&mut self) -> ActorResult<()> {
+    async fn custom_initialize(&mut self) -> ActorResult<()> {
         info!("StreamActor custom initialization starting");
 
         // Initialize governance connections
@@ -324,7 +165,7 @@ impl ExtendedAlysActor for StreamActor {
         Ok(())
     }
 
-    async fn handle_critical_error(&mut self, error: &ActorError) -> ActorResult<bool> {
+    async fn handle_critical_error(&mut self, error: ActorError) -> ActorResult<bool> {
         error!("StreamActor handling critical error: {:?}", error);
 
         match error {
@@ -345,7 +186,7 @@ impl ExtendedAlysActor for StreamActor {
         }
     }
 
-    async fn perform_maintenance(&mut self) -> ActorResult<()> {
+    async fn maintenance_task(&mut self) -> ActorResult<()> {
         debug!("StreamActor performing maintenance");
 
         // Clean up expired pending messages
@@ -363,64 +204,28 @@ impl ExtendedAlysActor for StreamActor {
         Ok(())
     }
 
-    async fn get_status_info(&self) -> ActorResult<serde_json::Value> {
+    async fn export_metrics(&self) -> ActorResult<serde_json::Value> {
         let healthy_connections = self.governance_connections
             .values()
-            .filter(|conn| matches!(conn.status, super::NodeConnectionStatus::Connected))
+            .filter(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
             .count();
 
-        let status = serde_json::json!({
-            "actor_type": "StreamActor",
-            "version": "v1.0.0",
-            "state": "Running",
-            "governance_connections": {
-                "total": self.governance_connections.len(),
-                "healthy": healthy_connections,
-                "endpoints": self.config.governance_endpoints,
-            },
-            "message_processing": {
-                "pending_messages": self.message_buffer.len(),
-                "pending_requests": self.request_tracker.pending_count(),
-            },
-            "last_heartbeat": self.last_heartbeat,
-            "uptime": self.actor_system_metrics.uptime(),
-            "metrics": {
-                "messages_processed": self.actor_system_metrics.messages_processed(),
-                "errors": self.actor_system_metrics.error_count(),
-            }
-        });
-
-        Ok(status)
-    }
-
-    async fn export_metrics(&self) -> ActorResult<Vec<(String, f64)>> {
-        let mut metrics = Vec::new();
-
-        // Connection metrics
-        let healthy_connections = self.governance_connections
-            .values()
-            .filter(|conn| matches!(conn.status, super::NodeConnectionStatus::Connected))
-            .count() as f64;
-        
-        metrics.push(("governance_connections_healthy".to_string(), healthy_connections));
-        metrics.push(("governance_connections_total".to_string(), self.governance_connections.len() as f64));
-
-        // Message metrics
-        metrics.push(("pending_messages".to_string(), self.message_buffer.len() as f64));
-        metrics.push(("pending_requests".to_string(), self.request_tracker.pending_count() as f64));
-
-        // Heartbeat metrics
+        let mut heartbeat_age = None;
         if let Some(last_heartbeat) = self.last_heartbeat {
-            let heartbeat_age = SystemTime::now()
+            heartbeat_age = Some(SystemTime::now()
                 .duration_since(last_heartbeat)
                 .unwrap_or_default()
-                .as_secs() as f64;
-            metrics.push(("heartbeat_age_seconds".to_string(), heartbeat_age));
+                .as_secs());
         }
 
-        // Add actor_system metrics
-        let system_metrics = self.actor_system_metrics.export_metrics();
-        metrics.extend(system_metrics);
+        let metrics = serde_json::json!({
+            "governance_connections_healthy": healthy_connections,
+            "governance_connections_total": self.governance_connections.len(),
+            "pending_messages": self.message_buffer.len(),
+            "pending_requests": 0, // self.request_tracker.pending_count(),
+            "heartbeat_age_seconds": heartbeat_age,
+            "actor_system": self.actor_system_metrics.snapshot()
+        });
 
         Ok(metrics)
     }
@@ -437,7 +242,7 @@ impl StreamActor {
     fn has_healthy_connections(&self) -> bool {
         self.governance_connections
             .values()
-            .any(|conn| matches!(conn.status, super::NodeConnectionStatus::Connected))
+            .any(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
     }
 
     /// Reconnect to governance nodes
@@ -467,9 +272,9 @@ impl StreamActor {
         
         // Mark unhealthy connections for reconnection
         for (node_id, connection) in &mut self.governance_connections {
-            if !matches!(connection.status, super::NodeConnectionStatus::Connected) {
+            if !matches!(connection.status, NodeConnectionStatus::Connected) {
                 debug!("Marking {} for reconnection", node_id);
-                connection.status = super::NodeConnectionStatus::Connecting;
+                connection.status = NodeConnectionStatus::Connecting;
             }
         }
         

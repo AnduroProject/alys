@@ -10,10 +10,11 @@ use async_trait::async_trait;
 use tracing::*;
 
 use lighthouse_facade::execution_layer::{
-    ExecutionPayload, PayloadStatus, PayloadAttributes, ForkchoiceState,
+    PayloadStatus, PayloadAttributes, ForkchoiceState,
     ForkchoiceUpdatedResponse, ExecutePayloadResponse, NewPayloadResponse,
 };
-use lighthouse_facade::types::{Hash256, Address, MainnetEthSpec};
+use lighthouse_facade::types::{Hash256, MainnetEthSpec};
+use ethereum_types::Address;
 
 use crate::types::*;
 use super::super::{
@@ -73,13 +74,13 @@ pub struct MockClientState {
     pub forkchoice_updates: u32,
     
     /// Last payload built
-    pub last_payload: Option<ExecutionPayload<MainnetEthSpec>>,
+    pub last_payload: Option<ExecutionPayload>,
     
     /// Current finalized block hash
     pub finalized_hash: Option<Hash256>,
     
     /// Simulated payloads in memory
-    pub payloads: HashMap<String, ExecutionPayload<MainnetEthSpec>>,
+    pub payloads: HashMap<String, ExecutionPayload>,
     
     /// Simulated blocks
     pub blocks: HashMap<Hash256, MockBlock>,
@@ -304,7 +305,7 @@ pub struct MockEngineState {
     pub finalized_block: Option<Hash256>,
     
     /// Built payloads
-    pub built_payloads: HashMap<String, ExecutionPayload<MainnetEthSpec>>,
+    pub built_payloads: HashMap<String, ExecutionPayload>,
     
     /// Executed payloads
     pub executed_payloads: Vec<Hash256>,
@@ -370,7 +371,7 @@ impl MockEngine {
     }
     
     /// Create a mock payload for testing
-    pub fn create_mock_payload(&self, parent_hash: Hash256) -> ExecutionPayload<MainnetEthSpec> {
+    pub fn create_mock_payload(&self, parent_hash: Hash256) -> ExecutionPayload {
         ExecutionPayload {
             parent_hash,
             fee_recipient: Address::zero(),
@@ -402,7 +403,7 @@ pub struct MockPayloadBuilder {
     pub config: MockClientConfig,
     
     /// Built payloads
-    pub payloads: Arc<Mutex<HashMap<String, ExecutionPayload<MainnetEthSpec>>>>,
+    pub payloads: Arc<Mutex<HashMap<String, ExecutionPayload>>>,
 }
 
 impl MockPayloadBuilder {
@@ -418,7 +419,7 @@ impl MockPayloadBuilder {
         &self,
         parent_hash: Hash256,
         attributes: PayloadAttributes,
-    ) -> EngineResult<(String, ExecutionPayload<MainnetEthSpec>)> {
+    ) -> EngineResult<(String, ExecutionPayload)> {
         // Simulate build time
         tokio::time::sleep(Duration::from_millis(50)).await;
         
@@ -438,7 +439,7 @@ impl MockPayloadBuilder {
             base_fee_per_gas: 1_000_000_000u64.into(),
             block_hash: Hash256::random(),
             transactions: vec![],
-            withdrawals: attributes.withdrawals.map(|w| w.into_iter().map(Into::into).collect()),
+            withdrawals: attributes.withdrawals.map(|w| w.into_iter().map(|withdrawal| withdrawal.into()).collect()),
             blob_gas_used: None,
             excess_blob_gas: None,
         };

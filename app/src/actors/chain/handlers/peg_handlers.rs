@@ -12,7 +12,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use crate::types::*;
-use super::super::{ChainActor, messages::*, state::*};
+use super::super::{ChainActor, messages::{FederationSignature as ChainFederationSignature, *}, state::*};
 
 /// Configuration for peg operation processing
 #[derive(Debug, Clone)]
@@ -103,7 +103,7 @@ pub struct PegOutState {
     /// Processing status
     pub status: PegOutStatus,
     /// Collected federation signatures
-    pub signatures: HashMap<Address, FederationSignature>,
+    pub signatures: HashMap<Address, ChainFederationSignature>,
     /// Bitcoin transaction (if created)
     pub bitcoin_tx: Option<bitcoin::Transaction>,
     /// When this peg-out was initiated
@@ -235,7 +235,7 @@ impl PegOperationManager {
     }
 
     /// Add a new peg-out for processing
-    pub fn add_pegout(&mut self, pegout: PendingPegOut) -> Result<(), ChainError> {
+    pub fn add_pegout(&mut self, pegout: crate::types::bridge::PendingPegOut) -> Result<(), ChainError> {
         // Validate peg-out
         if pegout.amount_sats < self.config.pegin_dust_limit {
             return Err(ChainError::PegOperationError(
@@ -340,7 +340,7 @@ impl PegOperationManager {
     /// Process pending peg-outs up to the configured limit
     pub fn process_pending_pegouts(
         &mut self,
-        federation_signatures: &[FederationSignature],
+        federation_signatures: &[ChainFederationSignature],
         limit: Option<usize>,
     ) -> Vec<PegOutDetail> {
         let process_limit = limit.unwrap_or(self.config.max_pegouts_per_batch);
@@ -446,8 +446,8 @@ impl PegOperationManager {
     }
 
     /// Get current peg operation status
-    pub fn get_status(&self) -> PegOperationStatus {
-        PegOperationStatus {
+    pub fn get_status(&self) -> super::super::messages::PegOperationStatus {
+        super::super::messages::PegOperationStatus {
             pending_pegins: self.pending_pegins.len() as u32,
             pending_pegouts: self.pending_pegouts.len() as u32,
             total_value_locked: self.total_value_locked_sats,

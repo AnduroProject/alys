@@ -11,8 +11,10 @@ use crate::actors::bridge::{
     messages::*,
     actors::{bridge::BridgeActor, pegin::PegInActor},
     integration::{CoordinationManager, StateSyncManager},
-    shared::validation::{ValidationEngine, ValidationResult},
+    shared::validation::{ValidationResult},
 };
+use crate::config::hot_reload::ValidationEngine;
+use crate::types::PegInStatus;
 
 /// Complete peg-in workflow orchestrator
 pub struct PegInWorkflowOrchestrator {
@@ -44,7 +46,7 @@ pub struct PegInWorkflow {
     pub required_confirmations: u32,
     pub error_count: u32,
     pub retry_attempts: HashMap<PegInWorkflowStep, u32>,
-    pub validation_results: Vec<ValidationResult>,
+    pub validation_results: Vec<ValidationResult<()>>,
     pub step_history: Vec<WorkflowStepRecord>,
 }
 

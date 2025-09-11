@@ -3,6 +3,8 @@
 //! This module contains all message handlers for NetworkActor, organized by functionality.
 //! Handlers manage P2P operations including network lifecycle, broadcasting, subscriptions,
 //! peer management, and event processing.
+//!
+//! NOTE: Handler implementations moved to main actor file to avoid conflicts
 
 use actix::{Handler, Context, ResponseFuture};
 use std::time::Instant;
@@ -11,6 +13,11 @@ use actor_system::{ActorResult, ActorError};
 use crate::actors::network::messages::*;
 use super::NetworkActor;
 
+// All handler implementations have been moved to the main NetworkActor file
+// to avoid conflicting trait implementations
+
+// Handler implementations removed to avoid conflicts with main actor file
+/*
 /// Network control and lifecycle handlers
 impl Handler<StartNetwork> for NetworkActor {
     type Result = ResponseFuture<NetworkActorResult<NetworkStartResponse>>;
@@ -352,4 +359,4 @@ impl Handler<NetworkEvent> for NetworkActor {
 
         Ok(Ok(()))
     }
-}
+}*/

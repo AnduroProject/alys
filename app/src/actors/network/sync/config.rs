@@ -853,7 +853,7 @@ pub struct AlertChannel {
     pub config: HashMap<String, String>,
     
     /// Minimum severity for this channel
-    pub min_severity: ErrorSeverity,
+    pub min_severity: crate::types::ErrorSeverity,
     
     /// Enable this channel
     pub enabled: bool,

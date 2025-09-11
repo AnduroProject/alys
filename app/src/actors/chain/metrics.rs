@@ -66,7 +66,6 @@ pub struct MovingAverage {
 #[derive(Debug)]
 pub struct QueueDepthTracker {
     pub pending_blocks: usize,
-    pub block_candidates: usize,
     pub validation_queue: usize,
     pub notification_queue: usize,
 }
@@ -140,7 +139,6 @@ impl ChainActorMetrics {
             peak_memory_bytes: 0,
             queue_depths: QueueDepthTracker {
                 pending_blocks: 0,
-                block_candidates: 0,
                 validation_queue: 0,
                 notification_queue: 0,
             },
@@ -284,9 +282,8 @@ impl ChainActorMetrics {
     }
     
     /// Update queue depths
-    pub fn update_queue_depths(&mut self, pending: usize, candidates: usize, validation: usize, notifications: usize) {
+    pub fn update_queue_depths(&mut self, pending: usize, validation: usize, notifications: usize) {
         self.queue_depths.pending_blocks = pending;
-        self.queue_depths.block_candidates = candidates;
         self.queue_depths.validation_queue = validation;
         self.queue_depths.notification_queue = notifications;
     }
@@ -310,7 +307,6 @@ impl ChainActorMetrics {
             total_errors: self.total_errors(),
             queue_depths: QueueDepthTracker {
                 pending_blocks: self.queue_depths.pending_blocks,
-                block_candidates: self.queue_depths.block_candidates,
                 validation_queue: self.queue_depths.validation_queue,
                 notification_queue: self.queue_depths.notification_queue,
             },
@@ -418,6 +414,18 @@ impl ChainActorMetrics {
     pub fn reset(&mut self) {
         *self = Self::new();
     }
+    
+    /// Record an invalid block
+    pub fn record_invalid_block(&mut self) {
+        self.validation_failures += 1;
+        self.error_counters.validation_errors += 1;
+    }
+    
+    /// Record a chain reorganization
+    pub fn record_chain_reorg(&mut self, blocks_reverted: u64) {
+        self.reorganizations += 1;
+        // Could track additional reorg metrics here
+    }
 }
 
 impl MovingAverage {
@@ -485,7 +493,6 @@ impl Clone for QueueDepthTracker {
     fn clone(&self) -> Self {
         Self {
             pending_blocks: self.pending_blocks,
-            block_candidates: self.block_candidates,
             validation_queue: self.validation_queue,
             notification_queue: self.notification_queue,
         }

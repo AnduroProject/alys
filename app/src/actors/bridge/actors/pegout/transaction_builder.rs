@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tracing::{info, debug};
 
 use crate::actors::bridge::shared::*;
+use crate::actors::bridge::shared::constants::DUST_LIMIT;
 use super::actor::PegOutError;
 
 /// Bitcoin transaction builder for peg-out operations
@@ -84,7 +85,7 @@ impl TransactionBuilder {
 
         // Create transaction
         let transaction = Transaction {
-            version: bitcoin::transaction::Version::TWO,
+            version: 2,
             lock_time: bitcoin::absolute::LockTime::ZERO,
             input: inputs,
             output: outputs,

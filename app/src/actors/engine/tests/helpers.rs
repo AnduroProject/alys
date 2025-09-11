@@ -4,7 +4,8 @@
 
 use std::time::{Duration, SystemTime};
 use actix::prelude::*;
-use lighthouse_facade::types::{Hash256, Address, MainnetEthSpec};
+use lighthouse_facade::types::{Hash256, MainnetEthSpec};
+use ethereum_types::Address;
 use lighthouse_facade::execution_layer::PayloadAttributes;
 
 use crate::types::*;

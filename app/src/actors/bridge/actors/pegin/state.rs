@@ -537,12 +537,6 @@ impl Default for PerformanceStats {
     }
 }
 
-impl Default for PegInState {
-    fn default() -> Self {
-        Self::Initializing
-    }
-}
-
 impl PegInState {
     /// Check if state allows processing new deposits
     pub fn can_process_deposits(&self) -> bool {

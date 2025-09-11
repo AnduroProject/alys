@@ -11,7 +11,7 @@ use actix::prelude::*;
 use crate::types::*;
 use super::super::{
     actor::EngineActor,
-    messages::*,
+    messages::{MessageResult, *},
     state::{PendingPayload, PayloadStatus, PayloadPriority},
     engine::{AddBalance, ConsensusAmount},
     EngineError, EngineResult,
@@ -275,7 +275,7 @@ impl Handler<ValidateTransactionMessage> for EngineActor {
                 Ok(Some(receipt)) => {
                     // Transaction exists and has been executed
                     let result = TransactionValidationResult {
-                        is_valid: receipt.status == Some(U64::from(1)), // Success status
+                        is_valid: receipt.status == Some(ethereum_types::U64::from(1)), // Success status
                         receipt: Some(receipt.clone()),
                         errors: vec![],
                         gas_used: receipt.gas_used.map(|g| g.as_u64()),

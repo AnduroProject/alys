@@ -8,8 +8,54 @@
 use crate::actors::network::sync::prelude::*;
 use std::collections::{HashMap, BTreeMap, VecDeque};
 use std::net::SocketAddr;
+use std::time::SystemTime;
 use chrono::{DateTime, Utc, Duration as ChronoDuration};
 use serde::{Serialize, Deserialize};
+
+// Re-export PeerId from crate::types
+pub use crate::types::PeerId;
+
+/// Connection status for peers
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ConnectionStatus {
+    Connected,
+    Connecting, 
+    Disconnected,
+    Error { reason: String },
+}
+
+/// Connection quality metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionQuality {
+    pub latency_ms: f64,
+    pub bandwidth_estimate: u64,
+    pub success_rate: f64,
+    pub last_updated: SystemTime,
+}
+
+impl Default for ConnectionQuality {
+    fn default() -> Self {
+        Self {
+            latency_ms: 0.0,
+            bandwidth_estimate: 0,
+            success_rate: 1.0,
+            last_updated: SystemTime::now(),
+        }
+    }
+}
+
+/// Peer activity tracking for performance metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PeerActivity {
+    /// Peer provided blocks
+    BlocksProvided { count: u32 },
+    /// Peer requested blocks
+    BlocksRequested { count: u32 },
+    /// Peer sent transaction
+    TransactionSent,
+    /// Peer connection activity
+    ConnectionActivity { activity_type: String },
+}
 
 /// Intelligent peer manager with advanced selection algorithms
 #[derive(Debug)]
@@ -442,33 +488,6 @@ pub struct PeerCapabilities {
     pub checkpoint_serving: bool,
 }
 
-/// Connection quality metrics with detailed analysis
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectionQuality {
-    /// Network latency (round-trip time)
-    pub latency: Duration,
-    
-    /// Bandwidth measurement (bytes/sec)
-    pub bandwidth: f64,
-    
-    /// Packet loss rate (0.0 to 1.0)
-    pub packet_loss: f64,
-    
-    /// Connection reliability score (0.0 to 1.0)
-    pub reliability: f64,
-    
-    /// Jitter measurement
-    pub jitter: Duration,
-    
-    /// Connection uptime percentage
-    pub uptime: f64,
-    
-    /// Network stability score
-    pub stability: f64,
-    
-    /// Quality of Service metrics
-    pub qos_metrics: QoSMetrics,
-}
 
 /// Quality of Service metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -704,18 +723,6 @@ pub struct AuthorityPerformanceMetrics {
     pub voting_participation: f64,
 }
 
-/// Connection status with detailed state information
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ConnectionStatus {
-    Disconnected,
-    Connecting,
-    Connected,
-    Authenticating,
-    Authenticated,
-    Syncing,
-    Error { error_code: u32 },
-    Banned { until: Option<Instant> },
-}
 
 /// Sync statistics for peer interaction
 #[derive(Debug, Clone, Serialize, Deserialize)]

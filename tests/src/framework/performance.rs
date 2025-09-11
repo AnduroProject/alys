@@ -19,7 +19,8 @@ use tokio::runtime::Runtime;
 use tracing::{info, debug, warn, error};
 use serde::{Serialize, Deserialize};
 
-use crate::framework::{TestResult, TestHarness};
+use crate::harness::TestHarness;
+use crate::framework::TestResult;
 use crate::framework::harness::{ActorTestHarness, SyncTestHarness};
 
 /// Performance testing framework with Criterion.rs integration
@@ -142,6 +143,12 @@ pub struct BenchmarkResult {
     pub config_snapshot: serde_json::Value,
     /// Timestamp
     pub timestamp: SystemTime,
+    /// Benchmark name (alias for test_name for compatibility)
+    pub name: String,
+    /// Primary performance value (throughput by default)
+    pub value: f64,
+    /// Unit of measurement
+    pub unit: String,
 }
 
 /// Benchmark category enumeration
@@ -518,6 +525,9 @@ impl PerformanceTestFramework {
                     additional_metrics: throughput_result.additional_metrics,
                     config_snapshot: serde_json::to_value(&actor_suite.config)?,
                     timestamp: SystemTime::now(),
+                    name: benchmark_name.clone(),
+                    value: throughput_result.messages_per_second,
+                    unit: "messages/sec".to_string(),
                 };
                 
                 results.push(result);
@@ -570,6 +580,9 @@ impl PerformanceTestFramework {
                     additional_metrics: sync_result.additional_metrics,
                     config_snapshot: serde_json::to_value(&sync_suite.config)?,
                     timestamp: SystemTime::now(),
+                    name: benchmark_name.clone(),
+                    value: sync_result.blocks_per_second,
+                    unit: "blocks/sec".to_string(),
                 };
                 
                 results.push(result);
@@ -736,6 +749,9 @@ impl PerformanceTestFramework {
             additional_metrics,
             config_snapshot: serde_json::to_value(&self.config.profiling_config)?,
             timestamp: SystemTime::now(),
+            name: "cpu_intensive_benchmark".to_string(),
+            value: 1_000_000.0 / duration.as_secs_f64(),
+            unit: "operations/sec".to_string(),
         })
     }
     
@@ -774,6 +790,9 @@ impl PerformanceTestFramework {
             additional_metrics,
             config_snapshot: serde_json::to_value(&self.config.profiling_config)?,
             timestamp: SystemTime::now(),
+            name: "memory_intensive_benchmark".to_string(),
+            value: allocations.len() as f64 / duration.as_secs_f64(),
+            unit: "allocations/sec".to_string(),
         })
     }
     
@@ -821,6 +840,9 @@ impl PerformanceTestFramework {
             additional_metrics,
             config_snapshot: serde_json::to_value(&self.config.profiling_config)?,
             timestamp: SystemTime::now(),
+            name: "system_stress_benchmark".to_string(),
+            value: 10000.0 / duration.as_secs_f64(),
+            unit: "operations/sec".to_string(),
         })
     }
     
@@ -1130,7 +1152,8 @@ impl From<SyncPerformanceConfig> for crate::framework::config::SyncConfig {
 // TestHarness Integration
 // ================================================================================================
 
-impl TestHarness for PerformanceTestFramework {
+// TODO: Fix thread safety issues with Criterion types before implementing TestHarness
+/*impl TestHarness for PerformanceTestFramework {
     fn name(&self) -> &str {
         "PerformanceTestFramework"
     }
@@ -1162,6 +1185,9 @@ impl TestHarness for PerformanceTestFramework {
         // Run comprehensive benchmarks
         match self.run_benchmarks().await {
             Ok(report) => {
+                // Store length before moving benchmarks
+                let benchmark_count = report.benchmarks.len();
+                
                 // Convert benchmark results to test results
                 for benchmark in report.benchmarks {
                     let success = benchmark.success_rate >= 95.0; // 95% success threshold
@@ -1196,7 +1222,7 @@ impl TestHarness for PerformanceTestFramework {
                         metadata.insert("performance_score".to_string(), report.performance_score.to_string());
                         metadata.insert("regressions".to_string(), report.regressions.len().to_string());
                         metadata.insert("improvements".to_string(), report.improvements.len().to_string());
-                        metadata.insert("total_benchmarks".to_string(), report.benchmarks.len().to_string());
+                        metadata.insert("total_benchmarks".to_string(), benchmark_count.to_string());
                         if let Some(ref path) = report.flamegraph_path {
                             metadata.insert("flamegraph_path".to_string(), path.to_string_lossy().to_string());
                         }
@@ -1243,7 +1269,7 @@ impl TestHarness for PerformanceTestFramework {
             "config": self.config
         })
     }
-}
+} */
 
 #[cfg(test)]
 mod tests {

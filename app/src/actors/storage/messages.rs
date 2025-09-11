@@ -19,6 +19,7 @@
 //! monitoring and debugging in the actor system.
 
 use crate::types::*;
+use super::indexing::{EthereumTransaction, EthereumLog};
 use actix::prelude::*;
 use std::collections::HashMap;
 use std::time::SystemTime;

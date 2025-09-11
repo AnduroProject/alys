@@ -6,6 +6,7 @@
 
 use crate::actors::network::sync::prelude::*;
 use actix::prelude::*;
+use crate::actors::chain::messages::GetChainHeight;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{broadcast, watch};
 use futures::future::join_all;
@@ -339,60 +340,6 @@ pub struct SyncActorHandle {
     pub metrics_receiver: watch::Receiver<SyncMetrics>,
 }
 
-impl Actor for SyncActor {
-    type Context = Context<Self>;
-    
-    fn started(&mut self, ctx: &mut Self::Context) {
-        info!("SyncActor starting with configuration: {:?}", self.config.core);
-        
-        // Store actor handle for self-reference
-        self.actor_handle = Some(ctx.address());
-        
-        // Start periodic tasks
-        self.start_periodic_tasks(ctx);
-        
-        // Initialize components
-        self.initialize_components(ctx);
-        
-        // Start health monitoring
-        self.start_health_monitoring(ctx);
-        
-        info!("SyncActor started successfully");
-        
-        // Broadcast start event
-        let _ = self.event_broadcaster.send(SyncEvent::StateChanged {
-            old_state: SyncState::Idle,
-            new_state: SyncState::Idle,
-            reason: "Actor started".to_string(),
-        });
-    }
-    
-    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
-        info!("SyncActor stopping");
-        
-        // Set shutdown signal
-        self.shutdown_signal.store(true, Ordering::SeqCst);
-        
-        // Broadcast shutdown event
-        let _ = self.event_broadcaster.send(SyncEvent::StateChanged {
-            old_state: self.get_current_state(),
-            new_state: SyncState::Failed {
-                reason: "Actor stopping".to_string(),
-                last_good_height: 0,
-                recovery_attempts: 0,
-                recovery_strategy: None,
-                can_retry: false,
-            },
-            reason: "Actor shutdown".to_string(),
-        });
-        
-        Running::Stop
-    }
-    
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        info!("SyncActor stopped");
-    }
-}
 
 impl SyncActor {
     /// Create a new SyncActor with comprehensive configuration
@@ -410,9 +357,16 @@ impl SyncActor {
             PeerManager::new(PeerManagerConfig::default())?
         ));
         
-        // Create block processor
+        // Create block processor with placeholder consensus actor
+        // TODO: Properly integrate ConsensusActor when available
+        let consensus_actor = todo!("ConsensusActor not yet implemented");
         let block_processor = Arc::new(RwLock::new(
-            BlockProcessor::new(BlockProcessorConfig::default()).await?
+            BlockProcessor::new(
+                Arc::new(config.clone()),
+                chain_actor.clone(),
+                consensus_actor,
+                peer_manager.clone(),
+            )?
         ));
         
         // Create checkpoint manager
@@ -725,7 +679,7 @@ impl SyncActor {
         
         // Only create checkpoints during active sync or when synced
         match current_state {
-            SyncState::DownloadingBlocks { current, .. } |
+            SyncState::DownloadingBlocks { .. } |
             SyncState::CatchingUp { .. } |
             SyncState::Synced { .. } => {
                 let progress = self.sync_progress.read().await;
@@ -1557,7 +1511,7 @@ pub struct EmergencyCondition {
 
 // Placeholder implementations for external components that would be implemented elsewhere
 
-use crate::actors::chain::{ChainActor, GetChainHeight};
+use crate::actors::chain::{ChainActor, messages::GetBlockByHeight};
 
 /// Checkpoint manager for recovery operations
 #[derive(Debug)]
@@ -1591,7 +1545,7 @@ pub struct NetworkMonitor {
 }
 
 impl NetworkMonitor {
-    pub async fn new(_config: NetworkConfig) -> SyncResult<Self> {
+    pub async fn new(_config: crate::config::NetworkConfig) -> SyncResult<Self> {
         Ok(Self {})
     }
     

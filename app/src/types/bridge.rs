@@ -2,6 +2,298 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime};
+use bitcoin::Address as BtcAddress;
+
+/// Status of signature collection for bridge operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureCollectionStatus {
+    /// No signatures requested yet
+    NotRequested,
+    /// Signatures have been requested
+    Requested,
+    /// All required signatures collected
+    Complete,
+    /// Signature collection timed out
+    Timeout,
+    /// Signature collection failed
+    Failed,
+}
+
+/// Signature collection status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureStatus {
+    pub request_id: Option<String>,
+    pub requested_at: Option<SystemTime>,
+    pub signatures_collected: u32,
+    pub signatures_required: u32,
+    pub status: SignatureCollectionStatus,
+}
+
+/// Pending peg-out operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPegOut {
+    pub burn_tx_hash: Hash256,
+    pub destination_address: BtcAddress,
+    pub amount: u64,
+    pub requester: Address,
+    pub unsigned_tx: Option<bitcoin::Transaction>,
+    pub signature_status: SignatureStatus,
+    pub witnesses: Vec<Hash256>,
+    pub signed_tx: Option<bitcoin::Transaction>,
+    pub broadcast_txid: Option<bitcoin::Txid>,
+    pub status: PegOperationStatus,
+}
+
+/// Pending request tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub id: String,
+    pub request_type: String,
+    pub timestamp: SystemTime,
+    pub timeout: Option<Duration>,
+}
+
+/// Governance endpoint configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceEndpoint {
+    pub url: String,
+    pub priority: u32,
+    pub timeout: Duration,
+    pub enabled: bool,
+}
+
+/// Federation migration strategy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FederationMigrationStrategy {
+    Gradual { phases: u32 },
+    Immediate,
+    Scheduled { at_block: u64 },
+    Manual,
+}
+
+/// Federation authority information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationAuthority {
+    pub id: String,
+    pub public_key: Vec<u8>,
+    pub weight: u64,
+    pub active: bool,
+}
+
+/// Status of refund operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefundStatus {
+    /// Refund not initiated
+    NotInitiated,
+    /// Refund in progress
+    Pending,
+    /// Refund completed successfully
+    Completed,
+    /// Refund failed
+    Failed,
+    /// Refund cancelled
+    Cancelled,
+}
+
+/// Who initiated an operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OperationInitiator {
+    /// User-initiated operation
+    User { user_address: Address },
+    /// System-initiated operation
+    System { component: String },
+    /// Governance-initiated operation
+    Governance { decision_id: String },
+    /// Automatic operation (scheduled)
+    Automatic { trigger: String },
+}
+
+/// Governance decision structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceDecision {
+    /// Unique decision ID
+    pub id: String,
+    /// Decision type
+    pub decision_type: String,
+    /// Decision outcome
+    pub approved: bool,
+    /// Voting details
+    pub votes: Vec<ProposalVote>,
+    /// Decision timestamp
+    pub decided_at: SystemTime,
+    /// Implementation deadline
+    pub deadline: Option<SystemTime>,
+}
+
+/// Governance approval information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceApproval {
+    /// Approval ID
+    pub id: String,
+    /// Approver identity
+    pub approver: String,
+    /// Approval timestamp
+    pub approved_at: SystemTime,
+    /// Signature/proof of approval
+    pub signature: Vec<u8>,
+}
+
+/// Detailed governance approval information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceApprovalDetails {
+    /// Basic approval info
+    pub approval: GovernanceApproval,
+    /// Additional context
+    pub context: String,
+    /// Approval conditions
+    pub conditions: Vec<String>,
+    /// Expiry time
+    pub expires_at: Option<SystemTime>,
+}
+
+/// Proposal vote information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposalVote {
+    /// Voter identity
+    pub voter: String,
+    /// Vote value
+    pub vote: bool,
+    /// Voting timestamp
+    pub voted_at: SystemTime,
+    /// Vote weight (if applicable)
+    pub weight: Option<u64>,
+}
+
+/// Required governance action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RequiredGovernanceAction {
+    /// Requires simple approval
+    SimpleApproval { threshold: f64 },
+    /// Requires multi-signature
+    MultiSignature { required_signatures: u32 },
+    /// Requires unanimous consent
+    Unanimous,
+    /// Emergency override possible
+    EmergencyOverride { override_conditions: Vec<String> },
+}
+
+/// Recovery option for failed operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecoveryOption {
+    /// Retry the operation
+    Retry { max_attempts: u32 },
+    /// Use alternative method
+    Alternative { method: String },
+    /// Manual intervention required
+    Manual { instructions: String },
+    /// Skip/cancel operation
+    Skip { reason: String },
+}
+
+/// Progress stage for long-running operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProgressStage {
+    /// Initial validation
+    Validation,
+    /// Signature collection
+    SignatureCollection,
+    /// Transaction building
+    TransactionBuilding,
+    /// Broadcasting
+    Broadcasting,
+    /// Confirmation waiting
+    Confirming,
+    /// Completion
+    Completed,
+}
+
+/// Load balancing information for distributed operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadBalancingInfo {
+    /// Current load level
+    pub load_level: f64,
+    /// Available capacity
+    pub available_capacity: u64,
+    /// Active operations count
+    pub active_operations: u32,
+    /// Average response time
+    pub avg_response_time: Duration,
+    /// Last updated timestamp
+    pub last_updated: SystemTime,
+}
+
+/// Execution window for time-constrained operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionWindow {
+    /// Window start time
+    pub start_time: SystemTime,
+    /// Window end time
+    pub end_time: SystemTime,
+    /// Priority within the window
+    pub priority: u32,
+    /// Maximum allowed delay
+    pub max_delay: Duration,
+}
+
+/// Emergency bypass configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmergencyBypass {
+    /// Enable emergency bypass
+    pub enabled: bool,
+    /// Required authorization level
+    pub auth_level: String,
+    /// Emergency codes
+    pub bypass_codes: Vec<String>,
+    /// Maximum usage count
+    pub max_uses: Option<u32>,
+    /// Expiry time
+    pub expires_at: Option<SystemTime>,
+}
+
+/// Blockchain for confirmation tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConfirmationBlockchain {
+    /// Bitcoin blockchain
+    Bitcoin,
+    /// Alys sidechain
+    Alys,
+    /// Ethereum mainnet (for bridge contracts)
+    Ethereum,
+}
+
+/// Federation update information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationUpdate {
+    pub update_type: String,
+    pub timestamp: SystemTime,
+}
+
+/// Escalation event for governance
+#[derive(Debug, Clone, Serialize, Deserialize)]  
+pub struct EscalationEvent {
+    pub severity: u32,
+    pub timestamp: SystemTime,
+}
+
+/// Validation steps for bridge operations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ValidationStep {
+    /// Check transaction validity
+    TransactionValidation,
+    /// Verify signatures
+    SignatureVerification,
+    /// Check amount and limits
+    AmountValidation,
+    /// Verify destination address
+    AddressValidation,
+    /// Check federation consensus
+    FederationConsensusCheck,
+    /// Verify blockchain confirmations
+    ConfirmationValidation,
+    /// Final approval step
+    FinalApproval,
+}
 
 /// Enhanced peg operation with governance integration and comprehensive tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,10 +314,6 @@ pub struct PegOperation {
     pub performance: OperationPerformanceMetrics,
     /// Error tracking and recovery
     pub error_tracking: OperationErrorTracking,
-    /// Compliance and audit trail
-    pub compliance: ComplianceTracking,
-    /// Resource allocation
-    pub resource_allocation: ResourceAllocation,
 }
 
 /// Peg operation types
@@ -132,6 +420,54 @@ pub struct PegOperationWorkflow {
     pub workflow_config: WorkflowConfig,
     /// State timeouts and deadlines
     pub timeouts: WorkflowTimeouts,
+}
+
+/// Workflow configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowConfig {
+    /// Enable automatic state transitions
+    pub auto_transitions: bool,
+    /// Maximum retry attempts per state
+    pub max_retries: u32,
+    /// Enable state validation
+    pub enable_validation: bool,
+    /// Workflow priority level
+    pub priority: u32,
+}
+
+impl Default for WorkflowConfig {
+    fn default() -> Self {
+        Self {
+            auto_transitions: true,
+            max_retries: 3,
+            enable_validation: true,
+            priority: 1,
+        }
+    }
+}
+
+/// Workflow timeout configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTimeouts {
+    /// Timeout for state initialization
+    pub init_timeout: Duration,
+    /// Timeout for state transitions
+    pub transition_timeout: Duration,
+    /// Timeout for validation operations
+    pub validation_timeout: Duration,
+    /// Global workflow timeout
+    pub workflow_timeout: Duration,
+}
+
+impl Default for WorkflowTimeouts {
+    fn default() -> Self {
+        Self {
+            init_timeout: Duration::from_secs(30),
+            transition_timeout: Duration::from_secs(60),
+            validation_timeout: Duration::from_secs(45),
+            workflow_timeout: Duration::from_secs(300),
+        }
+    }
 }
 
 /// Workflow states

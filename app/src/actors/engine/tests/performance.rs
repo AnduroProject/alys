@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use actix::prelude::*;
-use tracing_test::traced_test;
+// use tracing_test::traced_test;
 
-use lighthouse_facade::types::{Hash256, Address};
+use lighthouse_facade::types::Hash256;
+use ethereum_types::Address;
 
 use crate::types::*;
 use super::super::{

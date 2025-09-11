@@ -12,7 +12,8 @@ use tracing::*;
 use uuid::Uuid;
 
 use crate::types::*;
-use super::super::{ChainActor, messages::*, state::*};
+use super::super::{ChainActor, state::*};
+use super::super::messages::{*, FederationMember};
 
 /// Configuration for Aura PoA consensus operations
 #[derive(Debug, Clone)]
@@ -528,9 +529,9 @@ impl ChainActor {
     }
 
     /// Get current sync status
-    async fn get_sync_status(&self) -> Result<SyncStatus, ChainError> {
+    async fn get_sync_status(&self) -> Result<crate::types::consensus::SyncStatus, ChainError> {
         // Implementation would check sync state with network
-        Ok(SyncStatus::Synced)
+        Ok(crate::types::consensus::SyncStatus::Synced)
     }
 
     /// Get network status

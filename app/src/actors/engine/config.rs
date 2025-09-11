@@ -153,6 +153,65 @@ pub struct CircuitBreakerConfig {
     pub recovery_attempt_timeout: Duration,
 }
 
+/// Timeout configuration for engine operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeoutConfig {
+    /// Timeout for forkchoice updates
+    pub forkchoice_timeout: Duration,
+    
+    /// Timeout for new payload operations
+    pub new_payload_timeout: Duration,
+    
+    /// Timeout for get payload operations
+    pub get_payload_timeout: Duration,
+    
+    /// Timeout for general engine API calls
+    pub engine_api_timeout: Duration,
+    
+    /// Timeout for client health checks
+    pub health_check_timeout: Duration,
+}
+
+impl TimeoutConfig {
+    /// Create test default timeouts suitable for testing
+    pub fn test_defaults() -> Self {
+        Self {
+            forkchoice_timeout: Duration::from_millis(100),
+            new_payload_timeout: Duration::from_millis(200),
+            get_payload_timeout: Duration::from_millis(150),
+            engine_api_timeout: Duration::from_millis(500),
+            health_check_timeout: Duration::from_millis(50),
+        }
+    }
+}
+
+/// Health check configuration for engine operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckConfig {
+    /// Interval between health checks
+    pub interval: Duration,
+    
+    /// Timeout for health check operations
+    pub timeout: Duration,
+    
+    /// Maximum consecutive failures before marking unhealthy
+    pub max_failures: u32,
+    
+    /// Enable detailed health metrics
+    pub detailed_metrics: bool,
+}
+
+impl Default for HealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(30),
+            timeout: Duration::from_secs(5),
+            max_failures: 3,
+            detailed_metrics: false,
+        }
+    }
+}
+
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {

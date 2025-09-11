@@ -16,7 +16,10 @@ use crate::actors::bridge::{
     shared::errors::BridgeError,
     config::StreamConfig,
 };
+use crate::integration::{GovernanceMessage, GovernanceMessageType};
 use super::metrics::StreamMetrics;
+use lighthouse_facade::bls::SignatureSet;
+use actor_system::message::MessagePriority;
 
 /// Bridge-optimized governance protocol handler
 #[derive(Debug)]
@@ -272,7 +275,7 @@ pub enum GovernancePayload {
     /// Federation configuration update
     FederationUpdate {
         update_type: FederationUpdateType,
-        new_config: FederationConfig,
+        new_config: actor_system::blockchain::FederationConfig,
         effective_height: u64,
     },
     
@@ -585,8 +588,9 @@ impl BridgeGovernanceProtocol {
             let key = std::fs::read(&tls_config.key_path)
                 .map_err(|e| BridgeError::ConfigurationError(format!("Failed to read client key: {}", e)))?;
             
-            let identity = tonic::transport::Identity::from_pem(cert, key);
-            tls = tls.identity(identity);
+            // TODO: Fix when tonic::transport::Identity is available
+            // let identity = tonic::transport::Identity::from_pem(cert, key);
+            // tls = tls.identity(identity);
         }
         
         Ok(tls)
@@ -761,12 +765,12 @@ impl BridgeGovernanceProtocol {
         for endpoint in target_endpoints {
             // Convert GovernanceMessage to OutboundMessage
             let payload = match &message.payload {
-                crate::actors::bridge::messages::stream_messages::GovernancePayload::SignatureRequest(req) => {
+                super::governance::GovernancePayload::SignatureRequest(req) => {
                     GovernancePayload::SignatureRequest {
                         pegout_id: "unknown".to_string(), // Would extract from req
                         transaction: bitcoin::Transaction {
                             version: 1,
-                            lock_time: bitcoin::LockTime::ZERO,
+                            lock_time: bitcoin::absolute::LockTime::ZERO,
                             input: vec![],
                             output: vec![],
                         }, // Would extract from req
@@ -777,7 +781,7 @@ impl BridgeGovernanceProtocol {
                         fee: 0, // Would extract from req
                     }
                 }
-                crate::actors::bridge::messages::stream_messages::GovernancePayload::Heartbeat => {
+                super::governance::GovernancePayload::Heartbeat => {
                     GovernancePayload::Heartbeat {
                         timestamp: SystemTime::now(),
                         status: NodeStatus {

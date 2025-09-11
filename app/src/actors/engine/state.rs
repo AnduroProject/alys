@@ -232,6 +232,19 @@ pub enum SyncStatus {
     Unknown,
 }
 
+/// Impact level of performance degradation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DegradationImpact {
+    /// Minor performance reduction
+    Minor,
+    /// Moderate performance reduction
+    Moderate,
+    /// Significant performance reduction
+    PerformanceReduced,
+    /// Severe degradation affecting operations
+    Severe,
+}
+
 /// Engine actor internal state
 #[derive(Debug)]
 pub struct EngineActorState {

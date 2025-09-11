@@ -62,7 +62,7 @@ impl Default for BlockProcessingPriority {
 #[derive(Debug, Clone)]
 pub struct PendingBlockInfo {
     pub block: SignedConsensusBlock,
-    pub source: BlockSource,
+    pub source: crate::types::blockchain::BlockSource,
     pub received_at: Instant,
     pub priority: BlockProcessingPriority,
     pub correlation_id: Option<Uuid>,
@@ -593,7 +593,7 @@ impl ChainActor {
     }
 
     /// Perform chain reorganization to new block
-    async fn perform_reorganization(&mut self, target_block: &SignedConsensusBlock) -> Result<ReorgResult, ChainError> {
+    async fn perform_reorganization(&mut self, target_block: &SignedConsensusBlock) -> Result<super::super::messages::ReorgResult, ChainError> {
         let start_time = Instant::now();
         
         info!(
@@ -739,17 +739,17 @@ impl ChainActor {
     // Additional helper methods would be implemented here
     // Including validation helpers, execution logic, etc.
 
-    fn validate_block_structure(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<ValidationError>, _warnings: &mut Vec<String>) -> Result<(), ChainError> {
+    fn validate_block_structure(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<crate::types::ValidationError>, _warnings: &mut Vec<String>) -> Result<(), ChainError> {
         // Implementation placeholder
         Ok(())
     }
 
-    fn validate_block_signature(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<ValidationError>) -> Result<(), ChainError> {
+    fn validate_block_signature(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<crate::types::ValidationError>) -> Result<(), ChainError> {
         // Implementation placeholder
         Ok(())
     }
 
-    fn validate_consensus_rules(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<ValidationError>) -> Result<(), ChainError> {
+    fn validate_consensus_rules(&self, _block: &SignedConsensusBlock, _errors: &mut Vec<crate::types::ValidationError>) -> Result<(), ChainError> {
         // Implementation placeholder
         Ok(())
     }

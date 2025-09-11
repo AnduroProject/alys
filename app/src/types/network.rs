@@ -2,6 +2,7 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Peer connection information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -504,3 +505,4 @@ impl NetworkStats {
         }
     }
 }
+

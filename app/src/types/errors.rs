@@ -2,6 +2,7 @@
 
 use std::fmt;
 use serde::{Deserialize, Serialize};
+use ethereum_types::H256 as Hash256;
 
 /// System-level errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -581,3 +582,5 @@ pub type StreamResult<T> = Result<T, StreamError>;
 pub type BridgeResult<T> = Result<T, BridgeError>;
 pub type EngineResult<T> = Result<T, EngineError>;
 pub type AlysResult<T> = Result<T, AlysError>;
+
+

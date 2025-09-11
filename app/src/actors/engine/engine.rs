@@ -18,9 +18,10 @@ use lighthouse_facade::execution_layer::{
 };
 use lighthouse_facade::sensitive_url::SensitiveUrl;
 use lighthouse_facade::types::{
-    Address, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
+    ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, MainnetEthSpec,
     Uint256, Withdrawal,
 };
+use ethereum_types::Address;
 use lighthouse_facade::{execution_layer, types};
 use serde_json::json;
 use ssz_types::VariableList;
@@ -128,7 +129,7 @@ impl Engine {
         timestamp: Duration,
         payload_head: Option<ExecutionBlockHash>,
         add_balances: Vec<AddBalance>,
-    ) -> Result<ExecutionPayload<MainnetEthSpec>, Error> {
+    ) -> Result<ExecutionPayload, Error> {
         ENGINE_BUILD_BLOCK_CALLS
             .with_label_values(&["called", "default"])
             .inc();
@@ -228,7 +229,7 @@ impl Engine {
     /// Commit an execution block to the execution client
     pub async fn commit_block(
         &self,
-        execution_payload: ExecutionPayload<MainnetEthSpec>,
+        execution_payload: ExecutionPayload,
     ) -> Result<ExecutionBlockHash, Error> {
         ENGINE_COMMIT_BLOCK_CALLS
             .with_label_values(&["called"])
@@ -379,7 +380,7 @@ impl Engine {
     pub async fn get_payload_by_tag_from_engine(
         &self,
         query: BlockByNumberQuery<'_>,
-    ) -> Result<ExecutionPayloadCapella<MainnetEthSpec>, Error> {
+    ) -> Result<ExecutionPayloadCapella, Error> {
         debug!("Fetching payload by tag: {:?}", query);
         
         // Get the execution block header

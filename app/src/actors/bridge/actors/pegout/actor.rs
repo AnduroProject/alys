@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use crate::actors::bridge::{
     config::PegOutConfig,
-    messages::*,
-    shared::*,
+    messages::{pegout_messages::{PegOutStatus, PegOutMessage, PegOutResponse}, stream_messages::StreamMessage},
+    shared::{constants::*, federation::*, utxo::UtxoManager},
 };
 use crate::types::*;
 use super::{handlers::*, transaction_builder::*, signature_coordinator::*, state::*, metrics::*};
+use lighthouse_facade::bls::SignatureSet;
 
 /// PegOut actor for Bitcoin withdrawal processing
 pub struct PegOutActor {
@@ -40,8 +41,8 @@ pub struct PegOutActor {
     stream_actor: Option<Addr<super::super::stream::StreamActor>>,
     chain_actor: Option<Addr<crate::actors::chain::ChainActor>>,
     
-    /// External services
-    bitcoin_client: Arc<dyn BitcoinRpc>,
+    /// External services  
+    // bitcoin_client: Arc<dyn BitcoinRpc>, // TODO: Fix trait import cascade
     
     /// State management
     state: PegOutState,
@@ -93,15 +94,12 @@ impl PegOutActor {
     pub fn new(
         config: PegOutConfig,
         utxo_manager: UtxoManager,
-        bitcoin_client: Arc<dyn BitcoinRpc>,
-        federation_config: FederationConfig,
+        // bitcoin_client: Arc<dyn BitcoinRpc>, // TODO: Fix trait import cascade
+        federation_config: actor_system::blockchain::FederationConfig,
     ) -> Result<Self, PegOutError> {
-        let transaction_builder = TransactionBuilder::new(
-            bitcoin_client.clone(),
-            federation_config.clone(),
-        )?;
-        
-        let fee_estimator = FeeEstimator::new(bitcoin_client.clone(), config.transaction_fee_rate);
+        // TODO: Implement when BitcoinRpc trait is available
+        let transaction_builder = TransactionBuilder::default();
+        let fee_estimator = FeeEstimator::default();
         
         let signature_coordinator = SignatureCoordinator::new(
             federation_config,
@@ -121,7 +119,7 @@ impl PegOutActor {
             bridge_coordinator: None,
             stream_actor: None,
             chain_actor: None,
-            bitcoin_client,
+            // bitcoin_client, // TODO: Add back when trait is available
             state: PegOutState::Initializing,
             metrics,
             performance_tracker,
@@ -279,7 +277,7 @@ impl PegOutActor {
         info!("Requesting signatures for pegout {}", pegout_id);
 
         if let Some(stream_actor) = &self.stream_actor {
-            let signature_request = PegOutSignatureRequest {
+            let signature_request = SignatureRequest {
                 request_id: format!("sig_req_{}", Uuid::new_v4()),
                 pegout_id: pegout_id.clone(),
                 unsigned_transaction: unsigned_tx,

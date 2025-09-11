@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use tokio::fs::create_dir_all;
 use uuid::Uuid;
 
-use crate::framework::chaos::ChaosTestResult;
 use crate::framework::performance::{PerformanceMetrics, BenchmarkResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +175,13 @@ pub struct ChaosReport {
     pub fault_categories: HashMap<String, FaultCategoryResult>,
     pub recovery_analysis: RecoveryAnalysis,
     pub recommendations: Vec<ResilienceRecommendation>,
+    pub recovery_time_ms: Option<u64>,
+    pub success: bool,
+    pub fault_type: Option<String>,
+    pub severity: Option<String>,
+    pub failure_time_ms: Option<u64>,
+    pub performance_impact: Option<f64>,
+    pub auto_recovery: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,7 +296,7 @@ impl ReportGenerator {
         test_results: &HashMap<String, TestResult>,
         coverage_data: Option<&CoverageData>,
         performance_data: Option<&[BenchmarkResult]>,
-        chaos_results: Option<&[ChaosTestResult]>,
+        chaos_results: Option<&[ChaosReport]>,
     ) -> Result<TestReport> {
         let report_id = Uuid::new_v4();
         let timestamp = Utc::now();
@@ -426,7 +432,7 @@ impl ReportGenerator {
             
             let baseline = history.last().map(|h| h.value);
             let change_percentage = if let Some(baseline) = baseline {
-                ((result.value - baseline) / baseline) * 100.0
+                Some(((result.value - baseline) / baseline) * 100.0)
             } else {
                 None
             };
@@ -483,7 +489,7 @@ impl ReportGenerator {
         })
     }
 
-    fn generate_chaos_report(&self, chaos_results: &[ChaosTestResult]) -> Result<ChaosReport> {
+    fn generate_chaos_report(&self, chaos_results: &[ChaosReport]) -> Result<ChaosReport> {
         let total_experiments = chaos_results.len() as u32;
         let passed_experiments = chaos_results.iter()
             .filter(|r| r.success)
@@ -518,10 +524,11 @@ impl ReportGenerator {
         // Group by fault categories
         let mut fault_categories = HashMap::new();
         for result in chaos_results {
+            let fault_type = result.fault_type.clone().unwrap_or_else(|| "unknown".to_string());
             let entry = fault_categories
-                .entry(result.fault_type.clone())
+                .entry(fault_type.clone())
                 .or_insert(FaultCategoryResult {
-                    category: result.fault_type.clone(),
+                    category: fault_type,
                     experiments: 0,
                     success_rate: 0.0,
                     avg_recovery_time: 0.0,
@@ -532,7 +539,7 @@ impl ReportGenerator {
             if result.success {
                 entry.success_rate += 1.0;
             }
-            if result.severity == "critical" {
+            if result.severity.as_deref() == Some("critical") {
                 entry.critical_failures += 1;
             }
             if let Some(recovery_time) = result.recovery_time_ms {
@@ -549,6 +556,8 @@ impl ReportGenerator {
         let recovery_analysis = self.analyze_recovery_patterns(chaos_results);
         let recommendations = self.generate_resilience_recommendations(chaos_results, &system_stability_metrics);
         
+        let throughput_degradation = system_stability_metrics.throughput_degradation;
+        
         Ok(ChaosReport {
             experiments_conducted: total_experiments,
             experiments_passed: passed_experiments,
@@ -558,6 +567,13 @@ impl ReportGenerator {
             fault_categories,
             recovery_analysis,
             recommendations,
+            recovery_time_ms: None, // TODO: Calculate from recovery_analysis
+            success: passed_experiments > failed_experiments,
+            fault_type: None, // TODO: Determine primary fault type
+            severity: None, // TODO: Determine overall severity
+            failure_time_ms: None, // TODO: Calculate from system_stability_metrics
+            performance_impact: Some(throughput_degradation),
+            auto_recovery: false, // TODO: Calculate from recovery patterns
         })
     }
 
@@ -700,7 +716,7 @@ impl ReportGenerator {
         ((1.0 - cv.min(1.0)) * 100.0).max(0.0)
     }
 
-    fn calculate_mttf(&self, chaos_results: &[ChaosTestResult]) -> f64 {
+    fn calculate_mttf(&self, chaos_results: &[ChaosReport]) -> f64 {
         // Calculate Mean Time To Failure based on chaos test results
         let failure_intervals: Vec<f64> = chaos_results.iter()
             .filter(|r| !r.success)
@@ -714,12 +730,10 @@ impl ReportGenerator {
         failure_intervals.iter().sum::<f64>() / failure_intervals.len() as f64
     }
 
-    fn calculate_throughput_degradation(&self, chaos_results: &[ChaosTestResult]) -> f64 {
+    fn calculate_throughput_degradation(&self, chaos_results: &[ChaosReport]) -> f64 {
         // Calculate average throughput degradation during chaos tests
         let degradations: Vec<f64> = chaos_results.iter()
-            .filter_map(|r| r.performance_impact.as_ref())
-            .filter_map(|impact| impact.get("throughput_degradation_percent"))
-            .filter_map(|v| v.as_f64())
+            .filter_map(|r| r.performance_impact)
             .collect();
         
         if degradations.is_empty() {
@@ -729,7 +743,7 @@ impl ReportGenerator {
         degradations.iter().sum::<f64>() / degradations.len() as f64
     }
 
-    fn analyze_recovery_patterns(&self, chaos_results: &[ChaosTestResult]) -> RecoveryAnalysis {
+    fn analyze_recovery_patterns(&self, chaos_results: &[ChaosReport]) -> RecoveryAnalysis {
         let recovery_times: Vec<u64> = chaos_results.iter()
             .filter_map(|r| r.recovery_time_ms)
             .collect();
@@ -757,7 +771,7 @@ impl ReportGenerator {
         let recovery_success_rate = (successful_recoveries as f64 / chaos_results.len() as f64) * 100.0;
         
         let auto_recoveries = chaos_results.iter()
-            .filter(|r| r.auto_recovery.unwrap_or(false))
+            .filter(|r| r.auto_recovery)
             .count();
         let auto_recovery_rate = (auto_recoveries as f64 / chaos_results.len() as f64) * 100.0;
         
@@ -772,7 +786,7 @@ impl ReportGenerator {
 
     fn generate_resilience_recommendations(
         &self,
-        chaos_results: &[ChaosTestResult],
+        chaos_results: &[ChaosReport],
         stability_metrics: &SystemStabilityMetrics,
     ) -> Vec<ResilienceRecommendation> {
         let mut recommendations = Vec::new();
@@ -905,7 +919,8 @@ impl ReportGenerator {
         let output = Command::new("git")
             .args(["log", "-1", "--pretty=format:%ct"])
             .output()?;
-        let timestamp_str = String::from_utf8(output.stdout)?.trim();
+        let timestamp_string = String::from_utf8(output.stdout)?;
+        let timestamp_str = timestamp_string.trim();
         let timestamp: i64 = timestamp_str.parse()?;
         Ok(DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now))
     }

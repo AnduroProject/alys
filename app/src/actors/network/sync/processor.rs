@@ -19,21 +19,23 @@ use serde::{Serialize, Deserialize};
 use prometheus::{Histogram, Counter, Gauge, IntCounter, IntGauge};
 
 use crate::{
-    types::{Block, BlockHash, BlockHeader, Signature, AuthorityId},
+    types::{blockchain::{ConsensusBlock as Block, SignedConsensusBlock}, BlockHash, BlockHeader, Signature, ConsensusActor},
     actors::{
-        chain::{ChainActor, ValidateBlock, ImportBlock},
-        consensus::{ConsensusActor, VerifyFederationSignature},
+        chain::{ChainActor, ValidateBlock, ImportBlock, messages::VerifyFederationSignature},
     },
-    chain::BlockValidationError,
+    error::ChainError,
 };
 
 use super::{
     errors::{SyncError, SyncResult},
     messages::{ProcessBlocks, ValidationResult, BatchResult},
     metrics::*,
-    config::{SyncConfig, ValidationConfig, PerformanceConfig},
+    config::{SyncConfig, PerformanceConfig},
     peer::{PeerId, PeerManager},
 };
+
+/// Authority identifier for federation consensus
+pub type AuthorityId = String;
 
 lazy_static::lazy_static! {
     static ref VALIDATION_DURATION: Histogram = prometheus::register_histogram!(

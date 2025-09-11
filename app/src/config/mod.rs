@@ -15,6 +15,45 @@ pub mod storage_config;
 pub mod execution_config;
 pub mod hot_reload;
 
+/// Bitcoin configuration for node connections
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BitcoinConfig {
+    /// Bitcoin node RPC URL
+    pub rpc_url: String,
+    /// Bitcoin node RPC username
+    pub rpc_username: Option<String>,
+    /// Bitcoin node RPC password
+    pub rpc_password: Option<String>,
+    /// Connection timeout in seconds
+    pub timeout: u64,
+}
+
+impl Default for BitcoinConfig {
+    fn default() -> Self {
+        Self {
+            rpc_url: "http://localhost:8332".to_string(),
+            rpc_username: None,
+            rpc_password: None,
+            timeout: 30,
+        }
+    }
+}
+
+impl BitcoinConfig {
+    /// Load configuration from environment variables
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            rpc_url: std::env::var("BITCOIN_RPC_URL").unwrap_or_else(|_| "http://localhost:8332".to_string()),
+            rpc_username: std::env::var("BITCOIN_RPC_USER").ok(),
+            rpc_password: std::env::var("BITCOIN_RPC_PASS").ok(),
+            timeout: std::env::var("BITCOIN_RPC_TIMEOUT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
+        })
+    }
+}
+
 // Re-exports for convenience
 pub use alys_config::*;
 pub use actor_config::*;

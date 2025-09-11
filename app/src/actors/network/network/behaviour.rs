@@ -68,7 +68,7 @@ impl AlysNetworkBehaviour {
 
         // Configure Kademlia DHT
         let kad_store = kad::store::MemoryStore::new(local_peer_id);
-        let kademlia_config = kad::KademliaConfig::default()
+        let kademlia_config = kad::Config::default()
             .set_query_timeout(config.discovery_config.dht_query_timeout)
             .set_replication_factor(
                 config.discovery_config.kademlia_replication_factor.try_into()

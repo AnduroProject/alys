@@ -2,18 +2,39 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+
+/// Chain identifier for different networks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChainId {
+    /// Mainnet chain
+    Mainnet,
+    /// Testnet chain
+    Testnet,
+    /// Custom chain with numeric ID
+    Custom(u64),
+}
+
+impl From<u64> for ChainId {
+    fn from(id: u64) -> Self {
+        match id {
+            1 => ChainId::Mainnet,
+            212121 => ChainId::Testnet,
+            custom => ChainId::Custom(custom),
+        }
+    }
+}
 use bitcoin::{BlockHash as BitcoinBlockHash, Txid, Transaction as BitcoinTransaction};
 use lighthouse_facade::types::{
-    EthSpec, ExecutionPayloadCapella, MainnetEthSpec, ExecutionPayload, ExecutionBlockHash,
+    EthSpec, ExecutionPayloadCapella, MainnetEthSpec, ExecutionPayload as LighthouseExecutionPayload, ExecutionBlockHash,
     FixedVector, VariableList, Uint256, Transactions, Withdrawals
 };
 use lighthouse_facade::bls::PublicKey;
 use crate::auxpow::AuxPow;
 use crate::auxpow_miner::BlockIndex;
 use crate::aura::Authority;
-use crate::signatures::{AggregateApproval, CheckedIndividualApproval, IndividualApproval};
+use crate::signatures::{AggregateApproval as SignatureAggregateApproval, CheckedIndividualApproval, IndividualApproval as SignatureIndividualApproval};
 use crate::spec::ChainSpec;
-use crate::store::BlockRef;
+use crate::store::BlockRef as StoreBlockRef;
 use crate::error::Error;
 
 /// Trait for converting between different block hash types
@@ -36,7 +57,7 @@ impl ConvertBlockHash<Hash256> for BitcoinBlockHash {
 /// A complete block in the Alys blockchain with backward compatibility
 /// This supports both legacy and V2 usage patterns
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsensusBlock<T: EthSpec = MainnetEthSpec> {
+pub struct ConsensusBlock {
     /// The block hash of the parent
     pub parent_hash: Hash256,
     /// Aura slot the block was produced in
@@ -44,7 +65,7 @@ pub struct ConsensusBlock<T: EthSpec = MainnetEthSpec> {
     /// Proof of work header, used for finalization. Not every block is expected to have this.
     pub auxpow_header: Option<AuxPowHeader>,
     /// Execution layer payload (Capella format for legacy compatibility)
-    pub execution_payload: ExecutionPayloadCapella<T>,
+    pub execution_payload: ExecutionPayloadCapella,
     /// Transactions that are sending funds to the bridge (Bitcoin txid, block hash)
     pub pegins: Vec<(Txid, BitcoinBlockHash)>,
     /// Bitcoin payments for pegouts
@@ -75,8 +96,8 @@ pub struct AuxPowHeader {
 
 /// Signed consensus block with aggregate approval
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignedConsensusBlock<T: EthSpec = MainnetEthSpec> {
-    pub message: ConsensusBlock<T>,
+pub struct SignedConsensusBlock {
+    pub message: ConsensusBlock,
     /// Signed by the authority for that slot, plus the approvals of other authorities
     pub signature: AggregateApproval,
 }
@@ -90,6 +111,15 @@ pub struct AggregateApproval {
     pub signature: Signature,
 }
 
+impl Default for AggregateApproval {
+    fn default() -> Self {
+        Self {
+            signers: Vec::new(),
+            signature: Signature::empty(),
+        }
+    }
+}
+
 /// Individual approval from an authority
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndividualApproval {
@@ -100,7 +130,7 @@ pub struct IndividualApproval {
 // Implementation of BlockIndex trait for ConsensusBlock
 // NOTE: implementation assumes ConsensusBlock contains auxpow_header
 // i.e. it is only called for those blocks retrieved from storage
-impl BlockIndex for ConsensusBlock<MainnetEthSpec> {
+impl BlockIndex for ConsensusBlock {
     fn block_hash(&self) -> BitcoinBlockHash {
         self.signing_root().to_block_hash()
     }
@@ -128,7 +158,7 @@ impl BlockIndex for ConsensusBlock<MainnetEthSpec> {
     }
 }
 
-impl Default for ConsensusBlock<MainnetEthSpec> {
+impl Default for ConsensusBlock {
     fn default() -> Self {
         Self {
             parent_hash: Hash256::zero(),
@@ -158,10 +188,10 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
     }
 }
 
-impl ConsensusBlock<MainnetEthSpec> {
+impl ConsensusBlock {
     pub fn new(
         slot: u64,
-        payload: ExecutionPayload<MainnetEthSpec>,
+        payload: ExecutionPayload,
         prev: Hash256,
         auxpow_header: Option<AuxPowHeader>,
         pegins: Vec<(Txid, BitcoinBlockHash)>,
@@ -195,7 +225,7 @@ impl ConsensusBlock<MainnetEthSpec> {
         .assume_checked()
     }
 
-    pub fn sign_block(self, authority: &Authority) -> SignedConsensusBlock<MainnetEthSpec> {
+    pub fn sign_block(self, authority: &Authority) -> SignedConsensusBlock {
         let approval = self.sign(authority).into_aggregate();
 
         SignedConsensusBlock {
@@ -205,7 +235,7 @@ impl ConsensusBlock<MainnetEthSpec> {
     }
 }
 
-impl SignedConsensusBlock<MainnetEthSpec> {
+impl SignedConsensusBlock {
     // https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/beacon_chain/src/block_verification.rs#L1893
     pub fn verify_signature(&self, public_keys: &[PublicKey]) -> bool {
         let message = self.message.signing_root();
@@ -238,7 +268,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
 
     pub fn genesis(
         chain_spec: ChainSpec,
-        execution_payload: ExecutionPayloadCapella<MainnetEthSpec>,
+        execution_payload: ExecutionPayloadCapella,
     ) -> Self {
         // sanity checks
         if execution_payload.block_number != 0 {
@@ -348,6 +378,8 @@ pub struct ExecutionPayload {
     pub base_fee_per_gas: U256,
     pub transactions: Vec<Vec<u8>>, // Serialized transactions
     pub withdrawals: Option<Vec<Withdrawal>>,
+    pub blob_gas_used: Option<u64>,
+    pub excess_blob_gas: Option<u64>,
 }
 
 /// Withdrawal structure (future use)
@@ -396,14 +428,33 @@ pub struct EventLog {
     pub removed: bool,
 }
 
-/// Chain state information
+/// Basic chain information summary
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainState {
+pub struct ChainSummary {
     pub head: BlockRef,
     pub finalized_head: Option<BlockRef>,
     pub genesis_hash: BlockHash,
     pub chain_id: u64,
     pub total_difficulty: U256,
+}
+
+impl ChainSummary {
+    /// Create a new ChainSummary from basic chain information
+    pub fn new(
+        head: BlockRef,
+        finalized_head: Option<BlockRef>,
+        genesis_hash: BlockHash,
+        chain_id: u64,
+        total_difficulty: U256,
+    ) -> Self {
+        Self {
+            head,
+            finalized_head,
+            genesis_hash,
+            chain_id,
+            total_difficulty,
+        }
+    }
 }
 
 /// Pending transaction pool entry
@@ -951,6 +1002,15 @@ impl BlockRef {
             parent_hash: BlockHash::zero(),
         }
     }
+    
+    /// Create block reference from a consensus block
+    pub fn from_block(block: &SignedConsensusBlock) -> Self {
+        Self {
+            hash: block.message.hash(),
+            number: block.message.slot,
+            parent_hash: block.message.parent_hash,
+        }
+    }
 }
 
 impl ExecutionPayload {
@@ -972,6 +1032,8 @@ impl ExecutionPayload {
             base_fee_per_gas: U256::from(1_000_000_000u64), // 1 Gwei
             transactions: Vec::new(),
             withdrawals: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
         }
     }
 }
@@ -980,6 +1042,16 @@ impl SignedConsensusBlock {
     /// Create new signed consensus block
     pub fn new(message: ConsensusBlock, signature: AggregateApproval) -> Self {
         Self { message, signature }
+    }
+    
+    /// Create signed consensus block from block reference (placeholder implementation)
+    pub fn from_block_ref(block_ref: &BlockRef) -> Self {
+        // This is a placeholder - in a real implementation you'd need to reconstruct
+        // the full block from the reference, which might require database access
+        Self {
+            message: ConsensusBlock::default(),
+            signature: AggregateApproval::default(),
+        }
     }
 
     /// Verify the aggregate signature against public keys
@@ -1472,4 +1544,26 @@ impl BLSSignature {
     pub fn is_aggregated(&self) -> bool {
         self.aggregation_bits.is_some()
     }
+}
+
+/// Block event type for notifications
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockEventType {
+    /// New block imported
+    Import,
+    /// Block finalized
+    Finalization,
+    /// Block reorganization
+    Reorganization,
+}
+
+/// Block source information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BlockSource {
+    /// Block from peer
+    Peer { peer_id: PeerId },
+    /// Block produced locally
+    Local,
+    /// Block from sync
+    Sync { checkpoint: Option<String> },
 }

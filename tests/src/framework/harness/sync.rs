@@ -2146,18 +2146,25 @@ impl SyncTestHarness {
         let mut conflicts_detected = 0;
         let mut rng = rand::thread_rng();
         
-        // Simulate concurrent sync sessions
-        let mut session_handles = Vec::new();
-        for session_id in 0..session_count {
+        // Generate all random values first to avoid borrow conflicts
+        let session_params: Vec<_> = (0..session_count).map(|_| {
             let session_delay = Duration::from_millis(rng.gen_range(10..50));
             let session_blocks = blocks_per_session + rng.gen_range(0..100); // Slight variation
-            
+            let max_batches = (session_blocks + 99) / 100; // Ceiling division
+            let conflict_chances: Vec<bool> = (0..max_batches).map(|_| rng.gen_bool(0.05)).collect();
+            (session_delay, session_blocks, conflict_chances)
+        }).collect();
+
+        // Simulate concurrent sync sessions
+        let mut session_handles = Vec::new();
+        for (session_id, (session_delay, session_blocks, conflict_chances)) in session_params.into_iter().enumerate() {
             session_handles.push(async move {
                 tokio::time::sleep(session_delay).await;
                 
                 let session_start = Instant::now();
                 let mut blocks_synced = 0;
                 let mut session_conflicts = 0;
+                let mut batch_index = 0;
                 
                 // Simulate progressive sync with potential conflicts
                 while blocks_synced < session_blocks {
@@ -2166,14 +2173,15 @@ impl SyncTestHarness {
                     // Simulate sync work
                     tokio::time::sleep(Duration::from_millis(1)).await;
                     
-                    // Simulate conflict detection (5% chance)
-                    if rng.gen_bool(0.05) {
+                    // Simulate conflict detection using pre-generated chances
+                    if batch_index < conflict_chances.len() && conflict_chances[batch_index] {
                         session_conflicts += 1;
                         // Simulate conflict resolution delay
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                     
                     blocks_synced += batch_size;
+                    batch_index += 1;
                 }
                 
                 (session_id, session_start.elapsed(), session_conflicts)

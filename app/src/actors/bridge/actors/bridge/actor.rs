@@ -12,10 +12,11 @@ use uuid::Uuid;
 use crate::actors::bridge::{
     config::{BridgeSystemConfig, BridgeConfig},
     messages::*,
-    shared::*,
+    shared::{errors::BridgeError, federation::*, constants::*},
 };
 use crate::types::*;
-use super::{handlers::*, state::*, metrics::*};
+use super::{handlers::*, metrics::*};
+use super::state::{*, BridgeState};
 
 /// Bridge coordinator actor that manages the bridge system
 pub struct BridgeActor {

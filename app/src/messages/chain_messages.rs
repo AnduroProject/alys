@@ -17,7 +17,7 @@
 //!
 //! All messages support distributed tracing, correlation IDs, and actor supervision patterns.
 
-use crate::types::*;
+use crate::{types::*, AuxPow};
 use actix::prelude::*;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;

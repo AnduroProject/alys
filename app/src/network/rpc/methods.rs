@@ -95,9 +95,9 @@ pub struct MetaData<T: EthSpec> {
     /// A sequential counter indicating when data gets modified.
     pub seq_number: u64,
     /// The persistent attestation subnet bitfield.
-    pub attnets: EnrAttestationBitfield<T>,
+    pub attnets: EnrAttestationBitfield,
     /// The persistent sync committee bitfield.
-    pub syncnets: EnrSyncCommitteeBitfield<T>,
+    pub syncnets: EnrSyncCommitteeBitfield,
 }
 
 /// The reason given for a `Goodbye` message.
@@ -210,7 +210,7 @@ pub enum RPCResponse<T: EthSpec> {
 
     /// A response to a get BLOCKS_BY_RANGE request. A None response signifies the end of the
     /// batch.
-    BlocksByRange(Arc<SignedConsensusBlock<T>>),
+    BlocksByRange(Arc<SignedConsensusBlock>),
 
     /// A PONG response to a PING request.
     Pong(Ping),

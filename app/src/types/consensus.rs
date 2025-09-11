@@ -2,6 +2,26 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
+use actix::prelude::*;
+
+/// Placeholder ConsensusActor for compilation compatibility
+/// TODO: Implement proper consensus actor
+#[derive(Debug)]
+pub struct ConsensusActor {
+    _placeholder: bool,
+}
+
+impl ConsensusActor {
+    pub fn new() -> Self {
+        Self {
+            _placeholder: true,
+        }
+    }
+}
+
+impl Actor for ConsensusActor {
+    type Context = Context<Self>;
+}
 
 /// Enhanced synchronization progress with parallel download coordination
 #[derive(Debug, Clone, Serialize, Deserialize)]

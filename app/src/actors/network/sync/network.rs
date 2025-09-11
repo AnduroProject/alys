@@ -23,16 +23,17 @@ use prometheus::{Histogram, Counter, Gauge, IntCounter, IntGauge, HistogramVec};
 use uuid::Uuid;
 
 use crate::{
-    types::{Block, BlockHash},
+    types::{blockchain::{ConsensusBlock as Block, SignedConsensusBlock}, BlockHash},
 };
 
 use super::{
     errors::{SyncError, SyncResult},
-    messages::{SyncState, NetworkHealth, NetworkPartition, PartitionSeverity},
+    messages::{SyncState, NetworkHealth},
     config::SyncConfig,
     peer::{PeerId, PeerManager, PeerSyncInfo},
     metrics::*,
 };
+use crate::actors::sync::{NetworkPartition, PartitionSeverity};
 
 lazy_static::lazy_static! {
     static ref NETWORK_HEALTH_SCORE: Gauge = prometheus::register_gauge!(

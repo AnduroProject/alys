@@ -12,6 +12,8 @@ use crate::actors::bridge::{
     messages::*,
     actors::{bridge::BridgeActor, pegin::PegInActor, pegout::PegOutActor, stream::StreamActor},
 };
+use crate::types::{PegInStatus, bridge::*};
+use actor_system::lifecycle::ActorState;
 
 /// State synchronization manager
 pub struct StateSyncManager {
@@ -37,7 +39,7 @@ pub struct StateSyncManager {
 
 /// Actor state representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActorState {
+pub struct ActorStateSnapshot {
     pub actor_type: ActorType,
     pub version: u64,
     pub timestamp: SystemTime,
@@ -229,7 +231,7 @@ impl StateSyncManager {
         match actor_type {
             ActorType::Bridge => {
                 if let Some(actor) = &self.bridge_actor {
-                    let response = actor.send(BridgeStatusMessage::GetStatus).await
+                    let response = actor.send(BridgeCoordinationMessage::GetSystemStatus).await
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("Bridge: {}", e)))?
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("Bridge: {:?}", e)))?;
                     
@@ -275,14 +277,14 @@ impl StateSyncManager {
     }
 
     /// Convert bridge status to actor state
-    fn bridge_status_to_state(&self, status: BridgeStatus) -> ActorState {
+    fn bridge_status_to_state(&self, status: crate::types::bridge::BridgeStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("active_pegins".to_string(), StateValue::Integer(status.active_pegins as i64));
         key_metrics.insert("active_pegouts".to_string(), StateValue::Integer(status.active_pegouts as i64));
         key_metrics.insert("total_processed".to_string(), StateValue::Integer(status.total_processed as i64));
         key_metrics.insert("health_score".to_string(), StateValue::Float(status.health_score));
 
-        ActorState {
+        ActorStateSnapshot {
             actor_type: ActorType::Bridge,
             version: self.state_versions.get(&ActorType::Bridge).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
@@ -293,14 +295,14 @@ impl StateSyncManager {
     }
 
     /// Convert pegin status to actor state
-    fn pegin_status_to_state(&self, status: PegInStatus) -> ActorState {
+    fn pegin_status_to_state(&self, status: PegInStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("pending_deposits".to_string(), StateValue::Integer(status.pending_deposits as i64));
         key_metrics.insert("confirmed_deposits".to_string(), StateValue::Integer(status.confirmed_deposits as i64));
         key_metrics.insert("total_amount".to_string(), StateValue::Integer(status.total_amount as i64));
         key_metrics.insert("error_rate".to_string(), StateValue::Float(status.error_rate));
 
-        ActorState {
+        ActorStateSnapshot {
             actor_type: ActorType::PegIn,
             version: self.state_versions.get(&ActorType::PegIn).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
@@ -311,14 +313,14 @@ impl StateSyncManager {
     }
 
     /// Convert pegout status to actor state
-    fn pegout_status_to_state(&self, status: PegOutStatus) -> ActorState {
+    fn pegout_status_to_state(&self, status: crate::actors::bridge::messages::pegout_messages::PegOutStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("pending_withdrawals".to_string(), StateValue::Integer(status.pending_withdrawals as i64));
         key_metrics.insert("completed_withdrawals".to_string(), StateValue::Integer(status.completed_withdrawals as i64));
         key_metrics.insert("available_utxos".to_string(), StateValue::Integer(status.available_utxos as i64));
         key_metrics.insert("total_value".to_string(), StateValue::Integer(status.total_value as i64));
 
-        ActorState {
+        ActorStateSnapshot {
             actor_type: ActorType::PegOut,
             version: self.state_versions.get(&ActorType::PegOut).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
@@ -329,14 +331,14 @@ impl StateSyncManager {
     }
 
     /// Convert stream status to actor state
-    fn stream_status_to_state(&self, status: StreamConnectionStatus) -> ActorState {
+    fn stream_status_to_state(&self, status: NodeConnectionStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("is_connected".to_string(), StateValue::Boolean(status.connected));
         key_metrics.insert("message_count".to_string(), StateValue::Integer(status.message_count as i64));
         key_metrics.insert("last_message_time".to_string(), StateValue::String(format!("{:?}", status.last_message_time)));
         key_metrics.insert("reconnect_count".to_string(), StateValue::Integer(status.reconnect_count as i64));
 
-        ActorState {
+        ActorStateSnapshot {
             actor_type: ActorType::Stream,
             version: self.state_versions.get(&ActorType::Stream).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),

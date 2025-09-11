@@ -30,6 +30,18 @@ pub mod governance {
         pub status: String,
         pub data: Vec<u8>,
     }
+    
+    #[derive(Debug, Clone)]
+    pub struct StreamRequest {
+        pub request_id: String,
+        pub payload: Vec<u8>,
+    }
+    
+    #[derive(Debug, Clone)]
+    pub struct StreamResponse {
+        pub response_id: String,
+        pub payload: Vec<u8>,
+    }
 }
 
 /// Bridge governance service implementation

@@ -6,13 +6,15 @@
 use libp2p::{
     request_response::{
         self, Behaviour as RequestResponse, Config as RequestResponseConfig, Event as RequestResponseEvent, 
-        Message as RequestResponseMessage, ResponseChannel, RequestId, OutboundRequestId,
+        Message as RequestResponseMessage, ResponseChannel, OutboundRequestId,
     },
-    core::{ProtocolName, upgrade::{read_length_prefixed, write_length_prefixed}},
     futures::prelude::*,
     identity::Keypair,
     PeerId,
 };
+
+// Type alias for compatibility
+type RequestId = OutboundRequestId;
 use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use serde::{Serialize, Deserialize};
@@ -20,6 +22,41 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::io;
 use ethereum_types::H256;
+
+/// Read length-prefixed data from an async reader
+async fn read_length_prefixed<T>(io: &mut T, max_size: usize) -> io::Result<Vec<u8>>
+where
+    T: AsyncRead + Unpin,
+{
+    let mut length_bytes = [0u8; 4];
+    io.read_exact(&mut length_bytes).await?;
+    let length = u32::from_be_bytes(length_bytes) as usize;
+    
+    if length > max_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Message too large: {} bytes (max: {})", length, max_size),
+        ));
+    }
+    
+    let mut buffer = vec![0u8; length];
+    io.read_exact(&mut buffer).await?;
+    Ok(buffer)
+}
+
+/// Write length-prefixed data to an async writer
+async fn write_length_prefixed<T>(io: &mut T, data: Vec<u8>) -> io::Result<()>
+where
+    T: AsyncWrite + Unpin,
+{
+    let length = data.len() as u32;
+    let length_bytes = length.to_be_bytes();
+    
+    io.write_all(&length_bytes).await?;
+    io.write_all(&data).await?;
+    io.flush().await?;
+    Ok(())
+}
 
 /// Alys request-response protocol for blockchain operations
 pub struct AlysRequestResponse {

@@ -16,14 +16,19 @@ use libp2p::{
     dns,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
+
+// Import Alys protocol types
+use super::protocols::request_response::{AlysRequest, AlysResponse};
+use super::behaviour::{FederationEvent, AlysNetworkBehaviour};
 
 use actor_system::{AlysActor, LifecycleAware, ActorResult, ActorError};
 use actor_system::blockchain::{BlockchainAwareActor, BlockchainTimingConstraints, BlockchainActorPriority};
 
 use crate::actors::network::messages::*;
 use crate::actors::network::network::*;
+use crate::actors::network::network::behaviour::AlysNetworkEvent;
 
 /// NetworkActor for P2P protocol management
 pub struct NetworkActor {
@@ -78,12 +83,9 @@ impl NetworkActor {
         // Create transport
         let transport = {
             let tcp = tcp::tokio::Transport::default();
-            let dns_tcp = dns::TokioDnsConfig::system(tcp)
-                .map_err(|e| ActorError::InitializationError {
-                    reason: format!("DNS transport error: {}", e),
-                })?;
-            
-            dns_tcp
+            // TODO: Fix DNS config when libp2p API is available
+            // For now, use TCP directly
+            tcp
                 .upgrade(upgrade::Version::V1)
                 .authenticate(noise::Config::new(&keypair).unwrap())
                 .multiplex(yamux::Config::default())
@@ -571,7 +573,7 @@ impl LifecycleAware for NetworkActor {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> ActorResult<()> {
+    fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
         self.shutdown_requested = true;
         tracing::info!("NetworkActor lifecycle stopped");
         Ok(())
@@ -906,41 +908,6 @@ impl Handler<MessageReceived> for NetworkActor {
     }
 }
 
-impl Handler<NetworkEvent> for NetworkActor {
-    type Result = NetworkActorResult<()>;
-
-    fn handle(&mut self, msg: NetworkEvent, _ctx: &mut Context<Self>) -> Self::Result {
-        tracing::info!("Network event: {:?} - {}", msg.event_type, msg.details);
-
-        match msg.event_type {
-            NetworkEventType::BootstrapCompleted => {
-                self.bootstrap_status = BootstrapStatus::Completed;
-                tracing::info!("Bootstrap process completed successfully");
-            }
-            NetworkEventType::PartitionDetected => {
-                tracing::warn!("Network partition detected: {}", msg.details);
-                // Could trigger recovery procedures
-            }
-            NetworkEventType::PartitionRecovered => {
-                tracing::info!("Network partition recovered: {}", msg.details);
-                // Could resume normal operations
-            }
-            NetworkEventType::ProtocolUpgrade => {
-                tracing::info!("Protocol upgrade: {}", msg.details);
-            }
-            NetworkEventType::BandwidthLimitExceeded => {
-                tracing::warn!("Bandwidth limit exceeded: {}", msg.details);
-                // Could implement rate limiting
-            }
-            NetworkEventType::SecurityViolation => {
-                tracing::error!("Security violation detected: {}", msg.details);
-                // Could ban peer or take security measures
-            }
-        }
-
-        Ok(Ok(()))
-    }
-}
 
 #[cfg(test)]
 mod tests {

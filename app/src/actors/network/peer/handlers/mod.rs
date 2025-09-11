@@ -2,7 +2,10 @@
 //! 
 //! This module contains all message handlers for PeerActor, managing peer connections,
 //! discovery, scoring, and lifecycle operations with federation prioritization.
+//!
+//! NOTE: Handler implementations moved to main actor file to avoid conflicts
 
+/*
 use actix::{Handler, Context, ResponseFuture};
 use libp2p::PeerId;
 use std::time::Duration;
@@ -12,6 +15,16 @@ use crate::actors::network::messages::*;
 
 // Type alias for peer-specific actor results
 type PeerActorResult<T> = ActorResult<T>;
+
+/// Peer score information
+#[derive(Debug, Clone)]
+pub struct PeerScoreInfo {
+    pub peer_id: PeerId,
+    pub score: f64,
+    pub reputation: i32,
+    pub last_updated: std::time::SystemTime,
+}
+
 use crate::actors::network::peer::{
     connection::{DisconnectionReason, ConnectionEvent},
     scoring::ProtocolViolation,
@@ -433,4 +446,4 @@ impl Handler<CleanupPeerData> for PeerActor {
         // This would return actual count of cleaned up entries
         Ok(Ok(0))
     }
-}
+}*/

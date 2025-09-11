@@ -21,7 +21,6 @@ use super::{
 
 // Import types from the broader application
 use crate::types::*;
-use crate::features::{FeatureFlagManager, FeatureFlag};
 use crate::integration::*;
 
 // Enhanced actor system integration
@@ -48,8 +47,6 @@ pub struct ChainActor {
     /// Pending blocks awaiting processing or validation
     pub pending_blocks: HashMap<Hash256, PendingBlockInfo>,
     
-    /// Block candidate queue for production
-    pub block_candidates: VecDeque<BlockCandidate>,
     
     /// Federation configuration and state
     pub federation: FederationState,
@@ -62,9 +59,6 @@ pub struct ChainActor {
     
     /// Performance metrics and monitoring
     pub metrics: ChainActorMetrics,
-    
-    /// Feature flag manager for gradual rollout
-    pub feature_flags: Arc<FeatureFlagManager>,
     
     /// Integration with other actors
     pub actor_addresses: ActorAddresses,
@@ -115,7 +109,6 @@ impl Actor for ChainActor {
         // Update metrics
         self.metrics.update_queue_depths(
             self.pending_blocks.len(),
-            self.block_candidates.len(),
             0, // validation queue
             0, // notification queue
         );
@@ -143,7 +136,6 @@ impl ChainActor {
     pub fn new(
         config: ChainActorConfig,
         actor_addresses: ActorAddresses,
-        feature_flags: Arc<FeatureFlagManager>,
     ) -> Result<Self, ChainError> {
         let genesis = BlockRef::genesis(Hash256::zero());
         
@@ -170,12 +162,10 @@ impl ChainActor {
             config,
             chain_state,
             pending_blocks: HashMap::new(),
-            block_candidates: VecDeque::new(),
             federation,
             auxpow_state,
             subscribers: HashMap::new(),
             metrics,
-            feature_flags,
             actor_addresses,
             validation_cache,
             health_monitor,
@@ -374,7 +364,6 @@ impl ChainActor {
         // Update queue depth tracking
         self.metrics.update_queue_depths(
             self.pending_blocks.len(),
-            self.block_candidates.len(),
             0, // validation queue
             0, // notification queue
         );

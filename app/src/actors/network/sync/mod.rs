@@ -32,7 +32,7 @@ pub mod errors;
 pub use actor::*;
 pub use messages::*;
 pub use metrics::*;
-pub use peer::*;
+pub use peer::{PeerManager, PeerSyncInfo, ConnectionStatus, ConnectionQuality, PeerId, PeerManagerConfig, PeerActivity};
 pub use processor::*;
 pub use checkpoint::*;
 pub use network::*;
@@ -43,15 +43,16 @@ pub use errors::*;
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use super::{
-        SyncActor, SyncActorHandle, SyncConfig, SyncState, SyncStatus, SyncProgress,
-        SyncMetrics, SyncError, SyncResult,
-        StartSync, PauseSync, ResumeSync, GetSyncStatus, CanProduceBlocks,
-        PeerManager, PeerSyncInfo, PeerScore, PeerCapabilities,
+        SyncActor, SyncActorHandle, SyncConfig, SyncState, SyncStatus,
+        SyncMetrics, SyncError, SyncMode,
+        StartSync, PauseSync, ResumeSync, GetSyncStatus, CanProduceBlocks, ProcessBlocks,
+        ListCheckpoints, RecoverFromCheckpoint, CheckpointInfo, 
+        CreateCheckpoint, DeleteCheckpoint, GetCheckpointStatus, CheckpointStatus,
+        PeerManager, PeerSyncInfo, ConnectionStatus, ConnectionQuality, PeerManagerConfig, PeerActivity,
         BlockProcessor, ValidationWorker, ValidationResult,
-        CheckpointManager, BlockCheckpoint, CheckpointConfig, RecoveryResult,
-        NetworkMonitor, NetworkHealth, NetworkConfig,
-        PerformanceOptimizer, OptimizationLevel, OptimizationType,
-        SyncActorConfig, PerformanceConfig, SecurityConfig,
+        RecoveryResult,
+        NetworkHealth,
+        PerformanceConfig, SecurityConfig,
     };
     
     // External dependencies commonly used in sync operations

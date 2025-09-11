@@ -431,7 +431,7 @@ impl LifecycleAware for NetworkSupervisor {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> ActorResult<()> {
+    fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
         self.shutdown_requested = true;
         tracing::info!("NetworkSupervisor lifecycle stopped");
         Ok(())

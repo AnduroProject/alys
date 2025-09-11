@@ -19,7 +19,6 @@ use crate::actors::{
     supervisor::{RootSupervisor, SupervisorConfig},
     shared::ActorAddresses,
 };
-use crate::features::FeatureFlagManager;
 use crate::types::*;
 
 #[cfg(test)]
@@ -30,7 +29,6 @@ mod end_to_end_tests {
         chain_actor: Addr<ChainActor>,
         storage_actor: Addr<StorageActor>,
         root_supervisor: Addr<RootSupervisor>,
-        feature_flags: std::sync::Arc<FeatureFlagManager>,
         test_blocks: Vec<SignedConsensusBlock>,
     }
 
@@ -44,8 +42,6 @@ mod end_to_end_tests {
                 test_mode: true,
             };
             let root_supervisor = RootSupervisor::new(supervisor_config).start();
-
-            let feature_flags = std::sync::Arc::new(FeatureFlagManager::new_with_test_defaults());
 
             // Create storage actor with in-memory database
             let storage_config = StorageActorConfig {
@@ -81,7 +77,6 @@ mod end_to_end_tests {
             let chain_actor = ChainActor::new(
                 chain_config,
                 actor_addresses,
-                feature_flags.clone(),
             )
             .expect("Failed to create chain actor")
             .start();
@@ -93,7 +88,6 @@ mod end_to_end_tests {
                 chain_actor,
                 storage_actor,
                 root_supervisor,
-                feature_flags,
                 test_blocks,
             }
         }

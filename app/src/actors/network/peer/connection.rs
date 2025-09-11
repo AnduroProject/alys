@@ -6,7 +6,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use libp2p::{PeerId, Multiaddr};
-use libp2p::swarm::{ConnectionId, ConnectedPoint};
+use libp2p::swarm::ConnectionId;
+// ConnectedPoint is private in libp2p
+
+/// Simple connection point information (replacing private libp2p::ConnectedPoint)
+#[derive(Debug, Clone)]
+pub enum ConnectedPoint {
+    /// Dialer (outbound connection)
+    Dialer { address: Multiaddr },
+    /// Listener (inbound connection)  
+    Listener { local_addr: Multiaddr, send_back_addr: Multiaddr },
+}
 use tokio::sync::mpsc;
 
 use actor_system::error::ActorResult;

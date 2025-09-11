@@ -15,6 +15,7 @@ use crate::actors::bridge::{
     shared::*,
 };
 use crate::types::*;
+use crate::integration::{GovernanceMessage, GovernanceMessageType};
 use super::{governance::*, reconnection::*, metrics::*, protocol::*, request_tracking::*};
 use super::reconnection::BackoffDecision;
 use crate::actors::bridge::shared::errors::BridgeError;
@@ -260,7 +261,7 @@ impl StreamActor {
             from_node: "alys_bridge".to_string(),
             timestamp: SystemTime::now(),
             message_type: GovernanceMessageType::ConsensusRequest,
-            payload: GovernancePayload::SignatureRequest(request),
+            payload: super::governance::GovernancePayload::SignatureRequest(request),
             signature: None,
         };
 
@@ -389,7 +390,7 @@ impl StreamActor {
             from_node: "alys_bridge".to_string(),
             timestamp: SystemTime::now(),
             message_type: GovernanceMessageType::Heartbeat,
-            payload: GovernancePayload::Heartbeat,
+            payload: super::governance::GovernancePayload::Heartbeat,
             signature: None,
         };
 

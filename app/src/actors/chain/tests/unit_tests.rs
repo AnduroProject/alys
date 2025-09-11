@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use crate::actors::chain::{ChainActor, config::*, messages::*, state::*};
 use crate::types::*;
-use crate::features::FeatureFlagManager;
 
 #[cfg(test)]
 mod chain_actor_tests {
@@ -19,9 +18,8 @@ mod chain_actor_tests {
     async fn create_test_chain_actor() -> Addr<ChainActor> {
         let config = ChainActorConfig::test_config();
         let actor_addresses = create_test_actor_addresses();
-        let feature_flags = Arc::new(TestFeatureFlagManager::new());
         
-        ChainActor::new(config, actor_addresses, feature_flags)
+        ChainActor::new(config, actor_addresses)
             .expect("Failed to create test ChainActor")
             .start()
     }
@@ -494,21 +492,6 @@ impl Actor for TestNetworkActor { type Context = Context<Self>; }
 impl Actor for TestSyncActor { type Context = Context<Self>; }
 impl Actor for TestRootSupervisor { type Context = Context<Self>; }
 impl Actor for TestBlockSubscriber { type Context = Context<Self>; }
-
-// Mock feature flag manager
-struct TestFeatureFlagManager;
-
-impl TestFeatureFlagManager {
-    fn new() -> Self {
-        Self
-    }
-}
-
-impl FeatureFlagManager for TestFeatureFlagManager {
-    fn is_enabled(&self, _flag: &crate::features::FeatureFlag) -> bool {
-        true // Enable all features for testing
-    }
-}
 
 // Test configuration
 impl ChainActorConfig {

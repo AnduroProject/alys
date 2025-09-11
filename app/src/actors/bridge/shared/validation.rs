@@ -6,8 +6,39 @@ use bitcoin::{Transaction, TxOut, Address as BtcAddress, Network, Script};
 use ethereum_types::{H160, H256};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::collections::HashMap;
 use crate::types::*;
 use super::constants::*;
+
+/// Validation error placeholder (since validator crate is not available)
+#[derive(Debug, Clone)]
+pub struct ValidationFieldError {
+    pub code: String,
+    pub message: String,
+}
+
+/// Validation errors collection
+#[derive(Debug, Clone)]
+pub struct ValidationErrors {
+    pub errors: HashMap<String, Vec<ValidationFieldError>>,
+}
+
+impl ValidationErrors {
+    pub fn new() -> Self {
+        Self {
+            errors: HashMap::new(),
+        }
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Validation trait placeholder
+pub trait Validate {
+    fn validate(&self) -> Result<(), ValidationErrors>;
+}
 
 /// Validation result with detailed error information
 #[derive(Debug, Clone, Serialize, Deserialize)]

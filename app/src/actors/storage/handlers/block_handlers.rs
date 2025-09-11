@@ -93,10 +93,10 @@ impl Handler<GetBlockMessage> for StorageActor {
     }
 }
 
-impl Handler<GetBlockByNumberMessage> for StorageActor {
+impl Handler<GetBlockByHeightMessage> for StorageActor {
     type Result = ResponseFuture<Result<Option<ConsensusBlock>, StorageError>>;
 
-    fn handle(&mut self, msg: GetBlockByNumberMessage, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: GetBlockByHeightMessage, _ctx: &mut Self::Context) -> Self::Result {
         debug!("Received get block by number request: {}", msg.block_number);
         
         let database = self.database.clone();

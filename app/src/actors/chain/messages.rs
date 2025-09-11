@@ -1197,7 +1197,7 @@ pub struct GetAggregateHashes;
 /// Returns the most recent finalized consensus block for mining operations.
 /// Used by AuxPowActor to determine mining base and difficulty calculation.
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<ConsensusBlock<MainnetEthSpec>, ChainError>")]
+#[rtype(result = "Result<ConsensusBlock, ChainError>")]
 pub struct GetLastFinalizedBlock;
 
 /// Direct port of ChainManager::get_block_by_hash for mining
@@ -1205,7 +1205,7 @@ pub struct GetLastFinalizedBlock;
 /// Retrieves specific block by hash for mining validation purposes.
 /// Used during AuxPow submission to validate block references.
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "Result<Option<ConsensusBlock<MainnetEthSpec>>, ChainError>")]
+#[rtype(result = "Result<Option<ConsensusBlock>, ChainError>")]
 pub struct GetBlockByHashForMining {
     /// Bitcoin block hash to retrieve
     pub hash: bitcoin::BlockHash,
@@ -1249,3 +1249,25 @@ pub struct IsSynced;
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Option<AuxPowHeader>")]
 pub struct GetQueuedAuxpow;
+
+/// Get current chain height
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<u64, ChainError>")]
+pub struct GetChainHeight;
+
+/// Verify federation signature
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<bool, ChainError>")]
+pub struct VerifyFederationSignature {
+    pub block_hash: Hash256,
+    pub signature: Vec<u8>,
+}
+
+/// Update finalized state
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), ChainError>")]
+pub struct UpdateFinalizedState {
+    pub finalized_height: u64,
+    pub finalized_hash: Hash256,
+}
+

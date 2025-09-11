@@ -40,8 +40,17 @@ impl Actor for OrderingTestActor {
     type Context = Context<Self>;
 }
 
+impl Handler<crate::framework::harness::actor::TestMessage> for OrderingTestActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: crate::framework::harness::actor::TestMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        // Process test message for ordering verification
+        self.sequence_counter += 1;
+    }
+}
+
 impl OrderingTestActor {
-    pub fn new(actor_id: String) -> Self {
+    pub fn new(actor_id: String, _message_count: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Self {
         Self {
             actor_id,
             message_log: Vec::new(),

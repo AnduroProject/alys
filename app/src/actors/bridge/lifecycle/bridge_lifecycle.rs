@@ -19,9 +19,6 @@ impl LifecycleAware for BridgeActor {
         "BridgeActor".to_string()
     }
 
-    fn actor_id(&self) -> String {
-        format!("bridge_actor_{}", self.started_at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
-    }
 
     async fn on_start(&mut self) -> ActorResult<()> {
         info!("Starting Bridge Actor lifecycle");
@@ -45,7 +42,7 @@ impl LifecycleAware for BridgeActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self) -> ActorResult<()> {
+    async fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
         info!("Stopping Bridge Actor lifecycle");
 
         // Set state to shutting down
@@ -128,36 +125,6 @@ impl LifecycleAware for BridgeActor {
         Ok(())
     }
 
-    async fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
-        info!("Graceful shutdown requested with timeout {:?}", timeout);
-
-        // Start graceful shutdown process
-        let shutdown_start = std::time::Instant::now();
-        
-        // Set shutdown state
-        self.state = crate::actors::bridge::actors::bridge::state::BridgeState::ShuttingDown;
-
-        // Complete active operations with timeout
-        let operation_timeout = timeout / 2; // Reserve half timeout for operations
-        if let Err(e) = tokio::time::timeout(operation_timeout, self.complete_active_operations()).await {
-            warn!("Timeout waiting for operations to complete: {:?}", e);
-        }
-
-        // Shutdown child actors
-        let child_timeout = timeout / 4; // Reserve quarter timeout for child shutdown
-        if let Err(e) = tokio::time::timeout(child_timeout, self.shutdown_child_actors()).await {
-            warn!("Timeout waiting for child actors to shutdown: {:?}", e);
-        }
-
-        // Final cleanup
-        self.on_stop().await?;
-
-        let shutdown_duration = shutdown_start.elapsed();
-        info!("Graceful shutdown completed in {:?}", shutdown_duration);
-        
-        self.actor_system_metrics.record_shutdown_duration(shutdown_duration);
-        Ok(())
-    }
 
     async fn on_restart(&mut self) -> ActorResult<()> {
         info!("Restarting Bridge Actor");

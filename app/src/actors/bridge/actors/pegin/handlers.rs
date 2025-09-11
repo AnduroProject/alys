@@ -7,7 +7,7 @@ use bitcoin::{Transaction, Txid};
 use tracing::{info, warn, error, debug};
 
 use super::actor::{PegInActor, PegInError};
-use crate::actors::bridge::messages::*;
+use crate::actors::bridge::{messages::*, shared::errors::BridgeError};
 
 /// Handler for PegIn messages
 impl Handler<PegInMessage> for PegInActor {

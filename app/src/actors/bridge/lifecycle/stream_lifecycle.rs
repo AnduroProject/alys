@@ -12,10 +12,9 @@ use crate::actors::bridge::{
     shared::errors::BridgeError,
     config::StreamConfig,
 };
-use crate::actors::bridge::shared::lifecycle::{
-    ActorLifecycle, LifecyclePhase, LifecycleMetrics, LifecycleError,
-    LifecycleEvent, LifecycleCommand, LifecycleState, LifecycleHooks,
-    StartupHook, ShutdownHook, RestartHook, HealthCheckHook
+use actor_system::{
+    lifecycle::{LifecycleAware, ActorState, LifecycleMetadata},
+    error::ActorError,
 };
 
 /// Lifecycle manager for Stream actors
@@ -24,13 +23,13 @@ pub struct StreamLifecycle {
     actor_ref: Option<Addr<StreamActor>>,
     
     /// Current lifecycle phase
-    phase: LifecyclePhase,
+    phase: ActorState,
     
     /// Configuration
     config: StreamConfig,
     
     /// Metrics collection
-    metrics: LifecycleMetrics,
+    metrics: LifecycleMetadata,
     
     /// Lifecycle hooks
     hooks: StreamLifecycleHooks,
@@ -76,9 +75,9 @@ impl StreamLifecycle {
     pub fn new(config: StreamConfig) -> Self {
         Self {
             actor_ref: None,
-            phase: LifecyclePhase::Initialized,
+            phase: ActorState::Initialized,
             config,
-            metrics: LifecycleMetrics::new("stream"),
+            metrics: LifecycleMetadata::new("stream"),
             hooks: StreamLifecycleHooks::default(),
             startup_start: None,
             last_health_check: None,
@@ -93,7 +92,7 @@ impl StreamLifecycle {
     }
     
     /// Perform Stream-specific startup checks
-    async fn stream_startup_checks(&self) -> Result<(), LifecycleError> {
+    async fn stream_startup_checks(&self) -> Result<(), ActorError> {
         info!("Performing Stream startup checks");
         
         // Governance connection check
@@ -101,13 +100,13 @@ impl StreamLifecycle {
             match check() {
                 Ok(connected) => {
                     if !connected {
-                        return Err(LifecycleError::StartupFailed(
+                        return Err(ActorError::StartupFailed(
                             "Governance connection not available".to_string()
                         ));
                     }
                 },
                 Err(e) => {
-                    return Err(LifecycleError::StartupFailed(
+                    return Err(ActorError::StartupFailed(
                         format!("Governance connection check failed: {}", e)
                     ));
                 }
@@ -117,7 +116,7 @@ impl StreamLifecycle {
         // gRPC protocol setup
         if let Some(setup) = &self.hooks.grpc_protocol_setup {
             if let Err(e) = setup() {
-                return Err(LifecycleError::StartupFailed(
+                return Err(ActorError::StartupFailed(
                     format!("gRPC protocol setup failed: {}", e)
                 ));
             }
@@ -126,7 +125,7 @@ impl StreamLifecycle {
         // Message buffer validation
         if let Some(validate) = &self.hooks.buffer_validation {
             if let Err(e) = validate() {
-                return Err(LifecycleError::StartupFailed(
+                return Err(ActorError::StartupFailed(
                     format!("Message buffer validation failed: {}", e)
                 ));
             }
@@ -135,7 +134,7 @@ impl StreamLifecycle {
         // Reconnection strategy setup
         if let Some(setup) = &self.hooks.reconnection_setup {
             if let Err(e) = setup() {
-                return Err(LifecycleError::StartupFailed(
+                return Err(ActorError::StartupFailed(
                     format!("Reconnection setup failed: {}", e)
                 ));
             }
@@ -145,9 +144,9 @@ impl StreamLifecycle {
     }
     
     /// Perform health check
-    async fn health_check(&mut self) -> Result<bool, LifecycleError> {
+    async fn health_check(&mut self) -> Result<bool, ActorError> {
         if let Some(actor_ref) = &self.actor_ref {
-            match actor_ref.send(crate::actors::bridge::actors::stream::messages::GetStreamStatus).await {
+            match actor_ref.send(crate::actors::bridge::messages::stream_messages::StreamMessage::GetConnectionStatus).await {
                 Ok(status) => {
                     self.last_health_check = Some(Instant::now());
                     self.metrics.record_health_check(true);
@@ -156,111 +155,16 @@ impl StreamLifecycle {
                 Err(e) => {
                     warn!("Stream health check failed: {}", e);
                     self.metrics.record_health_check(false);
-                    Err(LifecycleError::HealthCheckFailed(format!("Actor communication failed: {}", e)))
+                    Err(ActorError::HealthCheckFailed(format!("Actor communication failed: {}", e)))
                 }
             }
         } else {
-            Err(LifecycleError::HealthCheckFailed("No actor reference available".to_string()))
+            Err(ActorError::HealthCheckFailed("No actor reference available".to_string()))
         }
     }
 }
 
-impl ActorLifecycle for StreamLifecycle {
-    type Actor = StreamActor;
-    type Config = StreamConfig;
-    type Error = LifecycleError;
-    
-    fn actor_name(&self) -> &'static str {
-        "StreamActor"
-    }
-    
-    fn current_phase(&self) -> LifecyclePhase {
-        self.phase
-    }
-    
-    fn metrics(&self) -> &LifecycleMetrics {
-        &self.metrics
-    }
-    
-    async fn start(&mut self) -> Result<Addr<Self::Actor>, Self::Error> {
-        info!("Starting Stream actor lifecycle");
-        self.phase = LifecyclePhase::Starting;
-        self.startup_start = Some(Instant::now());
-        
-        // Perform startup checks
-        self.stream_startup_checks().await?;
-        
-        // Create and start actor
-        let actor = StreamActor::new(self.config.clone())
-            .map_err(|e| LifecycleError::StartupFailed(format!("Actor creation failed: {}", e)))?;
-        
-        let addr = actor.start();
-        self.actor_ref = Some(addr.clone());
-        self.phase = LifecyclePhase::Running;
-        
-        // Record startup metrics
-        if let Some(start_time) = self.startup_start {
-            let startup_duration = start_time.elapsed();
-            self.metrics.record_startup(startup_duration);
-            info!("Stream actor started in {:?}", startup_duration);
-        }
-        
-        Ok(addr)
-    }
-    
-    async fn stop(&mut self) -> Result<(), Self::Error> {
-        info!("Stopping Stream actor");
-        self.phase = LifecyclePhase::Stopping;
-        
-        if let Some(actor_ref) = self.actor_ref.take() {
-            // Graceful shutdown with timeout
-            let shutdown_timeout = Duration::from_secs(30);
-            
-            match tokio::time::timeout(shutdown_timeout, async {
-                actor_ref.send(actix::prelude::System::current().stop()).await
-            }).await {
-                Ok(_) => {
-                    info!("Stream actor stopped gracefully");
-                    self.phase = LifecyclePhase::Stopped;
-                    self.metrics.record_shutdown();
-                    Ok(())
-                },
-                Err(_) => {
-                    warn!("Stream actor shutdown timeout, forcing stop");
-                    self.phase = LifecyclePhase::Failed;
-                    Err(LifecycleError::ShutdownTimeout)
-                }
-            }
-        } else {
-            warn!("No Stream actor reference to stop");
-            self.phase = LifecyclePhase::Stopped;
-            Ok(())
-        }
-    }
-    
-    async fn restart(&mut self) -> Result<Addr<Self::Actor>, Self::Error> {
-        info!("Restarting Stream actor (attempt #{})", self.restart_count + 1);
-        self.restart_count += 1;
-        
-        // Stop current instance
-        if let Err(e) = self.stop().await {
-            warn!("Error stopping Stream actor during restart: {}", e);
-        }
-        
-        // Brief delay before restart
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-        
-        // Start new instance
-        let addr = self.start().await?;
-        self.metrics.record_restart(self.restart_count);
-        
-        Ok(addr)
-    }
-    
-    async fn health_check(&mut self) -> Result<bool, Self::Error> {
-        self.health_check().await
-    }
-}
+// TODO: Implement proper LifecycleAware trait when interface is stabilized
 
 /// Builder for Stream lifecycle configuration
 pub struct StreamLifecycleBuilder {

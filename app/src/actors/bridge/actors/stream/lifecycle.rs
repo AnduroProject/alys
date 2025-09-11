@@ -12,7 +12,8 @@ use actor_system::{
 };
 
 use super::{StreamActor, actor::ConnectionStatus};
-use crate::actors::bridge::shared::errors::BridgeError;
+use crate::actors::bridge::{messages::stream_messages::NodeConnectionStatus, shared::errors::BridgeError};
+use crate::integration::{GovernanceMessage, GovernanceMessageType};
 
 /// Lifecycle metadata for StreamActor
 #[derive(Debug, Clone)]
@@ -38,7 +39,6 @@ impl Default for StreamLifecycleMetadata {
 
 #[async_trait]
 impl LifecycleAware for StreamActor {
-    type Metadata = StreamLifecycleMetadata;
 
     async fn on_start(&mut self) -> ActorResult<()> {
         info!("StreamActor lifecycle: Starting");
@@ -82,14 +82,10 @@ impl LifecycleAware for StreamActor {
         Ok(())
     }
 
-    async fn on_stop(&mut self) -> ActorResult<()> {
+    async fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
         info!("StreamActor lifecycle: Stopping");
         
-        let shutdown_timeout = if let Ok(metadata) = self.get_lifecycle_metadata() {
-            metadata.graceful_shutdown_timeout
-        } else {
-            Duration::from_secs(30)
-        };
+        let shutdown_timeout = timeout;
 
         // Stop accepting new messages by updating state
         self.connection_status = ConnectionStatus::Disconnected;
@@ -128,7 +124,7 @@ impl LifecycleAware for StreamActor {
         
         // Mark connections as paused
         for (_node_id, connection) in &mut self.governance_connections {
-            connection.status = super::NodeConnectionStatus::Disconnected;
+            connection.status = NodeConnectionStatus::Disconnected;
         }
         
         self.connection_status = ConnectionStatus::Degraded {
@@ -175,56 +171,12 @@ impl LifecycleAware for StreamActor {
         Ok(())
     }
 
-    async fn on_restart(&mut self) -> ActorResult<()> {
-        info!("StreamActor lifecycle: Restarting");
-        
-        // Increment restart counter
-        if let Ok(mut metadata) = self.get_lifecycle_metadata_mut() {
-            metadata.restart_count += 1;
-            metadata.last_state_change = SystemTime::now();
-            
-            // Implement exponential backoff for frequent restarts
-            if metadata.restart_count > 5 {
-                let backoff_delay = Duration::from_secs(2_u64.pow(metadata.restart_count.min(10)));
-                warn!("High restart count ({}), applying backoff: {:?}", 
-                     metadata.restart_count, backoff_delay);
-                tokio::time::sleep(backoff_delay).await;
-            }
-        }
-
-        // Clean up existing state
-        self.governance_connections.clear();
-        self.message_buffer.clear();
-        
-        // Reset connection status
-        self.connection_status = ConnectionStatus::Connecting;
-        
-        // Re-initialize
-        match self.establish_governance_connections().await {
-            Ok(_) => {
-                info!("StreamActor restarted successfully");
-                
-                if let Ok(mut metadata) = self.get_lifecycle_metadata_mut() {
-                    metadata.governance_connections_established = true;
-                }
-            }
-            Err(e) => {
-                error!("Failed to restart StreamActor: {:?}", e);
-                return Err(ActorError::RestartFailed {
-                    actor_name: "StreamActor".to_string(),
-                    reason: format!("Restart initialization failed: {:?}", e),
-                });
-            }
-        }
-
-        Ok(())
-    }
 
     async fn health_check(&self) -> Result<bool, Self::Error> {
         // Check governance connections
         let healthy_connections = self.governance_connections
             .values()
-            .filter(|conn| matches!(conn.status, super::NodeConnectionStatus::Connected))
+            .filter(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
             .count();
         
         let total_connections = self.governance_connections.len();
@@ -272,51 +224,7 @@ impl LifecycleAware for StreamActor {
         Ok(overall_health)
     }
 
-    fn current_state(&self) -> ActorState {
-        // Determine state based on connection status and internal state
-        match &self.connection_status {
-            ConnectionStatus::Disconnected => ActorState::Stopped,
-            ConnectionStatus::Connecting => ActorState::Starting,
-            ConnectionStatus::Connected { .. } => ActorState::Running,
-            ConnectionStatus::Degraded { .. } => ActorState::Degraded,
-        }
-    }
 
-    async fn get_lifecycle_info(&self) -> ActorResult<LifecycleMetadata> {
-        let current_state = self.current_state();
-        
-        let uptime = if let Ok(metadata) = self.get_lifecycle_metadata() {
-            metadata.started_at.map(|start| {
-                SystemTime::now()
-                    .duration_since(start)
-                    .unwrap_or_default()
-            })
-        } else {
-            None
-        };
-
-        let restart_count = if let Ok(metadata) = self.get_lifecycle_metadata() {
-            metadata.restart_count
-        } else {
-            0
-        };
-
-        Ok(LifecycleMetadata {
-            actor_type: "StreamActor".to_string(),
-            actor_version: "v1.0.0".to_string(),
-            current_state,
-            uptime,
-            restart_count,
-            last_health_check: Some(SystemTime::now()),
-            health_status: self.health_check().await.unwrap_or(false),
-            resource_usage: self.get_resource_usage().await,
-            dependencies_healthy: self.check_dependencies_health().await,
-        })
-    }
-
-    async fn can_handle_message(&self) -> bool {
-        matches!(self.current_state(), ActorState::Running)
-    }
 }
 
 // Helper methods for StreamActor lifecycle management
@@ -366,9 +274,9 @@ impl StreamActor {
             debug!("Closing connection to {}", node_id);
             
             // Send goodbye message if connected
-            if matches!(connection.status, super::NodeConnectionStatus::Connected) {
+            if matches!(connection.status, NodeConnectionStatus::Connected) {
                 // In a real implementation, send graceful disconnect message
-                connection.status = super::NodeConnectionStatus::Disconnected;
+                connection.status = NodeConnectionStatus::Disconnected;
             }
             
             // Check timeout
@@ -397,7 +305,7 @@ impl StreamActor {
         for pending in &self.message_buffer {
             // Mark signature responses as critical
             match &pending.message.message_type {
-                super::GovernanceMessageType::ConsensusRequest => {
+                GovernanceMessageType::ConsensusRequest => {
                     critical_messages.push(pending.clone());
                 }
                 _ => {} // Skip non-critical messages during shutdown
@@ -477,7 +385,7 @@ impl StreamActor {
     }
 
     /// Send message immediately (bypass normal queuing)
-    async fn send_message_immediately(&self, message: super::GovernanceMessage) -> Result<(), BridgeError> {
+    async fn send_message_immediately(&self, message: GovernanceMessage) -> Result<(), BridgeError> {
         debug!("Sending message immediately: {:?}", message.message_type);
         
         // In a real implementation, would send directly via gRPC

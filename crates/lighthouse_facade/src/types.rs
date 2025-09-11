@@ -252,6 +252,16 @@ pub enum PayloadStatusKind {
 }
 
 #[cfg(not(any(feature = "v4", feature = "v7")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ForkName {
+    Phase0,
+    Altair,
+    Bellatrix,
+    Capella,
+    Deneb,
+}
+
+#[cfg(not(any(feature = "v4", feature = "v7")))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkchoiceState {
     pub head_block_hash: H256,

@@ -66,7 +66,7 @@ impl IndividualApproval {
 
 #[derive(Debug, Encode, Decode, Serialize, Deserialize, TreeHash, Clone, PartialEq)]
 pub struct AggregateApproval {
-    aggregation_bits: BitList<MaxValidators>,
+    aggregation_bits: BitList,
     aggregate_signature: AggregateSignature,
 }
 

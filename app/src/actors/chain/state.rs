@@ -238,7 +238,7 @@ pub struct PendingAuxPow {
 #[derive(Debug)]
 pub struct BlockSubscriber {
     /// Actor to receive notifications
-    pub recipient: Recipient<BlockNotification>,
+    pub recipient: Recipient<super::messages::BlockNotification>,
     
     /// Event types subscribed to
     pub event_types: HashSet<BlockEventType>,
@@ -688,6 +688,11 @@ impl ChainState {
     /// Set finalized height
     pub fn set_finalized_height(&mut self, height: u64) {
         // Implementation would update finalized state
+    }
+    
+    /// Check if the chain has a specific block
+    pub fn has_block(&self, block_hash: &Hash256) -> Result<bool, ChainError> {
+        Ok(self.fork_choice.reorg_manager.has_block(block_hash))
     }
 }
 
@@ -1183,5 +1188,10 @@ impl ReorganizationManager {
 
         self.chain_metrics.orphan_blocks = self.orphan_pool.len();
         Ok(())
+    }
+    
+    /// Check if a block exists in the chain
+    pub fn has_block(&self, block_hash: &Hash256) -> bool {
+        self.block_index.contains_key(block_hash)
     }
 }

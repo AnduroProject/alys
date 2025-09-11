@@ -15,7 +15,8 @@ use lighthouse_facade::execution_layer::{
     DEFAULT_EXECUTION_ENDPOINT, LATEST_TAG,
 };
 use lighthouse_facade::sensitive_url::SensitiveUrl;
-use lighthouse_facade::types::{Address, ExecutionBlockHash, ExecutionPayload, MainnetEthSpec};
+use lighthouse_facade::types::{ExecutionBlockHash, ExecutionPayload, MainnetEthSpec};
+use ethereum_types::Address;
 
 use crate::types::*;
 use super::{config::EngineConfig, state::ClientHealthStatus, EngineError, EngineResult, ClientError};

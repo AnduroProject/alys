@@ -31,10 +31,9 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::{
-    types::{Block, BlockHash, BlockHeader, Hash256},
+    types::{blockchain::{ConsensusBlock as Block, SignedConsensusBlock}, BlockHash, BlockHeader, Hash256, ConsensusActor},
     actors::{
-        chain::{ChainActor, GetChainState, GetBlock},
-        consensus::{ConsensusActor, GetConsensusState},
+        chain::{ChainActor}, // GetSyncCheckpoint, GetBlock - TODO: implement these messages
     },
 };
 
@@ -1160,8 +1159,8 @@ impl CheckpointManager {
     
     async fn collect_blockchain_state(&self, height: u64, chain_actor: Addr<ChainActor>) -> SyncResult<BlockchainState> {
         // Get current chain state
-        let chain_state = chain_actor.send(GetChainState).await
-            .map_err(|e| SyncError::Internal { message: format!("Failed to get chain state: {}", e) })??;
+        let sync_checkpoint = chain_actor.send(GetSyncCheckpoint).await
+            .map_err(|e| SyncError::Internal { message: format!("Failed to get sync checkpoint: {}", e) })??;
         
         let best_block = chain_actor.send(GetBlock { height: Some(height), hash: None }).await
             .map_err(|e| SyncError::Internal { message: format!("Failed to get block: {}", e) })??;
@@ -1454,8 +1453,8 @@ impl CheckpointManager {
 // Additional message types and implementations needed for chain/consensus actors
 
 #[derive(Message, Debug)]
-#[rtype(result = "SyncResult<ChainState>")]
-pub struct GetChainState;
+#[rtype(result = "SyncResult<SyncCheckpoint>")]
+pub struct GetSyncCheckpoint;
 
 #[derive(Message, Debug)]
 #[rtype(result = "SyncResult<Block>")]
@@ -1469,10 +1468,21 @@ pub struct GetBlock {
 pub struct GetConsensusState;
 
 #[derive(Debug, Clone)]
-pub struct ChainState {
+pub struct SyncCheckpoint {
     pub best_block: Block,
     pub finalized_block: Block,
     pub state_root: Hash256,
+}
+
+impl SyncCheckpoint {
+    /// Create a new SyncCheckpoint
+    pub fn new(best_block: Block, finalized_block: Block, state_root: Hash256) -> Self {
+        Self {
+            best_block,
+            finalized_block,
+            state_root,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

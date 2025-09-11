@@ -6,6 +6,7 @@
 
 use crate::config::GovernanceConfig;
 use crate::types::*;
+use crate::actors::bridge::actors::stream::governance::GovernancePayload;
 use actor_system::{ActorError, ActorResult, AlysMessage, SerializableMessage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -403,7 +404,7 @@ pub struct GovernanceIntegrationFactory;
 impl GovernanceIntegrationFactory {
     /// Create governance integration with optional TLS
     pub fn create(tls_enabled: bool) -> Box<dyn GovernanceIntegration> {
-        Box::new(GovernanceGrpcClient::new(tls_config))
+        Box::new(GovernanceGrpcClient::new(tls_enabled))
     }
     
     /// Create governance integration from config

@@ -202,7 +202,7 @@ impl Handler<RestoreSnapshotMessage> for StorageActor {
             // Stop all pending writes
             warn!("Stopping all write operations for snapshot restoration");
             
-            match database.restore_from_snapshot(&snapshot_path).await {
+            match self.database.restore_from_snapshot(&snapshot_path).await {
                 Ok(()) => {
                     info!("Snapshot restoration completed successfully: {}", msg.snapshot_name);
                     Ok(())

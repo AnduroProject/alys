@@ -141,7 +141,7 @@ pub struct FederationCompat {
 impl FederationCompat {
     pub fn new(
         _pubkeys: Vec<bitcoin::PublicKey>,
-        _threshold: u32,
+        _threshold: usize,
         network: bitcoin::Network,
     ) -> Self {
         // Create a placeholder taproot address for compatibility

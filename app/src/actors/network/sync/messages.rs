@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::types::*;
 use super::errors::*;
 use super::peer::*;
+use super::checkpoint::BlockCheckpoint;
 
 /// Primary sync control messages
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +110,7 @@ pub struct ProcessBlockBatch {
     pub correlation_id: Option<String>,
 }
 
+
 #[derive(Message, Debug, Clone, Serialize, Deserialize)]
 #[rtype(result = "SyncResult<ValidationResult>")]
 pub struct ValidateBlock {
@@ -135,7 +137,7 @@ pub struct PeerDiscovered {
     /// Peer's protocol version
     pub protocol_version: String,
     /// Peer capabilities
-    pub capabilities: PeerCapabilities,
+    pub capabilities: super::peer::PeerCapabilities,
     /// Initial connection quality assessment
     pub connection_quality: ConnectionQuality,
     /// Correlation ID for tracing
@@ -623,7 +625,7 @@ pub struct ErrorSummary {
     /// Last occurrence time
     pub last_occurrence: Instant,
     /// Error severity
-    pub severity: ErrorSeverity,
+    pub severity: crate::types::ErrorSeverity,
 }
 
 /// Resource usage information

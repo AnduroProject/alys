@@ -279,7 +279,7 @@ impl DatabaseManager {
     
     /// Store the current chain head
     pub async fn put_chain_head(&self, head: &BlockRef) -> Result<(), StorageError> {
-        debug!("Updating chain head to: {} at height: {}", head.hash, head.height);
+        debug!("Updating chain head to: {} at height: {}", head.hash, head.number);
         
         let db = self.main_db.read().await;
         let head_cf = db.cf_handle(column_families::CHAIN_HEAD)
@@ -291,7 +291,7 @@ impl DatabaseManager {
         db.put_cf(&head_cf, b"current_head", &serialized_head)
             .map_err(|e| StorageError::DatabaseError(format!("Failed to update chain head: {}", e)))?;
         
-        info!("Chain head updated to: {} at height: {}", head.hash, head.height);
+        info!("Chain head updated to: {} at height: {}", head.hash, head.number);
         Ok(())
     }
     
@@ -308,7 +308,7 @@ impl DatabaseManager {
                 let head: BlockRef = serde_json::from_slice(&data)
                     .map_err(|e| StorageError::SerializationError(format!("Failed to deserialize chain head: {}", e)))?;
                 
-                debug!("Retrieved chain head: {} at height: {}", head.hash, head.height);
+                debug!("Retrieved chain head: {} at height: {}", head.hash, head.number);
                 Ok(Some(head))
             },
             Ok(None) => {

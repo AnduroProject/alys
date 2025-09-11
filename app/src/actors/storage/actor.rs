@@ -142,30 +142,6 @@ impl Actor for StorageActor {
     }
 }
 
-impl AlysActor for StorageActor {
-    fn actor_type(&self) -> &'static str {
-        "StorageActor"
-    }
-    
-    fn actor_id(&self) -> String {
-        "storage_actor".to_string()
-    }
-    
-    fn get_metrics(&self) -> ActorMetrics {
-        ActorMetrics {
-            actor_type: self.actor_type().to_string(),
-            actor_id: self.actor_id(),
-            messages_processed: self.metrics.operations_processed,
-            errors_count: self.metrics.total_errors(),
-            last_error: None, // TODO: Track last error
-            uptime_seconds: self.startup_time
-                .map(|start| start.elapsed().as_secs())
-                .unwrap_or(0),
-            memory_usage_bytes: self.metrics.memory_usage_bytes,
-            custom_metrics: self.metrics.to_custom_metrics(),
-        }
-    }
-}
 
 impl StorageActor {
     /// Create a new storage actor with the given configuration
@@ -387,7 +363,7 @@ impl StorageActor {
     
     /// Update chain head
     async fn update_chain_head(&mut self, head: BlockRef) -> Result<(), StorageError> {
-        info!("Updating chain head to: {} at height: {}", head.hash, head.height);
+        info!("Updating chain head to: {} at height: {}", head.hash, head.number);
         self.database.put_chain_head(&head).await?;
         self.metrics.record_chain_head_update();
         Ok(())

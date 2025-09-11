@@ -350,7 +350,7 @@ impl LifecycleAware for PeerActor {
         Ok(())
     }
 
-    fn on_stop(&mut self) -> ActorResult<()> {
+    fn on_shutdown(&mut self, timeout: Duration) -> ActorResult<()> {
         self.shutdown_requested = true;
         tracing::info!("PeerActor lifecycle stopped");
         Ok(())
@@ -396,20 +396,6 @@ impl BlockchainAwareActor for PeerActor {
 
 // Message Handlers
 
-impl Handler<ConnectToPeer> for PeerActor {
-    type Result = actix::ResponseFuture<NetworkActorResult<ConnectionResponse>>;
-
-    fn handle(&mut self, msg: ConnectToPeer, _ctx: &mut Context<Self>) -> Self::Result {
-        let mut actor = self.clone_for_async();
-
-        Box::pin(async move {
-            match actor.connect_to_peer(msg.peer_id, msg.address, msg.priority).await {
-                Ok(response) => Ok(Ok(response)),
-                Err(error) => Ok(Err(error)),
-            }
-        })
-    }
-}
 
 impl Handler<GetPeerStatus> for PeerActor {
     type Result = actix::ResponseFuture<NetworkActorResult<PeerStatus>>;

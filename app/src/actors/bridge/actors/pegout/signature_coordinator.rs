@@ -8,9 +8,10 @@ use std::time::{Duration, SystemTime};
 use tracing::{info, warn, debug};
 
 use crate::actors::bridge::{
-    messages::{SignatureSet, FederationSignature},
+    messages::SignatureSet,
     shared::FederationConfig,
 };
+use crate::actors::bridge::messages::pegout_messages::FederationSignature as BridgeFederationSignature;
 use super::actor::PegOutError;
 
 /// Signature coordinator for multi-signature collection
@@ -27,7 +28,7 @@ pub struct SignatureRequest {
     pub request_id: String,
     pub transaction: Transaction,
     pub required_signatures: usize,
-    pub collected_signatures: Vec<FederationSignature>,
+    pub collected_signatures: Vec<BridgeFederationSignature>,
     pub requested_at: SystemTime,
     pub status: SignatureRequestStatus,
 }
@@ -113,7 +114,7 @@ impl SignatureCoordinator {
     pub fn add_signature(
         &mut self,
         request_id: &str,
-        signature: FederationSignature,
+        signature: BridgeFederationSignature,
     ) -> Result<bool, PegOutError> {
         if let Some(request) = self.pending_requests.get_mut(request_id) {
             request.collected_signatures.push(signature);

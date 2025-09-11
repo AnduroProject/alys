@@ -26,7 +26,6 @@ use crate::actors::{
     shared::ActorAddresses,
 };
 
-use crate::features::FeatureFlagManager;
 use crate::types::*;
 
 #[cfg(test)]
@@ -37,8 +36,6 @@ mod tests {
     async fn create_test_actor_system() -> TestActorSystem {
         let supervisor_config = SupervisorConfig::test_default();
         let root_supervisor = RootSupervisor::new(supervisor_config).start();
-
-        let feature_flags = FeatureFlagManager::test_default();
 
         // Create storage actor
         let storage_config = StorageActorConfig::test_in_memory();
@@ -94,7 +91,6 @@ mod tests {
         let chain_actor = ChainActor::new(
             chain_config,
             actor_addresses.clone(),
-            feature_flags.clone(),
         )
         .expect("Failed to create chain actor")
         .start();
@@ -106,7 +102,6 @@ mod tests {
             network_actor,
             sync_actor,
             root_supervisor,
-            feature_flags,
         }
     }
 
@@ -118,7 +113,6 @@ mod tests {
         network_actor: Addr<NetworkActor>,
         sync_actor: Option<Addr<SyncActor>>,
         root_supervisor: Addr<RootSupervisor>,
-        feature_flags: Arc<FeatureFlagManager>,
     }
 
     #[actix::test]
@@ -577,9 +571,4 @@ mod test_configurations {
         }
     }
 
-    impl FeatureFlagManager {
-        pub fn test_default() -> Arc<Self> {
-            Arc::new(Self::new_with_defaults(true)) // Enable all features for testing
-        }
-    }
 }

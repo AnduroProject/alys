@@ -82,7 +82,7 @@ pub enum BridgeError {
     InvalidRequest(String),
 
     /// Unknown request correlation errors
-    #[error("Unknown request correlation: {correlation_id}")]
+    #[error("Unknown request correlation: {0}")]
     UnknownRequest(String),
 
     /// Signature collection errors
@@ -265,4 +265,17 @@ impl From<std::io::Error> for BridgeError {
     fn from(err: std::io::Error) -> Self {
         BridgeError::NetworkError(err.to_string())
     }
+}
+
+/// Migration error types for bridge actor transitions
+#[derive(Error, Debug, Clone, Serialize, Deserialize)]
+pub enum MigrationError {
+    #[error("Chain error during migration: {0}")]
+    ChainError { message: String },
+    
+    #[error("Migration configuration error: {0}")]
+    ConfigurationError(String),
+    
+    #[error("Migration state error: {0}")]
+    StateError(String),
 }

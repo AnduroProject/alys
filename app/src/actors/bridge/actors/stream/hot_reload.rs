@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 use notify::{Watcher, RecursiveMode, Event, EventKind, event::AccessKind};
-use validator::{Validate, ValidationErrors};
+use crate::actors::bridge::shared::validation::{Validate, ValidationErrors};
 use tracing::*;
 
 use crate::config::{StreamConfig as AdvancedStreamConfig, ConfigError};
@@ -566,11 +566,11 @@ impl AdvancedStreamConfig {
     /// Validate feature compatibility
     fn validate_feature_compatibility(&self) -> Result<(), ConfigError> {
         // Check for incompatible feature combinations
-        if self.features.experimental_protocols && self.environment.environment_type == super::config::EnvironmentType::Production {
+        if self.features.experimental_protocols && self.environment.environment_type == crate::config::Environment::Production {
             return Err(ConfigError::ValidationError("Experimental protocols cannot be enabled in production".to_string()));
         }
         
-        if self.features.debug_mode && self.environment.environment_type == super::config::EnvironmentType::Production {
+        if self.features.debug_mode && self.environment.environment_type == crate::config::Environment::Production {
             warn!("Debug mode enabled in production environment");
         }
         

@@ -8,7 +8,7 @@ use tracing::*;
 use actix::prelude::*;
 
 use lighthouse_facade::execution_layer::ForkchoiceState;
-use lighthouse_facade::types::{Address, MainnetEthSpec};
+use lighthouse_facade::types::MainnetEthSpec;
 
 use crate::types::*;
 use super::super::{
@@ -20,7 +20,7 @@ use super::super::{
 
 /// Handler for ForkchoiceUpdatedMessage - updates execution layer forkchoice
 impl Handler<ForkchoiceUpdatedMessage> for EngineActor {
-    type Result = ResponseFuture<MessageResult<ForkchoiceUpdateResult>>;
+    type Result = ResponseFuture<super::super::messages::MessageResult<ForkchoiceUpdateResult>>;
 
     fn handle(&mut self, msg: ForkchoiceUpdatedMessage, _ctx: &mut Self::Context) -> Self::Result {
         let engine = self.engine.clone();

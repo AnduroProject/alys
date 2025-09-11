@@ -186,7 +186,10 @@ async fn handle_get_chain_metrics(
         .with_label_values(&["getchainmetrics", "called"])
         .inc();
 
-    let get_metrics_msg = GetChainMetrics;
+    let get_metrics_msg = GetChainMetrics {
+        include_details: true,
+        time_window: None,
+    };
     
     match context.chain_actor.send(get_metrics_msg).await {
         Ok(Ok(metrics)) => {

@@ -98,7 +98,7 @@ pub trait ChainManager<BI> {
         address: EvmAddress,
     ) -> bool;
     async fn is_synced(&self) -> bool;
-    fn get_head(&self) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error>;
+    fn get_head(&self) -> Result<SignedConsensusBlock, Error>;
 }
 
 pub trait BlockIndex {
@@ -336,7 +336,7 @@ impl ChainActorManager {
 }
 
 #[async_trait::async_trait]
-impl ChainManager<ConsensusBlock<MainnetEthSpec>> for ChainActorManager {
+impl ChainManager<ConsensusBlock> for ChainActorManager {
     async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>> {
         let result = self.chain_actor.send(GetAggregateHashes).await
             .map_err(|e| eyre!("Actor communication error: {}", e))?

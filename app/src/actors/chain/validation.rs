@@ -147,7 +147,7 @@ impl ChainValidator {
         // Validate block size
         if block.encoded_size() > MAX_BLOCK_SIZE {
             result.is_valid = false;
-            result.errors.push(ValidationError::ConsensusError {
+            result.errors.push(crate::types::ValidationError::ConsensusError {
                 rule: "block_size".to_string(),
                 message: format!("Block size {} exceeds maximum {}", block.encoded_size(), MAX_BLOCK_SIZE),
             });
@@ -160,7 +160,7 @@ impl ChainValidator {
             
         if block.header.timestamp > now.as_secs() + MAX_TIME_DRIFT {
             result.is_valid = false;
-            result.errors.push(ValidationError::InvalidTimestamp {
+            result.errors.push(crate::types::ValidationError::InvalidTimestamp {
                 timestamp: block.header.timestamp,
                 reason: TimestampError::TooFuture { max_drift_seconds: MAX_TIME_DRIFT },
             });
