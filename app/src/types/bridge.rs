@@ -1279,6 +1279,9 @@ impl BridgeMetrics {
     }
 }
 
+// Type alias for backward compatibility
+pub type BridgeStatus = BridgeState;
+
 impl Default for BridgeMetrics {
     fn default() -> Self {
         Self::new()

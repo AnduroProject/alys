@@ -255,6 +255,11 @@ impl SignedConsensusBlock {
         self.message.signing_root()
     }
 
+    /// Get the block hash (alias for canonical_root for compatibility)
+    pub fn hash(&self) -> Hash256 {
+        self.canonical_root()
+    }
+
     pub fn add_approval(&mut self, approval: CheckedIndividualApproval) -> Result<(), Error> {
         self.signature.add_approval(approval)
     }

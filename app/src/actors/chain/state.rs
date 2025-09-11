@@ -244,7 +244,7 @@ pub struct BlockSubscriber {
     pub event_types: HashSet<BlockEventType>,
     
     /// Filter criteria
-    pub filter: Option<NotificationFilter>,
+    pub filter: Option<BlockNotificationFilter>,
     
     /// Subscription start time
     pub subscribed_at: SystemTime,

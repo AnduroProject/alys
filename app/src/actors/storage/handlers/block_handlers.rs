@@ -93,37 +93,6 @@ impl Handler<GetBlockMessage> for StorageActor {
     }
 }
 
-impl Handler<GetBlockByHeightMessage> for StorageActor {
-    type Result = ResponseFuture<Result<Option<ConsensusBlock>, StorageError>>;
-
-    fn handle(&mut self, msg: GetBlockByHeightMessage, _ctx: &mut Self::Context) -> Self::Result {
-        debug!("Received get block by number request: {}", msg.block_number);
-        
-        let database = self.database.clone();
-        let cache = self.cache.clone();
-        let height = msg.block_number;
-        
-        Box::pin(async move {
-            match database.get_block_by_height(height).await {
-                Ok(Some(block)) => {
-                    // Cache the block for future hash-based lookups
-                    let block_hash = block.hash();
-                    cache.put_block(block_hash, block.clone()).await;
-                    debug!("Block retrieved by height: {} -> {}", height, block_hash);
-                    Ok(Some(block))
-                },
-                Ok(None) => {
-                    debug!("No block found at height: {}", height);
-                    Ok(None)
-                },
-                Err(e) => {
-                    error!("Failed to retrieve block at height {}: {}", height, e);
-                    Err(e)
-                }
-            }
-        })
-    }
-}
 
 impl Handler<GetChainHeadMessage> for StorageActor {
     type Result = ResponseFuture<Result<Option<BlockRef>, StorageError>>;

@@ -270,7 +270,7 @@ impl From<std::io::Error> for BridgeError {
 /// Migration error types for bridge actor transitions
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]
 pub enum MigrationError {
-    #[error("Chain error during migration: {0}")]
+    #[error("Chain error during migration: {message}")]
     ChainError { message: String },
     
     #[error("Migration configuration error: {0}")]

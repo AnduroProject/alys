@@ -8,7 +8,7 @@ use actix::prelude::*;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
-use crate::types::*;
+use crate::types::{*, blockchain::ConsensusBlock as Block};
 use super::errors::*;
 use super::peer::*;
 use super::checkpoint::BlockCheckpoint;

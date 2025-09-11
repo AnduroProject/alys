@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use prometheus::{Counter, Histogram, Gauge, IntGauge, register_counter, register_histogram, register_gauge, register_int_gauge};
 use serde::{Deserialize, Serialize};
 use tracing::*;
+use actix::prelude::*;
 use super::messages::MetricsReportMessage;
 
 /// Engine actor metrics for performance monitoring and alerting

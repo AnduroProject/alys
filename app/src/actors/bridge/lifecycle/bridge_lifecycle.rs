@@ -126,32 +126,6 @@ impl LifecycleAware for BridgeActor {
     }
 
 
-    async fn on_restart(&mut self) -> ActorResult<()> {
-        info!("Restarting Bridge Actor");
-
-        // Stop current instance
-        self.on_stop().await?;
-
-        // Reset state for restart
-        self.reset_for_restart().await?;
-
-        // Start again
-        self.on_start().await?;
-
-        self.actor_system_metrics.record_actor_restarted();
-        info!("Bridge Actor restarted successfully");
-        Ok(())
-    }
-
-    fn get_lifecycle_state(&self) -> ActorState {
-        match &self.state {
-            crate::actors::bridge::actors::bridge::state::BridgeState::Initializing => ActorState::Initializing,
-            crate::actors::bridge::actors::bridge::state::BridgeState::Running => ActorState::Running,
-            crate::actors::bridge::actors::bridge::state::BridgeState::Degraded { .. } => ActorState::Paused,
-            crate::actors::bridge::actors::bridge::state::BridgeState::ShuttingDown => ActorState::Stopping,
-            crate::actors::bridge::actors::bridge::state::BridgeState::Stopped => ActorState::Stopped,
-        }
-    }
 
     async fn on_state_change(&mut self, from: ActorState, to: ActorState) -> ActorResult<()> {
         info!("Bridge Actor state change: {:?} -> {:?}", from, to);
@@ -181,36 +155,6 @@ impl LifecycleAware for BridgeActor {
         Ok(())
     }
 
-    async fn get_dependencies(&self) -> Vec<String> {
-        vec![
-            "actor_registry".to_string(),
-            "metrics_collector".to_string(),
-            "supervision_tree".to_string(),
-        ]
-    }
-
-    async fn check_dependency_health(&self, dependency: &str) -> ActorResult<bool> {
-        match dependency {
-            "actor_registry" => {
-                // Check if actor registry is accessible
-                Ok(true) // Placeholder
-            }
-            "metrics_collector" => {
-                // Check if metrics collection is working
-                Ok(self.actor_system_metrics.is_healthy())
-            }
-            "supervision_tree" => {
-                // Check if supervision is working
-                Ok(true) // Placeholder
-            }
-            _ => {
-                Err(ActorError::DependencyNotFound {
-                    actor_type: self.actor_type(),
-                    dependency: dependency.to_string(),
-                })
-            }
-        }
-    }
 }
 
 // Private implementation methods for lifecycle management

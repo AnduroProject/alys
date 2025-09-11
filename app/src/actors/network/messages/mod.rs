@@ -8,6 +8,7 @@ use std::result::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use uuid::Uuid;
+use crate::types::{ActorResult, AlysError};
 
 pub mod sync_messages;
 pub mod network_messages;

@@ -2,7 +2,7 @@
 
 use std::fmt;
 use serde::{Deserialize, Serialize};
-use ethereum_types::H256 as Hash256;
+use ethereum_types::H256;
 
 /// System-level errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,14 +380,17 @@ impl fmt::Display for BridgeError {
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SyncError::Configuration { message } => {
-                write!(f, "Sync configuration error: {}", message)
+            SyncError::NoPeersAvailable => {
+                write!(f, "No peers available for sync")
             }
-            SyncError::Network { peer_id, reason } => {
-                write!(f, "Sync network error from peer {}: {}", peer_id, reason)
+            SyncError::PeerMisbehavior { peer_id, reason } => {
+                write!(f, "Peer {} misbehavior: {}", peer_id, reason)
             }
-            SyncError::Consensus { reason } => {
-                write!(f, "Sync consensus error: {}", reason)
+            SyncError::DownloadFailed { item, reason } => {
+                write!(f, "Download failed for {}: {}", item, reason)
+            }
+            SyncError::SyncStalled { reason } => {
+                write!(f, "Sync stalled: {}", reason)
             }
             _ => write!(f, "{:?}", self),
         }
@@ -572,6 +575,97 @@ macro_rules! network_error {
     };
 }
 
+// Additional error types used across actor system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ValidationError {
+    InvalidBlock { reason: String },
+    InvalidTransaction { reason: String },
+    InvalidSignature { reason: String },
+    InvalidState { reason: String },
+    MissingData { item: String },
+    Other { reason: String },
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationError::InvalidBlock { reason } => write!(f, "Invalid block: {}", reason),
+            ValidationError::InvalidTransaction { reason } => write!(f, "Invalid transaction: {}", reason),
+            ValidationError::InvalidSignature { reason } => write!(f, "Invalid signature: {}", reason),
+            ValidationError::InvalidState { reason } => write!(f, "Invalid state: {}", reason),
+            ValidationError::MissingData { item } => write!(f, "Missing data: {}", item),
+            ValidationError::Other { reason } => write!(f, "Validation error: {}", reason),
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+// Actor health and monitoring types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ActorHealthStatus {
+    Healthy,
+    Degraded { reason: String },
+    Unhealthy { reason: String },
+    Unknown,
+}
+
+// Notification system types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationFilter {
+    pub actor_name: Option<String>,
+    pub event_type: Option<String>,
+    pub severity: Option<String>,
+}
+
+// General actor result type
+pub type ActorResult<T> = Result<T, AlysError>;
+
+// Sync-specific types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CheckpointRecoveryStrategy {
+    FastReplay,
+    FullValidation,
+    TrustedSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ErrorSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+// Transaction hash type
+pub type TransactionHash = H256;
+
+// Performance monitoring
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceSnapshot {
+    pub timestamp: std::time::SystemTime,
+    pub cpu_usage: f64,
+    pub memory_usage: u64,
+    pub network_usage: u64,
+}
+
+// Peer performance tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerPerformanceUpdate {
+    pub peer_id: String,
+    pub latency: std::time::Duration,
+    pub throughput: u64,
+    pub error_count: u32,
+}
+
+// Recovery result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecoveryResult {
+    Success { blocks_recovered: u64 },
+    PartialSuccess { blocks_recovered: u64, errors: Vec<String> },
+    Failed { reason: String },
+}
+
 // Result type aliases for convenience
 pub type SystemResult<T> = Result<T, SystemError>;
 pub type ChainResult<T> = Result<T, ChainError>;
@@ -582,5 +676,6 @@ pub type StreamResult<T> = Result<T, StreamError>;
 pub type BridgeResult<T> = Result<T, BridgeError>;
 pub type EngineResult<T> = Result<T, EngineError>;
 pub type AlysResult<T> = Result<T, AlysError>;
+pub type ValidationResult<T> = Result<T, ValidationError>;
 
 

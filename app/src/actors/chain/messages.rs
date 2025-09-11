@@ -431,7 +431,7 @@ pub struct SubscribeBlocks {
     /// Types of events to subscribe to
     pub event_types: Vec<BlockEventType>,
     /// Filter criteria for notifications
-    pub filter: Option<NotificationFilter>,
+    pub filter: Option<BlockNotificationFilter>,
 }
 
 /// Types of block events available for subscription
@@ -451,7 +451,7 @@ pub enum BlockEventType {
 
 /// Filter criteria for block notifications
 #[derive(Debug, Clone)]
-pub struct NotificationFilter {
+pub struct BlockNotificationFilter {
     /// Only notify for blocks above this height
     pub min_height: Option<u64>,
     /// Only notify for blocks with specific attributes
@@ -1230,7 +1230,7 @@ pub struct PushAuxPow {
     /// Target height for finalization
     pub height: u64,
     /// Completed AuxPow solution
-    pub auxpow: crate::auxpow::AuxPow,
+    pub auxpow: AuxPow,
     /// Mining reward address
     pub address: ethereum_types::Address,
 }

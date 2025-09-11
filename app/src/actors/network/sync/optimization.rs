@@ -23,6 +23,7 @@ use tokio::{
 use futures::{future::BoxFuture, FutureExt, StreamExt};
 use serde::{Serialize, Deserialize};
 use prometheus::{Histogram, Counter, Gauge, IntCounter, IntGauge, HistogramVec};
+use tracing::{info, warn, error, debug, trace};
 
 use super::{
     errors::{SyncError, SyncResult},

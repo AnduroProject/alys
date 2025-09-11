@@ -21,6 +21,7 @@ use futures::{future::BoxFuture, FutureExt, StreamExt};
 use serde::{Serialize, Deserialize};
 use prometheus::{Histogram, Counter, Gauge, IntCounter, IntGauge, HistogramVec};
 use uuid::Uuid;
+use tracing::{info, warn, error, debug, trace};
 
 use crate::{
     types::{blockchain::{ConsensusBlock as Block, SignedConsensusBlock}, BlockHash},

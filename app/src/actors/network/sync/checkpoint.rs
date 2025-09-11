@@ -29,6 +29,7 @@ use prometheus::{Histogram, Counter, Gauge, IntCounter, IntGauge};
 use sha2::{Sha256, Digest};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+use tracing::{info, warn, error, debug, trace};
 
 use crate::{
     types::{blockchain::{ConsensusBlock as Block, SignedConsensusBlock}, BlockHash, BlockHeader, Hash256, ConsensusActor},
