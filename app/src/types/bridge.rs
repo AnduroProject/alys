@@ -295,27 +295,6 @@ pub enum ValidationStep {
     FinalApproval,
 }
 
-/// Enhanced peg operation with governance integration and comprehensive tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PegOperation {
-    /// Unique operation identifier
-    pub operation_id: uuid::Uuid,
-    /// Operation type (peg-in or peg-out)
-    pub operation_type: PegOperationType,
-    /// Current operation status
-    pub status: PegOperationStatus,
-    /// Operation workflow state
-    pub workflow: PegOperationWorkflow,
-    /// Governance integration
-    pub governance: GovernanceIntegration,
-    /// Actor system metadata
-    pub actor_metadata: PegOperationActorMetadata,
-    /// Performance tracking
-    pub performance: OperationPerformanceMetrics,
-    /// Error tracking and recovery
-    pub error_tracking: OperationErrorTracking,
-}
-
 /// Peg operation types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PegOperationType {
@@ -381,13 +360,13 @@ pub enum PegOperationStatus {
     Completed {
         completed_at: std::time::SystemTime,
         final_confirmations: u32,
-        completion_proof: CompletionProof,
+        // completion_proof: CompletionProof,
         gas_used: Option<u64>,
     },
     /// Operation failed
     Failed {
         failed_at: std::time::SystemTime,
-        failure_reason: FailureReason,
+        // failure_reason: FailureReason,
         recovery_possible: bool,
         recovery_options: Vec<RecoveryOption>,
     },
@@ -783,55 +762,6 @@ pub struct PerformanceBenchmarks {
     pub efficiency_score: f64,
 }
 
-/// Error tracking and recovery for operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperationErrorTracking {
-    /// Errors encountered during operation
-    pub errors: Vec<OperationError>,
-    /// Recovery attempts made
-    pub recovery_attempts: Vec<RecoveryAttempt>,
-    /// Current recovery strategy
-    pub recovery_strategy: Option<RecoveryStrategy>,
-    /// Error patterns detected
-    pub error_patterns: Vec<ErrorPattern>,
-    /// Escalation history
-    pub escalation_history: Vec<EscalationEvent>,
-}
-
-/// Operation-specific errors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperationError {
-    /// Error type
-    pub error_type: OperationErrorType,
-    /// Error message
-    pub message: String,
-    /// When error occurred
-    pub occurred_at: std::time::SystemTime,
-    /// Error context
-    pub context: ErrorContext,
-    /// Recovery recommendations
-    pub recovery_recommendations: Vec<String>,
-    /// Error severity
-    pub severity: ErrorSeverity,
-}
-
-/// Types of operation errors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OperationErrorType {
-    /// Validation errors
-    Validation(ValidationErrorType),
-    /// Governance errors
-    Governance(GovernanceErrorType),
-    /// Blockchain errors
-    Blockchain(BlockchainErrorType),
-    /// Network errors
-    Network(NetworkErrorType),
-    /// System errors
-    System(SystemErrorType),
-    /// User errors
-    User(UserErrorType),
-}
-
 /// Peg-in operation status and tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PegInStatus {
@@ -1150,9 +1080,10 @@ impl PegInStatus {
     
     /// Get processing duration
     pub fn processing_duration(&self) -> Option<std::time::Duration> {
+        let now = std::time::SystemTime::now();
         match self {
-            PegInStatus::Completed { detected_at, completed_at, .. } => {
-                Some(completed_at.duration_since(*detected_at).unwrap_or_default())
+            PegInStatus::Completed { completed_at, .. } => {
+                Some(now.duration_since(*completed_at).unwrap_or_default())
             }
             _ => None,
         }

@@ -178,31 +178,29 @@ impl ActorMetricsBridge {
                 let mut total_message_count = 0;
                 let mut total_restarts = 0;
                 
-                for mut actor_entry in actors.iter_mut() {
-                    let actor_name = actor_entry.key();
-                    let registered = actor_entry.value_mut();
-                    
-                    total_actors += 1;
-                    let snapshot = registered.metrics.snapshot();
-                    
-                    // Update Prometheus metrics
-                    Self::update_prometheus_metrics(actor_name, &registered.actor_type, &snapshot);
-                    
-                    // Calculate rates if we have a previous snapshot
-                    if let Some(last_snapshot) = &registered.last_snapshot {
-                        Self::update_rate_metrics(actor_name, &registered.actor_type, last_snapshot, &snapshot);
+                let actor_names: Vec<String> = actors.iter().map(|e| e.key().clone()).collect();
+
+                for actor_name in actor_names {
+                    if let Some(mut entry) = actors.get_mut(&actor_name) {
+                        total_actors += 1;
+                        let registered = entry.value_mut();
+
+                        let snapshot = registered.metrics.snapshot();
+                        Self::update_prometheus_metrics(&actor_name, &registered.actor_type, &snapshot);
+
+                        if let Some(last_snapshot) = &registered.last_snapshot {
+                            Self::update_rate_metrics(&actor_name, &registered.actor_type, last_snapshot, &snapshot);
+                        }
+
+                        if snapshot.is_healthy() {
+                            healthy_actors += 1;
+                        }
+
+                        total_message_count += snapshot.messages_processed + snapshot.messages_failed;
+                        total_restarts += snapshot.restarts;
+
+                        registered.last_snapshot = Some(snapshot);
                     }
-                    
-                    // Health tracking
-                    if snapshot.is_healthy() {
-                        healthy_actors += 1;
-                    }
-                    
-                    total_message_count += snapshot.messages_processed + snapshot.messages_failed;
-                    total_restarts += snapshot.restarts;
-                    
-                    // Update last snapshot
-                    registered.last_snapshot = Some(snapshot);
                 }
                 
                 let collection_duration = collection_start.elapsed();

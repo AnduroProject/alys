@@ -308,7 +308,7 @@ pub trait StateSerializer: Send + Sync + std::fmt::Debug {
 }
 
 /// Reload history and metrics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ReloadHistory {
     /// All reload attempts
     pub reloads: Vec<ReloadAttempt>,
@@ -460,7 +460,7 @@ pub struct ValidationInfo {
 #[derive(Debug)]
 pub struct RollbackManager {
     /// Configuration snapshots for rollback
-    config_snapshots: HashMap<String, ConfigSnapshot>,
+    config_snapshots: RwLock<HashMap<String, ConfigSnapshot>>,
     
     /// Rollback strategies per component
     rollback_strategies: HashMap<String, RollbackStrategy>,
@@ -526,7 +526,7 @@ impl ConfigReloadManager {
                 validation_cache: HashMap::new(),
             },
             rollback_manager: RollbackManager {
-                config_snapshots: HashMap::new(),
+                config_snapshots: RwLock::new(HashMap::new()),
                 rollback_strategies: HashMap::new(),
                 max_snapshots: 10,
             },
@@ -630,11 +630,11 @@ impl ConfigReloadManager {
         // Create configuration snapshot for rollback
         let current_config = self.current_config.read().await.clone();
         let snapshot_id = format!("{}_snapshot", reload.reload_id);
-        self.rollback_manager.config_snapshots.insert(
+        self.rollback_manager.config_snapshots.write().await.insert(
             snapshot_id.clone(),
             ConfigSnapshot {
                 snapshot_id,
-                config: current_config,
+                config: current_config.clone(),
                 timestamp: start_time,
                 metadata: SnapshotMetadata {
                     config_version: "1.0".to_string(),
@@ -806,7 +806,7 @@ impl ConfigReloadManager {
         };
         
         // Compare actor configurations
-        if old_config.actors != new_config.actors {
+        if serde_json::to_value(&old_config.actors).ok() != serde_json::to_value(&new_config.actors).ok() {
             changes.sections_changed.push("actors".to_string());
             changes.actors_affected.extend([
                 "chain_actor".to_string(),
@@ -821,11 +821,11 @@ impl ConfigReloadManager {
         }
         
         // Compare network configuration
-        if old_config.network.listen_address != new_config.network.listen_address {
+        if old_config.network.listen_addr != new_config.network.listen_addr {
             changes.fields_changed.push(FieldChange {
-                path: "network.listen_address".to_string(),
-                old_value: Some(serde_json::to_value(&old_config.network.listen_address).unwrap()),
-                new_value: Some(serde_json::to_value(&new_config.network.listen_address).unwrap()),
+                path: "network.listen_addr".to_string(),
+                old_value: Some(serde_json::to_value(&old_config.network.listen_addr).unwrap()),
+                new_value: Some(serde_json::to_value(&new_config.network.listen_addr).unwrap()),
                 change_type: ChangeType::Modified,
             });
             changes.actors_affected.push("network_actor".to_string());
@@ -833,11 +833,11 @@ impl ConfigReloadManager {
         }
         
         // Compare storage configuration
-        if old_config.storage.database_url != new_config.storage.database_url {
+        if old_config.storage.data_dir != new_config.storage.data_dir {
             changes.fields_changed.push(FieldChange {
-                path: "storage.database_url".to_string(),
-                old_value: Some(serde_json::to_value(&old_config.storage.database_url).unwrap()),
-                new_value: Some(serde_json::to_value(&new_config.storage.database_url).unwrap()),
+                path: "storage.data_dir".to_string(),
+                old_value: Some(serde_json::to_value(&old_config.storage.data_dir).unwrap()),
+                new_value: Some(serde_json::to_value(&new_config.storage.data_dir).unwrap()),
                 change_type: ChangeType::Modified,
             });
             changes.actors_affected.push("storage_actor".to_string());
