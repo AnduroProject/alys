@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use ethereum_types::{H256 as TxHash, Address, U256, H256};
-use ethers_core::types::{TransactionReceipt, Log, Transaction as ExecutionTransaction, Block};
+use ethers_core::types::{TransactionReceipt, Log, Transaction as ExecutionTransaction, Block, Bytes};
 
 pub type ExecutionBlock = Block<ExecutionTransaction>;
 
@@ -217,12 +217,12 @@ pub struct PendingTransaction {
     pub from: Address,
     pub to: Option<Address>,
     pub value: U256,
-    pub gas: u64,
+    pub gas: U256,
     pub gas_price: U256,
     pub max_fee_per_gas: Option<U256>,
     pub max_priority_fee_per_gas: Option<U256>,
-    pub nonce: u64,
-    pub data: Vec<u8>,
+    pub nonce: U256,
+    pub data: Bytes,
     pub first_seen: SystemTime,
     pub replacements: u32,
 }
@@ -481,12 +481,13 @@ impl ExecutionClient {
             "id": 1
         });
         
-        let pool = self.connection_pool.read().await;
-        let endpoint = &pool.primary_endpoint;
-        drop(pool);
+        let endpoint = {
+            let pool = self.connection_pool.read().await;
+            pool.primary_endpoint.clone()
+        };
         
         let response = self.http_client
-            .post(endpoint)
+            .post(&endpoint)
             .json(&request_body)
             .send()
             .await
@@ -568,7 +569,7 @@ impl ExecutionClient {
                 to: tx.to,
                 value: tx.value,
                 gas: tx.gas,
-                gas_price: tx.gas_price,
+                gas_price: tx.gas_price.unwrap_or_default(),
                 max_fee_per_gas: tx.max_fee_per_gas,
                 max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
                 nonce: tx.nonce,

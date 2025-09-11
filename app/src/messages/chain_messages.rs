@@ -19,6 +19,7 @@
 
 use crate::{types::*, AuxPow};
 use actix::prelude::*;
+use serde::{Serialize, Deserialize};
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
@@ -554,7 +555,7 @@ pub struct GetChainMetrics {
 }
 
 /// Comprehensive chain performance metrics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChainMetrics {
     /// Total blocks produced by this node
     pub blocks_produced: u64,
@@ -583,7 +584,7 @@ pub struct ChainMetrics {
 }
 
 /// Memory usage statistics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryStats {
     /// Current memory usage in bytes
     pub current_bytes: u64,

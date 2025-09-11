@@ -489,10 +489,10 @@ impl BitcoinClient {
             "id": 1
         });
         
-        let mut request = self.client.post(&self.url).json(&request_body);
+        let mut request = self.client.post(&self.connection_pool.primary_url).json(&request_body);
         
         // Add authentication
-        request = match &self.auth {
+        request = match &self.connection_pool.auth {
             BitcoinNodeAuth::UserPass { username, password } => {
                 request.basic_auth(username, Some(password))
             }

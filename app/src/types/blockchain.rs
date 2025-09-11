@@ -30,8 +30,8 @@ use lighthouse_facade::types::{
 };
 use lighthouse_facade::bls::PublicKey;
 use crate::auxpow::AuxPow;
-use crate::auxpow_miner::BlockIndex;
-use crate::aura::Authority;
+use crate::actors::auxpow::config::BlockIndex;
+use crate::types::consensus::Authority;
 use crate::signatures::{AggregateApproval as SignatureAggregateApproval, CheckedIndividualApproval, IndividualApproval as SignatureIndividualApproval};
 use crate::spec::ChainSpec;
 use crate::store::BlockRef as StoreBlockRef;

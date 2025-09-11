@@ -3,6 +3,22 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 use actix::prelude::*;
+use lighthouse_facade::bls::Keypair;
+
+/// Aura consensus errors (migrated from legacy aura.rs)
+#[derive(Debug)]
+pub enum AuraError {
+    SlotIsInFuture,
+    SlotAuthorNotFound,
+    BadSignature,
+}
+
+/// Authority information for block production (migrated from legacy aura.rs)
+#[derive(Clone)]
+pub struct Authority {
+    pub signer: Keypair,
+    pub index: u8,
+}
 
 /// Placeholder ConsensusActor for compilation compatibility
 /// TODO: Implement proper consensus actor

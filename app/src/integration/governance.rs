@@ -174,14 +174,9 @@ impl GovernanceGrpcClient {
                 reason: format!("Invalid endpoint: {}", e),
             })?;
         
-        if let Some(tls) = &self.tls_config {
-            channel = channel.tls_config(tls.clone())
-                .map_err(|e| SystemError::ConfigurationError {
-                    parameter: "tls_config".to_string(),
-                    reason: format!("TLS config error: {}", e),
-                })?;
-        }
         
+        // TODO: Implement TLS when enabled
+
         channel.connect().await
             .map_err(|e| SystemError::ActorCommunicationFailed {
                 from: "alys_node".to_string(),
