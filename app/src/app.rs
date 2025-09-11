@@ -25,7 +25,7 @@ use crate::{
         rpc::AuxPowRpcContext,
         AuxPowActor, DifficultyManager,
     },
-    auxpow_miner::BitcoinConsensusParams, // Keep for legacy compatibility
+    actors::auxpow::config::BitcoinConsensusParams, // V2 migrated type
     config::*,
     spec::{
         genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,

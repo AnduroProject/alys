@@ -1,4 +1,4 @@
-use crate::aura::AuraError;
+use crate::types::consensus::AuraError;
 use crate::bridge_compat::Error as FederationError;
 use lighthouse_facade::execution_layer;
 use std::time::SystemTimeError;

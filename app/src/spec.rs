@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, str::FromStr};
 
-use crate::auxpow_miner::BitcoinConsensusParams;
+use crate::actors::auxpow::config::BitcoinConsensusParams;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
