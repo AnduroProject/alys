@@ -205,7 +205,7 @@ async fn handle_get_mining_info(
     let get_status_msg = GetMiningStatus;
     
     match context.auxpow_actor.send(get_status_msg).await {
-        Ok(status) => {
+        Ok(Ok(status)) => {
             RPC_REQUESTS
                 .with_label_values(&["getmininginfo", "success"])
                 .inc();
@@ -226,6 +226,12 @@ async fn handle_get_mining_info(
             });
             
             success_response(req.id, mining_info)
+        }
+        Ok(Err(auxpow_error)) => {
+            RPC_REQUESTS
+                .with_label_values(&["getmininginfo", "auxpow_error"])
+                .inc();
+            error_response(req.id, RpcError::from(auxpow_error))
         }
         Err(mailbox_error) => {
             RPC_REQUESTS

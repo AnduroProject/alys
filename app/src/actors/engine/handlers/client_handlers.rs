@@ -179,13 +179,13 @@ impl Handler<RestartEngineMessage> for EngineActor {
                 },
                 Err(e) => {
                     error!("Failed to reconnect during restart: {}", e);
-                    return Err(e);
+                    return Err(crate::types::errors::EngineError::Engine(format!("Restart failed: {}", e)));
                 }
             }
             
             info!("Engine actor restart completed successfully");
             Ok(())
-        })
+        }) as ResponseFuture<MessageResult<()>>
     }
 }
 

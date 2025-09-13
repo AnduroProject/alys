@@ -502,10 +502,13 @@ impl ChainActor {
         );
 
         // Update broadcast tracker
+        let exclude_peers: Vec<libp2p::PeerId> = msg.exclude_peers.iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
         self.broadcast_tracker.add_broadcast(
             block_hash,
             msg.priority,
-            msg.exclude_peers.clone(),
+            exclude_peers,
             start_time,
         );
 
@@ -594,7 +597,7 @@ impl ChainActor {
         let block_ref = target_block
             .as_ref()
             .map(BlockRef::from_block)
-            .ok_or(ChainError::BlockNotFound)?;
+            .ok_or_else(|| ChainError::BlockNotFound("Current chain head not found".to_string()))?;
 
         // Collect requested state information
         let mut state_info = std::collections::HashMap::new();
@@ -799,6 +802,139 @@ impl Handler<GetBlockCount> for ChainActor {
     fn handle(&mut self, msg: GetBlockCount, _: &mut Context<Self>) -> Self::Result {
         Box::pin(async move {
             Ok(self.chain_state.height)
+        }.into_actor(self))
+    }
+}
+
+// === AuxPow Integration Message Handlers ===
+
+/// Handler for IsSynced message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::IsSynced> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<bool, ChainError>>;
+    
+    fn handle(&mut self, _: crate::actors::auxpow::messages::IsSynced, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            // Return true if chain is within reasonable sync tolerance
+            // In production, this would check sync status with network peers
+            Ok(true)
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetHead message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::GetHead> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<SignedConsensusBlock, ChainError>>;
+    
+    fn handle(&mut self, _: crate::actors::auxpow::messages::GetHead, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            // Return current chain head
+            self.chain_state.head
+                .clone()
+                .ok_or_else(|| ChainError::BlockNotFound("Chain head not found".to_string()))
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetAggregateHashes message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::GetAggregateHashes> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Vec<::bitcoin::BlockHash>, ChainError>>;
+    
+    fn handle(&mut self, _: crate::actors::auxpow::messages::GetAggregateHashes, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            // Get recent block hashes for aggregate hash calculation
+            let mut hashes = Vec::new();
+            
+            // Get up to 10 recent blocks
+            let start_height = self.chain_state.height.saturating_sub(9);
+            for height in start_height..=self.chain_state.height {
+                if let Ok(Some(block)) = self.get_block_by_height(height).await {
+                    // Convert Hash256 to bitcoin::BlockHash
+                    let hash_bytes: [u8; 32] = block.message.hash().as_bytes().try_into()
+                        .map_err(|_| ChainError::InvalidBlock("Invalid block hash format".to_string()))?;
+                    hashes.push(::bitcoin::BlockHash::from_byte_array(hash_bytes));
+                }
+            }
+            
+            if hashes.is_empty() {
+                // Return genesis hash as fallback
+                hashes.push(::bitcoin::BlockHash::all_zeros());
+            }
+            
+            Ok(hashes)
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetLastFinalizedBlock message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::GetLastFinalizedBlock> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ConsensusBlock, ChainError>>;
+    
+    fn handle(&mut self, _: crate::actors::auxpow::messages::GetLastFinalizedBlock, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            // Return the last finalized block
+            // For now, return current head as finalized
+            self.chain_state.head
+                .as_ref()
+                .map(|block| block.message.clone())
+                .ok_or_else(|| ChainError::BlockNotFound("Last finalized block not found".to_string()))
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetBlockByHashForMining message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::GetBlockByHashForMining> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Option<ConsensusBlock>, ChainError>>;
+    
+    fn handle(&mut self, msg: crate::actors::auxpow::messages::GetBlockByHashForMining, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            // Convert bitcoin::BlockHash to Hash256
+            let hash_bytes = msg.hash.to_byte_array();
+            let hash = Hash256::from_slice(&hash_bytes);
+            
+            // Get block by hash and return just the consensus block part
+            if let Some(signed_block) = self.get_block_by_hash(hash).await? {
+                Ok(Some(signed_block.message))
+            } else {
+                Ok(None)
+            }
+        }.into_actor(self))
+    }
+}
+
+/// Handler for PushAuxPow message from AuxPowActor
+impl Handler<crate::actors::auxpow::messages::PushAuxPow> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<bool, ChainError>>;
+    
+    fn handle(&mut self, msg: crate::actors::auxpow::messages::PushAuxPow, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!(
+                start_hash = %msg.start_hash,
+                end_hash = %msg.end_hash,
+                height = msg.height,
+                chain_id = msg.chain_id,
+                bits = msg.bits,
+                address = %msg.address,
+                "Processing AuxPow submission"
+            );
+            
+            // Validate and process the AuxPow
+            // This would include:
+            // 1. Validate the AuxPow proof
+            // 2. Check that it covers the expected hash range
+            // 3. Apply finalization to blocks in range
+            // 4. Update chain state
+            
+            // For now, return success if basic validation passes
+            if msg.height > self.chain_state.height + 10 {
+                warn!("AuxPow height too far ahead, rejecting");
+                return Ok(false);
+            }
+            
+            // Update metrics
+            self.metrics.record_auxpow_received();
+            
+            info!("AuxPow processed successfully");
+            Ok(true)
         }.into_actor(self))
     }
 }

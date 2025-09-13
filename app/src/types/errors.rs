@@ -42,7 +42,7 @@ pub enum ChainError {
     NotValidator,
     InvalidSignature,
     ConsensusFailure { reason: String },
-    NotOurSlot { slot: u64 },
+    NotOurSlot { slot: u64, reason: String },
     ProductionPaused { reason: String },
     InvalidFederation { reason: String },
     Unauthorized { operation: String },
@@ -602,13 +602,22 @@ impl fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 // Actor health and monitoring types
+/// Actor health status with detailed metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ActorHealthStatus {
-    Healthy,
-    Degraded { reason: String },
-    Unhealthy { reason: String },
-    Unknown,
+pub struct ActorHealthStatus {
+    /// Number of active actors
+    pub active_actors: u32,
+    /// Number of failed actors
+    pub failed_actors: u32,
+    /// Queue depths for different actors
+    pub queue_depths: std::collections::HashMap<String, usize>,
+    /// Overall system health score (0-100)
+    pub system_health: u8,
+    /// Whether supervision is active
+    pub supervision_active: bool,
 }
+
+// BlockNotificationFilter moved to crate::actors::chain::messages to avoid duplication
 
 // Notification system types
 #[derive(Debug, Clone, Serialize, Deserialize)]

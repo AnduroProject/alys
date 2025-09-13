@@ -12,7 +12,8 @@ use actix::prelude::*;
 // Import types from other modules
 use crate::types::*;
 use crate::actors::auxpow::types::AuxPow;
-use super::messages::{self, FederationMember as MessageFederationMember};
+use super::messages::{self, FederationMember as MessageFederationMember, BroadcastPriority, BlockNotificationFilter};
+use libp2p::PeerId;
 use crate::actors::engine::state::ExecutionState;
 
 /// Current chain state managed by the actor
@@ -815,6 +816,40 @@ impl Default for BroadcastTracker {
     }
 }
 
+impl BroadcastTracker {
+    /// Add a broadcast entry to tracking
+    pub fn add_broadcast(
+        &mut self,
+        block_hash: Hash256,
+        _priority: BroadcastPriority, // TODO: use priority
+        _exclude_peers: Vec<PeerId>,  // TODO: use exclude_peers
+        start_time: Instant,
+    ) {
+        let metrics = BroadcastMetrics {
+            block_hash,
+            peers_reached: 0, // TODO: calculate actual peers reached
+            successful_sends: 0, // TODO: track successful sends
+            broadcast_time: start_time.elapsed(),
+            timestamp: start_time,
+        };
+        
+        self.recent_broadcasts.push_back(metrics);
+        
+        // Keep only recent broadcasts
+        if self.recent_broadcasts.len() > 50 {
+            self.recent_broadcasts.pop_front();
+        }
+        
+        // Update success rate (placeholder calculation)
+        self.success_rate = 0.95; // TODO: calculate actual success rate
+    }
+    
+    /// Get current success rate
+    pub fn success_rate(&self) -> f64 {
+        self.success_rate
+    }
+}
+
 // Placeholder actor types - these should be imported from other modules
 pub struct EngineActor;
 pub struct BridgeActor;
@@ -935,7 +970,7 @@ impl ReorganizationManager {
         target_block_hash: Hash256,
     ) -> Result<ReorgResult, ChainError> {
         let target_metadata = self.block_index.get(&target_block_hash)
-            .ok_or(ChainError::BlockNotFound)?;
+            .ok_or_else(|| ChainError::BlockNotFound("Target block not found in index".to_string()))?;
 
         let current_tip = self.get_canonical_tip()?;
         

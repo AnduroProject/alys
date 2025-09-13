@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use actix::prelude::*;
 use tracing::*;
 
-use bitcoin::{BlockHash, CompactTarget};
+use bitcoin::BlockHash;
 use ethereum_types::Address as EvmAddress;
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
 
 use super::{
     messages::*,
-    config::AuxPowConfig,
+    config::{AuxPowConfig, BlockIndex},
     error::{AuxPowError, AuxPowResult},
     metrics::AuxPowMetrics,
     DifficultyManager,
@@ -213,6 +213,25 @@ impl AuxPowActor {
             .map_err(|_| AuxPowError::ChainError)?;
         Ok(head.message.height())
     }
+    
+    // ============================================================================
+    // Public getter methods for testing
+    // ============================================================================
+    
+    /// Get mutable reference to metrics for testing
+    pub fn metrics_mut(&mut self) -> &mut AuxPowMetrics {
+        &mut self.metrics
+    }
+    
+    /// Get reference to metrics for testing
+    pub fn metrics(&self) -> &AuxPowMetrics {
+        &self.metrics
+    }
+    
+    /// Get reference to config for testing  
+    pub fn config(&self) -> &AuxPowConfig {
+        &self.config
+    }
 }
 
 // ============================================================================
@@ -221,9 +240,17 @@ impl AuxPowActor {
 
 /// Handler for CreateAuxBlock - Direct port of create_aux_block()
 impl Handler<CreateAuxBlock> for AuxPowActor {
-    type Result = ResponseActFuture<Self, AuxPowResult<AuxBlock>>;
+    type Result = ResponseFuture<AuxPowResult<AuxBlock>>;
     
     fn handle(&mut self, msg: CreateAuxBlock, _: &mut Context<Self>) -> Self::Result {
+        // Extract all needed data from self before async block
+        let chain_actor = self.chain_actor.clone();
+        let difficulty_manager = self.difficulty_manager.clone();
+        
+        // Store aux info and record metrics after async operations complete
+        let state_ptr = &mut self.state as *mut BTreeMap<BlockHash, AuxInfo>;
+        let metrics_ptr = &mut self.metrics as *mut AuxPowMetrics;
+        
         Box::pin(async move {
             let start_time = Instant::now();
             
@@ -233,16 +260,22 @@ impl Handler<CreateAuxBlock> for AuxPowActor {
                 .inc();
 
             // Check sync status (exact legacy logic)
-            if !self.is_chain_synced().await? {
+            let is_synced = chain_actor
+                .send(IsSynced)
+                .await
+                .map_err(|_| AuxPowError::ChainCommunicationError)?
+                .map_err(|_| AuxPowError::ChainError)?;
+
+            if !is_synced {
                 AUXPOW_CREATE_BLOCK_CALLS
                     .with_label_values(&["chain_syncing"])
                     .inc();
-                self.metrics.record_error("chain_syncing");
+                unsafe { (*metrics_ptr).record_error("chain_syncing"); }
                 return Err(AuxPowError::ChainSyncing);
             }
 
             // Get last finalized block (exact legacy logic)
-            let index_last = self.chain_actor
+            let index_last = chain_actor
                 .send(GetLastFinalizedBlock)
                 .await
                 .map_err(|_| AuxPowError::ChainCommunicationError)?
@@ -255,7 +288,7 @@ impl Handler<CreateAuxBlock> for AuxPowActor {
             );
 
             // Get aggregate hashes (exact legacy logic)
-            let hashes = self.chain_actor
+            let hashes = chain_actor
                 .send(GetAggregateHashes)
                 .await
                 .map_err(|_| AuxPowError::ChainCommunicationError)?
@@ -263,33 +296,32 @@ impl Handler<CreateAuxBlock> for AuxPowActor {
 
             // Exact legacy metric observation
             AUXPOW_HASHES_PROCESSED.observe(hashes.len() as f64);
-            self.metrics.record_hashes_processed(hashes.len());
+            unsafe { (*metrics_ptr).record_hashes_processed(hashes.len()); }
 
             // Calculate aggregate hash (exact legacy call)
             let hash = AuxPow::aggregate_hash(&hashes);
 
             trace!("Creating AuxBlock for hash {}", hash);
 
-            // Store aux info (exact legacy structure and logic)
-            self.state.insert(
-                hash,
-                AuxInfo {
-                    last_hash: index_last.block_hash(),
-                    start_hash: *hashes.first().ok_or_else(|| {
-                        self.metrics.record_error("hash_retrieval");
-                        AuxPowError::HashRetrievalError
-                    })?,
-                    end_hash: *hashes.last().ok_or_else(|| {
-                        self.metrics.record_error("hash_retrieval");
-                        AuxPowError::HashRetrievalError
-                    })?,
-                    address: msg.address,
-                },
-            );
+            // Get first and last hashes with error handling
+            let start_hash = *hashes.first().ok_or_else(|| {
+                unsafe { (*metrics_ptr).record_error("hash_retrieval"); }
+                AuxPowError::HashRetrievalError
+            })?;
+            let end_hash = *hashes.last().ok_or_else(|| {
+                unsafe { (*metrics_ptr).record_error("hash_retrieval"); }
+                AuxPowError::HashRetrievalError
+            })?;
 
             // Get difficulty target (delegated to DifficultyManager)
-            let head_height = self.get_chain_head_height().await?;
-            let bits = self.difficulty_manager
+            let head = chain_actor
+                .send(GetHead)
+                .await
+                .map_err(|_| AuxPowError::ChainCommunicationError)?
+                .map_err(|_| AuxPowError::ChainError)?;
+            let head_height = head.message.height();
+            
+            let bits = difficulty_manager
                 .send(GetNextWorkRequired {
                     index_last: index_last.clone(),
                     chain_head_height: head_height,
@@ -298,6 +330,17 @@ impl Handler<CreateAuxBlock> for AuxPowActor {
                 .map_err(|_| AuxPowError::ChainCommunicationError)?
                 .map_err(|e| AuxPowError::DifficultyCalculationError(format!("{:?}", e)))?;
 
+            // Store aux info (exact legacy structure and logic)
+            let aux_info = AuxInfo {
+                last_hash: index_last.block_hash(),
+                start_hash,
+                end_hash,
+                address: msg.address,
+            };
+
+            // Store in state
+            unsafe { (*state_ptr).insert(hash, aux_info); }
+
             // Exact legacy metric increment
             AUXPOW_CREATE_BLOCK_CALLS
                 .with_label_values(&["success"])
@@ -305,27 +348,35 @@ impl Handler<CreateAuxBlock> for AuxPowActor {
 
             // Record timing
             let duration = start_time.elapsed().as_millis() as u64;
-            self.metrics.record_create_call(duration);
+            unsafe { (*metrics_ptr).record_create_call(duration); }
 
             // Return AuxBlock (exact legacy structure)
             Ok(AuxBlock {
                 hash,
-                chain_id: index_last.chain_id(),
+                chain_id: index_last.chain_id().unwrap_or(1), // Default to chain_id 1 if no auxpow
                 previous_block_hash: index_last.block_hash(),
                 coinbase_value: 0,
                 bits,
                 height: index_last.height() + 1,
                 _target: bits.into(),
             })
-        }.into_actor(self))
+        })
     }
 }
 
 /// Handler for SubmitAuxBlock - Direct port of submit_aux_block()
 impl Handler<SubmitAuxBlock> for AuxPowActor {
-    type Result = ResponseActFuture<Self, AuxPowResult<()>>;
+    type Result = ResponseFuture<AuxPowResult<()>>;
     
     fn handle(&mut self, msg: SubmitAuxBlock, _: &mut Context<Self>) -> Self::Result {
+        // Extract all needed data from self before async block
+        let chain_actor = self.chain_actor.clone();
+        let difficulty_manager = self.difficulty_manager.clone();
+        
+        // Use unsafe pointers to update state and metrics from async block
+        let state_ptr = &mut self.state as *mut BTreeMap<BlockHash, AuxInfo>;
+        let metrics_ptr = &mut self.metrics as *mut AuxPowMetrics;
+        
         Box::pin(async move {
             let start_time = Instant::now();
             
@@ -337,35 +388,45 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
             trace!("Submitting AuxPow for hash {}", msg.hash);
             
             // Retrieve aux info (exact legacy logic)
+            let aux_info = unsafe {
+                (*state_ptr).remove(&msg.hash).ok_or_else(|| {
+                    error!("Submitted AuxPow for unknown block");
+                    AUXPOW_SUBMIT_BLOCK_CALLS
+                        .with_label_values(&["unknown_block"])
+                        .inc();
+                    (*metrics_ptr).record_error("unknown_block");
+                    AuxPowError::UnknownBlock
+                })?
+            };
+            
             let AuxInfo {
                 last_hash,
                 start_hash,
                 end_hash,
                 address,
-            } = self.state.remove(&msg.hash).ok_or_else(|| {
-                error!("Submitted AuxPow for unknown block");
-                AUXPOW_SUBMIT_BLOCK_CALLS
-                    .with_label_values(&["unknown_block"])
-                    .inc();
-                self.metrics.record_error("unknown_block");
-                AuxPowError::UnknownBlock
-            })?;
+            } = aux_info;
 
             // Get last block (exact legacy logic)
-            let index_last = self.chain_actor
+            let index_last = chain_actor
                 .send(GetBlockByHashForMining { hash: last_hash })
                 .await
                 .map_err(|_| AuxPowError::ChainCommunicationError)?
                 .map_err(|_| AuxPowError::ChainError)?
                 .ok_or_else(|| {
                     error!("Last block not found");
-                    self.metrics.record_error("last_block_not_found");
+                    unsafe { (*metrics_ptr).record_error("last_block_not_found"); }
                     AuxPowError::LastBlockNotFound
                 })?;
 
             // Get difficulty for validation (delegated to DifficultyManager)
-            let head_height = self.get_chain_head_height().await?;
-            let bits = self.difficulty_manager
+            let head = chain_actor
+                .send(GetHead)
+                .await
+                .map_err(|_| AuxPowError::ChainCommunicationError)?
+                .map_err(|_| AuxPowError::ChainError)?;
+            let head_height = head.message.height();
+            
+            let bits = difficulty_manager
                 .send(GetNextWorkRequired {
                     index_last: index_last.clone(),
                     chain_head_height: head_height,
@@ -374,7 +435,7 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
                 .map_err(|_| AuxPowError::ChainCommunicationError)?
                 .map_err(|e| AuxPowError::DifficultyCalculationError(format!("{:?}", e)))?;
             
-            let chain_id = index_last.chain_id();
+            let chain_id = index_last.chain_id().unwrap_or(1); // Default to chain_id 1 if no auxpow
 
             trace!("Next work required: {}", bits.to_consensus());
             trace!("Chain ID: {}", chain_id);
@@ -385,7 +446,7 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
                 AUXPOW_SUBMIT_BLOCK_CALLS
                     .with_label_values(&["invalid_pow"])
                     .inc();
-                self.metrics.record_error("invalid_pow");
+                unsafe { (*metrics_ptr).record_error("invalid_pow"); }
                 return Err(AuxPowError::InvalidPow);
             }
 
@@ -395,12 +456,12 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
                 AUXPOW_SUBMIT_BLOCK_CALLS
                     .with_label_values(&["invalid_auxpow"])
                     .inc();
-                self.metrics.record_error("invalid_auxpow");
+                unsafe { (*metrics_ptr).record_error("invalid_auxpow"); }
                 return Err(AuxPowError::InvalidAuxpow);
             }
 
             // Push to chain for finalization (exact legacy parameters)
-            let success = self.chain_actor
+            let success = chain_actor
                 .send(PushAuxPow {
                     start_hash,
                     end_hash,
@@ -416,7 +477,7 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
 
             // Record metrics
             let duration = start_time.elapsed().as_millis() as u64;
-            self.metrics.record_submit_call(duration, success);
+            unsafe { (*metrics_ptr).record_submit_call(duration, success); }
 
             if success {
                 debug!("AuxPow submitted and accepted successfully");
@@ -425,13 +486,13 @@ impl Handler<SubmitAuxBlock> for AuxPowActor {
             }
 
             Ok(())
-        }.into_actor(self))
+        })
     }
 }
 
 /// Handler for GetQueuedAuxpow - Direct port of get_queued_auxpow()
 impl Handler<GetQueuedAuxpow> for AuxPowActor {
-    type Result = ResponseActFuture<Self, Option<AuxPowHeader>>;
+    type Result = ResponseFuture<Option<AuxPowHeader>>;
     
     fn handle(&mut self, _: GetQueuedAuxpow, _: &mut Context<Self>) -> Self::Result {
         Box::pin(async move {
@@ -439,7 +500,7 @@ impl Handler<GetQueuedAuxpow> for AuxPowActor {
             // In legacy system, this was forwarded to Chain::get_queued_auxpow
             // TODO: Implement when ChainActor has GetQueuedAuxpow handler
             None
-        }.into_actor(self))
+        })
     }
 }
 
@@ -476,10 +537,10 @@ impl Handler<SetMiningEnabled> for AuxPowActor {
 
 /// Handler for GetMiningStatus
 impl Handler<GetMiningStatus> for AuxPowActor {
-    type Result = MiningStatus;
+    type Result = Result<MiningStatus, AuxPowError>;
     
     fn handle(&mut self, _: GetMiningStatus, _: &mut Context<Self>) -> Self::Result {
-        MiningStatus {
+        Ok(MiningStatus {
             mining_enabled: self.config.mining_enabled,
             mining_address: self.config.mining_address,
             current_work_count: self.state.len(),
@@ -487,13 +548,13 @@ impl Handler<GetMiningStatus> for AuxPowActor {
             total_blocks_mined: self.metrics.blocks_mined,
             total_submissions: self.metrics.submit_calls,
             success_rate: self.metrics.success_rate(),
-        }
+        })
     }
 }
 
 /// Handler for HealthCheck
 impl Handler<HealthCheck> for AuxPowActor {
-    type Result = HealthCheckResult;
+    type Result = Result<HealthCheckResult, AuxPowError>;
     
     fn handle(&mut self, _: HealthCheck, _: &mut Context<Self>) -> Self::Result {
         let now = Instant::now();
@@ -529,12 +590,12 @@ impl Handler<HealthCheck> for AuxPowActor {
             error_count
         );
 
-        HealthCheckResult {
+        Ok(HealthCheckResult {
             healthy,
             score,
             details,
             last_activity: self.metrics.last_activity,
             error_count,
-        }
+        })
     }
 }

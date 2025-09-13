@@ -61,8 +61,8 @@ impl Handler<BuildPayloadMessage> for EngineActor {
                         correlation_id = ?correlation_id,
                         payload_id = %payload_id,
                         build_time_ms = %build_duration.as_millis(),
-                        block_hash = %execution_payload.block_hash(),
-                        gas_used = %execution_payload.gas_used(),
+                        block_hash = %execution_payload.block_hash,
+                        gas_used = %execution_payload.gas_used,
                         "Successfully built execution payload"
                     );
                     
@@ -79,10 +79,10 @@ impl Handler<BuildPayloadMessage> for EngineActor {
                         "Failed to build execution payload"
                     );
                     
-                    Err(EngineError::ClientError(super::super::ClientError::RpcError(format!("{}", e))))
+                    Err(crate::types::errors::EngineError::Engine(format!("Failed to build payload: {}", e)))
                 }
             }
-        })
+        }) as ResponseFuture<MessageResult<PayloadId>>
     }
 }
 
@@ -107,7 +107,7 @@ impl Handler<GetPayloadMessage> for EngineActor {
             info!(
                 correlation_id = ?correlation_id,
                 payload_id = %payload_id,
-                block_hash = %payload.block_hash(),
+                block_hash = %payload.block_hash,
                 "Found payload in pending list"
             );
             
@@ -134,7 +134,7 @@ impl Handler<GetPayloadMessage> for EngineActor {
             self.metrics.payload_not_found();
             
             Box::pin(async move {
-                Err(EngineError::PayloadNotFound(payload_id))
+                Err(crate::types::errors::EngineError::Engine("Payload not found".to_string()))
             })
         }
     }
@@ -147,7 +147,7 @@ impl Handler<ExecutePayloadMessage> for EngineActor {
     fn handle(&mut self, msg: ExecutePayloadMessage, _ctx: &mut Self::Context) -> Self::Result {
         let engine = self.engine.clone();
         let correlation_id = msg.correlation_id;
-        let block_hash = msg.payload.block_hash();
+        let block_hash = msg.payload.block_hash;
         let validate = msg.validate;
         let timeout = msg.timeout.unwrap_or(Duration::from_secs(30));
         
@@ -183,8 +183,8 @@ impl Handler<ExecutePayloadMessage> for EngineActor {
                         status: ExecutionStatus::Valid,
                         latest_valid_hash: Some(committed_hash),
                         validation_error: None,
-                        gas_used: Some(msg.payload.gas_used()),
-                        state_root: Some(msg.payload.state_root()),
+                        gas_used: Some(msg.payload.gas_used),
+                        state_root: Some(msg.payload.state_root),
                         receipts: vec![], // TODO: Fetch actual receipts
                         execution_duration,
                     };
@@ -251,7 +251,12 @@ impl Handler<ChainRequestPayloadMessage> for EngineActor {
         };
 
         // Forward to the regular payload handler
-        ctx.address().send(build_msg)
+        Box::pin(async move {
+            let result = ctx.address().send(build_msg).await.map_err(|_| {
+                crate::types::errors::EngineError::Engine("Failed to forward build message".to_string())
+            })??;
+            Ok(result)
+        })
     }
 }
 
@@ -425,11 +430,11 @@ impl EngineActor {
         
         // Check that gas used is reasonable
         if let Some(gas_used) = result.gas_used {
-            if gas_used > payload.gas_limit() {
+            if gas_used > payload.gas_limit {
                 warn!(
                     "Execution used more gas than limit: used={}, limit={}",
                     gas_used,
-                    payload.gas_limit()
+                    payload.gas_limit
                 );
                 return false;
             }

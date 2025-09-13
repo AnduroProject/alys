@@ -6,7 +6,8 @@
 use serde::{Deserialize, Serialize};
 use ethereum_types::{H256, U256, Address};
 use std::fmt;
-use crate::types::{ExecutionPayload, MainnetEthSpec};
+use crate::types::{ExecutionPayload, MainnetEthSpec, EthSpec};
+use crate::types::store::{ItemStore, Item};
 use crate::error::{FacadeError, FacadeResult};
 
 // Re-export from v7 when available
@@ -238,6 +239,23 @@ pub mod fallback {
         pub fn open<P: AsRef<std::path::Path>>(path: P) -> FacadeResult<Self> {
             let _ = path.as_ref(); // Use the path parameter
             Ok(LevelDB)
+        }
+    }
+    
+    impl<E: EthSpec> ItemStore<E> for LevelDB {
+        fn put<I: Item>(&self, _key: &str, _item: &I) -> FacadeResult<()> {
+            // Mock implementation - in real implementation would store to LevelDB
+            Ok(())
+        }
+        
+        fn get<I: Item>(&self, _key: &str) -> FacadeResult<Option<I>> {
+            // Mock implementation - in real implementation would retrieve from LevelDB
+            Ok(None)
+        }
+        
+        fn delete<I: Item>(&self, _key: &str) -> FacadeResult<()> {
+            // Mock implementation - in real implementation would delete from LevelDB
+            Ok(())
         }
     }
     

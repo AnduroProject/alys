@@ -253,7 +253,7 @@ impl AlysActor for BridgeActor {
             message_id = %envelope.id,
             message_type = %envelope.payload.message_type(),
             error = %error,
-            actor_type = %self.actor_type(),
+            actor_type = %AlysActor::actor_type(self),
             "Bridge message processing failed"
         );
 
@@ -284,13 +284,13 @@ impl ExtendedAlysActor for BridgeActor {
 
         // Initialize health monitoring
         self.health_monitor.start().await.map_err(|e| ActorError::InitializationFailed {
-            actor_type: self.actor_type(),
+            actor_type: AlysActor::actor_type(self),
             reason: format!("Health monitoring initialization failed: {}", e),
         })?;
 
         // Initialize metrics collection
         self.metrics.initialize().await.map_err(|e| ActorError::InitializationFailed {
-            actor_type: self.actor_type(),
+            actor_type: AlysActor::actor_type(self),
             reason: format!("Metrics initialization failed: {}", e),
         })?;
 
@@ -302,7 +302,7 @@ impl ExtendedAlysActor for BridgeActor {
 
     async fn handle_critical_error(&mut self, error: ActorError) -> ActorResult<bool> {
         tracing::error!(
-            actor_type = %self.actor_type(),
+            actor_type = %AlysActor::actor_type(self),
             error = %error,
             "Critical error occurred in bridge actor"
         );
@@ -383,14 +383,14 @@ impl ExtendedAlysActor for BridgeActor {
 
         // Release monitoring resources
         self.health_monitor.stop().await.map_err(|e| ActorError::ResourceCleanupFailed {
-            actor_type: self.actor_type(),
+            actor_type: AlysActor::actor_type(self),
             resource: "health_monitor".to_string(),
             reason: e.to_string(),
         })?;
 
         // Flush metrics
         self.metrics.flush().await.map_err(|e| ActorError::ResourceCleanupFailed {
-            actor_type: self.actor_type(),
+            actor_type: AlysActor::actor_type(self),
             resource: "metrics".to_string(),
             reason: e.to_string(),
         })?;

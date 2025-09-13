@@ -88,6 +88,7 @@ impl From<AddBalance> for Withdrawal {
 const DEAD_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 
 /// Core Engine implementation that handles execution layer operations
+#[derive(Clone)]
 pub struct Engine {
     /// Engine API client for authenticated operations
     pub api: HttpJsonRpc,

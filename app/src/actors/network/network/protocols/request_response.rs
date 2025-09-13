@@ -10,7 +10,7 @@ use libp2p::{
     },
     futures::prelude::*,
     identity::Keypair,
-    PeerId,
+    PeerId, StreamProtocol,
 };
 
 // Type alias for compatibility
@@ -273,9 +273,9 @@ impl AlysRequestResponse {
 #[derive(Debug, Clone)]
 pub struct AlysProtocol;
 
-impl ProtocolName for AlysProtocol {
-    fn protocol_name(&self) -> &[u8] {
-        b"/alys/req-resp/1.0.0"
+impl From<AlysProtocol> for StreamProtocol {
+    fn from(_: AlysProtocol) -> Self {
+        StreamProtocol::new("/alys/req-resp/1.0.0")
     }
 }
 

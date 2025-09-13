@@ -191,8 +191,19 @@ impl MockExecutionClient {
     }
 }
 
+/// Trait for execution client implementations
 #[async_trait]
-impl ExecutionClient for MockExecutionClient {
+pub trait ExecutionClientTrait {
+    async fn health_check(&self) -> HealthCheck;
+    async fn get_capabilities(&self) -> EngineResult<ClientCapabilities>;
+    async fn connect(&self) -> EngineResult<()>;
+    async fn disconnect(&self) -> EngineResult<()>;
+    async fn reconnect(&self) -> EngineResult<()>;
+    async fn is_connected(&self) -> bool;
+}
+
+#[async_trait]
+impl ExecutionClientTrait for MockExecutionClient {
     async fn health_check(&self) -> HealthCheck {
         self.simulate_delay().await;
         

@@ -632,6 +632,9 @@ impl ChainMigrationController {
             let _shadow_result = actor.send(ImportBlock {
                 block: block.clone(),
                 broadcast: false,
+                priority: crate::actors::chain::messages::BlockProcessingPriority::Normal,
+                correlation_id: None,
+                source: crate::actors::chain::messages::BlockSource::Sync,
             }).await;
             
             self.metrics.actor_operations.fetch_add(1, Ordering::Relaxed);

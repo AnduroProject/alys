@@ -65,14 +65,14 @@ pub struct AuxBlock {
     #[serde(rename = "previousblockhash")]
     #[serde(serialize_with = "block_hash_to_consensus_hex")]
     #[serde(deserialize_with = "block_hash_from_consensus_hex")]
-    previous_block_hash: BlockHash,
+    pub previous_block_hash: BlockHash,
     #[serde(rename = "coinbasevalue")]
-    coinbase_value: u64,
+    pub coinbase_value: u64,
     #[serde(serialize_with = "compact_target_to_hex")]
     #[serde(deserialize_with = "compact_target_from_hex")]
     pub bits: CompactTarget,
     pub height: u64,
-    _target: Target,
+    pub _target: Target,
 }
 
 /// BlockIndex trait for mining operations (migrated from legacy auxpow_miner.rs)
@@ -114,7 +114,7 @@ impl BitcoinConsensusParams {
         max_pow_adjustment: 20,
     };
 
-    fn difficulty_adjustment_interval(&self) -> u64 {
+    pub fn difficulty_adjustment_interval(&self) -> u64 {
         self.pow_target_timespan / self.pow_target_spacing
     }
 }

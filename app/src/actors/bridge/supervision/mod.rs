@@ -220,7 +220,7 @@ impl BridgeSupervisor {
         let bitcoin_client = BitcoinClientFactory::create_mock();
         let federation_config = actor_system::blockchain::FederationConfig::default();
         
-        let pegout_actor = PegOutActor::new(pegout_config, utxo_manager, bitcoin_client, federation_config)
+        let pegout_actor = PegOutActor::new(pegout_config, utxo_manager, federation_config)
             .map_err(|e| SupervisionError::ActorStartFailed(format!("PegOutActor: {:?}", e)))?
             .start();
             

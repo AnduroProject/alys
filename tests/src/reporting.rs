@@ -936,7 +936,7 @@ impl ReportGenerator {
         // This would use a proper template engine like Tera or handlebars
         // For now, return a simple HTML template
         let html = format!(
-            include_str!("../templates/report_template.html"),
+            include_str!("templates/report_template.html"),
             report_id = report.id,
             report_name = report.name,
             timestamp = report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),

@@ -513,6 +513,82 @@ impl Handler<WarmCache> for StorageActor {
     }
 }
 
+// ============================================================================
+// AuxPow Integration Message Handlers
+// ============================================================================
+
+/// Handler for GetStoredDifficultyHistory from AuxPow system
+impl Handler<crate::actors::auxpow::messages::GetStoredDifficultyHistory> for StorageActor {
+    type Result = ResponseActFuture<Self, Result<Vec<crate::actors::auxpow::messages::DifficultyEntry>, StorageError>>;
+    
+    fn handle(&mut self, msg: crate::actors::auxpow::messages::GetStoredDifficultyHistory, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!(
+                limit = ?msg.limit,
+                start_height = ?msg.start_height,
+                "Retrieving difficulty history from storage"
+            );
+            
+            // TODO: Implement actual database retrieval
+            // For now, return empty history
+            Ok(vec![])
+        }.into_actor(self))
+    }
+}
+
+/// Handler for SaveDifficultyEntry from AuxPow system
+impl Handler<crate::actors::auxpow::messages::SaveDifficultyEntry> for StorageActor {
+    type Result = ResponseActFuture<Self, Result<(), StorageError>>;
+    
+    fn handle(&mut self, msg: crate::actors::auxpow::messages::SaveDifficultyEntry, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!(
+                height = msg.entry.height,
+                bits = ?msg.entry.bits,
+                auxpow_count = msg.entry.auxpow_count,
+                "Saving difficulty entry to storage"
+            );
+            
+            // TODO: Implement actual database storage
+            // For now, just log the operation
+            Ok(())
+        }.into_actor(self))
+    }
+}
+
+/// Handler for GetLastRetargetHeight from AuxPow system
+impl Handler<crate::actors::auxpow::messages::GetLastRetargetHeight> for StorageActor {
+    type Result = ResponseActFuture<Self, Result<Option<u64>, StorageError>>;
+    
+    fn handle(&mut self, _: crate::actors::auxpow::messages::GetLastRetargetHeight, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!("Retrieving last retarget height from storage");
+            
+            // TODO: Implement actual database retrieval
+            // For now, return None (no retarget height found)
+            Ok(None)
+        }.into_actor(self))
+    }
+}
+
+/// Handler for SaveRetargetHeight from AuxPow system
+impl Handler<crate::actors::auxpow::messages::SaveRetargetHeight> for StorageActor {
+    type Result = ResponseActFuture<Self, Result<(), StorageError>>;
+    
+    fn handle(&mut self, msg: crate::actors::auxpow::messages::SaveRetargetHeight, _: &mut Context<Self>) -> Self::Result {
+        Box::pin(async move {
+            info!(
+                height = msg.height,
+                "Saving retarget height to storage"
+            );
+            
+            // TODO: Implement actual database storage
+            // For now, just log the operation
+            Ok(())
+        }.into_actor(self))
+    }
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {

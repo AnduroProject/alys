@@ -157,7 +157,8 @@ impl AuxPowRpcContext {
             })?;
         
         // Deserialize auxpow structure
-        let auxpow = AuxPow::consensus_decode(&mut auxpow_bytes.as_slice())
+        use bitcoin::consensus::Decodable;
+        let auxpow = AuxPow::consensus_decode_from_finite_reader(&mut auxpow_bytes.as_slice())
             .map_err(|e| RpcError {
                 code: -8,
                 message: format!("Invalid auxpow structure: {:?}", e),
@@ -238,7 +239,8 @@ impl AuxPowRpcContext {
                 code: -32603,
                 message: "Actor communication failed".to_string(),
                 data: Some(serde_json::json!({ "actor_error": e.to_string() })),
-            })?;
+            })?
+            .map_err(RpcError::from)?;
 
         let mining_info = MiningInfo {
             mining: status.mining_enabled,

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use crate::actors::bridge::messages::*;
+use crate::actors::bridge::shared::errors::BridgeError as ActorBridgeError;
 use crate::types::*;
 
 /// Bridge coordination metrics

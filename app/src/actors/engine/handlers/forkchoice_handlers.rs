@@ -97,10 +97,10 @@ impl Handler<ForkchoiceUpdatedMessage> for EngineActor {
                         "Forkchoice update failed"
                     );
                     
-                    Err(EngineError::ForkchoiceError(format!("{}", e)))
+                    Err(crate::types::errors::EngineError::Engine(format!("Forkchoice update failed: {}", e)))
                 }
             }
-        })
+        }) as ResponseFuture<super::super::messages::MessageResult<ForkchoiceUpdateResult>>
     }
 }
 

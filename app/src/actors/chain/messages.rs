@@ -25,6 +25,25 @@ use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 use lighthouse_facade::types::MainnetEthSpec;
 
+/// Priority levels for block processing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BlockProcessingPriority {
+    /// Low priority (sync blocks, old blocks)
+    Low = 1,
+    /// Normal priority (regular peer blocks)
+    Normal = 2,
+    /// High priority (new head, finalized blocks)
+    High = 3,
+    /// Critical priority (locally produced blocks)
+    Critical = 4,
+}
+
+impl Default for BlockProcessingPriority {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 /// Message to import a block into the chain with comprehensive validation
 /// This is the primary message for processing incoming blocks from peers or local production
 #[derive(Message, Debug, Clone)]

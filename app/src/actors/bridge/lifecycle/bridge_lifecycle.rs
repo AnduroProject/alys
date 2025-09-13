@@ -15,10 +15,15 @@ use crate::actors::bridge::actors::bridge::BridgeActor;
 
 #[async_trait]
 impl LifecycleAware for BridgeActor {
-    fn actor_type(&self) -> String {
-        "BridgeActor".to_string()
+    async fn initialize(&mut self) -> ActorResult<()> {
+        info!("Initializing Bridge Actor");
+        
+        // Initialize bridge-specific components
+        self.initialize_bridge_components().await?;
+        
+        info!("Bridge Actor initialized successfully");
+        Ok(())
     }
-
 
     async fn on_start(&mut self) -> ActorResult<()> {
         info!("Starting Bridge Actor lifecycle");
@@ -70,7 +75,7 @@ impl LifecycleAware for BridgeActor {
         Ok(())
     }
 
-    async fn health_check(&self) -> Result<bool, Self::Error> {
+    async fn health_check(&self) -> ActorResult<bool> {
         // Check bridge system health
         let system_health = self.health_monitor.check_system_health();
         
@@ -153,6 +158,10 @@ impl LifecycleAware for BridgeActor {
         }
 
         Ok(())
+    }
+
+    fn actor_type(&self) -> &str {
+        "BridgeActor"
     }
 
 }

@@ -39,6 +39,15 @@ impl Default for StreamLifecycleMetadata {
 
 #[async_trait]
 impl LifecycleAware for StreamActor {
+    async fn initialize(&mut self) -> ActorResult<()> {
+        info!("Initializing StreamActor");
+        
+        // Initialize actor_system metrics
+        self.actor_system_metrics.record_actor_started();
+        
+        info!("StreamActor initialized successfully");
+        Ok(())
+    }
 
     async fn on_start(&mut self) -> ActorResult<()> {
         info!("StreamActor lifecycle: Starting");
@@ -172,7 +181,7 @@ impl LifecycleAware for StreamActor {
     }
 
 
-    async fn health_check(&self) -> Result<bool, Self::Error> {
+    async fn health_check(&self) -> ActorResult<bool> {
         // Check governance connections
         let healthy_connections = self.governance_connections
             .values()
@@ -224,6 +233,9 @@ impl LifecycleAware for StreamActor {
         Ok(overall_health)
     }
 
+    fn actor_type(&self) -> &str {
+        "StreamActor"
+    }
 
 }
 
@@ -337,7 +349,7 @@ impl StreamActor {
             info!("Cancelling {} pending requests", pending_count);
             
             // In a real implementation, would notify requestors of cancellation
-            self.request_tracker = super::RequestTracker::new();
+            self.request_tracker = super::RequestTracker::new(super::request_tracking::RequestTrackerConfig::default());
         }
     }
 

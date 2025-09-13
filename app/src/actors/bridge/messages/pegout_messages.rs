@@ -17,7 +17,7 @@ pub struct SelectedUtxo {
     pub txid: Txid,
     pub vout: u32,
     pub value: u64, // satoshis
-    pub script_pubkey: bitcoin::Script,
+    pub script_pubkey: bitcoin::ScriptBuf,
 }
 
 /// Peg-out workflow messages

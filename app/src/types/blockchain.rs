@@ -233,6 +233,12 @@ impl ConsensusBlock {
             signature: approval,
         }
     }
+    
+    /// Get the height of this consensus block
+    /// For now, returns the slot number as height until proper height tracking is implemented
+    pub fn height(&self) -> u64 {
+        self.slot
+    }
 }
 
 impl SignedConsensusBlock {

@@ -7,6 +7,7 @@
 use crate::actors::network::sync::prelude::*;
 use actix::prelude::*;
 use crate::actors::chain::messages::GetChainHeight;
+use crate::actors::network::messages::peer_messages::ScoreUpdate;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{broadcast, watch};
 use futures::future::join_all;
@@ -114,7 +115,7 @@ impl Actor for SyncActor {
 }
 
 impl SyncActor {
-    pub async fn new(
+    pub async fn new_full(
         config: SyncConfig,
         chain_actor: Addr<ChainActor>,
         consensus_actor: Addr<ConsensusActor>,
@@ -343,7 +344,7 @@ pub struct SyncActorHandle {
 
 impl SyncActor {
     /// Create a new SyncActor with comprehensive configuration
-    pub async fn new(
+    pub async fn new_with_clients(
         config: SyncConfig,
         federation_client: Arc<dyn FederationClient>,
         governance_client: Arc<dyn GovernanceClient>,
@@ -417,6 +418,23 @@ impl SyncActor {
             performance_optimizer,
             emergency_handler,
         })
+    }
+    
+    /// Create a simple SyncActor with config only (for testing and basic usage)
+    pub async fn new(config: SyncConfig) -> SyncResult<Self> {
+        // Create placeholder clients for simple usage
+        // TODO: Replace with proper mock implementations when mocks module is available
+        // For now, this will cause compile errors but allows basic structure to compile
+        let federation_client: Arc<dyn FederationClient> = todo!("MockFederationClient not yet implemented");
+        let governance_client: Arc<dyn GovernanceClient> = todo!("MockGovernanceClient not yet implemented");
+        
+        // Create a placeholder chain actor address
+        let chain_actor = ChainActor::new(
+            crate::actors::chain::config::ChainActorConfig::default(), 
+            crate::actors::chain::state::ActorAddresses::default()
+        ).map_err(|e| SyncError::Internal { message: format!("Failed to create ChainActor: {:?}", e) })?.start();
+        
+        Self::new_with_clients(config, federation_client, governance_client, chain_actor).await
     }
     
     /// Start the actor and return a handle
@@ -1219,7 +1237,7 @@ impl Handler<ProcessBlocks> for SyncActor {
                 let mut pm = peer_manager.write().await;
                 let success_rate = results.iter().filter(|r| r.is_valid).count() as f64 / results.len() as f64;
                 
-                pm.update_peer_score(peer_id, PeerScoreUpdate {
+                pm.update_peer_score(peer_id, ScoreUpdate {
                     validation_success_rate: Some(success_rate),
                     response_time: Some(start_time.elapsed()),
                     blocks_provided: Some(results.len() as u32),

@@ -601,11 +601,11 @@ impl StreamActor {
             .count();
 
         let connection_quality = match healthy_connections as f64 / connected_nodes.len().max(1) as f64 {
-            ratio if ratio >= 0.8 => ConnectionQuality::Excellent,
-            ratio if ratio >= 0.6 => ConnectionQuality::Good,
-            ratio if ratio >= 0.4 => ConnectionQuality::Degraded,
-            ratio if ratio >= 0.2 => ConnectionQuality::Poor,
-            _ => ConnectionQuality::Failed,
+            ratio if ratio >= 0.8 => crate::actors::bridge::messages::ConnectionQuality::Excellent,
+            ratio if ratio >= 0.6 => crate::actors::bridge::messages::ConnectionQuality::Good,
+            ratio if ratio >= 0.4 => crate::actors::bridge::messages::ConnectionQuality::Degraded,
+            ratio if ratio >= 0.2 => crate::actors::bridge::messages::ConnectionQuality::Poor,
+            _ => crate::actors::bridge::messages::ConnectionQuality::Failed,
         };
 
         GovernanceConnectionStatus {

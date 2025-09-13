@@ -270,6 +270,8 @@ impl EthereumIntegration for EthereumRpcClient {
             base_fee_per_gas: U256::from(1_000_000_000u64),
             transactions: Vec::new(),
             withdrawals: payload_attributes.withdrawals,
+            blob_gas_used: None, // EIP-4844 not supported yet
+            excess_blob_gas: None, // EIP-4844 not supported yet
         })
     }
     

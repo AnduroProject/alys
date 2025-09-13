@@ -11,7 +11,8 @@ use std::time::Duration;
 use crate::{
     actors::auxpow::types::AuxPow,
     actors::auxpow::config::AuxBlock,
-    types::blockchain::{AuxPowHeader, ConsensusBlock},
+    types::blockchain::{AuxPowHeader, ConsensusBlock, SignedConsensusBlock},
+    types::errors::{ChainError, StorageError},
     types::*,
 };
 
@@ -66,7 +67,7 @@ pub struct SetMiningEnabled {
 
 /// Get current mining status and statistics
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "MiningStatus")]
+#[rtype(result = "Result<MiningStatus, AuxPowError>")]
 pub struct GetMiningStatus;
 
 /// Mining status response
@@ -137,7 +138,7 @@ pub struct DifficultyEntry {
 
 /// Get current difficulty statistics
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "DifficultyStats")]
+#[rtype(result = "Result<DifficultyStats, DifficultyError>")]
 pub struct GetDifficultyStats;
 
 /// Current difficulty statistics
@@ -254,7 +255,7 @@ pub struct SaveRetargetHeight {
 
 /// Health check message for supervision
 #[derive(Message, Debug, Clone)]
-#[rtype(result = "HealthCheckResult")]
+#[rtype(result = "Result<HealthCheckResult, AuxPowError>")]
 pub struct HealthCheck;
 
 /// Health check result
@@ -282,3 +283,9 @@ pub struct PerformanceMetrics {
     pub memory_usage_bytes: Option<u64>,
     pub cache_hit_rate: f64,
 }
+
+// ============================================================================
+// Message Response Trait Implementations
+// ============================================================================
+// Note: MessageResponse is typically implemented automatically
+// via the #[rtype(result = "...")] annotation on messages

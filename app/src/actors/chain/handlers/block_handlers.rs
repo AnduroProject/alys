@@ -39,24 +39,6 @@ impl Default for BlockProcessingConfig {
     }
 }
 
-/// Priority levels for block processing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BlockProcessingPriority {
-    /// Low priority (sync blocks, old blocks)
-    Low = 1,
-    /// Normal priority (regular peer blocks)
-    Normal = 2,
-    /// High priority (new head, finalized blocks)
-    High = 3,
-    /// Critical priority (locally produced blocks)
-    Critical = 4,
-}
-
-impl Default for BlockProcessingPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// Information about a pending block awaiting processing
 #[derive(Debug, Clone)]
@@ -318,7 +300,7 @@ impl ChainActor {
                 let reorg_result = self.perform_reorganization(&msg.block).await?;
                 blocks_reverted = reorg_result.blocks_reverted;
                 
-                self.metrics.record_chain_reorg(blocks_reverted);
+                self.metrics.record_chain_reorg(blocks_reverted as u64);
             }
 
             let block_ref = BlockRef::from_block(&msg.block);
@@ -348,7 +330,10 @@ impl ChainActor {
 
         // Check if we should produce for this slot
         if !msg.force && !self.should_produce_block(msg.slot) {
-            return Err(ChainError::NotOurSlot);
+            return Err(ChainError::NotOurSlot { 
+                slot: msg.slot,
+                reason: "This slot is not assigned to us".to_string()
+            });
         }
 
         // Check if block production is paused
@@ -379,86 +364,8 @@ impl ChainActor {
             pegins: Vec::new(), // TODO: Populate from bridge actor
             pegout_payment_proposal: None, // TODO: Populate from bridge actor
             finalized_pegouts: Vec::new(),
-            lighthouse_metadata: LighthouseMetadata {
-                beacon_block_root: None,
-                beacon_state_root: None,
-                randao_reveal: None,
-                graffiti: Some([0u8; 32]),
-                proposer_index: None,
-                bls_aggregate_signature: None,
-                sync_committee_signature: None,
-                sync_committee_bits: None,
-            },
-            timing: BlockTiming {
-                production_started_at: std::time::SystemTime::now(),
-                produced_at: std::time::SystemTime::now(),
-                received_at: None,
-                validation_started_at: None,
-                validation_completed_at: None,
-                import_completed_at: None,
-                processing_duration_ms: None,
-            },
-            validation_info: ValidationInfo {
-                status: BlockValidationStatus::Pending,
-                validation_errors: Vec::new(),
-                checkpoints: Vec::new(),
-                gas_validation: GasValidation {
-                    expected_gas_limit: execution_payload.gas_limit,
-                    actual_gas_used: execution_payload.gas_used,
-                    utilization_percent: 0.0,
-                    is_valid: true,
-                    base_fee_valid: true,
-                    priority_fee_valid: true,
-                },
-                state_validation: StateValidation {
-                    pre_state_root: execution_payload.parent_hash,
-                    post_state_root: execution_payload.state_root,
-                    expected_state_root: execution_payload.state_root,
-                    state_root_valid: true,
-                    storage_proofs_valid: true,
-                    account_changes: 0,
-                    storage_changes: 0,
-                },
-                consensus_validation: ConsensusValidation {
-                    signature_valid: false, // Will be validated during signing
-                    proposer_valid: true,
-                    slot_valid: true,
-                    parent_valid: true,
-                    difficulty_valid: true,
-                    auxpow_valid: None,
-                    committee_signatures_valid: true,
-                },
-            },
-            actor_metadata: ActorBlockMetadata {
-                processing_actor: Some("ChainActor".to_string()),
-                correlation_id: Some(uuid::Uuid::new_v4()),
-                trace_context: TraceContext {
-                    trace_id: Some(uuid::Uuid::new_v4().to_string()),
-                    span_id: Some(uuid::Uuid::new_v4().to_string()),
-                    parent_span_id: None,
-                    baggage: std::collections::HashMap::new(),
-                    sampled: true,
-                },
-                priority: BlockProcessingPriority::Normal,
-                retry_info: RetryInfo {
-                    attempt: 0,
-                    max_attempts: 3,
-                    backoff_strategy: BackoffStrategy::Exponential { base_ms: 100, multiplier: 2.0, max_ms: 5000 },
-                    next_retry_at: None,
-                    last_failure_reason: None,
-                },
-                actor_metrics: ActorProcessingMetrics {
-                    queue_time_ms: None,
-                    processing_time_ms: None,
-                    memory_usage_bytes: None,
-                    cpu_time_ms: None,
-                    messages_sent: 0,
-                    messages_received: 0,
-                },
-            },
         };
 
-        // Sign the block
         let signed_block = self.sign_block(consensus_block).await?;
         
         // Record metrics
@@ -471,7 +378,7 @@ impl ChainActor {
             production_time_ms = production_time.as_millis(),
             "Block produced successfully"
         );
-
+        
         Ok(signed_block)
     }
 
@@ -637,6 +544,7 @@ impl ChainActor {
         let storage_request = StoreBlockMessage {
             block: block.clone(),
             canonical: true, // Blocks in canonical chain are canonical by default
+            correlation_id: None, // Optional tracing ID
         };
         
         match self.actor_addresses.storage.send(storage_request).await {
@@ -810,6 +718,8 @@ impl ChainActor {
             base_fee_per_gas: 1_000_000_000u64.into(), // 1 Gwei
             transactions: Vec::new(),
             withdrawals: Some(Vec::new()),
+            blob_gas_used: None, // EIP-4844 blob gas usage (not supported yet)
+            excess_blob_gas: None, // EIP-4844 excess blob gas (not supported yet)
         })
     }
 

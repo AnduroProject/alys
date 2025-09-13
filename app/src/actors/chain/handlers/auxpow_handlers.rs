@@ -169,7 +169,8 @@ impl ChainActor {
     pub async fn handle_auxpow_header(&mut self, pow_header: AuxPowHeader) -> Result<(), ChainError> {
         info!(
             height = pow_header.height,
-            block_hash = %pow_header.block_hash,
+            range_start = %pow_header.range_start,
+            range_end = %pow_header.range_end,
             "Received AuxPoW header"
         );
         
@@ -216,7 +217,9 @@ impl ChainActor {
         // Validate finalization eligibility
         for block in &blocks_to_finalize {
             if !self.validate_finalization_eligibility(block, &pow_header)? {
-                return Err(ChainError::InvalidFinalization);
+                return Err(ChainError::InvalidFinalization { 
+                    reason: "Block failed finalization eligibility validation".to_string() 
+                });
             }
         }
 

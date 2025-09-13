@@ -444,7 +444,7 @@ impl NetworkBehaviour for FederationBehaviour {
         // Handle connection events as needed
     }
 
-    fn poll(&mut self, _cx: &mut std::task::Context<'_>, _params: &mut impl libp2p::swarm::PollParameters) -> std::task::Poll<libp2p::swarm::ToSwarm<Self::ToSwarm, libp2p::swarm::THandlerInEvent<Self>>> {
+    fn poll(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<libp2p::swarm::ToSwarm<Self::ToSwarm, libp2p::swarm::THandlerInEvent<Self>>> {
         std::task::Poll::Pending
     }
 }

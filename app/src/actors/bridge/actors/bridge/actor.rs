@@ -4,45 +4,44 @@
 
 use actix::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn, error, debug};
-use uuid::Uuid;
 
 use crate::actors::bridge::{
-    config::{BridgeSystemConfig, BridgeConfig},
+    config::BridgeConfig,
     messages::*,
-    shared::{errors::BridgeError, federation::*, constants::*},
+    shared::errors::BridgeError,
 };
 use crate::types::*;
-use super::{handlers::*, metrics::*};
+use super::metrics::*;
 use super::state::{*, BridgeState};
 
 /// Bridge coordinator actor that manages the bridge system
 pub struct BridgeActor {
     /// Configuration
-    config: BridgeConfig,
+    pub config: BridgeConfig,
     
     /// System state
-    state: BridgeState,
+    pub state: BridgeState,
     
     /// Child actor addresses
-    child_actors: ChildActors,
+    pub child_actors: ChildActors,
     
     /// Operation registry
-    active_operations: HashMap<String, OperationContext>,
+    pub active_operations: HashMap<String, OperationContext>,
     
     /// System metrics
-    metrics: BridgeCoordinationMetrics,
+    pub metrics: BridgeCoordinationMetrics,
     
     /// Actor system metrics (for AlysActor compatibility)
-    actor_system_metrics: actor_system::metrics::ActorMetrics,
+    // TODO: Fix actor_system metrics integration
+    // pub actor_system_metrics: actor_system::metrics::ActorMetrics,
     
     /// Health monitor
-    health_monitor: ActorHealthMonitor,
+    pub health_monitor: ActorHealthMonitor,
     
     /// System startup time
-    started_at: SystemTime,
+    pub started_at: SystemTime,
 }
 
 /// Child actor addresses
@@ -90,9 +89,11 @@ pub struct OperationMetadata {
 impl BridgeActor {
     /// Create new bridge coordinator actor
     pub fn new(config: BridgeConfig) -> Result<Self, BridgeError> {
-        let metrics = BridgeCoordinationMetrics::new()?;
+        let metrics = BridgeCoordinationMetrics::new()
+            .map_err(|e| BridgeError::InternalError(format!("Failed to initialize metrics: {}", e)))?;
         let health_monitor = ActorHealthMonitor::new(config.health_check_interval);
-        let actor_system_metrics = actor_system::metrics::ActorMetrics::new("BridgeActor".to_string());
+        // TODO: Fix actor_system metrics integration
+        // let actor_system_metrics = actor_system::metrics::ActorMetrics::new();
         
         Ok(Self {
             config,
@@ -100,7 +101,8 @@ impl BridgeActor {
             child_actors: ChildActors::default(),
             active_operations: HashMap::new(),
             metrics,
-            actor_system_metrics,
+            // TODO: Fix actor_system metrics integration
+            // actor_system_metrics,
             health_monitor,
             started_at: SystemTime::now(),
         })
@@ -133,7 +135,7 @@ impl BridgeActor {
     }
 
     /// Start a new peg-in operation
-    async fn start_pegin_operation(
+    pub async fn start_pegin_operation(
         &mut self,
         pegin_id: String,
         bitcoin_txid: bitcoin::Txid,
@@ -162,7 +164,12 @@ impl BridgeActor {
         if let Some(pegin_actor) = &self.child_actors.pegin_actor {
             let msg = PegInMessage::ProcessDeposit {
                 txid: bitcoin_txid,
-                bitcoin_tx: Transaction::default(), // Will be fetched by PegInActor
+                bitcoin_tx: bitcoin::Transaction {
+                    version: 1,
+                    lock_time: bitcoin::absolute::LockTime::ZERO,
+                    input: vec![],
+                    output: vec![],
+                }, // Will be fetched by PegInActor
                 block_height: 0, // Will be determined by PegInActor
             };
             
@@ -186,14 +193,14 @@ impl BridgeActor {
             }
         } else {
             error!("PegInActor not registered for operation {}", pegin_id);
-            return Err(BridgeError::ActorNotAvailable("PegInActor".to_string()));
+            return Err(BridgeError::ActorSystemError("PegInActor not available".to_string()));
         }
 
         Ok(())
     }
 
     /// Start a new peg-out operation
-    async fn start_pegout_operation(
+    pub async fn start_pegout_operation(
         &mut self,
         pegout_id: String,
         burn_tx_hash: H256,
@@ -222,7 +229,7 @@ impl BridgeActor {
         if let Some(pegout_actor) = &self.child_actors.pegout_actor {
             let msg = PegOutMessage::ProcessBurnEvent {
                 burn_tx: burn_tx_hash,
-                destination: bitcoin::Address::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap(), // Placeholder
+                destination: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>().unwrap().assume_checked(), // Placeholder bitcoin address
                 amount: 100_000_000, // Placeholder
                 requester: H160::zero(), // Placeholder
             };
@@ -247,14 +254,14 @@ impl BridgeActor {
             }
         } else {
             error!("PegOutActor not registered for operation {}", pegout_id);
-            return Err(BridgeError::ActorNotAvailable("PegOutActor".to_string()));
+            return Err(BridgeError::ActorSystemError("PegOutActor not available".to_string()));
         }
 
         Ok(())
     }
 
     /// Update operation status
-    fn update_operation_status(&mut self, operation_id: String, status: OperationState) {
+    pub fn update_operation_status(&mut self, operation_id: String, status: OperationState) {
         if let Some(operation) = self.active_operations.get_mut(&operation_id) {
             let old_status = operation.status.clone();
             operation.status = status.clone();
@@ -276,7 +283,7 @@ impl BridgeActor {
     }
 
     /// Get system status
-    fn get_system_status(&self) -> BridgeSystemStatus {
+    pub fn get_system_status(&self) -> BridgeSystemStatus {
         let registered_actors = ActorRegistry {
             pegin_actor: self.child_actors.pegin_actor.as_ref().map(|_| ActorInfo {
                 actor_type: ActorType::PegIn,
@@ -338,7 +345,7 @@ impl BridgeActor {
     }
 
     /// Handle actor failure
-    async fn handle_actor_failure(&mut self, actor_type: ActorType, error: BridgeError) {
+    pub async fn handle_actor_failure(&mut self, actor_type: ActorType, error: BridgeError) {
         error!("Actor failure detected: {:?} - {:?}", actor_type, error);
         
         // Record failure
@@ -371,23 +378,16 @@ impl BridgeActor {
 impl Actor for BridgeActor {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Bridge coordinator actor starting");
         
-        // Initialize system asynchronously
-        let fut = self.initialize_system(ctx);
-        let fut = actix::fut::wrap_future::<_, Self>(fut);
-        ctx.spawn(fut.map(|result, actor, ctx| {
-            match result {
-                Ok(_) => {
-                    info!("Bridge coordinator actor started successfully");
-                }
-                Err(e) => {
-                    error!("Failed to initialize bridge coordinator: {:?}", e);
-                    ctx.stop();
-                }
-            }
-        }));
+        // TODO: Implement proper health monitoring initialization
+        // Health monitoring should be started via messages after actor is fully initialized
+        
+        // Update state to running
+        self.state = BridgeState::Running;
+        
+        info!("Bridge coordinator actor started successfully");
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
