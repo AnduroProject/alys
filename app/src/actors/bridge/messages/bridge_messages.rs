@@ -1,12 +1,12 @@
 //! Bridge Coordinator Messages
-//! 
+//!
 //! Messages for bridge actor coordination and system management
 
 use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 use crate::types::errors::BridgeError as TypesBridgeError;
-use crate::types::{Address, H256, Hash256};
+use crate::types::H256;
 use super::pegin_messages::PegInActor;
 use super::pegout_messages::PegOutActor;
 use super::stream_messages::StreamActor;
@@ -14,17 +14,38 @@ use super::stream_messages::StreamActor;
 // Import actor_system message traits
 use actor_system::message::{AlysMessage, MessagePriority};
 
+// Default functions for serde skip
+fn default_pegin_addr() -> Option<Addr<PegInActor>> { None }
+fn default_pegout_addr() -> Option<Addr<PegOutActor>> { None }
+fn default_stream_addr() -> Option<Addr<StreamActor>> { None }
+
+
 /// Bridge coordination messages
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
 #[rtype(result = "Result<(), TypesBridgeError>")]
 pub enum BridgeCoordinationMessage {
     /// Initialize the bridge system
     InitializeSystem,
-    
-    /// Register specialized actors
-    RegisterPegInActor(Addr<PegInActor>),
-    RegisterPegOutActor(Addr<PegOutActor>),
-    RegisterStreamActor(Addr<StreamActor>),
+
+    /// Register specialized actors using string identifiers
+    RegisterPegInActor {
+        actor_id: String,
+        /// Non-serializable actor address for internal use
+        #[serde(skip, default = "default_pegin_addr")]
+        addr: Option<Addr<PegInActor>>,
+    },
+    RegisterPegOutActor {
+        actor_id: String,
+        /// Non-serializable actor address for internal use
+        #[serde(skip, default = "default_pegout_addr")]
+        addr: Option<Addr<PegOutActor>>,
+    },
+    RegisterStreamActor {
+        actor_id: String,
+        /// Non-serializable actor address for internal use
+        #[serde(skip, default = "default_stream_addr")]
+        addr: Option<Addr<StreamActor>>,
+    },
     
     /// System status and health
     GetSystemStatus,
@@ -61,7 +82,7 @@ pub enum BridgeCoordinationMessage {
     PegOutCompleted {
         pegout_id: String,
         burn_tx_hash: H256,
-        bitcoin_destination: bitcoin::Address,
+        bitcoin_destination: String, // Bitcoin address as string for serialization
         amount: u64,
     },
 }
@@ -74,9 +95,9 @@ impl AlysMessage for BridgeCoordinationMessage {
             BridgeCoordinationMessage::InitializeSystem => MessagePriority::High,
             BridgeCoordinationMessage::CoordinatePegIn { .. } => MessagePriority::High,
             BridgeCoordinationMessage::CoordinatePegOut { .. } => MessagePriority::High,
-            BridgeCoordinationMessage::RegisterPegInActor(_) => MessagePriority::High,
-            BridgeCoordinationMessage::RegisterPegOutActor(_) => MessagePriority::High,
-            BridgeCoordinationMessage::RegisterStreamActor(_) => MessagePriority::High,
+            BridgeCoordinationMessage::RegisterPegInActor { .. } => MessagePriority::High,
+            BridgeCoordinationMessage::RegisterPegOutActor { .. } => MessagePriority::High,
+            BridgeCoordinationMessage::RegisterStreamActor { .. } => MessagePriority::High,
             BridgeCoordinationMessage::PegInCompleted { .. } => MessagePriority::Normal,
             BridgeCoordinationMessage::PegOutCompleted { .. } => MessagePriority::Normal,
             BridgeCoordinationMessage::GetSystemStatus => MessagePriority::Low,
@@ -91,9 +112,9 @@ impl AlysMessage for BridgeCoordinationMessage {
             BridgeCoordinationMessage::CoordinatePegIn { .. } => Duration::from_secs(300), // 5 minutes for peg-in
             BridgeCoordinationMessage::CoordinatePegOut { .. } => Duration::from_secs(600), // 10 minutes for peg-out
             BridgeCoordinationMessage::HandleActorFailure { .. } => Duration::from_secs(30),
-            BridgeCoordinationMessage::RegisterPegInActor(_) => Duration::from_secs(30),
-            BridgeCoordinationMessage::RegisterPegOutActor(_) => Duration::from_secs(30),
-            BridgeCoordinationMessage::RegisterStreamActor(_) => Duration::from_secs(30),
+            BridgeCoordinationMessage::RegisterPegInActor { .. } => Duration::from_secs(30),
+            BridgeCoordinationMessage::RegisterPegOutActor { .. } => Duration::from_secs(30),
+            BridgeCoordinationMessage::RegisterStreamActor { .. } => Duration::from_secs(30),
             BridgeCoordinationMessage::PegInCompleted { .. } => Duration::from_secs(10),
             BridgeCoordinationMessage::PegOutCompleted { .. } => Duration::from_secs(10),
             BridgeCoordinationMessage::GetSystemStatus => Duration::from_secs(5),
@@ -108,9 +129,9 @@ impl AlysMessage for BridgeCoordinationMessage {
             BridgeCoordinationMessage::CoordinatePegIn { .. } => true,
             BridgeCoordinationMessage::CoordinatePegOut { .. } => true,
             BridgeCoordinationMessage::HandleActorFailure { .. } => true,
-            BridgeCoordinationMessage::RegisterPegInActor(_) => true,
-            BridgeCoordinationMessage::RegisterPegOutActor(_) => true,
-            BridgeCoordinationMessage::RegisterStreamActor(_) => true,
+            BridgeCoordinationMessage::RegisterPegInActor { .. } => true,
+            BridgeCoordinationMessage::RegisterPegOutActor { .. } => true,
+            BridgeCoordinationMessage::RegisterStreamActor { .. } => true,
             BridgeCoordinationMessage::PegInCompleted { .. } => false, // Already completed
             BridgeCoordinationMessage::PegOutCompleted { .. } => false, // Already completed
             BridgeCoordinationMessage::GetSystemStatus => true,
@@ -123,9 +144,9 @@ impl AlysMessage for BridgeCoordinationMessage {
             BridgeCoordinationMessage::CoordinatePegIn { .. } => 5,
             BridgeCoordinationMessage::CoordinatePegOut { .. } => 5,
             BridgeCoordinationMessage::HandleActorFailure { .. } => 3,
-            BridgeCoordinationMessage::RegisterPegInActor(_) => 3,
-            BridgeCoordinationMessage::RegisterPegOutActor(_) => 3,
-            BridgeCoordinationMessage::RegisterStreamActor(_) => 3,
+            BridgeCoordinationMessage::RegisterPegInActor { .. } => 3,
+            BridgeCoordinationMessage::RegisterPegOutActor { .. } => 3,
+            BridgeCoordinationMessage::RegisterStreamActor { .. } => 3,
             BridgeCoordinationMessage::GetSystemStatus => 2,
             BridgeCoordinationMessage::GetSystemMetrics => 2,
             _ => 1, // Non-retryable messages or single retry
@@ -164,6 +185,18 @@ impl AlysMessage for BridgeCoordinationMessage {
                     "bitcoin_destination": bitcoin_destination.to_string(),
                     "amount": amount
                 }),
+                BridgeCoordinationMessage::RegisterPegInActor { actor_id, .. } => serde_json::json!({
+                    "details": "RegisterPegInActor",
+                    "actor_id": actor_id
+                }),
+                BridgeCoordinationMessage::RegisterPegOutActor { actor_id, .. } => serde_json::json!({
+                    "details": "RegisterPegOutActor",
+                    "actor_id": actor_id
+                }),
+                BridgeCoordinationMessage::RegisterStreamActor { actor_id, .. } => serde_json::json!({
+                    "details": "RegisterStreamActor",
+                    "actor_id": actor_id
+                }),
                 _ => serde_json::json!({ "details": "Basic message" })
             }
         })
@@ -171,22 +204,22 @@ impl AlysMessage for BridgeCoordinationMessage {
 }
 
 /// System status response
-#[derive(Debug, Clone, Message, Serialize, Deserialize)]
+#[derive(Debug, Clone, Message)]
 #[rtype(result = "Result<BridgeSystemStatus, TypesBridgeError>")]
 pub struct GetSystemStatusResponse;
 
 /// Bridge system status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BridgeSystemStatus {
     pub status: SystemHealthStatus,
     pub active_operations: u32,
-    pub registered_actors: ActorRegistry,
+    pub registered_actors: ActorStatusRegistry,
     pub last_activity: SystemTime,
     pub uptime: std::time::Duration,
 }
 
 /// System health status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum SystemHealthStatus {
     Healthy,
     Degraded { issues: Vec<String> },
@@ -195,16 +228,16 @@ pub enum SystemHealthStatus {
     Shutdown,
 }
 
-/// Actor registry tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActorRegistry {
+/// Actor registry tracking (status)
+#[derive(Debug, Clone)]
+pub struct ActorStatusRegistry {
     pub pegin_actor: Option<ActorInfo>,
     pub pegout_actor: Option<ActorInfo>,
     pub stream_actor: Option<ActorInfo>,
 }
 
 /// Actor information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ActorInfo {
     pub actor_type: ActorType,
     pub status: ActorStatus,
@@ -214,7 +247,7 @@ pub struct ActorInfo {
 }
 
 /// Actor type enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ActorType {
     Bridge,
     PegIn,
@@ -233,7 +266,7 @@ pub enum ActorStatus {
 }
 
 /// Operation status tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct OperationStatus {
     pub operation_id: String,
     pub operation_type: OperationType,
@@ -244,14 +277,14 @@ pub struct OperationStatus {
 }
 
 /// Operation types
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum OperationType {
     PegIn,
     PegOut,
 }
 
 /// Operation states
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum OperationState {
     Initiated,
     Processing,

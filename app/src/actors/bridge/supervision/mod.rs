@@ -248,7 +248,10 @@ impl BridgeSupervisor {
         if let Some(bridge_actor) = &self.bridge_actor {
             // Register PegIn Actor
             if let Some(pegin_actor) = &self.pegin_actor {
-                let msg = BridgeCoordinationMessage::RegisterPegInActor(pegin_actor.clone());
+                let msg = BridgeCoordinationMessage::RegisterPegInActor {
+                    actor_id: "primary".to_string(),
+                    addr: Some(pegin_actor.clone())
+                };
                 bridge_actor.send(msg).await
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("PegInActor: {:?}", e)))?
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("PegInActor: {:?}", e)))?;
@@ -256,7 +259,10 @@ impl BridgeSupervisor {
 
             // Register PegOut Actor
             if let Some(pegout_actor) = &self.pegout_actor {
-                let msg = BridgeCoordinationMessage::RegisterPegOutActor(pegout_actor.clone());
+                let msg = BridgeCoordinationMessage::RegisterPegOutActor {
+                    actor_id: "primary".to_string(),
+                    addr: Some(pegout_actor.clone())
+                };
                 bridge_actor.send(msg).await
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("PegOutActor: {:?}", e)))?
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("PegOutActor: {:?}", e)))?;
@@ -264,7 +270,10 @@ impl BridgeSupervisor {
 
             // Register Stream Actor
             if let Some(stream_actor) = &self.stream_actor {
-                let msg = BridgeCoordinationMessage::RegisterStreamActor(stream_actor.clone());
+                let msg = BridgeCoordinationMessage::RegisterStreamActor {
+                    actor_id: "primary".to_string(),
+                    addr: Some(stream_actor.clone())
+                };
                 bridge_actor.send(msg).await
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("StreamActor: {:?}", e)))?
                     .map_err(|e| SupervisionError::RegistrationFailed(format!("StreamActor: {:?}", e)))?;

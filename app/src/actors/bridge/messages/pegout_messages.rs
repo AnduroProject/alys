@@ -3,11 +3,39 @@
 //! Messages for Bitcoin withdrawal processing and signature coordination
 
 use actix::prelude::*;
-use bitcoin::{Transaction, Txid, Address as BtcAddress, Witness};
-use serde::{Deserialize, Serialize};
+use bitcoin::{Transaction, Txid, Address as BtcAddress, Witness, Network};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json;
 use std::time::SystemTime;
 use crate::types::*;
+
+// Custom serde implementations for BtcAddress to handle NetworkChecked
+mod btc_address_serde {
+    use super::*;
+    use bitcoin::address::NetworkUnchecked;
+
+    pub fn serialize<S>(address: &BtcAddress, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        address.to_string().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BtcAddress, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let address_str = String::deserialize(deserializer)?;
+        let unchecked: bitcoin::Address<NetworkUnchecked> = address_str
+            .parse()
+            .map_err(serde::de::Error::custom)?;
+
+        // For now, assume Bitcoin mainnet. In production, this should be configurable
+        unchecked
+            .require_network(Network::Bitcoin)
+            .map_err(serde::de::Error::custom)
+    }
+}
 
 // Import the actual actor instead of forward declaration
 pub use super::super::actors::pegout::actor::{PegOutActor, PegOutActorStatus};
@@ -193,6 +221,7 @@ pub struct BurnEvent {
     pub burn_tx_hash: H256,
     pub block_number: u64,
     pub log_index: u32,
+    #[serde(with = "btc_address_serde")]
     pub destination_address: BtcAddress,
     pub amount: u64,
     pub requester: H160,
@@ -204,6 +233,7 @@ pub struct BurnEvent {
 pub struct PendingPegOut {
     pub pegout_id: String,
     pub burn_tx_hash: H256,
+    #[serde(with = "btc_address_serde")]
     pub destination_address: BtcAddress,
     pub amount: u64,
     pub requester: H160,

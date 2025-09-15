@@ -300,7 +300,10 @@ impl Handler<RegisterWithBridgeCoordinator> for PegInActor {
         let bridge_coordinator = msg.0;
         
         actix::spawn(async move {
-            let registration_msg = BridgeCoordinationMessage::RegisterPegInActor(self_addr);
+            let registration_msg = BridgeCoordinationMessage::RegisterPegInActor {
+                actor_id: "primary".to_string(),
+                addr: Some(self_addr)
+            };
             if let Err(e) = bridge_coordinator.send(registration_msg).await {
                 error!("Failed to register with bridge coordinator: {:?}", e);
             } else {

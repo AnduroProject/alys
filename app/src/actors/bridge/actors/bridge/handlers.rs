@@ -27,23 +27,62 @@ impl Handler<BridgeCoordinationMessage> for BridgeActor {
                 }.into_actor(self))
             }
 
-            BridgeCoordinationMessage::RegisterPegInActor(addr) => {
-                info!("Registering PegInActor with bridge coordinator");
-                self.child_actors.pegin_actor = Some(addr);
+            BridgeCoordinationMessage::RegisterPegInActor { actor_id, addr } => {
+                info!("Registering PegInActor '{}' with bridge coordinator", actor_id);
+
+                if let Some(addr) = addr {
+                    // Register in the new registry
+                    self.actor_registry.register_pegin(actor_id.clone(), addr.clone());
+
+                    // Maintain backward compatibility - set as primary if it's the first/primary
+                    if actor_id == "primary" || self.child_actors.pegin_actor.is_none() {
+                        self.child_actors.pegin_actor = Some(addr);
+                    }
+                } else {
+                    // If no address provided, this might be from deserialization
+                    warn!("Received RegisterPegInActor message without actor address for ID: {}", actor_id);
+                }
+
                 self.metrics.record_actor_registration(ActorType::PegIn);
                 Box::pin(async { Ok(()) }.into_actor(self))
             }
 
-            BridgeCoordinationMessage::RegisterPegOutActor(addr) => {
-                info!("Registering PegOutActor with bridge coordinator");
-                self.child_actors.pegout_actor = Some(addr);
+            BridgeCoordinationMessage::RegisterPegOutActor { actor_id, addr } => {
+                info!("Registering PegOutActor '{}' with bridge coordinator", actor_id);
+
+                if let Some(addr) = addr {
+                    // Register in the new registry
+                    self.actor_registry.register_pegout(actor_id.clone(), addr.clone());
+
+                    // Maintain backward compatibility - set as primary if it's the first/primary
+                    if actor_id == "primary" || self.child_actors.pegout_actor.is_none() {
+                        self.child_actors.pegout_actor = Some(addr);
+                    }
+                } else {
+                    // If no address provided, this might be from deserialization
+                    warn!("Received RegisterPegOutActor message without actor address for ID: {}", actor_id);
+                }
+
                 self.metrics.record_actor_registration(ActorType::PegOut);
                 Box::pin(async { Ok(()) }.into_actor(self))
             }
 
-            BridgeCoordinationMessage::RegisterStreamActor(addr) => {
-                info!("Registering StreamActor with bridge coordinator");
-                self.child_actors.stream_actor = Some(addr);
+            BridgeCoordinationMessage::RegisterStreamActor { actor_id, addr } => {
+                info!("Registering StreamActor '{}' with bridge coordinator", actor_id);
+
+                if let Some(addr) = addr {
+                    // Register in the new registry
+                    self.actor_registry.register_stream(actor_id.clone(), addr.clone());
+
+                    // Maintain backward compatibility - set as primary if it's the first/primary
+                    if actor_id == "primary" || self.child_actors.stream_actor.is_none() {
+                        self.child_actors.stream_actor = Some(addr);
+                    }
+                } else {
+                    // If no address provided, this might be from deserialization
+                    warn!("Received RegisterStreamActor message without actor address for ID: {}", actor_id);
+                }
+
                 self.metrics.record_actor_registration(ActorType::Stream);
                 Box::pin(async { Ok(()) }.into_actor(self))
             }

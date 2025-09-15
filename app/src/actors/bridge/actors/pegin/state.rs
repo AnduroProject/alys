@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 use bitcoin::Txid;
 use ethereum_types::{H160, H256};
 use crate::actors::bridge::messages::*;
+use crate::actors::bridge::shared::OperationEventType;
 
 /// Actor system compatible PegIn state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,20 +109,6 @@ pub struct OperationEvent {
     pub error_message: Option<String>,
 }
 
-/// Types of operation events
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OperationEventType {
-    DepositDetected,
-    ValidationStarted,
-    ValidationCompleted,
-    ConfirmationStarted,
-    ConfirmationUpdated,
-    ConfirmationCompleted,
-    MintingInitiated,
-    MintingCompleted,
-    OperationFailed,
-    OperationRetried,
-}
 
 /// PegIn actor metrics state
 #[derive(Debug, Clone)]

@@ -21,13 +21,16 @@ use actor_system::metrics::ActorMetrics;
 pub struct BridgeActor {
     /// Configuration
     pub config: BridgeConfig,
-    
+
     /// System state
     pub state: BridgeState,
-    
-    /// Child actor addresses
+
+    /// Actor registry for named actors
+    pub actor_registry: ActorRegistry,
+
+    /// Child actor addresses (backward compatibility)
     pub child_actors: ChildActors,
-    
+
     /// Operation registry
     pub active_operations: HashMap<String, OperationContext>,
     
@@ -44,7 +47,68 @@ pub struct BridgeActor {
     pub started_at: SystemTime,
 }
 
-/// Child actor addresses
+/// Actor registry for named actor management
+#[derive(Debug, Default)]
+pub struct ActorRegistry {
+    pegin_actors: std::collections::HashMap<String, Addr<super::super::pegin::PegInActor>>,
+    pegout_actors: std::collections::HashMap<String, Addr<super::super::pegout::PegOutActor>>,
+    stream_actors: std::collections::HashMap<String, Addr<super::super::stream::StreamActor>>,
+}
+
+impl ActorRegistry {
+    /// Register a PegIn actor with an identifier
+    pub fn register_pegin(&mut self, id: String, addr: Addr<super::super::pegin::PegInActor>) {
+        info!("Registering PegIn actor with ID: {}", id);
+        self.pegin_actors.insert(id, addr);
+    }
+
+    /// Register a PegOut actor with an identifier
+    pub fn register_pegout(&mut self, id: String, addr: Addr<super::super::pegout::PegOutActor>) {
+        info!("Registering PegOut actor with ID: {}", id);
+        self.pegout_actors.insert(id, addr);
+    }
+
+    /// Register a Stream actor with an identifier
+    pub fn register_stream(&mut self, id: String, addr: Addr<super::super::stream::StreamActor>) {
+        info!("Registering Stream actor with ID: {}", id);
+        self.stream_actors.insert(id, addr);
+    }
+
+    /// Get a PegIn actor by ID
+    pub fn get_pegin(&self, id: &str) -> Option<&Addr<super::super::pegin::PegInActor>> {
+        self.pegin_actors.get(id)
+    }
+
+    /// Get a PegOut actor by ID
+    pub fn get_pegout(&self, id: &str) -> Option<&Addr<super::super::pegout::PegOutActor>> {
+        self.pegout_actors.get(id)
+    }
+
+    /// Get a Stream actor by ID
+    pub fn get_stream(&self, id: &str) -> Option<&Addr<super::super::stream::StreamActor>> {
+        self.stream_actors.get(id)
+    }
+
+    /// Get primary actors for backward compatibility
+    pub fn get_primary_pegin(&self) -> Option<&Addr<super::super::pegin::PegInActor>> {
+        self.pegin_actors.get("primary")
+    }
+
+    pub fn get_primary_pegout(&self) -> Option<&Addr<super::super::pegout::PegOutActor>> {
+        self.pegout_actors.get("primary")
+    }
+
+    pub fn get_primary_stream(&self) -> Option<&Addr<super::super::stream::StreamActor>> {
+        self.stream_actors.get("primary")
+    }
+
+    /// Get count of registered actors
+    pub fn get_registered_count(&self) -> u32 {
+        (self.pegin_actors.len() + self.pegout_actors.len() + self.stream_actors.len()) as u32
+    }
+}
+
+/// Child actor addresses - kept for backward compatibility
 #[derive(Debug, Default)]
 pub struct ChildActors {
     pub pegin_actor: Option<Addr<super::super::pegin::PegInActor>>,
@@ -60,6 +124,13 @@ impl ChildActors {
         if self.pegout_actor.is_some() { count += 1; }
         if self.stream_actor.is_some() { count += 1; }
         count
+    }
+
+    /// Update from registry for backward compatibility
+    pub fn sync_with_registry(&mut self, registry: &ActorRegistry) {
+        self.pegin_actor = registry.get_primary_pegin().cloned();
+        self.pegout_actor = registry.get_primary_pegout().cloned();
+        self.stream_actor = registry.get_primary_stream().cloned();
     }
 }
 
@@ -97,6 +168,7 @@ impl BridgeActor {
         Ok(Self {
             config,
             state: BridgeState::Initializing,
+            actor_registry: ActorRegistry::default(),
             child_actors: ChildActors::default(),
             active_operations: HashMap::new(),
             metrics,
@@ -282,7 +354,7 @@ impl BridgeActor {
 
     /// Get system status
     pub fn get_system_status(&self) -> BridgeSystemStatus {
-        let registered_actors = ActorRegistry {
+        let registered_actors = ActorStatusRegistry {
             pegin_actor: self.child_actors.pegin_actor.as_ref().map(|_| ActorInfo {
                 actor_type: ActorType::PegIn,
                 status: ActorStatus::Running,

@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
+use crate::actors::bridge::shared::OperationEventType;
 
 /// PegOut actor state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,20 +26,6 @@ pub enum PegOutState {
 /// Operation tracker for performance monitoring
 pub use crate::actors::bridge::actors::pegin::state::OperationTracker;
 
-/// Operation event types specific to PegOut
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OperationEventType {
-    BurnEventProcessed,
-    TransactionBuilt,
-    SignaturesRequested,
-    SignaturesReceived,
-    SignaturesApplied,
-    TransactionBroadcast,
-    TransactionConfirmed,
-    PegOutCompleted,
-    OperationFailed,
-    OperationRetried,
-}
 
 /// PegOut actor metrics
 #[derive(Debug, Clone)]

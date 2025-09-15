@@ -11,10 +11,18 @@ use crate::actors::bridge::shared::constants::DUST_LIMIT;
 use super::actor::PegOutError;
 
 /// Bitcoin transaction builder for peg-out operations
-#[derive(Debug)]
 pub struct TransactionBuilder {
     bitcoin_client: Arc<dyn BitcoinRpc>,
     federation_config: FederationConfig,
+}
+
+impl std::fmt::Debug for TransactionBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionBuilder")
+            .field("bitcoin_client", &"<BitcoinRpc>")
+            .field("federation_config", &self.federation_config)
+            .finish()
+    }
 }
 
 impl TransactionBuilder {
@@ -99,10 +107,18 @@ impl TransactionBuilder {
 }
 
 /// Fee estimator for Bitcoin transactions
-#[derive(Debug)]
 pub struct FeeEstimator {
     bitcoin_client: Arc<dyn BitcoinRpc>,
     default_fee_rate: u64,
+}
+
+impl std::fmt::Debug for FeeEstimator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeeEstimator")
+            .field("bitcoin_client", &"<BitcoinRpc>")
+            .field("default_fee_rate", &self.default_fee_rate)
+            .finish()
+    }
 }
 
 impl FeeEstimator {
