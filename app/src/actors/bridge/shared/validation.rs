@@ -2,7 +2,7 @@
 //! 
 //! Common validation logic for bridge operations
 
-use bitcoin::{Transaction, TxOut, Address as BtcAddress, Network, Script};
+use bitcoin::{Transaction, TxOut, Address as BtcAddress, Network, ScriptBuf};
 use ethereum_types::{H160, H256};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -100,17 +100,18 @@ pub enum ValidationWarning {
 }
 
 /// Bitcoin transaction validator
+#[derive(Debug)]
 pub struct BitcoinTransactionValidator {
     network: Network,
     federation_addresses: Vec<BtcAddress>,
-    federation_scripts: Vec<Script>,
+    federation_scripts: Vec<ScriptBuf>,
 }
 
 impl BitcoinTransactionValidator {
     pub fn new(
         network: Network,
         federation_addresses: Vec<BtcAddress>,
-        federation_scripts: Vec<Script>,
+        federation_scripts: Vec<ScriptBuf>,
     ) -> Self {
         Self {
             network,

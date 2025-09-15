@@ -7,6 +7,7 @@ use bitcoin::{Transaction, Txid, TxOut};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use crate::types::*;
+use crate::actors::bridge::shared::errors::BridgeError;
 
 // Import the actual actor instead of forward declaration
 pub use super::super::actors::pegin::actor::{PegInActor, PegInActorStatus};
@@ -180,4 +181,76 @@ pub struct ConfirmationUpdate {
     pub confirmations: u32,
     pub block_height: u32,
     pub timestamp: SystemTime,
+}
+
+// AlysMessage trait implementation
+use actor_system::message::{AlysMessage, MessagePriority};
+use std::time::Duration;
+
+impl AlysMessage for PegInMessage {
+    fn message_type(&self) -> &'static str {
+        match self {
+            PegInMessage::ProcessDeposit { .. } => "ProcessDeposit",
+            PegInMessage::ValidateDeposit { .. } => "ValidateDeposit",
+            PegInMessage::UpdateConfirmations { .. } => "UpdateConfirmations",
+            PegInMessage::ConfirmDeposit { .. } => "ConfirmDeposit",
+            PegInMessage::NotifyMinting { .. } => "NotifyMinting",
+            PegInMessage::GetDepositStatus { .. } => "GetDepositStatus",
+            PegInMessage::ListPendingDeposits => "ListPendingDeposits",
+            PegInMessage::RetryDeposit { .. } => "RetryDeposit",
+            PegInMessage::CancelDeposit { .. } => "CancelDeposit",
+            PegInMessage::Initialize => "Initialize",
+            PegInMessage::GetStatus => "GetStatus",
+            PegInMessage::Shutdown => "Shutdown",
+        }
+    }
+
+    fn priority(&self) -> MessagePriority {
+        match self {
+            PegInMessage::Shutdown => MessagePriority::Critical,
+            PegInMessage::Initialize => MessagePriority::High,
+            PegInMessage::ProcessDeposit { .. } => MessagePriority::High,
+            PegInMessage::ValidateDeposit { .. } => MessagePriority::High,
+            PegInMessage::ConfirmDeposit { .. } => MessagePriority::High,
+            PegInMessage::NotifyMinting { .. } => MessagePriority::High,
+            PegInMessage::RetryDeposit { .. } => MessagePriority::High,
+            PegInMessage::UpdateConfirmations { .. } => MessagePriority::Normal,
+            PegInMessage::CancelDeposit { .. } => MessagePriority::Normal,
+            PegInMessage::GetDepositStatus { .. } => MessagePriority::Low,
+            PegInMessage::ListPendingDeposits => MessagePriority::Low,
+            PegInMessage::GetStatus => MessagePriority::Low,
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        match self {
+            PegInMessage::ProcessDeposit { .. } => Duration::from_secs(120),
+            PegInMessage::ValidateDeposit { .. } => Duration::from_secs(60),
+            PegInMessage::ConfirmDeposit { .. } => Duration::from_secs(60),
+            PegInMessage::Initialize => Duration::from_secs(60),
+            PegInMessage::Shutdown => Duration::from_secs(30),
+            _ => Duration::from_secs(30),
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            PegInMessage::ProcessDeposit { .. } => true,
+            PegInMessage::ValidateDeposit { .. } => true,
+            PegInMessage::ConfirmDeposit { .. } => true,
+            PegInMessage::RetryDeposit { .. } => false, // Already a retry
+            PegInMessage::CancelDeposit { .. } => false, // Cancellation is final
+            PegInMessage::Shutdown => false, // Shutdown is final
+            _ => true,
+        }
+    }
+
+    fn max_retries(&self) -> u32 {
+        match self {
+            PegInMessage::ProcessDeposit { .. } => 5,
+            PegInMessage::ValidateDeposit { .. } => 3,
+            PegInMessage::ConfirmDeposit { .. } => 3,
+            _ => 3,
+        }
+    }
 }

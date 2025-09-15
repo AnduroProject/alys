@@ -222,6 +222,10 @@ pub enum BridgeError {
     
     // Communication errors
     ActorCommunication { actor: String, reason: String },
+    
+    // Operation management errors
+    MaxRetriesExceeded(String),
+    OperationNotFound(String),
 }
 
 /// Engine (execution layer) errors
@@ -371,6 +375,12 @@ impl fmt::Display for BridgeError {
             }
             BridgeError::AmountTooHigh => {
                 write!(f, "Amount above maximum threshold")
+            }
+            BridgeError::MaxRetriesExceeded(operation_id) => {
+                write!(f, "Maximum retries exceeded for operation: {}", operation_id)
+            }
+            BridgeError::OperationNotFound(operation_id) => {
+                write!(f, "Operation not found: {}", operation_id)
             }
             _ => write!(f, "{:?}", self),
         }
@@ -549,7 +559,54 @@ impl From<ChainError> for crate::actors::bridge::shared::errors::MigrationError 
     fn from(err: ChainError) -> Self {
         // This is a placeholder conversion - adjust based on actual MigrationError definition
         crate::actors::bridge::shared::errors::MigrationError::ChainError { 
-            reason: format!("{:?}", err) 
+            message: format!("{:?}", err) 
+        }
+    }
+}
+
+// Conversion from actors::bridge::shared::errors::BridgeError to types::errors::BridgeError
+impl From<crate::actors::bridge::shared::errors::BridgeError> for BridgeError {
+    fn from(err: crate::actors::bridge::shared::errors::BridgeError) -> Self {
+        use crate::actors::bridge::shared::errors::BridgeError as SharedBridgeError;
+        match err {
+            SharedBridgeError::ConnectionError(msg) => BridgeError::ActorCommunication { 
+                actor: "bridge".to_string(), 
+                reason: msg 
+            },
+            SharedBridgeError::NetworkError(msg) => BridgeError::BitcoinNodeError { reason: msg },
+            SharedBridgeError::AuthenticationError(msg) => BridgeError::InvalidSignature { 
+                signer: "unknown".to_string(), 
+                reason: msg 
+            },
+            SharedBridgeError::ConfigurationError(msg) => BridgeError::FederationNotReady { reason: msg },
+            SharedBridgeError::ValidationError { field, reason } => BridgeError::PegInFailed { 
+                bitcoin_tx: field, 
+                reason 
+            },
+            SharedBridgeError::PegInError { pegin_id, reason } => BridgeError::PegInFailed { 
+                bitcoin_tx: pegin_id, 
+                reason 
+            },
+            SharedBridgeError::PegOutError { pegout_id, reason } => BridgeError::PegOutFailed { 
+                burn_tx: pegout_id, 
+                reason 
+            },
+            SharedBridgeError::InsufficientSignatures { collected, required, .. } => {
+                BridgeError::InsufficientSignatures { required, collected }
+            },
+            SharedBridgeError::RequestTimeout { request_id, .. } => BridgeError::SignatureTimeout { 
+                timeout: std::time::Duration::from_secs(30) 
+            },
+            SharedBridgeError::ServiceUnavailable { service, .. } => BridgeError::FederationNotReady { 
+                reason: format!("Service unavailable: {}", service) 
+            },
+            SharedBridgeError::RateLimitExceeded { .. } => BridgeError::EmergencyPause { 
+                reason: "Rate limit exceeded".to_string() 
+            },
+            _ => BridgeError::ActorCommunication { 
+                actor: "bridge".to_string(), 
+                reason: format!("{:?}", err) 
+            },
         }
     }
 }

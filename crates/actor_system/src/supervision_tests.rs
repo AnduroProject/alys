@@ -142,6 +142,7 @@ impl TestActor {
             FailureType::InvalidState => ActorError::InvalidStateTransition {
                 from: "Running".to_string(),
                 to: "InvalidTarget".to_string(),
+                reason: "Simulated invalid state transition".to_string(),
             },
             FailureType::Custom(msg) => ActorError::Custom {
                 message: msg.clone(),

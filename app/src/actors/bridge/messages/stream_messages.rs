@@ -24,7 +24,7 @@ pub struct StreamActorStatus {
 }
 
 /// Stream actor messages (enhanced for bridge integration)
-#[derive(Debug, Clone, Message, Serialize, Deserialize)]
+#[derive(Debug, Clone, Message)]
 #[rtype(result = "Result<StreamResponse, BridgeError>")]
 pub enum StreamMessage {
     /// Establish governance connection
@@ -58,7 +58,7 @@ pub enum StreamMessage {
     /// Get connection status
     GetConnectionStatus,
     
-    /// Register peg-out actor for direct communication
+    /// Register peg-out actor for direct communication (not serializable)
     RegisterPegOutActor(Addr<PegOutActor>),
     
     /// Reconnect to governance nodes
@@ -103,7 +103,7 @@ pub struct PegOutSignatureRequest {
     pub request_id: String,
     pub pegout_id: String,
     pub unsigned_transaction: bitcoin::Transaction,
-    pub destination_address: bitcoin::Address,
+    pub destination_address: String, // Bitcoin address as string for serde compatibility
     pub amount: u64,
     pub fee: u64,
     pub utxo_commitments: Vec<UtxoCommitment>,
@@ -139,7 +139,7 @@ pub struct FederationUpdate {
     pub update_type: FederationUpdateType,
     pub new_config: FederationConfig,
     pub effective_height: u64,
-    pub signatures: Vec<FederationSignature>,
+    pub signatures: Vec<StreamFederationSignature>,
     pub timestamp: SystemTime,
 }
 
@@ -217,7 +217,7 @@ pub struct UtxoCommitment {
 
 /// Federation signature for updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FederationSignature {
+pub struct StreamFederationSignature {
     pub member_id: String,
     pub signature: Vec<u8>,
     pub public_key: Vec<u8>,
@@ -244,6 +244,11 @@ impl AlysMessage for StreamMessage {
             // Low priority monitoring and status
             StreamMessage::SendHeartbeat => MessagePriority::Low,
             StreamMessage::GetConnectionStatus => MessagePriority::Low,
+
+            // Lifecycle management
+            StreamMessage::Initialize => MessagePriority::High,
+            StreamMessage::GetStatus => MessagePriority::Low,
+            StreamMessage::Shutdown => MessagePriority::High,
         }
     }
 
@@ -270,6 +275,11 @@ impl AlysMessage for StreamMessage {
             // Quick operations
             StreamMessage::SendHeartbeat => Duration::from_secs(10),
             StreamMessage::GetConnectionStatus => Duration::from_secs(5),
+
+            // Lifecycle operations
+            StreamMessage::Initialize => Duration::from_secs(30),
+            StreamMessage::GetStatus => Duration::from_secs(5),
+            StreamMessage::Shutdown => Duration::from_secs(15),
         }
     }
 
@@ -292,6 +302,11 @@ impl AlysMessage for StreamMessage {
             StreamMessage::RegisterPegOutActor(_) => true,
             StreamMessage::SendHeartbeat => true,
             StreamMessage::GetConnectionStatus => true,
+
+            // Lifecycle operations
+            StreamMessage::Initialize => true,
+            StreamMessage::GetStatus => true,
+            StreamMessage::Shutdown => false, // Don't retry shutdown
         }
     }
 
@@ -314,6 +329,11 @@ impl AlysMessage for StreamMessage {
             // Status checks and responses get minimal retries
             StreamMessage::GetConnectionStatus => 1,
             StreamMessage::ReceiveSignatureResponse { .. } => 0, // No retries for responses
+
+            // Lifecycle operations
+            StreamMessage::Initialize => 3,
+            StreamMessage::GetStatus => 1,
+            StreamMessage::Shutdown => 0, // No retries for shutdown
         }
     }
 
@@ -374,6 +394,9 @@ impl StreamMessage {
             StreamMessage::RegisterPegOutActor(_) => "RegisterPegOutActor",
             StreamMessage::ReconnectToGovernance => "ReconnectToGovernance",
             StreamMessage::UpdateGovernanceEndpoints { .. } => "UpdateGovernanceEndpoints",
+            StreamMessage::Initialize => "Initialize",
+            StreamMessage::GetStatus => "GetStatus",
+            StreamMessage::Shutdown => "Shutdown",
         }
     }
 
@@ -390,7 +413,10 @@ impl StreamMessage {
             StreamMessage::ReconnectToGovernance |
             StreamMessage::UpdateGovernanceEndpoints { .. } |
             StreamMessage::GetConnectionStatus |
-            StreamMessage::RegisterPegOutActor(_) => false,
+            StreamMessage::RegisterPegOutActor(_) |
+            StreamMessage::Initialize |
+            StreamMessage::GetStatus |
+            StreamMessage::Shutdown => false,
         }
     }
 
@@ -409,9 +435,13 @@ impl StreamMessage {
             StreamMessage::UpdateGovernanceEndpoints { .. } => StreamMessageCategory::ConnectionManagement,
             
             StreamMessage::SendHeartbeat |
-            StreamMessage::GetConnectionStatus => StreamMessageCategory::Monitoring,
-            
+            StreamMessage::GetConnectionStatus |
+            StreamMessage::GetStatus => StreamMessageCategory::Monitoring,
+
             StreamMessage::RegisterPegOutActor(_) => StreamMessageCategory::Registration,
+
+            StreamMessage::Initialize |
+            StreamMessage::Shutdown => StreamMessageCategory::Lifecycle,
         }
     }
 }
@@ -425,4 +455,5 @@ pub enum StreamMessageCategory {
     ConnectionManagement,
     Monitoring,
     Registration,
+    Lifecycle,
 }

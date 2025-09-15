@@ -7,9 +7,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use crate::actors::bridge::messages::*;
-use crate::actors::bridge::shared::errors::BridgeError as ActorBridgeError;
-use crate::types::*;
+use crate::actors::bridge::messages::{ActorType, OperationType, OperationState};
+use crate::types::errors::BridgeError;
 
 /// Bridge coordination metrics
 #[derive(Debug, Clone)]
@@ -44,6 +43,9 @@ pub struct BridgeCoordinationMetrics {
     
     /// Detailed metrics
     detailed_metrics: Arc<std::sync::RwLock<DetailedMetrics>>,
+    
+    /// Coordination operations counter
+    pub coordination_operations: Arc<AtomicU64>,
 }
 
 /// Detailed metrics structure
@@ -128,6 +130,7 @@ impl BridgeCoordinationMetrics {
             error_counts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             last_operation_time: Arc::new(std::sync::RwLock::new(None)),
             detailed_metrics: Arc::new(std::sync::RwLock::new(DetailedMetrics::default())),
+            coordination_operations: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -233,7 +236,7 @@ impl BridgeCoordinationMetrics {
     pub fn record_operation_status_change(
         &self,
         operation_type: &OperationType,
-        old_status: &OperationState,
+        _old_status: &OperationState,
         new_status: &OperationState,
     ) {
         // Update detailed metrics
@@ -328,6 +331,37 @@ impl BridgeCoordinationMetrics {
         } else {
             0.0
         }
+    }
+
+    /// Create snapshot for actor_system compatibility
+    pub fn create_snapshot(&self) -> actor_system::metrics::MetricsSnapshot {
+        actor_system::metrics::MetricsSnapshot {
+            enabled: true,
+            messages_processed: self.operations_completed.load(Ordering::Relaxed),
+            messages_failed: self.operations_failed.load(Ordering::Relaxed),
+            avg_processing_time: Duration::from_millis(100), // Placeholder - would calculate from operation_durations
+            mailbox_size: self.active_operations_gauge.load(Ordering::Relaxed),
+            restarts: self.system_starts.load(Ordering::Relaxed),
+            state_transitions: 0, // Not tracked in bridge metrics
+            last_activity: SystemTime::now(),
+            peak_memory_usage: 0, // Not tracked in bridge metrics
+            total_cpu_time: Duration::from_secs(0), // Not tracked in bridge metrics
+            error_counts: HashMap::new(), // Would convert from self.error_counts
+            custom_counters: HashMap::new(),
+            custom_gauges: HashMap::new(),
+        }
+    }
+
+    /// Initialize metrics (for LifecycleAware compatibility)
+    pub async fn initialize(&mut self) -> Result<(), BridgeError> {
+        // No initialization needed for metrics
+        Ok(())
+    }
+
+    /// Flush metrics (for compatibility)
+    pub async fn flush(&self) -> Result<(), BridgeError> {
+        // No flushing needed for in-memory metrics
+        Ok(())
     }
 
     /// Calculate performance statistics

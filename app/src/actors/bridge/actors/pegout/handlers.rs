@@ -3,9 +3,9 @@
 //! Message handling implementation for the PegOut actor
 
 use actix::prelude::*;
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
-use super::actor::{PegOutActor, PegOutError};
+use super::actor::PegOutActor;
 use crate::actors::bridge::{messages::*, shared::errors::BridgeError};
 
 /// Handler for PegOut messages

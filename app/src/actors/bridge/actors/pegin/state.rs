@@ -30,7 +30,7 @@ impl Default for PegInActorState {
             monitored_addresses: 0,
             last_block_checked: 0,
             error_count: 0,
-            metrics_snapshot: actor_system::metrics::MetricsSnapshot::default(),
+            metrics_snapshot: Default::default(),
         }
     }
 }
@@ -42,6 +42,8 @@ pub enum PegInState {
     Initializing,
     /// Actor is running and monitoring blockchain
     Running,
+    /// Actor is monitoring blockchain for deposits
+    Monitoring,
     /// Actor is processing deposits
     Processing,
     /// Actor is in degraded state
@@ -50,6 +52,8 @@ pub enum PegInState {
     Paused,
     /// Actor is shutting down
     ShuttingDown,
+    /// Actor is stopping
+    Stopping,
     /// Actor has stopped
     Stopped,
 }
@@ -552,9 +556,12 @@ impl PegInState {
     pub fn description(&self) -> String {
         match self {
             PegInState::Initializing => "Initializing PegIn actor".to_string(),
+            PegInState::Running => "Running and processing requests".to_string(),
             PegInState::Monitoring => "Monitoring Bitcoin blockchain for deposits".to_string(),
+            PegInState::Processing => "Processing deposits".to_string(),
             PegInState::Degraded { issues } => format!("Degraded: {}", issues.join(", ")),
             PegInState::Paused => "Paused".to_string(),
+            PegInState::ShuttingDown => "Shutting down".to_string(),
             PegInState::Stopping => "Stopping".to_string(),
             PegInState::Stopped => "Stopped".to_string(),
         }

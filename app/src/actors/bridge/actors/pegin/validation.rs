@@ -1,12 +1,11 @@
 //! PegIn Deposit Validation
-//! 
+//!
 //! Comprehensive validation logic for Bitcoin deposits
 
-use bitcoin::{Transaction, Address as BtcAddress, Network};
+use bitcoin::{Transaction, Address as BtcAddress};
 use ethereum_types::H160;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, info};
 
 use crate::actors::bridge::{
     messages::DepositTransaction,
@@ -71,7 +70,7 @@ impl DepositValidator {
             }
         }
 
-        let federation_scripts = federation_addresses
+        let federation_scripts: Vec<bitcoin::ScriptBuf> = federation_addresses
             .iter()
             .map(|addr| addr.script_pubkey())
             .collect();
@@ -112,7 +111,7 @@ impl DepositValidator {
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let mut validation_score = 0.0;
+        let mut validation_score: f64 = 0.0;
 
         // Basic transaction structure validation
         if deposit.bitcoin_tx.input.is_empty() {
@@ -167,11 +166,14 @@ impl DepositValidator {
             }
         };
 
-        // Network consistency check
+        // Network consistency check - federation addresses should all be on same network
+        let expected_network = self.federation_addresses[0].network;
         for addr in &self.federation_addresses {
-            if addr.network != deposit.bitcoin_tx.version.to_consensus() as u8 as Network {
-                // This is a simplified check; in practice, you'd validate against expected network
-                warnings.push(ValidationWarning::Other("Network consistency check needed".to_string()));
+            if addr.network != expected_network {
+                warnings.push(ValidationWarning::Other(
+                    format!("Federation address network mismatch: expected {:?}, found {:?}",
+                            expected_network, addr.network)
+                ));
             }
         }
 
@@ -216,7 +218,7 @@ impl DepositValidator {
     }
 
     /// Find federation output in transaction
-    fn find_federation_output(&self, tx: &Transaction) -> (Option<usize>, Option<&bitcoin::TxOut>) {
+    fn find_federation_output<'a>(&self, tx: &'a Transaction) -> (Option<usize>, Option<&'a bitcoin::TxOut>) {
         for (index, output) in tx.output.iter().enumerate() {
             for fed_addr in &self.federation_addresses {
                 if output.script_pubkey == fed_addr.script_pubkey() {
@@ -320,7 +322,7 @@ impl DepositValidator {
         self.federation_addresses = new_addresses;
         
         // Update address validator
-        let federation_scripts = self.federation_addresses
+        let federation_scripts: Vec<bitcoin::ScriptBuf> = self.federation_addresses
             .iter()
             .map(|addr| addr.script_pubkey())
             .collect();

@@ -15,6 +15,7 @@ use crate::actors::bridge::{
 use crate::types::*;
 use super::metrics::*;
 use super::state::{*, BridgeState};
+use actor_system::metrics::ActorMetrics;
 
 /// Bridge coordinator actor that manages the bridge system
 pub struct BridgeActor {
@@ -34,8 +35,7 @@ pub struct BridgeActor {
     pub metrics: BridgeCoordinationMetrics,
     
     /// Actor system metrics (for AlysActor compatibility)
-    // TODO: Fix actor_system metrics integration
-    // pub actor_system_metrics: actor_system::metrics::ActorMetrics,
+    pub actor_system_metrics: ActorMetrics,
     
     /// Health monitor
     pub health_monitor: ActorHealthMonitor,
@@ -92,8 +92,7 @@ impl BridgeActor {
         let metrics = BridgeCoordinationMetrics::new()
             .map_err(|e| BridgeError::InternalError(format!("Failed to initialize metrics: {}", e)))?;
         let health_monitor = ActorHealthMonitor::new(config.health_check_interval);
-        // TODO: Fix actor_system metrics integration
-        // let actor_system_metrics = actor_system::metrics::ActorMetrics::new();
+        let actor_system_metrics = ActorMetrics::new();
         
         Ok(Self {
             config,
@@ -101,8 +100,7 @@ impl BridgeActor {
             child_actors: ChildActors::default(),
             active_operations: HashMap::new(),
             metrics,
-            // TODO: Fix actor_system metrics integration
-            // actor_system_metrics,
+            actor_system_metrics,
             health_monitor,
             started_at: SystemTime::now(),
         })
@@ -229,7 +227,7 @@ impl BridgeActor {
         if let Some(pegout_actor) = &self.child_actors.pegout_actor {
             let msg = PegOutMessage::ProcessBurnEvent {
                 burn_tx: burn_tx_hash,
-                destination: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>().unwrap().assume_checked(), // Placeholder bitcoin address
+                destination: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(), // Placeholder
                 amount: 100_000_000, // Placeholder
                 requester: H160::zero(), // Placeholder
             };

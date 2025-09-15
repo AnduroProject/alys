@@ -2,7 +2,7 @@
 //! 
 //! Transaction construction utilities for peg-out operations
 
-use bitcoin::{Transaction, TxIn, TxOut, OutPoint, Sequence, Witness, Address as BtcAddress, ScriptBuf};
+use bitcoin::{Transaction, TxIn, TxOut, Sequence, Witness, Address as BtcAddress, ScriptBuf};
 use std::sync::Arc;
 use tracing::{info, debug};
 

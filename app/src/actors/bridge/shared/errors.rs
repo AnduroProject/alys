@@ -156,6 +156,7 @@ pub enum BridgeError {
     InvalidStateTransition {
         from: String,
         to: String,
+        reason: String,
     },
 
     /// Temporary service unavailable errors

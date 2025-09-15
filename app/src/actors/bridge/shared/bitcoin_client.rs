@@ -2,12 +2,14 @@
 //! 
 //! Unified interface for Bitcoin node communication
 
-use bitcoin::{Transaction, Txid, Block, BlockHash, Address as BtcAddress, OutPoint, TxOut};
+use bitcoin::{Transaction, Txid, Block, BlockHash, Address as BtcAddress};
+use bitcoin::hashes::Hash;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::error;
 use crate::types::*;
 
 /// Bitcoin RPC client interface
@@ -98,7 +100,7 @@ pub struct FeeEstimate {
 pub struct Utxo {
     pub txid: Txid,
     pub vout: u32,
-    pub address: BtcAddress,
+    pub address: String, // Address as string from RPC
     pub label: Option<String>,
     pub script_pubkey: String,
     pub amount: f64, // BTC amount
@@ -350,21 +352,21 @@ impl BitcoinClientFactory {
     }
 
     /// Create mock Bitcoin client for testing
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn create_mock() -> Arc<dyn BitcoinRpc> {
         Arc::new(MockBitcoinRpc::new())
     }
 }
 
 /// Mock Bitcoin RPC client for testing
-#[cfg(test)]
+// #[cfg(test)]
 pub struct MockBitcoinRpc {
     transactions: std::sync::RwLock<std::collections::HashMap<Txid, Transaction>>,
     blocks: std::sync::RwLock<std::collections::HashMap<BlockHash, Block>>,
-    utxos: std::sync::RwLock<std::collections::HashMap<BtcAddress, Vec<Utxo>>>,
+    utxos: std::sync::RwLock<std::collections::HashMap<String, Vec<Utxo>>>,
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 impl MockBitcoinRpc {
     pub fn new() -> Self {
         Self {
@@ -376,16 +378,16 @@ impl MockBitcoinRpc {
 
     pub fn add_transaction(&self, tx: Transaction) {
         let mut transactions = self.transactions.write().unwrap();
-        transactions.insert(tx.compute_txid(), tx);
+        transactions.insert(tx.txid(), tx);
     }
 
-    pub fn add_utxo(&self, address: BtcAddress, utxo: Utxo) {
+    pub fn add_utxo(&self, address: String, utxo: Utxo) {
         let mut utxos = self.utxos.write().unwrap();
         utxos.entry(address).or_default().push(utxo);
     }
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 #[async_trait::async_trait]
 impl BitcoinRpc for MockBitcoinRpc {
     async fn get_transaction(&self, txid: &Txid) -> Result<Transaction, BitcoinRpcError> {
@@ -403,7 +405,7 @@ impl BitcoinRpc for MockBitcoinRpc {
             size: 250, // Mock values
             vsize: 250,
             weight: 1000,
-            version: tx.version.0,
+            version: tx.version as u32,
             locktime: tx.lock_time.to_consensus_u32(),
             confirmations: Some(6),
             blockhash: None,
@@ -431,11 +433,12 @@ impl BitcoinRpc for MockBitcoinRpc {
 
     async fn list_unspent(&self, address: &BtcAddress) -> Result<Vec<Utxo>, BitcoinRpcError> {
         let utxos = self.utxos.read().unwrap();
-        Ok(utxos.get(address).cloned().unwrap_or_default())
+        let address_string = address.to_string();
+        Ok(utxos.get(&address_string).cloned().unwrap_or_default())
     }
 
     async fn send_raw_transaction(&self, tx: &Transaction) -> Result<Txid, BitcoinRpcError> {
-        let txid = tx.compute_txid();
+        let txid = tx.txid();
         self.add_transaction(tx.clone());
         Ok(txid)
     }

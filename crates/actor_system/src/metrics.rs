@@ -322,6 +322,76 @@ impl ActorMetrics {
         self.custom_counters.clear();
         self.custom_gauges.clear();
     }
+
+    /// Record configuration update
+    pub fn record_config_update(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter("config_updates");
+        self.record_activity();
+    }
+
+    /// Record health check success
+    pub fn record_health_check_success(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter("health_check_success");
+        self.record_activity();
+    }
+
+    /// Record health check failure
+    pub fn record_health_check_failure(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter("health_check_failures");
+        self.record_activity();
+    }
+
+    /// Record health check error
+    pub fn record_health_check_error(&mut self, _error: &str) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter("health_check_errors");
+        self.record_activity();
+    }
+
+    /// Record message received (alias for record_message_processed)
+    pub fn record_message_received(&mut self, msg_type: &str) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter(&format!("messages_received_{}", msg_type));
+        self.record_activity();
+    }
+
+    /// Record message processed successfully (alias)
+    pub fn record_message_processed_successfully(&mut self, msg_type: &str, duration: std::time::Duration) {
+        self.record_message_processed(duration);
+        self.increment_counter(&format!("messages_success_{}", msg_type));
+    }
+
+    /// Record critical error
+    pub fn record_critical_error(&mut self, error: &str) {
+        if !self.enabled {
+            return;
+        }
+        self.record_error("critical");
+        self.increment_counter(&format!("critical_errors_{}", error));
+        self.record_activity();
+    }
+
+    /// Record maintenance completed
+    pub fn record_maintenance_completed(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.increment_counter("maintenance_completed");
+        self.record_activity();
+    }
 }
 
 impl Default for ActorMetrics {
@@ -377,6 +447,26 @@ pub struct MetricsSnapshot {
     pub error_counts: HashMap<String, u64>,
     pub custom_counters: HashMap<String, u64>,
     pub custom_gauges: HashMap<String, f64>,
+}
+
+impl Default for MetricsSnapshot {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            messages_processed: 0,
+            messages_failed: 0,
+            avg_processing_time: Duration::from_millis(0),
+            mailbox_size: 0,
+            restarts: 0,
+            state_transitions: 0,
+            last_activity: SystemTime::now(),
+            peak_memory_usage: 0,
+            total_cpu_time: Duration::from_millis(0),
+            error_counts: HashMap::new(),
+            custom_counters: HashMap::new(),
+            custom_gauges: HashMap::new(),
+        }
+    }
 }
 
 impl MetricsSnapshot {

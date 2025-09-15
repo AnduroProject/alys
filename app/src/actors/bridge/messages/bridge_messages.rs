@@ -5,7 +5,8 @@
 use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
-use crate::types::*;
+use crate::types::errors::BridgeError as TypesBridgeError;
+use crate::types::{Address, H256, Hash256};
 use super::pegin_messages::PegInActor;
 use super::pegout_messages::PegOutActor;
 use super::stream_messages::StreamActor;
@@ -15,7 +16,7 @@ use actor_system::message::{AlysMessage, MessagePriority};
 
 /// Bridge coordination messages
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
-#[rtype(result = "Result<(), BridgeError>")]
+#[rtype(result = "Result<(), TypesBridgeError>")]
 pub enum BridgeCoordinationMessage {
     /// Initialize the bridge system
     InitializeSystem,
@@ -43,7 +44,7 @@ pub enum BridgeCoordinationMessage {
     /// Error handling and recovery
     HandleActorFailure {
         actor_type: ActorType,
-        error: BridgeError,
+        error: TypesBridgeError,
     },
     
     /// Graceful shutdown
@@ -171,7 +172,7 @@ impl AlysMessage for BridgeCoordinationMessage {
 
 /// System status response
 #[derive(Debug, Clone, Message, Serialize, Deserialize)]
-#[rtype(result = "BridgeSystemStatus")]
+#[rtype(result = "Result<BridgeSystemStatus, TypesBridgeError>")]
 pub struct GetSystemStatusResponse;
 
 /// Bridge system status
@@ -213,7 +214,7 @@ pub struct ActorInfo {
 }
 
 /// Actor type enumeration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum ActorType {
     Bridge,
     PegIn,
@@ -243,14 +244,14 @@ pub struct OperationStatus {
 }
 
 /// Operation types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum OperationType {
     PegIn,
     PegOut,
 }
 
-/// Operation states  
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Operation states
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum OperationState {
     Initiated,
     Processing,

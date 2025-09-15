@@ -1,25 +1,25 @@
 //! PegIn Confirmation Tracking
-//! 
+//!
 //! Advanced confirmation tracking for Bitcoin deposits
 
 use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 /// Confirmation tracker for deposits
 #[derive(Debug)]
 pub struct ConfirmationTracker {
     /// Required confirmations threshold
     confirmation_threshold: u32,
-    
+
     /// Tracking entries for each transaction
     tracking_entries: HashMap<Txid, ConfirmationEntry>,
-    
+
     /// Confirmation history for analytics
     confirmation_history: Vec<ConfirmationEvent>,
-    
+
     /// Statistics
     stats: ConfirmationStats,
 }
@@ -109,7 +109,10 @@ impl ConfirmationTracker {
 
     /// Start tracking a transaction
     pub fn start_tracking(&mut self, txid: Txid, start_block_height: u32) {
-        info!("Starting confirmation tracking for {} at block {}", txid, start_block_height);
+        info!(
+            "Starting confirmation tracking for {} at block {}",
+            txid, start_block_height
+        );
 
         let entry = ConfirmationEntry {
             txid,
@@ -140,30 +143,42 @@ impl ConfirmationTracker {
     }
 
     /// Update confirmations for a transaction
-    pub fn update_confirmations(&mut self, txid: Txid, confirmations: u32, block_height: u32) -> bool {
+    pub fn update_confirmations(
+        &mut self,
+        txid: Txid,
+        confirmations: u32,
+        block_height: u32,
+    ) -> bool {
         if let Some(entry) = self.tracking_entries.get_mut(&txid) {
             let now = SystemTime::now();
             let time_since_last = entry.last_updated.elapsed().ok();
-            
+
             // Only update if confirmations increased
             if confirmations > entry.current_confirmations {
-                debug!("Updating confirmations for {}: {} -> {}", txid, entry.current_confirmations, confirmations);
-                
+                debug!(
+                    "Updating confirmations for {}: {} -> {}",
+                    txid, entry.current_confirmations, confirmations
+                );
+
                 entry.current_confirmations = confirmations;
                 entry.last_updated = now;
-                
+
                 // Update confirmation rate (confirmations per minute)
                 if let Ok(duration_since_start) = now.duration_since(entry.first_seen) {
                     if duration_since_start.as_secs() > 0 {
-                        entry.confirmation_rate = (confirmations as f64) / (duration_since_start.as_secs_f64() / 60.0);
+                        entry.confirmation_rate =
+                            (confirmations as f64) / (duration_since_start.as_secs_f64() / 60.0);
                     }
                 }
 
                 // Estimate time to completion
                 if entry.confirmation_rate > 0.0 {
-                    let remaining_confirmations = entry.required_confirmations.saturating_sub(confirmations);
-                    let estimated_minutes = (remaining_confirmations as f64) / entry.confirmation_rate;
-                    entry.estimated_confirmation_time = Some(Duration::from_secs((estimated_minutes * 60.0) as u64));
+                    let remaining_confirmations =
+                        entry.required_confirmations.saturating_sub(confirmations);
+                    let estimated_minutes =
+                        (remaining_confirmations as f64) / entry.confirmation_rate;
+                    entry.estimated_confirmation_time =
+                        Some(Duration::from_secs((estimated_minutes * 60.0) as u64));
                 }
 
                 // Add update record
@@ -208,7 +223,10 @@ impl ConfirmationTracker {
                 false // No update needed
             }
         } else {
-            warn!("Attempted to update confirmations for untracked transaction: {}", txid);
+            warn!(
+                "Attempted to update confirmations for untracked transaction: {}",
+                txid
+            );
             false
         }
     }
@@ -219,12 +237,18 @@ impl ConfirmationTracker {
         let mut stalled_txids = Vec::new();
 
         for (txid, entry) in &mut self.tracking_entries {
-            if matches!(entry.status, ConfirmationStatus::Tracking | ConfirmationStatus::Progressing) {
+            if matches!(
+                entry.status,
+                ConfirmationStatus::Tracking | ConfirmationStatus::Progressing
+            ) {
                 if let Ok(time_since_update) = now.duration_since(entry.last_updated) {
                     if time_since_update > stall_threshold {
-                        warn!("Transaction {} appears stalled: {} seconds since last confirmation", 
-                              txid, time_since_update.as_secs());
-                        
+                        warn!(
+                            "Transaction {} appears stalled: {} seconds since last confirmation",
+                            txid,
+                            time_since_update.as_secs()
+                        );
+
                         entry.status = ConfirmationStatus::Stalled;
                         stalled_txids.push(*txid);
                         self.stats.stalled_count += 1;
@@ -235,7 +259,9 @@ impl ConfirmationTracker {
                             event_type: ConfirmationEventType::TrackingStalled,
                             confirmations: entry.current_confirmations,
                             timestamp: now,
-                            duration_since_start: now.duration_since(entry.first_seen).unwrap_or_default(),
+                            duration_since_start: now
+                                .duration_since(entry.first_seen)
+                                .unwrap_or_default(),
                         };
                         self.confirmation_history.push(event);
                     }
@@ -251,24 +277,37 @@ impl ConfirmationTracker {
                 .duration_since(entry.first_seen)
                 .unwrap_or_default();
 
-            info!("Transaction {} confirmed in {:.1} minutes", 
-                  txid, confirmation_duration.as_secs_f64() / 60.0);
+            info!(
+                "Transaction {} confirmed in {:.1} minutes",
+                txid,
+                confirmation_duration.as_secs_f64() / 60.0
+            );
 
             // Update statistics
             self.stats.confirmed_transactions += 1;
             self.stats.currently_tracking = self.stats.currently_tracking.saturating_sub(1);
-            
+
             // Update timing statistics
-            let total_time = self.stats.average_confirmation_time.as_secs_f64() * (self.stats.confirmed_transactions - 1) as f64;
+            let total_time = self.stats.average_confirmation_time.as_secs_f64()
+                * (self.stats.confirmed_transactions - 1) as f64;
             self.stats.average_confirmation_time = Duration::from_secs_f64(
-                (total_time + confirmation_duration.as_secs_f64()) / self.stats.confirmed_transactions as f64
+                (total_time + confirmation_duration.as_secs_f64())
+                    / self.stats.confirmed_transactions as f64,
             );
 
-            if self.stats.fastest_confirmation.map_or(true, |fastest| confirmation_duration < fastest) {
+            if self
+                .stats
+                .fastest_confirmation
+                .map_or(true, |fastest| confirmation_duration < fastest)
+            {
                 self.stats.fastest_confirmation = Some(confirmation_duration);
             }
 
-            if self.stats.slowest_confirmation.map_or(true, |slowest| confirmation_duration > slowest) {
+            if self
+                .stats
+                .slowest_confirmation
+                .map_or(true, |slowest| confirmation_duration > slowest)
+            {
                 self.stats.slowest_confirmation = Some(confirmation_duration);
             }
         }
@@ -277,7 +316,7 @@ impl ConfirmationTracker {
     /// Stop tracking a transaction
     pub fn stop_tracking(&mut self, txid: Txid) -> Option<ConfirmationEntry> {
         info!("Stopping confirmation tracking for {}", txid);
-        
+
         if let Some(entry) = self.tracking_entries.remove(&txid) {
             self.stats.currently_tracking = self.stats.currently_tracking.saturating_sub(1);
             Some(entry)
@@ -301,8 +340,10 @@ impl ConfirmationTracker {
         self.tracking_entries
             .iter()
             .filter(|(_, entry)| {
-                matches!(entry.status, ConfirmationStatus::Tracking | ConfirmationStatus::Progressing)
-                    && entry.current_confirmations < entry.required_confirmations
+                matches!(
+                    entry.status,
+                    ConfirmationStatus::Tracking | ConfirmationStatus::Progressing
+                ) && entry.current_confirmations < entry.required_confirmations
             })
             .map(|(txid, _)| *txid)
             .collect()
@@ -310,22 +351,35 @@ impl ConfirmationTracker {
 
     /// Update confirmation threshold
     pub fn update_threshold(&mut self, new_threshold: u32) {
-        info!("Updating confirmation threshold: {} -> {}", self.confirmation_threshold, new_threshold);
-        
-        let old_threshold = self.confirmation_threshold;
+        info!(
+            "Updating confirmation threshold: {} -> {}",
+            self.confirmation_threshold, new_threshold
+        );
+
         self.confirmation_threshold = new_threshold;
 
         // Update all tracking entries
+        let mut txids_to_process = Vec::new();
+
         for entry in self.tracking_entries.values_mut() {
             entry.required_confirmations = new_threshold;
-            
+
             // Re-evaluate status based on new threshold
-            if entry.current_confirmations >= new_threshold && !matches!(entry.status, ConfirmationStatus::Confirmed) {
+            if entry.current_confirmations >= new_threshold
+                && !matches!(entry.status, ConfirmationStatus::Confirmed)
+            {
                 entry.status = ConfirmationStatus::Confirmed;
-                self.handle_confirmation_complete(entry.txid);
-            } else if entry.current_confirmations < new_threshold && matches!(entry.status, ConfirmationStatus::Confirmed) {
+                txids_to_process.push(entry.txid);
+            } else if entry.current_confirmations < new_threshold
+                && matches!(entry.status, ConfirmationStatus::Confirmed)
+            {
                 entry.status = ConfirmationStatus::Progressing;
             }
+        }
+
+        // Process the txids after the loop
+        for txid in txids_to_process {
+            self.handle_confirmation_complete(txid);
         }
     }
 
@@ -337,11 +391,10 @@ impl ConfirmationTracker {
     /// Clean up old history entries
     pub fn cleanup_old_entries(&mut self, max_history_entries: usize, max_age: Duration) {
         let now = SystemTime::now();
-        
+
         // Remove old history entries
-        self.confirmation_history.retain(|event| {
-            now.duration_since(event.timestamp).unwrap_or_default() <= max_age
-        });
+        self.confirmation_history
+            .retain(|event| now.duration_since(event.timestamp).unwrap_or_default() <= max_age);
 
         // Keep only recent entries if still over limit
         if self.confirmation_history.len() > max_history_entries {
@@ -350,11 +403,14 @@ impl ConfirmationTracker {
         }
 
         // Remove completed/lost tracking entries older than max_age
-        let txids_to_remove: Vec<Txid> = self.tracking_entries
+        let txids_to_remove: Vec<Txid> = self
+            .tracking_entries
             .iter()
             .filter(|(_, entry)| {
-                matches!(entry.status, ConfirmationStatus::Confirmed | ConfirmationStatus::Lost)
-                    && now.duration_since(entry.last_updated).unwrap_or_default() > max_age
+                matches!(
+                    entry.status,
+                    ConfirmationStatus::Confirmed | ConfirmationStatus::Lost
+                ) && now.duration_since(entry.last_updated).unwrap_or_default() > max_age
             })
             .map(|(txid, _)| *txid)
             .collect();
@@ -363,8 +419,11 @@ impl ConfirmationTracker {
             self.tracking_entries.remove(&txid);
         }
 
-        debug!("Cleaned up confirmation tracker: {} history entries, {} tracking entries", 
-               self.confirmation_history.len(), self.tracking_entries.len());
+        debug!(
+            "Cleaned up confirmation tracker: {} history entries, {} tracking entries",
+            self.confirmation_history.len(),
+            self.tracking_entries.len()
+        );
     }
 
     /// Get estimated time to confirmation for a transaction
@@ -374,12 +433,15 @@ impl ConfirmationTracker {
 
     /// Check if transaction is confirmed
     pub fn is_confirmed(&self, txid: &Txid) -> bool {
-        self.tracking_entries.get(txid)
-            .map_or(false, |entry| matches!(entry.status, ConfirmationStatus::Confirmed))
+        self.tracking_entries.get(txid).map_or(false, |entry| {
+            matches!(entry.status, ConfirmationStatus::Confirmed)
+        })
     }
 
     /// Get current confirmations for transaction
     pub fn get_current_confirmations(&self, txid: &Txid) -> Option<u32> {
-        self.tracking_entries.get(txid).map(|entry| entry.current_confirmations)
+        self.tracking_entries
+            .get(txid)
+            .map(|entry| entry.current_confirmations)
     }
 }

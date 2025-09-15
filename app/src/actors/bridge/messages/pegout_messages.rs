@@ -5,6 +5,7 @@
 use actix::prelude::*;
 use bitcoin::{Transaction, Txid, Address as BtcAddress, Witness};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::time::SystemTime;
 use crate::types::*;
 
@@ -27,7 +28,7 @@ pub enum PegOutMessage {
     /// Process burn event from Alys chain
     ProcessBurnEvent {
         burn_tx: H256,
-        destination: BtcAddress,
+        destination: String, // Bitcoin address as string for serde compatibility
         amount: u64,
         requester: H160,
     },
@@ -92,7 +93,7 @@ pub enum PegOutMessage {
     ProcessWithdrawal {
         pegout_id: String,
         amount: u64,
-        destination: BtcAddress,
+        destination: String, // Bitcoin address as string for serde compatibility
     },
     
     /// Select UTXOs for transaction
@@ -119,12 +120,45 @@ pub enum PegOutMessage {
         txid: Txid,
     },
     
+    /// Process a generic request
+    ProcessRequest {
+        request_id: String,
+        request_data: serde_json::Value,
+    },
+
+    /// Create Bitcoin transaction
+    CreateBitcoinTransaction {
+        pegout_id: String,
+        inputs: Vec<bitcoin::OutPoint>,
+        outputs: Vec<(String, u64)>, // address, amount pairs
+    },
+
+    /// Sign transaction
+    SignTransaction {
+        pegout_id: String,
+        transaction: Transaction,
+    },
+
+    /// Cancel request
+    CancelRequest {
+        request_id: String,
+        reason: String,
+    },
+
+    /// Handle timeout
+    HandleTimeout {
+        request_id: String,
+    },
+
     /// Initialize the peg-out actor
     Initialize,
-    
+
     /// Get actor status
     GetStatus,
-    
+
+    /// Get metrics
+    GetMetrics,
+
     /// Shutdown the actor
     Shutdown,
 }
@@ -243,14 +277,14 @@ pub enum SignatureCollectionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureSet {
     pub request_id: String,
-    pub signatures: Vec<FederationSignature>,
+    pub signatures: Vec<PegoutFederationSignature>,
     pub aggregated_signature: Option<Vec<u8>>,
     pub valid: bool,
 }
 
 /// Individual federation member signature
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FederationSignature {
+pub struct PegoutFederationSignature {
     pub member_id: String,
     pub signature: Vec<u8>,
     pub public_key: Vec<u8>,
@@ -260,11 +294,11 @@ pub struct FederationSignature {
 /// Transaction building context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionBuildContext {
-    pub destination: BtcAddress,
+    pub destination: String, // Bitcoin address as string for serde compatibility
     pub amount: u64,
     pub fee_rate: u64,
     pub selected_utxos: Vec<UtxoSelection>,
-    pub change_address: Option<BtcAddress>,
+    pub change_address: Option<String>, // Bitcoin address as string for serde compatibility
     pub estimated_fee: u64,
 }
 

@@ -49,7 +49,7 @@ pub enum ActorError {
     
     /// Invalid state transition
     #[error("Invalid state transition from {from} to {to}")]
-    InvalidStateTransition { from: String, to: String },
+    InvalidStateTransition { from: String, to: String, reason: String },
     
     /// Timeout occurred
     #[error("Operation timed out: {operation} after {timeout:?}")]
@@ -122,6 +122,26 @@ pub enum ActorError {
     /// Metrics export failed
     #[error("Metrics export failed: {reason}")]
     MetricsExportFailed { reason: String },
+
+    /// Actor initialization failed
+    #[error("Actor initialization failed: {actor_type} - {reason}")]
+    InitializationFailed { actor_type: String, reason: String },
+
+    /// Actor not ready for operation
+    #[error("Actor not ready: {actor_type} - {reason}")]
+    ActorNotReady { actor_type: String, reason: String },
+
+    /// Resource cleanup failed
+    #[error("Resource cleanup failed for {actor_type}: {resource} - {reason}")]
+    ResourceCleanupFailed { actor_type: String, resource: String, reason: String },
+
+    /// Message processing timeout
+    #[error("Message timeout: {message_type} after {timeout:?}")]
+    MessageTimeout { message_type: String, timeout: std::time::Duration },
+
+    /// External service error
+    #[error("External service error: {service} - {reason}")]
+    ExternalServiceError { service: String, reason: String },
 }
 
 /// Blockchain-specific actor errors
@@ -582,6 +602,7 @@ impl From<BlockchainActorError> for ActorError {
                 ActorError::InvalidStateTransition {
                     from: "stable_chain".to_string(),
                     to: format!("reorg_depth_{}", depth),
+                    reason,
                 }
             }
             BlockchainActorError::ConsensusError { consensus_type, reason, .. } => {
@@ -590,7 +611,7 @@ impl From<BlockchainActorError> for ActorError {
                 }
             }
             BlockchainActorError::StateTransitionError { from_state, to_state, reason, .. } => {
-                ActorError::InvalidStateTransition { from: from_state, to: to_state }
+                ActorError::InvalidStateTransition { from: from_state, to: to_state, reason }
             }
         }
     }
@@ -729,6 +750,11 @@ impl ActorError {
             ActorError::ValidationFailed { .. } => ErrorSeverity::Moderate,
             ActorError::MetricsInitializationFailed { .. } => ErrorSeverity::Moderate,
             ActorError::MetricsExportFailed { .. } => ErrorSeverity::Minor,
+            ActorError::InitializationFailed { .. } => ErrorSeverity::Major,
+            ActorError::ActorNotReady { .. } => ErrorSeverity::Minor,
+            ActorError::ResourceCleanupFailed { .. } => ErrorSeverity::Moderate,
+            ActorError::MessageTimeout { .. } => ErrorSeverity::Moderate,
+            ActorError::ExternalServiceError { .. } => ErrorSeverity::Moderate,
         }
     }
     
@@ -790,6 +816,11 @@ impl ActorError {
             ActorError::ValidationFailed { .. } => "validation",
             ActorError::MetricsInitializationFailed { .. } => "metrics",
             ActorError::MetricsExportFailed { .. } => "metrics",
+            ActorError::InitializationFailed { .. } => "actor_lifecycle",
+            ActorError::ActorNotReady { .. } => "actor_lifecycle",
+            ActorError::ResourceCleanupFailed { .. } => "resources",
+            ActorError::MessageTimeout { .. } => "messaging",
+            ActorError::ExternalServiceError { .. } => "external",
         }
     }
     
@@ -984,6 +1015,7 @@ impl From<std::io::Error> for ActorError {
         }
     }
 }
+
 
 /// Error reporting and metrics
 pub struct ErrorReporter {

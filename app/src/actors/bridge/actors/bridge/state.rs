@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use crate::actors::bridge::messages::*;
-use crate::types::*;
 
 /// Actor system compatible bridge state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +24,21 @@ impl Default for BridgeActorState {
             active_operations: 0,
             registered_actors: 0,
             last_health_check: SystemTime::now(),
-            metrics_snapshot: actor_system::metrics::MetricsSnapshot::default(),
+            metrics_snapshot: actor_system::metrics::MetricsSnapshot {
+                enabled: true,
+                messages_processed: 0,
+                messages_failed: 0,
+                avg_processing_time: std::time::Duration::from_secs(0),
+                mailbox_size: 0,
+                restarts: 0,
+                state_transitions: 0,
+                last_activity: SystemTime::now(),
+                peak_memory_usage: 0,
+                total_cpu_time: std::time::Duration::from_secs(0),
+                error_counts: HashMap::new(),
+                custom_counters: HashMap::new(),
+                custom_gauges: HashMap::new(),
+            },
         }
     }
 }
@@ -39,6 +52,8 @@ pub enum BridgeState {
     Running,
     /// System is in degraded state
     Degraded { issues: Vec<String> },
+    /// System is paused
+    Paused,
     /// System is shutting down
     ShuttingDown,
     /// System has stopped
@@ -171,7 +186,7 @@ impl ActorHealthMonitor {
         let error = SystemError {
             error_type: SystemErrorType::ActorFailure,
             message: format!("Actor {:?} failed", actor_type),
-            actor_type: Some(actor_type),
+            actor_type: Some(actor_type.clone()),
             operation_id: None,
             occurred_at: SystemTime::now(),
             resolved_at: None,
@@ -288,6 +303,7 @@ impl BridgeState {
             BridgeState::Degraded { issues } => {
                 format!("System is degraded: {}", issues.join(", "))
             }
+            BridgeState::Paused => "System is paused".to_string(),
             BridgeState::ShuttingDown => "System is shutting down".to_string(),
             BridgeState::Stopped => "System has stopped".to_string(),
         }

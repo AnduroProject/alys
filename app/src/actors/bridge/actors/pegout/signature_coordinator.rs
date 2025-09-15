@@ -5,13 +5,13 @@
 use bitcoin::{Transaction, Witness};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 use crate::actors::bridge::{
     messages::SignatureSet,
     shared::FederationConfig,
 };
-use crate::actors::bridge::messages::pegout_messages::FederationSignature as BridgeFederationSignature;
+use crate::actors::bridge::messages::pegout_messages::PegoutFederationSignature as BridgeFederationSignature;
 use super::actor::PegOutError;
 
 /// Signature coordinator for multi-signature collection

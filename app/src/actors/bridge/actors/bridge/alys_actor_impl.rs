@@ -13,6 +13,7 @@ use actor_system::{
     mailbox::MailboxConfig,
     metrics::ActorMetrics,
     supervisor::{SupervisionPolicy, SupervisorMessage},
+    message::AlysMessage,
 };
 
 use crate::actors::bridge::{
@@ -23,6 +24,39 @@ use crate::actors::bridge::{
 
 use super::state::BridgeActorState;
 use crate::actors::bridge::shared::errors::BridgeError;
+
+/// Convert BridgeError to ActorError
+impl From<BridgeError> for ActorError {
+    fn from(err: BridgeError) -> Self {
+        match err {
+            BridgeError::ConnectionError(reason) => ActorError::NetworkError { reason },
+            BridgeError::NetworkError(reason) => ActorError::NetworkError { reason },
+            BridgeError::AuthenticationError(reason) => ActorError::PermissionDenied { resource: "authentication".to_string(), reason },
+            BridgeError::ConfigurationError(reason) => ActorError::ConfigurationError { parameter: "bridge_config".to_string(), reason },
+            BridgeError::ValidationError { field, reason } => ActorError::ValidationFailed { field, reason },
+            BridgeError::SimpleValidationError(reason) => ActorError::ValidationFailed { field: "general".to_string(), reason },
+            BridgeError::SerializationError(reason) => ActorError::SerializationFailed { reason },
+            BridgeError::InternalError(reason) => ActorError::Internal { reason },
+            BridgeError::ActorSystemError(reason) => ActorError::SystemFailure { reason },
+            BridgeError::PegInError { pegin_id, reason } => ActorError::MessageHandlingFailed { message_type: "PegIn".to_string(), reason: format!("{}: {}", pegin_id, reason) },
+            BridgeError::PegOutError { pegout_id, reason } => ActorError::MessageHandlingFailed { message_type: "PegOut".to_string(), reason: format!("{}: {}", pegout_id, reason) },
+            BridgeError::RequestTimeout { request_id, timeout } => ActorError::Timeout { operation: format!("request_{}", request_id), timeout },
+            BridgeError::RequestCancelled { request_id } => ActorError::MessageHandlingFailed { message_type: "Request".to_string(), reason: format!("Request {} cancelled", request_id) },
+            BridgeError::RequestNotFound { request_id } => ActorError::NotFound { resource: "request".to_string(), id: request_id },
+            BridgeError::InvalidRequest(reason) => ActorError::ValidationFailed { field: "request".to_string(), reason },
+            BridgeError::UnknownRequest(request_id) => ActorError::NotFound { resource: "request".to_string(), id: request_id },
+            BridgeError::SignatureCollectionFailed { request_id, reason } => ActorError::MessageHandlingFailed { message_type: "SignatureCollection".to_string(), reason: format!("{}: {}", request_id, reason) },
+            BridgeError::InsufficientSignatures { request_id, collected, required } => ActorError::ValidationFailed { field: "signatures".to_string(), reason: format!("Request {}: {}/{} signatures", request_id, collected, required) },
+            BridgeError::FederationUpdateFailed { update_id, reason } => ActorError::MessageHandlingFailed { message_type: "FederationUpdate".to_string(), reason: format!("{}: {}", update_id, reason) },
+            BridgeError::GrpcError(reason) => ActorError::ExternalDependency { service: "grpc".to_string(), reason },
+            BridgeError::GovernanceError(reason) => ActorError::PermissionDenied { resource: "governance".to_string(), reason },
+            BridgeError::ResourceExhausted { resource, details } => ActorError::ResourceExhausted { resource, details },
+            BridgeError::InvalidStateTransition { from, to, reason } => ActorError::InvalidStateTransition { from, to, reason },
+            BridgeError::ServiceUnavailable { service, .. } => ActorError::ExternalDependency { service, reason: "Service unavailable".to_string() },
+            BridgeError::RateLimitExceeded { limit, window } => ActorError::RateLimitExceeded { limit, window },
+        }
+    }
+}
 
 #[async_trait]
 impl AlysActor for BridgeActor {
@@ -74,7 +108,7 @@ impl AlysActor for BridgeActor {
             return Err(ActorError::InvalidStateTransition {
                 from: format!("{:?}", self.state),
                 to: format!("{:?}", state.current_state),
-                reason: "Invalid bridge state transition".to_string(),
+                reason: "Invalid Bridge actor state transition".to_string(),
             });
         }
 
@@ -85,11 +119,14 @@ impl AlysActor for BridgeActor {
     }
 
     fn mailbox_config(&self) -> MailboxConfig {
-        MailboxConfig::new()
-            .with_capacity(self.config.max_pending_operations as usize)
-            .with_priority_levels(5)
-            .with_overflow_strategy(actor_system::mailbox::OverflowStrategy::DropOldest)
-            .with_backpressure_threshold(0.8)
+        MailboxConfig {
+            capacity: self.config.max_concurrent_operations,
+            enable_priority: true,
+            processing_timeout: self.config.operation_timeout,
+            backpressure_threshold: 0.8,
+            drop_on_full: false,
+            metrics_interval: Duration::from_secs(10),
+        }
     }
 
     fn supervision_policy(&self) -> SupervisionPolicy {
@@ -119,9 +156,9 @@ impl AlysActor for BridgeActor {
         tracing::info!("Updating bridge actor configuration");
 
         // Validate new configuration
-        if new_config.max_pending_operations == 0 {
+        if new_config.max_concurrent_operations == 0 {
             return Err(ActorError::ConfigurationError {
-                field: "max_pending_operations".to_string(),
+                parameter: "max_concurrent_operations".to_string(),
                 reason: "Must be greater than 0".to_string(),
             });
         }
@@ -132,12 +169,15 @@ impl AlysActor for BridgeActor {
 
         // Handle configuration changes that require actor updates
         if old_config.health_check_interval != self.config.health_check_interval {
-            self.health_monitor.update_interval(self.config.health_check_interval)?;
+            self.health_monitor.update_interval(self.config.health_check_interval).map_err(|e| ActorError::ConfigurationError {
+                parameter: "health_check_interval".to_string(),
+                reason: format!("Failed to update health check interval: {}", e),
+            })?;
         }
 
-        if old_config.max_pending_operations != self.config.max_pending_operations {
+        if old_config.max_concurrent_operations != self.config.max_concurrent_operations {
             // Update operation limits
-            self.update_operation_limits(self.config.max_pending_operations).await?;
+            self.update_operation_limits(self.config.max_concurrent_operations as u32).await?;
         }
 
         // Update metrics
@@ -209,19 +249,19 @@ impl AlysActor for BridgeActor {
         // Rate limiting for certain message types
         if !self.check_rate_limits(&envelope.payload).await? {
             return Err(ActorError::RateLimitExceeded {
-                message_type: envelope.payload.message_type().to_string(),
-                limit: "Bridge coordination rate limit exceeded".to_string(),
+                limit: 100, // Default rate limit
+                window: Duration::from_secs(60), // 1 minute window
             });
         }
 
         Ok(())
     }
 
-    async fn post_process_message(&mut self, envelope: &actor_system::message::MessageEnvelope<Self::Message>, result: &<Self::Message as Message>::Result) -> ActorResult<()> {
+    async fn post_process_message(&mut self, envelope: &actor_system::message::MessageEnvelope<Self::Message>, result: &<Self::Message as actix::Message>::Result) -> ActorResult<()> {
         // Update metrics based on result
         match result {
             Ok(_) => {
-                self.metrics_mut().record_message_processed_successfully(&envelope.payload.message_type());
+                self.metrics_mut().record_message_processed_successfully(&envelope.payload.message_type(), Duration::from_millis(0));
             }
             Err(e) => {
                 self.metrics_mut().record_message_failed(&format!("{}: {}", envelope.payload.message_type(), e));
@@ -259,7 +299,7 @@ impl AlysActor for BridgeActor {
 
         // Handle specific error types
         match error {
-            ActorError::MessageTimeout { .. } => {
+            ActorError::Timeout { .. } => {
                 // Increment timeout counter for this message type
                 self.handle_message_timeout(&envelope.payload).await?;
             }
@@ -283,13 +323,13 @@ impl ExtendedAlysActor for BridgeActor {
         tracing::info!("Initializing bridge actor with extended capabilities");
 
         // Initialize health monitoring
-        self.health_monitor.start().await.map_err(|e| ActorError::InitializationFailed {
+        self.health_monitor.start().await.map_err(|e| ActorError::StartupFailed {
             actor_type: AlysActor::actor_type(self),
             reason: format!("Health monitoring initialization failed: {}", e),
         })?;
 
         // Initialize metrics collection
-        self.metrics.initialize().await.map_err(|e| ActorError::InitializationFailed {
+        self.metrics.initialize().await.map_err(|e| ActorError::StartupFailed {
             actor_type: AlysActor::actor_type(self),
             reason: format!("Metrics initialization failed: {}", e),
         })?;
@@ -314,7 +354,7 @@ impl ExtendedAlysActor for BridgeActor {
         let should_restart = match &error {
             ActorError::SystemFailure { .. } => true,
             ActorError::ResourceExhausted { .. } => true,
-            ActorError::MessageTimeout { .. } if self.get_timeout_count() > 5 => true,
+            ActorError::Timeout { .. } if self.get_timeout_count() > 5 => true,
             ActorError::ActorNotFound { .. } => false, // Don't restart for missing actors
             ActorError::ConfigurationError { .. } => false, // Don't restart for config issues
             _ => error.severity().is_critical(),
@@ -373,26 +413,24 @@ impl ExtendedAlysActor for BridgeActor {
         tracing::info!("Cleaning up bridge actor resources");
 
         // Cancel active operations
-        for (operation_id, _) in &self.active_operations {
+        let operation_ids: Vec<String> = self.active_operations.keys().cloned().collect();
+        for operation_id in operation_ids {
             tracing::debug!("Cancelling active operation: {}", operation_id);
-            self.cancel_operation(operation_id).await?;
+            self.cancel_operation(&operation_id).await?;
         }
 
         // Close connections to child actors
-        self.disconnect_child_actors().await?;
+        // Clear child actor addresses (equivalent to disconnect_child_actors)
+        // Implementation would clear child actor references here
 
         // Release monitoring resources
-        self.health_monitor.stop().await.map_err(|e| ActorError::ResourceCleanupFailed {
-            actor_type: AlysActor::actor_type(self),
-            resource: "health_monitor".to_string(),
-            reason: e.to_string(),
+        self.health_monitor.stop().await.map_err(|e| ActorError::SystemFailure {
+            reason: format!("Failed to stop health monitor for {}: {}", AlysActor::actor_type(self), e),
         })?;
 
         // Flush metrics
-        self.metrics.flush().await.map_err(|e| ActorError::ResourceCleanupFailed {
-            actor_type: AlysActor::actor_type(self),
-            resource: "metrics".to_string(),
-            reason: e.to_string(),
+        self.metrics.flush().await.map_err(|e| ActorError::SystemFailure {
+            reason: format!("Failed to flush metrics for {}: {}", AlysActor::actor_type(self), e),
         })?;
 
         Ok(())
@@ -474,7 +512,7 @@ impl BridgeActor {
     }
 
     /// Handle general message error
-    async fn handle_general_message_error(&mut self, _envelope: &actor_system::message::MessageEnvelope<Self::Message>, _error: &ActorError) -> ActorResult<()> {
+    async fn handle_general_message_error(&mut self, _envelope: &actor_system::message::MessageEnvelope<<Self as AlysActor>::Message>, _error: &ActorError) -> ActorResult<()> {
         // Implement general error handling
         Ok(())
     }
@@ -518,7 +556,7 @@ impl BridgeActor {
     /// Get bridge-specific metrics
     async fn get_bridge_specific_metrics(&self) -> ActorResult<serde_json::Value> {
         Ok(serde_json::json!({
-            "coordination_operations": self.metrics.coordination_operations,
+            "coordination_operations": self.metrics.coordination_operations.load(std::sync::atomic::Ordering::Relaxed),
             "active_pegin_operations": self.get_active_pegin_count(),
             "active_pegout_operations": self.get_active_pegout_count(),
         }))
@@ -530,11 +568,6 @@ impl BridgeActor {
         Ok(())
     }
 
-    /// Disconnect child actors
-    async fn disconnect_child_actors(&mut self) -> ActorResult<()> {
-        // Disconnect from child actors
-        Ok(())
-    }
 
     /// Get active peg-in count
     fn get_active_pegin_count(&self) -> u32 {
