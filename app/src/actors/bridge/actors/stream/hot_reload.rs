@@ -8,10 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 use notify::{Watcher, RecursiveMode, Event, EventKind, event::AccessKind};
-use crate::actors::bridge::shared::validation::{Validate, ValidationErrors};
+use futures::TryFutureExt;
 use tracing::*;
 
-use crate::config::{StreamConfig as AdvancedStreamConfig, ConfigError};
+use crate::actors::bridge::config::StreamConfig;
+use crate::types::errors::BridgeError as ConfigError;
 
 /// Configuration change notification system
 #[derive(Debug, Clone)]
@@ -36,7 +37,7 @@ pub enum ConfigChangeType {
 
 /// Hot-reload configuration manager
 pub struct ConfigHotReloadManager {
-    config: Arc<RwLock<AdvancedStreamConfig>>,
+    config: Arc<RwLock<StreamConfig>>,
     file_path: PathBuf,
     watcher: Option<notify::RecommendedWatcher>,
     change_sender: watch::Sender<ConfigChangeNotification>,
@@ -52,7 +53,7 @@ pub struct ConfigHotReloadManager {
 impl ConfigHotReloadManager {
     /// Create new hot-reload manager
     pub fn new(
-        initial_config: AdvancedStreamConfig,
+        initial_config: StreamConfig,
         file_path: PathBuf,
     ) -> Result<Self, ConfigError> {
         let (change_sender, change_receiver) = watch::channel(
@@ -174,15 +175,15 @@ impl ConfigHotReloadManager {
     }
 
     /// Get current configuration (read-only)
-    pub async fn get_config(&self) -> AdvancedStreamConfig {
+    pub async fn get_config(&self) -> StreamConfig {
         self.config.read().await.clone()
     }
 
     /// Update configuration with validation
-    pub async fn update_config(&mut self, new_config: AdvancedStreamConfig) -> Result<Vec<ConfigChangeNotification>, ConfigError> {
+    pub async fn update_config(&mut self, new_config: StreamConfig) -> Result<Vec<ConfigChangeNotification>, ConfigError> {
         if self.validation_enabled {
             new_config.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Config validation failed: {:?}", e)))?;
+                .map_err(|e| ConfigError::ValidationError(format!("Config validation failed: {:?}", e))).await?;
         }
 
         let mut config_guard = self.config.write().await;
@@ -275,17 +276,21 @@ impl ConfigHotReloadManager {
     /// Reload configuration from file
     async fn reload_config_from_file(
         file_path: &Path,
-        config: Arc<RwLock<AdvancedStreamConfig>>,
+        config: Arc<RwLock<StreamConfig>>,
         validation_enabled: bool,
     ) -> Result<Vec<ConfigChangeNotification>, ConfigError> {
         debug!("Loading configuration from file: {:?}", file_path);
-        
-        let new_config = AdvancedStreamConfig::from_file(file_path)?;
+
+        let config_content = tokio::fs::read_to_string(file_path).await
+            .map_err(|e| ConfigError::ConfigurationError(format!("Failed to read config file: {}", e)))?;
+        let new_config: StreamConfig = serde_json::from_str(&config_content)
+            .map_err(|e| ConfigError::ConfigurationError(format!("Failed to parse config: {}", e)))?;
         
         if validation_enabled {
             new_config.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Config validation failed: {:?}", e)))?;
-            
+                .map_err(|e| ConfigError::ValidationError(format!("Config validation failed: {:?}", e)))
+                .await?;
+
             debug!("Configuration validation passed");
         }
 
@@ -297,41 +302,63 @@ impl ConfigHotReloadManager {
     }
 
     /// Detect configuration changes
-    fn detect_changes(&self, old_config: &AdvancedStreamConfig, new_config: &AdvancedStreamConfig) -> Vec<ConfigChangeNotification> {
+    fn detect_changes(&self, old_config: &StreamConfig, new_config: &StreamConfig) -> Vec<ConfigChangeNotification> {
         Self::detect_changes_static(old_config, new_config)
     }
 
     /// Static method for detecting changes
-    fn detect_changes_static(old_config: &AdvancedStreamConfig, new_config: &AdvancedStreamConfig) -> Vec<ConfigChangeNotification> {
+    fn detect_changes_static(old_config: &StreamConfig, new_config: &StreamConfig) -> Vec<ConfigChangeNotification> {
         let mut changes = Vec::new();
         let timestamp = std::time::SystemTime::now();
 
-        // Core configuration changes
-        if old_config.core != new_config.core {
+        // Governance endpoints changes
+        if old_config.governance_endpoints != new_config.governance_endpoints {
             changes.push(ConfigChangeNotification {
-                field_path: "core".to_string(),
-                old_value: Some(format!("{:?}", old_config.core)),
-                new_value: Some(format!("{:?}", new_config.core)),
+                field_path: "governance_endpoints".to_string(),
+                old_value: Some(format!("{:?}", old_config.governance_endpoints)),
+                new_value: Some(format!("{:?}", new_config.governance_endpoints)),
                 change_type: ConfigChangeType::Modified,
                 timestamp,
             });
         }
 
-        // Connection configuration changes
-        if old_config.connection != new_config.connection {
+        // Connection timeout changes
+        if old_config.connection_timeout != new_config.connection_timeout {
             changes.push(ConfigChangeNotification {
-                field_path: "connection".to_string(),
-                old_value: Some(format!("{:?}", old_config.connection)),
-                new_value: Some(format!("{:?}", new_config.connection)),
+                field_path: "connection_timeout".to_string(),
+                old_value: Some(format!("{:?}", old_config.connection_timeout)),
+                new_value: Some(format!("{:?}", new_config.connection_timeout)),
                 change_type: ConfigChangeType::Modified,
                 timestamp,
             });
         }
 
-        // Authentication configuration changes (don't log sensitive data)
-        if old_config.authentication != new_config.authentication {
+        // Heartbeat interval changes
+        if old_config.heartbeat_interval != new_config.heartbeat_interval {
             changes.push(ConfigChangeNotification {
-                field_path: "authentication".to_string(),
+                field_path: "heartbeat_interval".to_string(),
+                old_value: Some(format!("{:?}", old_config.heartbeat_interval)),
+                new_value: Some(format!("{:?}", new_config.heartbeat_interval)),
+                change_type: ConfigChangeType::Modified,
+                timestamp,
+            });
+        }
+
+        // Max connections changes
+        if old_config.max_connections != new_config.max_connections {
+            changes.push(ConfigChangeNotification {
+                field_path: "max_connections".to_string(),
+                old_value: Some(old_config.max_connections.to_string()),
+                new_value: Some(new_config.max_connections.to_string()),
+                change_type: ConfigChangeType::Modified,
+                timestamp,
+            });
+        }
+
+        // Authentication token changes (don't log sensitive data)
+        if old_config.auth_token != new_config.auth_token {
+            changes.push(ConfigChangeNotification {
+                field_path: "auth_token".to_string(),
                 old_value: None, // Don't log sensitive auth data
                 new_value: None,
                 change_type: ConfigChangeType::Modified,
@@ -339,61 +366,6 @@ impl ConfigHotReloadManager {
             });
         }
 
-        // Messaging configuration changes
-        if old_config.messaging != new_config.messaging {
-            changes.push(ConfigChangeNotification {
-                field_path: "messaging".to_string(),
-                old_value: Some(format!("{:?}", old_config.messaging)),
-                new_value: Some(format!("{:?}", new_config.messaging)),
-                change_type: ConfigChangeType::Modified,
-                timestamp,
-            });
-        }
-
-        // Request tracking configuration changes
-        if old_config.request_tracking != new_config.request_tracking {
-            changes.push(ConfigChangeNotification {
-                field_path: "request_tracking".to_string(),
-                old_value: Some(format!("{:?}", old_config.request_tracking)),
-                new_value: Some(format!("{:?}", new_config.request_tracking)),
-                change_type: ConfigChangeType::Modified,
-                timestamp,
-            });
-        }
-
-        // Performance configuration changes
-        if old_config.performance != new_config.performance {
-            changes.push(ConfigChangeNotification {
-                field_path: "performance".to_string(),
-                old_value: Some(format!("{:?}", old_config.performance)),
-                new_value: Some(format!("{:?}", new_config.performance)),
-                change_type: ConfigChangeType::Modified,
-                timestamp,
-            });
-        }
-
-        // Feature configuration changes
-        if old_config.features != new_config.features {
-            changes.push(ConfigChangeNotification {
-                field_path: "features".to_string(),
-                old_value: Some(format!("{:?}", old_config.features)),
-                new_value: Some(format!("{:?}", new_config.features)),
-                change_type: ConfigChangeType::Modified,
-                timestamp,
-            });
-        }
-
-        // Environment configuration changes
-        if old_config.environment != new_config.environment {
-            changes.push(ConfigChangeNotification {
-                field_path: "environment".to_string(),
-                old_value: Some(format!("{:?}", old_config.environment)),
-                new_value: Some(format!("{:?}", new_config.environment)),
-                change_type: ConfigChangeType::Modified,
-                timestamp,
-            });
-        }
-        
         changes
     }
 }
@@ -419,165 +391,74 @@ pub trait ConfigValidator {
 }
 
 #[async_trait::async_trait]
-impl ConfigValidator for AdvancedStreamConfig {
+impl ConfigValidator for StreamConfig {
     type Error = ConfigError;
-    
+
     async fn validate(&self) -> Result<(), Self::Error> {
-        debug!("Starting comprehensive configuration validation");
-        
-        // Validate using validator crate
-        Validate::validate(self)
-            .map_err(|e| ConfigError::ValidationError(format!("Validation failed: {:?}", e)))?;
-        
-        // Custom business logic validation
+        debug!("Starting configuration validation");
+
+        // Basic validation
         self.validate_connection_limits()?;
         self.validate_timeout_relationships()?;
-        self.validate_security_requirements().await?;
-        self.validate_performance_constraints()?;
-        self.validate_feature_compatibility()?;
-        
+
         info!("Configuration validation completed successfully");
         Ok(())
     }
-    
+
     fn validate_field(&self, field_name: &str) -> Result<(), Self::Error> {
         debug!("Validating field: {}", field_name);
-        
+
         match field_name {
-            "core" => self.core.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Core config validation failed: {:?}", e))),
-            "connection" => self.connection.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Connection config validation failed: {:?}", e))),
-            "authentication" => self.authentication.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Authentication config validation failed: {:?}", e))),
-            "messaging" => self.messaging.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Messaging config validation failed: {:?}", e))),
-            "request_tracking" => self.request_tracking.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Request tracking config validation failed: {:?}", e))),
-            "performance" => self.performance.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Performance config validation failed: {:?}", e))),
-            "features" => self.features.validate()
-                .map_err(|e| ConfigError::ValidationError(format!("Features config validation failed: {:?}", e))),
-            _ => Err(ConfigError::ValidationError(format!("Unknown field: {}", field_name))),
+            "governance_endpoints" => {
+                if self.governance_endpoints.is_empty() {
+                    Err(ConfigError::ConfigurationError("governance_endpoints cannot be empty".to_string()))
+                } else {
+                    Ok(())
+                }
+            },
+            "max_connections" => {
+                if self.max_connections == 0 {
+                    Err(ConfigError::ConfigurationError("max_connections must be greater than 0".to_string()))
+                } else {
+                    Ok(())
+                }
+            },
+            "message_buffer_size" => {
+                if self.message_buffer_size == 0 {
+                    Err(ConfigError::ConfigurationError("message_buffer_size must be greater than 0".to_string()))
+                } else {
+                    Ok(())
+                }
+            },
+            _ => Err(ConfigError::ConfigurationError(format!("Unknown field: {}", field_name))),
         }
     }
 }
 
-impl AdvancedStreamConfig {
+impl StreamConfig {
     /// Validate connection limits
     fn validate_connection_limits(&self) -> Result<(), ConfigError> {
-        if self.connection.max_connections == 0 {
-            return Err(ConfigError::ValidationError("max_connections must be greater than 0".to_string()));
+        if self.max_connections == 0 {
+            return Err(ConfigError::ConfigurationError("max_connections must be greater than 0".to_string()));
         }
-        
-        if self.connection.connection_pool_size > self.connection.max_connections {
-            return Err(ConfigError::ValidationError("connection_pool_size cannot exceed max_connections".to_string()));
+
+        if self.message_buffer_size == 0 {
+            return Err(ConfigError::ConfigurationError("message_buffer_size must be greater than 0".to_string()));
         }
-        
-        if self.core.max_connections > 0 && self.connection.max_connections != self.core.max_connections {
-            warn!("Connection limits mismatch between core and connection configs");
-        }
-        
+
         Ok(())
     }
-    
+
     /// Validate timeout relationships
     fn validate_timeout_relationships(&self) -> Result<(), ConfigError> {
-        if self.connection.connection_timeout > self.messaging.request_timeout {
-            return Err(ConfigError::ValidationError("connection_timeout should not exceed request_timeout".to_string()));
+        if self.heartbeat_interval >= self.connection_timeout {
+            return Err(ConfigError::ConfigurationError("heartbeat_interval should be less than connection_timeout".to_string()));
         }
-        
-        if self.connection.heartbeat_interval >= self.connection.connection_timeout {
-            return Err(ConfigError::ValidationError("heartbeat_interval should be less than connection_timeout".to_string()));
+
+        if self.reconnect_delay >= self.connection_timeout {
+            warn!("Reconnect delay is greater than or equal to connection timeout, this may cause long delays");
         }
-        
-        if self.reconnection.base_delay > self.connection.connection_timeout {
-            warn!("Reconnection base_delay is greater than connection_timeout, this may cause long delays");
-        }
-        
-        Ok(())
-    }
-    
-    /// Validate security requirements
-    async fn validate_security_requirements(&self) -> Result<(), ConfigError> {
-        use crate::config::Environment as EnvironmentType;
-        
-        // Validate TLS configuration in production
-        if self.environment.environment_type == EnvironmentType::Production {
-            if !self.connection.tls.enabled {
-                return Err(ConfigError::ValidationError("TLS must be enabled in production environment".to_string()));
-            }
-            
-            if self.authentication.auth_token.is_none() {
-                return Err(ConfigError::ValidationError("Authentication token required in production environment".to_string()));
-            }
-            
-            if !self.security.require_mutual_tls {
-                warn!("Mutual TLS not required in production environment");
-            }
-        }
-        
-        // Validate certificate paths if TLS is enabled
-        if self.connection.tls.enabled {
-            if let Some(ca_cert_path) = &self.connection.tls.ca_cert_path {
-                if !Path::new(ca_cert_path).exists() {
-                    return Err(ConfigError::ValidationError(format!("CA certificate file not found: {}", ca_cert_path)));
-                }
-            }
-            
-            if let Some(client_cert_path) = &self.connection.tls.client_cert_path {
-                if !Path::new(client_cert_path).exists() {
-                    return Err(ConfigError::ValidationError(format!("Client certificate file not found: {}", client_cert_path)));
-                }
-            }
-            
-            if let Some(client_key_path) = &self.connection.tls.client_key_path {
-                if !Path::new(client_key_path).exists() {
-                    return Err(ConfigError::ValidationError(format!("Client key file not found: {}", client_key_path)));
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
-    /// Validate performance constraints
-    fn validate_performance_constraints(&self) -> Result<(), ConfigError> {
-        if self.performance.worker_threads == 0 {
-            return Err(ConfigError::ValidationError("worker_threads must be greater than 0".to_string()));
-        }
-        
-        if self.performance.blocking_threads == 0 {
-            return Err(ConfigError::ValidationError("blocking_threads must be greater than 0".to_string()));
-        }
-        
-        // Warn about potentially problematic configurations
-        if self.performance.worker_threads > 32 {
-            warn!("High number of worker threads ({}), this may cause overhead", self.performance.worker_threads);
-        }
-        
-        if self.performance.max_memory_usage_mb > 8192 {
-            warn!("High memory usage limit ({}MB)", self.performance.max_memory_usage_mb);
-        }
-        
-        Ok(())
-    }
-    
-    /// Validate feature compatibility
-    fn validate_feature_compatibility(&self) -> Result<(), ConfigError> {
-        // Check for incompatible feature combinations
-        if self.features.experimental_protocols && self.environment.environment_type == crate::config::Environment::Production {
-            return Err(ConfigError::ValidationError("Experimental protocols cannot be enabled in production".to_string()));
-        }
-        
-        if self.features.debug_mode && self.environment.environment_type == crate::config::Environment::Production {
-            warn!("Debug mode enabled in production environment");
-        }
-        
-        if self.features.performance_monitoring && !self.monitoring.metrics_enabled {
-            warn!("Performance monitoring enabled but metrics collection is disabled");
-        }
-        
+
         Ok(())
     }
 }
@@ -586,39 +467,38 @@ impl AdvancedStreamConfig {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
-    use tokio::fs::write;
 
     #[tokio::test]
     async fn test_config_hot_reload_manager_creation() {
-        let config = AdvancedStreamConfig::default();
+        let config = StreamConfig::default();
         let temp_file = NamedTempFile::new().unwrap();
         let file_path = temp_file.path().to_path_buf();
-        
+
         let manager = ConfigHotReloadManager::new(config.clone(), file_path).unwrap();
         let loaded_config = manager.get_config().await;
-        
+
         // Basic sanity check
-        assert_eq!(loaded_config.core.actor_id, config.core.actor_id);
+        assert_eq!(loaded_config.max_connections, config.max_connections);
     }
 
     #[tokio::test]
     async fn test_config_validation() {
-        let config = AdvancedStreamConfig::default();
+        let config = StreamConfig::default();
         let result = config.validate().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_config_update_with_validation() {
-        let config = AdvancedStreamConfig::default();
+        let config = StreamConfig::default();
         let temp_file = NamedTempFile::new().unwrap();
         let file_path = temp_file.path().to_path_buf();
-        
+
         let mut manager = ConfigHotReloadManager::new(config.clone(), file_path).unwrap();
-        
+
         let mut new_config = config.clone();
-        new_config.core.actor_id = "updated_actor".to_string();
-        
+        new_config.max_connections = 20;
+
         let changes = manager.update_config(new_config).await.unwrap();
         assert!(!changes.is_empty());
     }

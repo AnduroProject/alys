@@ -4,6 +4,25 @@ use crate::types::*;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 use bitcoin::Address as BtcAddress;
+// Use consolidated federation types from actor_system
+pub use actor_system::{FederationConfig, FederationMember};
+
+/// Consolidated request type for all bridge stream operations
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestType {
+    /// Peg-out signature requests
+    PegOutSignature,
+    /// Federation update requests
+    FederationUpdate,
+    /// Heartbeat requests
+    Heartbeat,
+    /// Status check requests
+    StatusCheck,
+    /// Node registration requests
+    NodeRegistration,
+    /// Peg-in notification requests
+    PegInNotification,
+}
 
 /// Status of signature collection for bridge operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,10 +67,13 @@ pub struct PendingPegOut {
 /// Pending request tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingRequest {
-    pub id: String,
-    pub request_type: String,
+    pub request_id: String,
+    pub request_type: RequestType,
+    pub pegout_id: Option<String>,
+    pub created_at: SystemTime,
     pub timestamp: SystemTime,
     pub timeout: Option<Duration>,
+    pub retry_count: u32,
 }
 
 /// Governance endpoint configuration
@@ -859,19 +881,7 @@ pub enum PegOutStatus {
     },
 }
 
-/// Federation member information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FederationMember {
-    pub alys_address: Address,
-    pub bitcoin_public_key: bitcoin::PublicKey,
-    pub signing_weight: u32,
-    pub is_active: bool,
-    pub joined_at: std::time::SystemTime,
-    pub last_activity: std::time::SystemTime,
-    pub reputation_score: i32,
-    pub successful_signatures: u64,
-    pub failed_signatures: u64,
-}
+// FederationMember and FederationConfig are now imported from actor_system crate above
 
 /// Federation signature for multi-sig operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -891,19 +901,6 @@ pub enum FederationSignatureType {
     Schnorr,
     BLS,
     Threshold,
-}
-
-/// Federation configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FederationConfig {
-    pub members: Vec<FederationMember>,
-    pub threshold: usize,
-    pub multisig_address: bitcoin::Address,
-    pub emergency_addresses: Vec<bitcoin::Address>,
-    pub signing_timeout: std::time::Duration,
-    pub minimum_confirmations: u32,
-    pub maximum_amount: u64,
-    pub fee_rate_sat_per_vbyte: u64,
 }
 
 /// Bitcoin UTXO information

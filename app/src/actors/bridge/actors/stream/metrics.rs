@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::time::SystemTime;
-use serde::{Deserialize, Serialize};
 use super::actor::{GovernanceConnection, ConnectionStatus};
 
 /// Stream actor metrics

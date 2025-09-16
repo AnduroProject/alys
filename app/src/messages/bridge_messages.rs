@@ -2,6 +2,8 @@
 
 use crate::types::*;
 use actix::prelude::*;
+// Use consolidated federation types from actor_system
+use actor_system::{FederationConfig, FederationMember};
 
 /// Message to process a peg-in transaction
 #[derive(Message)]
@@ -187,25 +189,7 @@ pub enum SignatureType {
     BLS,
 }
 
-/// Federation configuration
-#[derive(Debug, Clone)]
-pub struct FederationConfig {
-    pub members: Vec<FederationMember>,
-    pub threshold: usize,
-    pub multisig_address: bitcoin::Address,
-    pub emergency_addresses: Vec<bitcoin::Address>,
-    pub signing_timeout: std::time::Duration,
-}
-
-/// Federation member information
-#[derive(Debug, Clone)]
-pub struct FederationMember {
-    pub address: Address,
-    pub bitcoin_public_key: bitcoin::PublicKey,
-    pub is_active: bool,
-    pub reputation_score: i32,
-    pub last_activity: std::time::SystemTime,
-}
+// FederationConfig and FederationMember are now imported from actor_system crate above
 
 /// Purpose for monitoring Bitcoin addresses
 #[derive(Debug, Clone)]

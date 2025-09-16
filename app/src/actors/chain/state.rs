@@ -12,9 +12,11 @@ use actix::prelude::*;
 // Import types from other modules
 use crate::types::*;
 use crate::actors::auxpow::types::AuxPow;
-use super::messages::{self, FederationMember as MessageFederationMember, BroadcastPriority, BlockNotificationFilter};
+use super::messages::{self, BroadcastPriority, BlockNotificationFilter};
 use libp2p::PeerId;
 use crate::actors::engine::state::ExecutionState;
+// Use consolidated federation types from actor_system
+use actor_system::{FederationConfig, FederationMember};
 
 /// Current chain state managed by the actor
 #[derive(Debug)]
@@ -157,13 +159,7 @@ pub struct PendingFederationChange {
     pub proposed_at: SystemTime,
 }
 
-/// Federation configuration
-#[derive(Debug, Clone)]
-pub struct FederationConfig {
-    pub version: u32,
-    pub members: Vec<FederationMember>,
-    pub threshold: usize,
-}
+// FederationConfig is now imported from actor_system crate above
 
 /// Signature performance tracking for federation
 #[derive(Debug)]

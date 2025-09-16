@@ -668,6 +668,29 @@ impl AdvancedRequestTracker {
         self.stats.response_percentiles.p95 = response_time;
         self.stats.response_percentiles.p99 = response_time;
     }
+
+    /// Check if there's a pending request with the given ID
+    pub fn has_pending_request(&self, request_id: &str) -> bool {
+        self.pending_requests.contains_key(request_id)
+    }
+
+    /// Complete a request and return its details
+    pub fn complete_request(&mut self, request_id: &str) -> Option<PendingRequestEntry> {
+        if let Some(mut entry) = self.pending_requests.remove(request_id) {
+            entry.state = RequestState::Completed {
+                result: Ok(()),
+                response_time: entry.created_at.elapsed().unwrap_or_default(),
+            };
+
+            // Update statistics
+            self.stats.total_requests += 1;
+            self.stats.completed_requests += 1;
+
+            Some(entry)
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for RequestTrackerConfig {

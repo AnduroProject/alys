@@ -1,5 +1,5 @@
 //! Stream Actor Bridge Integration
-//! 
+//!
 //! Enhanced StreamActor with bridge-specific functionality
 
 pub mod actor;

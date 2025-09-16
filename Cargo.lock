@@ -78,6 +78,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
+ "bitcoin",
  "criterion",
  "crossbeam",
  "dashmap",

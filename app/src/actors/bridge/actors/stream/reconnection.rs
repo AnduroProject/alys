@@ -256,18 +256,25 @@ impl ReconnectionManager {
             ReconnectionResult::PermanentFailure { error }
         };
 
-        let strategy = self.get_strategy(&node_id);
-        strategy.record_attempt(result);
+        // Record attempt and get next decision, limiting the scope of mutable borrow
+        let (next_decision, attempt_count, circuit_breaker_state) = {
+            let strategy = self.get_strategy(&node_id);
+            strategy.record_attempt(result);
+            let decision = strategy.next_attempt();
+            let count = strategy.attempt_count();
+            let cb_state = strategy.circuit_breaker_state();
+            (decision, count, cb_state)
+        };
 
-        // Update health monitor
+        // Update health monitor (now we can borrow health_monitor mutably)
         self.health_monitor.record_failure(&node_id);
 
         warn!(
             "Connection failure for {}: attempt {}, circuit breaker: {}, next decision: {}",
             node_id,
-            strategy.attempt_count(),
-            strategy.circuit_breaker_state(),
-            strategy.next_attempt()
+            attempt_count,
+            circuit_breaker_state,
+            next_decision
         );
     }
 

@@ -1016,6 +1016,19 @@ impl From<std::io::Error> for ActorError {
     }
 }
 
+/// Generic conversion from string error messages to ActorError
+impl From<String> for ActorError {
+    fn from(msg: String) -> Self {
+        ActorError::Custom { message: msg }
+    }
+}
+
+impl From<&str> for ActorError {
+    fn from(msg: &str) -> Self {
+        ActorError::Custom { message: msg.to_string() }
+    }
+}
+
 
 /// Error reporting and metrics
 pub struct ErrorReporter {

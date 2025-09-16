@@ -222,7 +222,12 @@ pub enum BridgeError {
     
     // Communication errors
     ActorCommunication { actor: String, reason: String },
-    
+
+    // Validation errors
+    ValidationError(String),
+    ConfigurationError(String),
+    InvalidAddress(String),
+
     // Operation management errors
     MaxRetriesExceeded(String),
     OperationNotFound(String),
@@ -472,6 +477,13 @@ impl fmt::Display for AlysError {
             AlysError::Stream(err) => write!(f, "Stream error: {}", err),
             AlysError::Bridge(err) => write!(f, "Bridge error: {}", err),
             AlysError::Engine(err) => write!(f, "Engine error: {}", err),
+            AlysError::Internal { message } => write!(f, "Internal error: {}", message),
+            AlysError::Configuration { parameter, message } => write!(f, "Configuration error in '{}': {}", parameter, message),
+            AlysError::Validation { field, message } => write!(f, "Validation error in '{}': {}", field, message),
+            AlysError::NotFound { item } => write!(f, "Not found: {}", item),
+            AlysError::AlreadyExists { item } => write!(f, "Already exists: {}", item),
+            AlysError::Timeout { operation, timeout } => write!(f, "Timeout in '{}' after {:?}", operation, timeout),
+            AlysError::Unavailable { service, reason } => write!(f, "Service '{}' unavailable: {}", service, reason),
         }
     }
 }

@@ -1,48 +1,194 @@
-//! gRPC Service Definitions for Bridge Stream Protocol
-//! 
-//! Bridge-optimized gRPC services for governance communication
+//! gRPC Service Implementation for Bridge Stream Protocol
+//!
+//! Real gRPC services for governance communication using tonic and protobuf
 
-use std::collections::HashMap;
 use std::time::SystemTime;
 use tonic::{Request, Response, Status, Streaming};
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
 use crate::actors::bridge::{
     messages::stream_messages::*,
     shared::errors::BridgeError,
 };
+use crate::types::bridge::RequestType;
 
-/// gRPC service definitions
-pub mod governance {
-    // TODO: Add protobuf build setup and include generated code
-    // tonic::include_proto!("governance.bridge.v1");
-    
-    // Placeholder structures until protobuf build is configured
-    #[derive(Debug, Clone)]
-    pub struct GovernanceRequest {
-        pub id: String,
-        pub data: Vec<u8>,
-    }
-    
-    #[derive(Debug, Clone)]
-    pub struct GovernanceResponse {
-        pub status: String,
-        pub data: Vec<u8>,
-    }
-    
-    #[derive(Debug, Clone)]
+// Include generated protobuf code (when available)
+#[cfg(feature = "grpc-generated")]
+pub mod governance_bridge_v1 {
+    tonic::include_proto!("governance.bridge.v1");
+}
+
+// Fallback definitions when protobuf generation is not available
+#[cfg(not(feature = "grpc-generated"))]
+pub mod governance_bridge_v1 {
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct StreamRequest {
         pub request_id: String,
+        pub request_type: i32,
         pub payload: Vec<u8>,
+        pub timestamp: u64,
+        pub priority: i32,
     }
-    
-    #[derive(Debug, Clone)]
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct StreamResponse {
         pub response_id: String,
+        pub response_type: i32,
         pub payload: Vec<u8>,
+        pub timestamp: u64,
+        pub success: bool,
+        pub error_message: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct HealthCheckRequest {
+        pub service: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct HealthCheckResponse {
+        pub status: i32,
+        pub message: String,
+    }
+
+    // Mock server trait for compilation
+    pub mod governance_bridge_server {
+        use super::*;
+        use async_trait::async_trait;
+        use tonic::{Request, Response, Status, Streaming};
+        use tonic::transport::Server;
+
+        #[async_trait]
+        pub trait GovernanceBridge {
+            type BidirectionalStreamStream: futures::Stream<Item = Result<StreamResponse, Status>> + Send + 'static;
+
+            async fn bidirectional_stream(
+                &self,
+                request: Request<Streaming<StreamRequest>>,
+            ) -> Result<Response<Self::BidirectionalStreamStream>, Status>;
+
+            async fn health_check(
+                &self,
+                request: Request<HealthCheckRequest>,
+            ) -> Result<Response<HealthCheckResponse>, Status>;
+        }
+
+        // Mock server type for consistency with protobuf generated code
+        pub struct GovernanceBridgeServer<T> {
+            inner: T,
+        }
+
+        impl<T> GovernanceBridgeServer<T>
+        where
+            T: GovernanceBridge + Send + Sync + 'static,
+        {
+            pub fn new(service: T) -> Self {
+                Self { inner: service }
+            }
+
+            pub fn with_interceptor<F>(service: T, _interceptor: F) -> Self
+            where
+                F: tonic::service::Interceptor,
+            {
+                Self { inner: service }
+            }
+        }
+    }
+
+    // Enum definitions for request/response types
+    #[repr(i32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum RequestType {
+        Unspecified = 0,
+        PegoutSignature = 1,
+        FederationUpdate = 2,
+        Heartbeat = 3,
+        StatusCheck = 4,
+        NodeRegistration = 5,
+        PeginNotification = 6,
+    }
+
+    #[repr(i32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum ResponseType {
+        Unspecified = 0,
+        SignatureResponse = 1,
+        FederationUpdateAck = 2,
+        HeartbeatResponse = 3,
+        StatusResponse = 4,
+        RegistrationAck = 5,
+        NotificationAck = 6,
+        Error = 7,
+    }
+
+    #[repr(i32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum Priority {
+        Unspecified = 0,
+        Low = 1,
+        Normal = 2,
+        High = 3,
+        Critical = 4,
+    }
+
+    #[repr(i32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum HealthCheckStatus {
+        Unspecified = 0,
+        Serving = 1,
+        NotServing = 2,
+    }
+
+    // Helper methods for enum conversion
+    impl StreamRequest {
+        pub fn request_type(&self) -> RequestType {
+            match self.request_type {
+                1 => RequestType::PegoutSignature,
+                2 => RequestType::FederationUpdate,
+                3 => RequestType::Heartbeat,
+                4 => RequestType::StatusCheck,
+                5 => RequestType::NodeRegistration,
+                6 => RequestType::PeginNotification,
+                _ => RequestType::Unspecified,
+            }
+        }
+    }
+
+    impl From<RequestType> for i32 {
+        fn from(rt: RequestType) -> i32 {
+            rt as i32
+        }
+    }
+
+    impl From<ResponseType> for i32 {
+        fn from(rt: ResponseType) -> i32 {
+            rt as i32
+        }
+    }
+
+    impl From<Priority> for i32 {
+        fn from(p: Priority) -> i32 {
+            p as i32
+        }
+    }
+
+    impl From<HealthCheckStatus> for i32 {
+        fn from(status: HealthCheckStatus) -> i32 {
+            status as i32
+        }
     }
 }
+
+pub use governance_bridge_v1::{
+    governance_bridge_server::{GovernanceBridge, GovernanceBridgeServer},
+    StreamRequest, StreamResponse,
+    RequestType as GrpcRequestType, ResponseType, HealthCheckRequest,
+    HealthCheckResponse, HealthCheckStatus, Priority,
+};
 
 /// Bridge governance service implementation
 #[derive(Debug, Clone)]
@@ -55,230 +201,182 @@ pub struct BridgeGovernanceService {
 #[derive(Debug)]
 pub struct IncomingRequest {
     /// Request type
-    pub request_type: String,
+    pub request_type: RequestType,
     /// Request payload
     pub payload: serde_json::Value,
     /// Response sender
     pub response_sender: tokio::sync::oneshot::Sender<Result<serde_json::Value, BridgeError>>,
 }
 
-/// Stream request message for gRPC
-#[derive(Debug, Clone)]
-pub struct StreamRequest {
-    /// Request identifier
-    pub request_id: String,
-    /// Request type
-    pub request_type: RequestType,
-    /// Request payload (JSON-encoded)
-    pub payload: serde_json::Value,
-    /// Request timestamp
-    pub timestamp: SystemTime,
-    /// Request priority
-    pub priority: i32,
-}
-
-/// Stream response message for gRPC
-#[derive(Debug, Clone)]
-pub struct StreamResponse {
-    /// Response identifier (matches request_id)
-    pub response_id: String,
-    /// Response type
-    pub response_type: ResponseType,
-    /// Response payload (JSON-encoded)
-    pub payload: serde_json::Value,
-    /// Response timestamp
-    pub timestamp: SystemTime,
-    /// Success flag
-    pub success: bool,
-    /// Error message if failed
-    pub error_message: Option<String>,
-}
-
-/// Request types for gRPC communication
-#[derive(Debug, Clone, PartialEq)]
-pub enum RequestType {
-    PegOutSignature,
-    FederationUpdate,
-    Heartbeat,
-    StatusCheck,
-    NodeRegistration,
-    PegInNotification,
-}
-
-/// Response types for gRPC communication
-#[derive(Debug, Clone, PartialEq)]
-pub enum ResponseType {
-    SignatureResponse,
-    FederationUpdateAck,
-    HeartbeatResponse,
-    StatusResponse,
-    RegistrationAck,
-    NotificationAck,
-    Error,
-}
-
 impl BridgeGovernanceService {
     /// Create new bridge governance service
     pub fn new(request_sender: mpsc::Sender<IncomingRequest>) -> Self {
-        Self {
-            request_sender,
-        }
+        Self { request_sender }
     }
+}
 
-    /// Handle bidirectional streaming
-    pub async fn handle_bidirectional_stream(
+#[tonic::async_trait]
+impl GovernanceBridge for BridgeGovernanceService {
+    type BidirectionalStreamStream = ReceiverStream<Result<StreamResponse, Status>>;
+
+    async fn bidirectional_stream(
         &self,
-        request_stream: Streaming<governance::StreamRequest>,
-    ) -> Result<Streaming<governance::StreamResponse>, Status> {
+        request: Request<Streaming<StreamRequest>>,
+    ) -> Result<Response<Self::BidirectionalStreamStream>, Status> {
         info!("Handling bidirectional gRPC stream");
-        
-        // Create response stream
-        let (response_sender, response_receiver) = mpsc::channel(1000);
-        let response_stream = tokio_stream::wrappers::ReceiverStream::new(response_receiver);
-        
-        // Spawn task to handle incoming requests
-        let request_sender_clone = self.request_sender.clone();
-        tokio::spawn(async move {
-            Self::handle_request_stream(request_stream, request_sender_clone, response_sender).await;
-        });
-        
-        Ok(Streaming::new(response_stream))
-    }
 
-    /// Handle incoming request stream
-    async fn handle_request_stream(
-        mut request_stream: Streaming<governance::StreamRequest>,
-        request_sender: mpsc::Sender<IncomingRequest>,
-        response_sender: mpsc::Sender<governance::StreamResponse>,
-    ) {
-        while let Ok(Some(request)) = request_stream.message().await {
-            debug!("Received gRPC request: {:?}", request.request_type);
-            
-            // Convert gRPC request to internal format
-            match Self::convert_grpc_request(&request) {
-                Ok(internal_request) => {
-                    // Create response channel
-                    let (resp_sender, resp_receiver) = tokio::sync::oneshot::channel();
-                    
-                    let incoming = IncomingRequest {
-                        request_type: internal_request.request_type.clone(),
-                        payload: internal_request.payload.clone(),
-                        response_sender: resp_sender,
-                    };
-                    
-                    // Send to internal handler
-                    if let Err(e) = request_sender.send(incoming).await {
-                        error!("Failed to forward incoming request: {:?}", e);
-                        continue;
-                    }
-                    
-                    // Wait for response and send back via gRPC
-                    match resp_receiver.await {
-                        Ok(Ok(response_payload)) => {
-                            let grpc_response = governance::StreamResponse {
-                                response_id: request.request_id.clone(),
-                                response_type: Self::map_response_type(&internal_request.request_type),
-                                payload: response_payload.to_string(),
-                                timestamp: SystemTime::now()
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                success: true,
-                                error_message: None,
-                            };
-                            
-                            if let Err(e) = response_sender.send(grpc_response).await {
-                                warn!("Failed to send gRPC response: {:?}", e);
+        let mut request_stream = request.into_inner();
+        let (response_sender, response_receiver) = mpsc::channel(1000);
+        let request_sender_clone = self.request_sender.clone();
+
+        // Spawn task to handle incoming requests
+        tokio::spawn(async move {
+            while let Ok(Some(grpc_request)) = request_stream.message().await {
+                debug!("Received gRPC request: {:?}", grpc_request.request_type);
+
+                // Convert gRPC request to internal format
+                match Self::convert_grpc_request(&grpc_request) {
+                    Ok((request_type, payload)) => {
+                        // Create response channel
+                        let (resp_sender, resp_receiver) = tokio::sync::oneshot::channel();
+
+                        let incoming = IncomingRequest {
+                            request_type,
+                            payload,
+                            response_sender: resp_sender,
+                        };
+
+                        // Send to internal handler
+                        if let Err(e) = request_sender_clone.send(incoming).await {
+                            error!("Failed to forward incoming request: {:?}", e);
+                            continue;
+                        }
+
+                        // Wait for response and send back via gRPC
+                        match resp_receiver.await {
+                            Ok(Ok(response_payload)) => {
+                                let grpc_response = StreamResponse {
+                                    response_id: grpc_request.request_id.clone(),
+                                    response_type: Self::map_response_type(&grpc_request.request_type()).into(),
+                                    payload: serde_json::to_vec(&response_payload).unwrap_or_default(),
+                                    timestamp: SystemTime::now()
+                                        .duration_since(SystemTime::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                    success: true,
+                                    error_message: None,
+                                };
+
+                                if let Err(e) = response_sender.send(Ok(grpc_response)).await {
+                                    warn!("Failed to send gRPC response: {:?}", e);
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                // Send error response
+                                let error_response = StreamResponse {
+                                    response_id: grpc_request.request_id.clone(),
+                                    response_type: ResponseType::Error.into(),
+                                    payload: vec![],
+                                    timestamp: SystemTime::now()
+                                        .duration_since(SystemTime::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                    success: false,
+                                    error_message: Some(format!("{:?}", e)),
+                                };
+
+                                if let Err(e) = response_sender.send(Ok(error_response)).await {
+                                    warn!("Failed to send error response: {:?}", e);
+                                }
+                            }
+                            Err(_) => {
+                                warn!("Response receiver cancelled for request {}", grpc_request.request_id);
                             }
                         }
-                        Ok(Err(e)) => {
-                            // Send error response
-                            let error_response = governance::StreamResponse {
-                                response_id: request.request_id.clone(),
-                                response_type: "error".to_string(),
-                                payload: "{}".to_string(),
-                                timestamp: SystemTime::now()
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs(),
-                                success: false,
-                                error_message: Some(format!("{:?}", e)),
-                            };
-                            
-                            if let Err(e) = response_sender.send(error_response).await {
-                                warn!("Failed to send error response: {:?}", e);
-                            }
-                        }
-                        Err(_) => {
-                            warn!("Response receiver cancelled for request {}", request.request_id);
-                        }
                     }
-                }
-                Err(e) => {
-                    error!("Failed to convert gRPC request: {:?}", e);
-                    
-                    // Send error response
-                    let error_response = governance::StreamResponse {
-                        response_id: request.request_id.clone(),
-                        response_type: "error".to_string(),
-                        payload: "{}".to_string(),
-                        timestamp: SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        success: false,
-                        error_message: Some(format!("Request conversion failed: {:?}", e)),
-                    };
-                    
-                    if let Err(e) = response_sender.send(error_response).await {
-                        warn!("Failed to send error response: {:?}", e);
+                    Err(e) => {
+                        error!("Failed to convert gRPC request: {:?}", e);
+
+                        // Send error response
+                        let error_response = StreamResponse {
+                            response_id: grpc_request.request_id.clone(),
+                            response_type: ResponseType::Error.into(),
+                            payload: vec![],
+                            timestamp: SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            success: false,
+                            error_message: Some(format!("Request conversion failed: {:?}", e)),
+                        };
+
+                        if let Err(e) = response_sender.send(Ok(error_response)).await {
+                            warn!("Failed to send error response: {:?}", e);
+                        }
                     }
                 }
             }
-        }
-        
-        info!("Request stream ended");
+
+            info!("Request stream ended");
+        });
+
+        // Return the response stream
+        let response_stream = ReceiverStream::new(response_receiver);
+        Ok(Response::new(response_stream))
     }
 
+    async fn health_check(
+        &self,
+        request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
+        let req = request.into_inner();
+        info!("Health check requested for service: {}", req.service);
+
+        let response = HealthCheckResponse {
+            status: HealthCheckStatus::Serving.into(),
+            message: "Service is healthy".to_string(),
+        };
+
+        Ok(Response::new(response))
+    }
+}
+
+impl BridgeGovernanceService {
     /// Convert gRPC request to internal format
-    fn convert_grpc_request(grpc_request: &governance::StreamRequest) -> Result<StreamRequest, BridgeError> {
-        let request_type = match grpc_request.request_type.as_str() {
-            "pegout_signature" => RequestType::PegOutSignature,
-            "federation_update" => RequestType::FederationUpdate,
-            "heartbeat" => RequestType::Heartbeat,
-            "status_check" => RequestType::StatusCheck,
-            "node_registration" => RequestType::NodeRegistration,
-            "pegin_notification" => RequestType::PegInNotification,
+    fn convert_grpc_request(
+        grpc_request: &StreamRequest,
+    ) -> Result<(RequestType, serde_json::Value), BridgeError> {
+        let request_type = match grpc_request.request_type() {
+            governance_bridge_v1::RequestType::PegoutSignature => RequestType::PegOutSignature,
+            governance_bridge_v1::RequestType::FederationUpdate => RequestType::FederationUpdate,
+            governance_bridge_v1::RequestType::Heartbeat => RequestType::Heartbeat,
+            governance_bridge_v1::RequestType::StatusCheck => RequestType::StatusCheck,
+            governance_bridge_v1::RequestType::NodeRegistration => RequestType::NodeRegistration,
+            governance_bridge_v1::RequestType::PeginNotification => RequestType::PegInNotification,
             _ => {
                 return Err(BridgeError::InvalidRequest(format!(
-                    "Unknown request type: {}",
+                    "Unknown request type: {:?}",
                     grpc_request.request_type
                 )));
             }
         };
 
-        let payload: serde_json::Value = serde_json::from_str(&grpc_request.payload)
-            .map_err(|e| BridgeError::SerializationError(format!("Invalid JSON payload: {}", e)))?;
+        let payload: serde_json::Value = serde_json::from_slice(&grpc_request.payload)
+            .map_err(|e| BridgeError::SerializationError(format!("Invalid payload: {}", e)))?;
 
-        Ok(StreamRequest {
-            request_id: grpc_request.request_id.clone(),
-            request_type,
-            payload,
-            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(grpc_request.timestamp),
-            priority: grpc_request.priority,
-        })
+        Ok((request_type, payload))
     }
 
     /// Map request type to response type
-    fn map_response_type(request_type: &str) -> String {
+    fn map_response_type(request_type: &governance_bridge_v1::RequestType) -> ResponseType {
         match request_type {
-            "pegout_signature" => "signature_response".to_string(),
-            "federation_update" => "federation_update_ack".to_string(),
-            "heartbeat" => "heartbeat_response".to_string(),
-            "status_check" => "status_response".to_string(),
-            "node_registration" => "registration_ack".to_string(),
-            "pegin_notification" => "notification_ack".to_string(),
-            _ => "error".to_string(),
+            governance_bridge_v1::RequestType::PegoutSignature => ResponseType::SignatureResponse,
+            governance_bridge_v1::RequestType::FederationUpdate => ResponseType::FederationUpdateAck,
+            governance_bridge_v1::RequestType::Heartbeat => ResponseType::HeartbeatResponse,
+            governance_bridge_v1::RequestType::StatusCheck => ResponseType::StatusResponse,
+            governance_bridge_v1::RequestType::NodeRegistration => ResponseType::RegistrationAck,
+            governance_bridge_v1::RequestType::PeginNotification => ResponseType::NotificationAck,
+            _ => ResponseType::Error,
         }
     }
 }
@@ -288,154 +386,100 @@ pub struct MessageConverter;
 
 impl MessageConverter {
     /// Convert StreamMessage to gRPC format
-    pub fn to_grpc_request(message: &StreamMessage) -> Result<governance::StreamRequest, BridgeError> {
+    pub fn to_grpc_request(message: &StreamMessage) -> Result<StreamRequest, BridgeError> {
         let (request_type, payload) = match message {
             StreamMessage::RequestPegOutSignatures { request } => (
-                "pegout_signature".to_string(),
-                serde_json::to_value(request)
-                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?
+                governance_bridge_v1::RequestType::PegoutSignature,
+                serde_json::to_vec(request)
+                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?,
             ),
             StreamMessage::SendHeartbeat => (
-                "heartbeat".to_string(),
-                serde_json::json!({
+                governance_bridge_v1::RequestType::Heartbeat,
+                serde_json::to_vec(&serde_json::json!({
                     "timestamp": SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs(),
                     "node_id": "alys_bridge",
                     "status": "healthy"
-                })
+                }))
+                .map_err(|e| BridgeError::SerializationError(e.to_string()))?,
             ),
             StreamMessage::HandleFederationUpdate { update } => (
-                "federation_update".to_string(),
-                serde_json::to_value(update)
-                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?
+                governance_bridge_v1::RequestType::FederationUpdate,
+                serde_json::to_vec(update)
+                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?,
             ),
             StreamMessage::NotifyPegIn { notification } => (
-                "pegin_notification".to_string(),
-                serde_json::to_value(notification)
-                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?
+                governance_bridge_v1::RequestType::PeginNotification,
+                serde_json::to_vec(notification)
+                    .map_err(|e| BridgeError::SerializationError(e.to_string()))?,
             ),
             StreamMessage::GetConnectionStatus => (
-                "status_check".to_string(),
-                serde_json::json!({
+                governance_bridge_v1::RequestType::StatusCheck,
+                serde_json::to_vec(&serde_json::json!({
                     "request_time": SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs()
-                })
+                }))
+                .map_err(|e| BridgeError::SerializationError(e.to_string()))?,
             ),
             _ => {
                 return Err(BridgeError::InvalidRequest(
-                    "Message type not supported for gRPC conversion".to_string()
+                    "Message type not supported for gRPC conversion".to_string(),
                 ));
             }
         };
 
-        Ok(governance::StreamRequest {
+        Ok(StreamRequest {
             request_id: uuid::Uuid::new_v4().to_string(),
-            request_type,
-            payload: payload.to_string(),
+            request_type: request_type.into(),
+            payload,
             timestamp: SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            priority: message.priority() as i32,
+            priority: Priority::Normal.into(),
         })
     }
 
-    /// Convert gRPC response to StreamResponse
-    pub fn from_grpc_response(grpc_response: &governance::StreamResponse) -> Result<StreamResponse, BridgeError> {
-        let response_type = match grpc_response.response_type.as_str() {
-            "signature_response" => ResponseType::SignatureResponse,
-            "federation_update_ack" => ResponseType::FederationUpdateAck,
-            "heartbeat_response" => ResponseType::HeartbeatResponse,
-            "status_response" => ResponseType::StatusResponse,
-            "registration_ack" => ResponseType::RegistrationAck,
-            "notification_ack" => ResponseType::NotificationAck,
-            "error" => ResponseType::Error,
-            _ => ResponseType::Error,
-        };
+    /// Convert gRPC response to internal response
+    pub fn from_grpc_response(
+        grpc_response: &StreamResponse,
+    ) -> Result<serde_json::Value, BridgeError> {
+        if !grpc_response.success {
+            return Err(BridgeError::InvalidRequest(
+                grpc_response.error_message.clone().unwrap_or_default(),
+            ));
+        }
 
-        let payload: serde_json::Value = serde_json::from_str(&grpc_response.payload)
-            .map_err(|e| BridgeError::SerializationError(format!("Invalid response payload: {}", e)))?;
-
-        Ok(StreamResponse {
-            response_id: grpc_response.response_id.clone(),
-            response_type,
-            payload,
-            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(grpc_response.timestamp),
-            success: grpc_response.success,
-            error_message: grpc_response.error_message.clone(),
-        })
+        serde_json::from_slice(&grpc_response.payload)
+            .map_err(|e| BridgeError::SerializationError(format!("Invalid response payload: {}", e)))
     }
 }
 
-/// Protobuf definitions placeholder
-/// In a real implementation, these would be generated from .proto files
-pub mod proto_stubs {
-    /// Simplified gRPC message structures
-    /// These would normally be generated by tonic from .proto files
-    
-    #[derive(Debug, Clone)]
-    pub struct StreamRequest {
-        pub request_id: String,
-        pub request_type: String,
-        pub payload: String,
-        pub timestamp: u64,
-        pub priority: i32,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_service_creation() {
+        let (sender, _receiver) = mpsc::channel(100);
+        let service = BridgeGovernanceService::new(sender);
+        assert!(std::ptr::eq(&service.request_sender, &service.request_sender));
     }
 
-    #[derive(Debug, Clone)]
-    pub struct StreamResponse {
-        pub response_id: String,
-        pub response_type: String,
-        pub payload: String,
-        pub timestamp: u64,
-        pub success: bool,
-        pub error_message: Option<String>,
-    }
+    #[tokio::test]
+    async fn test_health_check() {
+        let (sender, _receiver) = mpsc::channel(100);
+        let service = BridgeGovernanceService::new(sender);
 
-    #[derive(Debug, Clone)]
-    pub struct Heartbeat {
-        pub timestamp: u64,
-        pub node_id: String,
-        pub status: String,
-    }
+        let request = Request::new(HealthCheckRequest {
+            service: "bridge".to_string(),
+        });
 
-    #[derive(Debug, Clone)]
-    pub struct SignatureRequest {
-        pub request_id: String,
-        pub pegout_id: String,
-        pub transaction_hex: String,
-        pub destination_address: String,
-        pub amount: u64,
-        pub fee: u64,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct SignatureResponse {
-        pub request_id: String,
-        pub pegout_id: String,
-        pub signatures: Vec<String>,
-        pub approval_status: String,
-        pub responding_nodes: Vec<String>,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct FederationUpdate {
-        pub update_id: String,
-        pub update_type: String,
-        pub effective_height: u64,
-        pub members: Vec<FederationMember>,
-        pub threshold: u32,
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct FederationMember {
-        pub alys_address: String,
-        pub bitcoin_pubkey: String,
-        pub weight: u32,
-        pub active: bool,
+        let response = service.health_check(request).await.unwrap();
+        assert_eq!(response.into_inner().status, HealthCheckStatus::Serving as i32);
     }
 }

@@ -7,18 +7,14 @@
 use crate::{
     actor::{AlysActor, ActorRegistration},
     lifecycle::LifecycleAware,
-    supervisor::{RestartStrategy, EscalationStrategy},
-    error::{ActorError, ActorResult},
-    metrics::ActorMetrics,
+    supervisor::RestartStrategy,
+    error::ActorResult,
 };
 use actix::{Actor, Addr, Context, Message};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime},
-};
-use tracing::{info, warn, error};
+use std::time::{Duration, SystemTime};
+use tracing::{info, error};
 
 /// Blockchain timing constraints for the Alys sidechain
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,17 +40,53 @@ impl Default for BlockchainTimingConstraints {
     }
 }
 
-/// Federation configuration for consensus operations
+/// Consolidated federation configuration for consensus and bridge operations
+/// This is the canonical FederationConfig type used throughout the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationConfig {
-    /// Current federation members
-    pub members: Vec<String>,
+    /// Federation members with detailed information
+    pub members: Vec<FederationMember>,
     /// Signature threshold (e.g., 3 of 5)
     pub threshold: usize,
+    /// Bitcoin multisig address for the federation (as string for serialization)
+    pub multisig_address: String,
+    /// Emergency addresses for failsafe operations (as strings for serialization)
+    pub emergency_addresses: Vec<String>,
+    /// Signing operation timeout
+    pub signing_timeout: Duration,
+    /// Minimum confirmations required for Bitcoin transactions
+    pub minimum_confirmations: u32,
+    /// Maximum amount per single bridge operation
+    pub maximum_amount: u64,
+    /// Bitcoin fee rate in satoshis per virtual byte
+    pub fee_rate_sat_per_vbyte: u64,
     /// Federation health check interval
     pub health_interval: Duration,
     /// Minimum healthy members for operation
     pub min_healthy: usize,
+}
+
+/// Federation member information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationMember {
+    /// Alys/Ethereum address of the member
+    pub alys_address: String, // Using String for compatibility with both Address types
+    /// Bitcoin public key for multisig operations
+    pub bitcoin_public_key: bitcoin::PublicKey,
+    /// Signing weight for weighted multisig
+    pub signing_weight: u32,
+    /// Whether the member is currently active
+    pub is_active: bool,
+    /// When the member joined the federation
+    pub joined_at: std::time::SystemTime,
+    /// Last recorded activity timestamp
+    pub last_activity: std::time::SystemTime,
+    /// Member's reputation score
+    pub reputation_score: i32,
+    /// Count of successful signatures
+    pub successful_signatures: u64,
+    /// Count of failed signatures
+    pub failed_signatures: u64,
 }
 
 impl Default for FederationConfig {
@@ -62,6 +94,12 @@ impl Default for FederationConfig {
         Self {
             members: Vec::new(),
             threshold: 3,
+            multisig_address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(), // Placeholder
+            emergency_addresses: Vec::new(),
+            signing_timeout: Duration::from_secs(300), // 5 minutes
+            minimum_confirmations: 6,
+            maximum_amount: 1_000_000_000, // 10 BTC in satoshis
+            fee_rate_sat_per_vbyte: 10,
             health_interval: Duration::from_secs(30),
             min_healthy: 3,
         }

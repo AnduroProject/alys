@@ -107,6 +107,10 @@ pub enum BridgeError {
         reason: String,
     },
 
+    /// Invalid address errors
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+
     /// Internal actor errors
     #[error("Internal error: {0}")]
     InternalError(String),
@@ -279,4 +283,108 @@ pub enum MigrationError {
     
     #[error("Migration state error: {0}")]
     StateError(String),
+}
+
+/// Conversion from BridgeError to unified ActorError for actor system integration
+impl From<BridgeError> for actor_system::error::ActorError {
+    fn from(err: BridgeError) -> Self {
+        use actor_system::error::ActorError;
+
+        match err {
+            BridgeError::ConnectionError(msg) => ActorError::NetworkError { reason: msg },
+
+            BridgeError::NetworkError(msg) => ActorError::ExternalDependency {
+                service: "bitcoin_network".to_string(),
+                reason: msg,
+            },
+
+            BridgeError::AuthenticationError(msg) => ActorError::PermissionDenied {
+                resource: "bridge_authentication".to_string(),
+                reason: msg,
+            },
+
+            BridgeError::ConfigurationError(msg) => ActorError::ConfigurationError {
+                parameter: "bridge_config".to_string(),
+                reason: msg,
+            },
+
+            BridgeError::ValidationError { field, reason } => ActorError::ValidationFailed {
+                field,
+                reason,
+            },
+
+            BridgeError::PegInError { pegin_id, reason } => ActorError::MessageHandlingFailed {
+                message_type: "PegIn".to_string(),
+                reason: format!("PegIn {} failed: {}", pegin_id, reason),
+            },
+
+            BridgeError::PegOutError { pegout_id, reason } => ActorError::MessageHandlingFailed {
+                message_type: "PegOut".to_string(),
+                reason: format!("PegOut {} failed: {}", pegout_id, reason),
+            },
+
+            BridgeError::InsufficientSignatures { collected, required, .. } => ActorError::Timeout {
+                operation: "signature_collection".to_string(),
+                timeout: Duration::from_secs(300),
+            },
+
+            BridgeError::RequestTimeout { request_id, timeout } => ActorError::MessageTimeout {
+                message_type: format!("BridgeRequest_{}", request_id),
+                timeout,
+            },
+
+            BridgeError::ServiceUnavailable { service, .. } => ActorError::ExternalServiceError {
+                service,
+                reason: "Service unavailable".to_string(),
+            },
+
+            BridgeError::RateLimitExceeded { limit, window } => ActorError::RateLimitExceeded {
+                limit,
+                window,
+            },
+
+            BridgeError::SerializationError(msg) => ActorError::SerializationFailed { reason: msg },
+
+            BridgeError::InvalidRequest(msg) => ActorError::InvalidOperation {
+                operation: "bridge_request".to_string(),
+                reason: msg,
+            },
+
+            BridgeError::InvalidStateTransition { from, to, reason } => ActorError::InvalidStateTransition {
+                from,
+                to,
+                reason,
+            },
+
+            BridgeError::InternalError(msg) => ActorError::Internal { reason: msg },
+
+            BridgeError::ActorSystemError(msg) => ActorError::SystemFailure { reason: msg },
+
+            BridgeError::ResourceExhausted { resource, details } => ActorError::ResourceExhausted {
+                resource,
+                details,
+            },
+
+            // For any other bridge errors, wrap in Custom variant with proper context
+            _ => ActorError::Custom {
+                message: format!("Bridge error [{}]: {}", err.category().as_str(), err),
+            },
+        }
+    }
+}
+
+impl BridgeErrorCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BridgeErrorCategory::Network => "network",
+            BridgeErrorCategory::Auth => "auth",
+            BridgeErrorCategory::Request => "request",
+            BridgeErrorCategory::Signature => "signature",
+            BridgeErrorCategory::Federation => "federation",
+            BridgeErrorCategory::Bridge => "bridge",
+            BridgeErrorCategory::Validation => "validation",
+            BridgeErrorCategory::Configuration => "configuration",
+            BridgeErrorCategory::Internal => "internal",
+        }
+    }
 }

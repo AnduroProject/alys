@@ -1,32 +1,24 @@
 //! AlysActor Implementation for StreamActor
-//! 
+//!
 //! Complete integration with actor_system crate for governance communication
 
 use async_trait::async_trait;
 use std::time::{Duration, SystemTime};
-use std::collections::HashMap;
-use uuid::Uuid;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 use actor_system::{
     actor::{AlysActor, ExtendedAlysActor},
-    lifecycle::{LifecycleAware, ActorState},
-    mailbox::{MailboxConfig, OverflowStrategy},
-    message::{AlysMessage, MessageEnvelope, MessagePriority},
-    supervisor::{SupervisionPolicy, RestartStrategy, EscalationStrategy},
     error::{ActorError, ActorResult},
+    lifecycle::ActorState,
+    mailbox::MailboxConfig,
     metrics::ActorMetrics,
+    supervisor::{EscalationStrategy, RestartStrategy, SupervisionPolicy},
 };
 
+use super::StreamActor;
+use crate::actors::bridge::actors::stream::actor::ConnectionStatus;
 use crate::actors::bridge::{
-    messages::stream_messages::*,
-    config::StreamConfig,
-    shared::errors::BridgeError,
-};
-use super::{
-    StreamActor, 
-    actor::{GovernanceConnection, ConnectionStatus},
-    metrics::StreamMetrics,
+    config::StreamConfig, messages::stream_messages::*, shared::errors::BridgeError,
 };
 
 /// State structure for actor_system compatibility
@@ -49,35 +41,14 @@ impl AlysActor for StreamActor {
 
     fn new(config: Self::Config) -> Result<Self, Self::Error> {
         info!("Creating StreamActor with actor_system integration");
-        
-        let reconnection_manager = super::ReconnectionManager::new(
-            config.reconnect_attempts.unwrap_or(5),
-            config.reconnect_delay.unwrap_or(Duration::from_secs(5)),
-        );
-        
-        let metrics = StreamMetrics::new()
-            .map_err(|e| BridgeError::StreamError { 
-                message: format!("Failed to initialize metrics: {:?}", e),
-            })?;
 
-        let actor_system_metrics = ActorMetrics::new("bridge_stream_actor", "v1.0.0")
-            .map_err(|e| BridgeError::StreamError {
-                message: format!("Failed to initialize actor_system metrics: {:?}", e),
-            })?;
+        // Use the existing StreamActor constructor
+        let mut actor = StreamActor::new(config).map_err(|e| {
+            BridgeError::ConfigurationError(format!("Failed to create StreamActor: {:?}", e))
+        })?;
 
-        Ok(Self {
-            config,
-            governance_connections: HashMap::new(),
-            message_buffer: Vec::new(),
-            request_tracker: super::RequestTracker::new(),
-            pegout_actor: None,
-            bridge_coordinator: None,
-            reconnection_manager,
-            metrics,
-            connection_status: ConnectionStatus::Disconnected,
-            last_heartbeat: None,
-            actor_system_metrics,
-        })
+        // The constructor already creates ActorMetrics, so we don't need to do anything else
+        Ok(actor)
     }
 
     fn actor_type(&self) -> String {
@@ -87,19 +58,19 @@ impl AlysActor for StreamActor {
     fn config(&self) -> &Self::Config {
         &self.config
     }
-    
+
     fn config_mut(&mut self) -> &mut Self::Config {
         &mut self.config
     }
-    
+
     fn metrics(&self) -> &ActorMetrics {
         &self.actor_system_metrics
     }
-    
+
     fn metrics_mut(&mut self) -> &mut ActorMetrics {
         &mut self.actor_system_metrics
     }
-    
+
     async fn get_state(&self) -> Self::State {
         let metrics_snapshot = self.actor_system_metrics.snapshot();
 
@@ -112,7 +83,7 @@ impl AlysActor for StreamActor {
             metrics_snapshot,
         }
     }
-    
+
     async fn set_state(&mut self, state: Self::State) -> ActorResult<()> {
         self.connection_status = state.connection_status;
         self.last_heartbeat = state.last_heartbeat;
@@ -120,12 +91,14 @@ impl AlysActor for StreamActor {
     }
 
     fn mailbox_config(&self) -> MailboxConfig {
-        MailboxConfig::new()
-            .with_capacity(self.config.max_pending_messages.unwrap_or(1000))
-            .with_priority_levels(5)
-            .with_overflow_strategy(OverflowStrategy::DropOldest)
-            .with_backpressure_threshold(0.8)
-            .with_fair_scheduling(true)
+        MailboxConfig {
+            capacity: 1000,
+            enable_priority: true,
+            processing_timeout: Duration::from_secs(30),
+            drop_on_full: true,
+            metrics_interval: Duration::from_secs(60),
+            backpressure_threshold: 800.0,
+        }
     }
 
     fn supervision_policy(&self) -> SupervisionPolicy {
@@ -134,17 +107,115 @@ impl AlysActor for StreamActor {
                 initial_delay: Duration::from_secs(1),
                 max_delay: Duration::from_secs(300),
                 multiplier: 2.0,
-                max_attempts: 10,
             },
             escalation_strategy: EscalationStrategy::EscalateToParent,
+            shutdown_timeout: Duration::from_secs(30),
+            isolate_failures: false,
+            max_restarts: 10,
+            restart_window: Duration::from_secs(600), // 10 minutes
         }
     }
 
     fn dependencies(&self) -> Vec<String> {
-        vec![
-            "bridge_actor".to_string(),
-            "pegout_actor".to_string(),
-        ]
+        vec!["bridge_actor".to_string(), "pegout_actor".to_string()]
+    }
+
+    /// Handle configuration update
+    async fn on_config_update(&mut self, new_config: Self::Config) -> ActorResult<()> {
+        info!("Updating StreamActor configuration");
+        let old_config = self.config.clone();
+        *self.config_mut() = new_config;
+
+        // Update connection timers if endpoints changed
+        if old_config.governance_endpoints != self.config.governance_endpoints {
+            self.reconnect_to_governance_nodes()
+                .await
+                .map_err(|e| ActorError::from(e))?;
+        }
+
+        // Update heartbeat and connection timeouts if changed
+        if old_config.heartbeat_interval != self.config.heartbeat_interval
+            || old_config.connection_timeout != self.config.connection_timeout
+        {
+            self.update_connection_timers()
+                .await
+                .map_err(|e| ActorError::from(e))?;
+        }
+
+        Ok(())
+    }
+
+    /// Handle supervisor message
+    async fn handle_supervisor_message(
+        &mut self,
+        msg: actor_system::supervisor::SupervisorMessage,
+    ) -> ActorResult<()> {
+        use actor_system::supervisor::SupervisorMessage;
+        match msg {
+            SupervisorMessage::HealthCheck => {
+                let healthy = self.has_healthy_connections();
+                if !healthy {
+                    warn!("StreamActor health check failed: no healthy governance connections");
+                }
+                Ok(())
+            }
+            SupervisorMessage::Shutdown { timeout } => {
+                info!(
+                    "StreamActor received shutdown signal with timeout: {:?}",
+                    timeout
+                );
+                // Cleanup governance connections
+                self.governance_connections.clear();
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Pre-process message before handling
+    async fn pre_process_message(
+        &mut self,
+        _envelope: &actor_system::message::MessageEnvelope<Self::Message>,
+    ) -> ActorResult<()> {
+        // Increment message received count
+        self.metrics_mut().record_message_received("stream_message");
+        Ok(())
+    }
+
+    /// Post-process message after handling
+    async fn post_process_message(
+        &mut self,
+        _envelope: &actor_system::message::MessageEnvelope<Self::Message>,
+        _result: &<Self::Message as actix::Message>::Result,
+    ) -> ActorResult<()> {
+        // Record successful message processing
+        self.metrics_mut()
+            .record_message_processed(Duration::from_millis(1)); // TODO: Measure actual processing time
+        Ok(())
+    }
+
+    /// Handle message processing error
+    async fn handle_message_error(
+        &mut self,
+        _envelope: &actor_system::message::MessageEnvelope<Self::Message>,
+        error: &ActorError,
+    ) -> ActorResult<()> {
+        self.metrics_mut().record_message_failed(&error.to_string());
+        error!(
+            actor_type = "StreamActor",
+            error = %error,
+            "Message processing failed"
+        );
+
+        // If it's a critical error, trigger reconnection
+        if error.severity().is_critical() {
+            warn!("Critical error in StreamActor, attempting recovery");
+            if let Err(recovery_err) = self.reconnect_to_governance_nodes().await {
+                error!("Failed to recover from critical error: {:?}", recovery_err);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -154,11 +225,12 @@ impl ExtendedAlysActor for StreamActor {
         info!("StreamActor custom initialization starting");
 
         // Initialize governance connections
-        self.establish_governance_connections().await
-            .map_err(|e| ActorError::StartupFailed {
+        if let Err(e) = self.establish_governance_connections().await {
+            return Err(ActorError::StartupFailed {
                 actor_type: "StreamActor".to_string(),
                 reason: format!("Failed to establish governance connections: {:?}", e),
-            })?;
+            });
+        }
 
         // Start background tasks would normally be handled by the actor framework
         info!("StreamActor custom initialization completed");
@@ -182,7 +254,7 @@ impl ExtendedAlysActor for StreamActor {
                 self.initiate_connection_recovery().await;
                 Ok(true) // Handled error
             }
-            _ => Ok(false) // Let supervisor handle other errors
+            _ => Ok(false), // Let supervisor handle other errors
         }
     }
 
@@ -199,23 +271,25 @@ impl ExtendedAlysActor for StreamActor {
         self.compact_message_buffer().await;
 
         // Update metrics
-        self.actor_system_metrics.record_maintenance_performed();
-        
+        self.actor_system_metrics.record_maintenance_completed();
+
         Ok(())
     }
 
     async fn export_metrics(&self) -> ActorResult<serde_json::Value> {
         let healthy_connections = self.governance_connections
             .values()
-            .filter(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
+            .filter(|conn| matches!(conn.status, crate::actors::bridge::messages::stream_messages::NodeConnectionStatus::Connected))
             .count();
 
         let mut heartbeat_age = None;
         if let Some(last_heartbeat) = self.last_heartbeat {
-            heartbeat_age = Some(SystemTime::now()
-                .duration_since(last_heartbeat)
-                .unwrap_or_default()
-                .as_secs());
+            heartbeat_age = Some(
+                SystemTime::now()
+                    .duration_since(last_heartbeat)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
         }
 
         let metrics = serde_json::json!({
@@ -233,27 +307,17 @@ impl ExtendedAlysActor for StreamActor {
 
 // Helper methods for StreamActor
 impl StreamActor {
-    /// Add actor_system_metrics field to StreamActor struct
-    pub fn actor_system_metrics(&self) -> &ActorMetrics {
-        &self.actor_system_metrics
-    }
-
-    /// Check if actor has healthy connections
-    fn has_healthy_connections(&self) -> bool {
-        self.governance_connections
-            .values()
-            .any(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
-    }
-
     /// Reconnect to governance nodes
     async fn reconnect_to_governance_nodes(&mut self) -> Result<(), BridgeError> {
         info!("Reconnecting to governance nodes");
-        
+
         // Clear existing connections
         self.governance_connections.clear();
-        
+
         // Re-establish connections
-        self.establish_governance_connections().await
+        self.establish_governance_connections()
+            .await
+            .map_err(|e| BridgeError::ConnectionError(format!("Failed to reconnect: {:?}", e)))
     }
 
     /// Update connection timers based on new configuration
@@ -261,15 +325,15 @@ impl StreamActor {
         info!("Updating connection timers");
         // This would update periodic tasks in a real implementation
         // For now, just log the change
-        debug!("Heartbeat interval: {:?}", self.config.heartbeat_interval);
-        debug!("Connection timeout: {:?}", self.config.connection_timeout);
+        debug!("Heartbeat interval: {:?}", Duration::from_secs(60)); // TODO: Get from config when available
+        debug!("Connection timeout: {:?}", Duration::from_secs(30)); // TODO: Get from config when available
         Ok(())
     }
 
     /// Initiate connection recovery
     async fn initiate_connection_recovery(&mut self) {
         warn!("Initiating connection recovery");
-        
+
         // Mark unhealthy connections for reconnection
         for (node_id, connection) in &mut self.governance_connections {
             if !matches!(connection.status, NodeConnectionStatus::Connected) {
@@ -277,7 +341,7 @@ impl StreamActor {
                 connection.status = NodeConnectionStatus::Connecting;
             }
         }
-        
+
         self.connection_status = ConnectionStatus::Connecting;
     }
 
@@ -285,9 +349,9 @@ impl StreamActor {
     async fn cleanup_expired_messages(&mut self) {
         let now = SystemTime::now();
         let initial_count = self.message_buffer.len();
-        
+
         self.message_buffer.retain(|msg| now < msg.timeout);
-        
+
         let cleaned = initial_count - self.message_buffer.len();
         if cleaned > 0 {
             debug!("Cleaned up {} expired pending messages", cleaned);
@@ -297,11 +361,12 @@ impl StreamActor {
     /// Update connection health scores
     async fn update_connection_health(&mut self) {
         let now = SystemTime::now();
-        
+
         for (_node_id, connection) in &mut self.governance_connections {
             // Decay health score for inactive connections
             if let Ok(inactive_time) = now.duration_since(connection.last_activity) {
-                if inactive_time > Duration::from_secs(300) { // 5 minutes
+                if inactive_time > Duration::from_secs(300) {
+                    // 5 minutes
                     connection.health_score = (connection.health_score * 0.95).max(10.0);
                 }
             }
@@ -318,5 +383,3 @@ impl StreamActor {
         }
     }
 }
-
-// actor_system_metrics field is already defined in the StreamActor struct in actor.rs
