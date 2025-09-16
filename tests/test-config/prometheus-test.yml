@@ -1,0 +1,36 @@
+# Prometheus Test Configuration for Alys V2 Testing Framework
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Alys consensus client metrics
+  - job_name: 'consensus-test'
+    static_configs:
+      - targets: ['consensus:9001']
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # Reth execution client metrics
+  - job_name: 'execution-test'
+    static_configs:
+      - targets: ['execution:19001']
+    scrape_interval: 5s
+    metrics_path: /metrics
+
+  # Test coordinator metrics
+  - job_name: 'test-coordinator'
+    static_configs:
+      - targets: ['test-coordinator:8080']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # Prometheus itself
+  - job_name: 'prometheus-test'
+    static_configs:
+      - targets: ['localhost:9090']

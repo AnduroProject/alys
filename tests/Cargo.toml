@@ -1,0 +1,81 @@
+[package]
+name = "alys-test-framework"
+version = "0.1.0"
+edition = "2021"
+description = "Comprehensive testing framework for Alys V2 migration"
+
+[dependencies]
+# Core async runtime
+tokio = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+
+# Error handling
+anyhow = "1.0"
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# Testing dependencies
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.8"
+
+# Time and duration utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4"] }
+rand = "0.8"
+hex = "0.4"
+
+# Actor system dependencies
+actix = "0.13"
+
+# HTTP and web server dependencies
+axum = { version = "0.7", features = ["json", "tokio", "tower-log"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+hyper = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+
+# Database dependencies - removed to avoid libsqlite3-sys conflicts with lighthouse
+# sqlx = { version = "0.6", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"] }
+
+# Configuration and environment
+config = "0.14"
+clap = { version = "4.0", features = ["derive"] }
+
+# Development dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+
+# Benchmark configuration
+[[bench]]
+name = "actor_benchmarks"
+harness = false
+
+[[bench]]
+name = "sync_benchmarks"
+harness = false
+
+[[bench]]
+name = "system_benchmarks"
+harness = false
+
+# Binary configuration
+[[bin]]
+name = "test-coordinator"
+path = "src/bin/test_coordinator.rs"
+
+# Optional features
+[features]
+default = ["chaos", "performance", "coverage"]
+chaos = []
+performance = []
+coverage = []
+integration = []

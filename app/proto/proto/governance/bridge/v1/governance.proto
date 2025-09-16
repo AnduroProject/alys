@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package governance.bridge.v1;
+
+// Bridge governance gRPC service
+service GovernanceBridge {
+  // Bidirectional streaming for governance communication
+  rpc BidirectionalStream(stream StreamRequest) returns (stream StreamResponse);
+
+  // Health check endpoint
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Stream request message
+message StreamRequest {
+  string request_id = 1;
+  RequestType request_type = 2;
+  bytes payload = 3;
+  uint64 timestamp = 4;
+  Priority priority = 5;
+}
+
+// Stream response message
+message StreamResponse {
+  string response_id = 1;
+  ResponseType response_type = 2;
+  bytes payload = 3;
+  uint64 timestamp = 4;
+  bool success = 5;
+  optional string error_message = 6;
+}
+
+// Request types
+enum RequestType {
+  REQUEST_TYPE_UNSPECIFIED = 0;
+  REQUEST_TYPE_PEGOUT_SIGNATURE = 1;
+  REQUEST_TYPE_FEDERATION_UPDATE = 2;
+  REQUEST_TYPE_HEARTBEAT = 3;
+  REQUEST_TYPE_STATUS_CHECK = 4;
+  REQUEST_TYPE_NODE_REGISTRATION = 5;
+  REQUEST_TYPE_PEGIN_NOTIFICATION = 6;
+}
+
+// Response types
+enum ResponseType {
+  RESPONSE_TYPE_UNSPECIFIED = 0;
+  RESPONSE_TYPE_SIGNATURE_RESPONSE = 1;
+  RESPONSE_TYPE_FEDERATION_UPDATE_ACK = 2;
+  RESPONSE_TYPE_HEARTBEAT_RESPONSE = 3;
+  RESPONSE_TYPE_STATUS_RESPONSE = 4;
+  RESPONSE_TYPE_REGISTRATION_ACK = 5;
+  RESPONSE_TYPE_NOTIFICATION_ACK = 6;
+  RESPONSE_TYPE_ERROR = 7;
+}
+
+// Priority levels
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_NORMAL = 2;
+  PRIORITY_HIGH = 3;
+  PRIORITY_CRITICAL = 4;
+}
+
+// Health check messages
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  HealthCheckStatus status = 1;
+  string message = 2;
+}
+
+enum HealthCheckStatus {
+  HEALTH_CHECK_STATUS_UNSPECIFIED = 0;
+  HEALTH_CHECK_STATUS_SERVING = 1;
+  HEALTH_CHECK_STATUS_NOT_SERVING = 2;
+}
+
+// PegOut signature request payload
+message PegOutSignatureRequest {
+  string pegout_id = 1;
+  string transaction_hex = 2;
+  string destination_address = 3;
+  uint64 amount = 4;
+  uint64 fee = 5;
+}
+
+// PegOut signature response payload
+message PegOutSignatureResponse {
+  string pegout_id = 1;
+  repeated string signatures = 2;
+  string approval_status = 3;
+  repeated string responding_nodes = 4;
+}
+
+// Federation update payload
+message FederationUpdate {
+  string update_id = 1;
+  string update_type = 2;
+  uint64 effective_height = 3;
+  repeated FederationMember members = 4;
+  uint32 threshold = 5;
+}
+
+// Federation member info
+message FederationMember {
+  string alys_address = 1;
+  string bitcoin_pubkey = 2;
+  uint32 weight = 3;
+  bool active = 4;
+}
+
+// Heartbeat payload
+message Heartbeat {
+  uint64 timestamp = 1;
+  string node_id = 2;
+  string status = 3;
+}
+
+// PegIn notification payload
+message PegInNotification {
+  string transaction_id = 1;
+  string deposit_address = 2;
+  uint64 amount = 3;
+  uint32 confirmations = 4;
+  string recipient_address = 5;
+}

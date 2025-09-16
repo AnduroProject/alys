@@ -1,0 +1,240 @@
+# ALYS V2 Sync & Performance Alert Rules  
+# For ALYS-003-24: Comprehensive alert rules for sync monitoring and performance
+
+groups:
+  - name: sync_alerts
+    interval: 30s
+    rules:
+      # Critical Sync Alerts
+      - alert: SyncFailed
+        expr: alys_sync_state == 5
+        for: 1m
+        labels:
+          severity: critical
+          service: alys-core
+          component: sync
+        annotations:
+          summary: "Blockchain sync has failed"
+          description: "Node synchronization is in failed state ({{ $labels.instance }})"
+          runbook_url: "https://docs.alys.dev/runbooks/sync-failure"
+          dashboard_url: "http://grafana:3000/d/sync/sync-dashboard"
+
+      - alert: SyncStalled
+        expr: rate(alys_sync_current_height[15m]) == 0 and alys_sync_state < 4
+        for: 15m
+        labels:
+          severity: critical
+          service: alys-core
+          component: sync
+        annotations:
+          summary: "Blockchain sync has stalled"
+          description: "No progress in sync height for 15 minutes. Current height: {{ $value }}"
+          runbook_url: "https://docs.alys.dev/runbooks/sync-stall"
+
+      - alert: SyncHeightFarBehind
+        expr: alys_sync_target_height - alys_sync_current_height > 1000
+        for: 10m
+        labels:
+          severity: critical
+          service: alys-core  
+          component: sync
+        annotations:
+          summary: "Sync height far behind target"
+          description: "Current height {{ $labels.current_height }} is {{ $value }} blocks behind target"
+          runbook_url: "https://docs.alys.dev/runbooks/sync-behind"
+
+      # Performance Alerts
+      - alert: BlockProductionSlow
+        expr: histogram_quantile(0.95, rate(alys_block_production_duration_seconds_bucket[5m])) > 5.0
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: performance
+        annotations:
+          summary: "Slow block production detected"
+          description: "P95 block production time is {{ $value | humanizeDuration }}, exceeding 5 second target"
+
+      - alert: BlockValidationSlow
+        expr: histogram_quantile(0.95, rate(alys_block_validation_duration_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: performance
+        annotations:
+          summary: "Slow block validation detected"
+          description: "P95 block validation time is {{ $value | humanizeDuration }}, exceeding 1 second target"
+
+      - alert: SyncSpeedSlow
+        expr: alys_sync_blocks_per_second < 10 and alys_sync_state < 4
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: sync
+        annotations:
+          summary: "Sync speed is unusually slow"
+          description: "Sync speed is {{ $value }} blocks/second, below 10 blocks/second threshold"
+
+      # Transaction Pool Alerts
+      - alert: TransactionPoolFull
+        expr: alys_txpool_size > alys_txpool_max_size * 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: txpool
+        annotations:
+          summary: "Transaction pool is nearly full"
+          description: "Transaction pool has {{ $value }} transactions ({{ $value | humanizePercentage }} full)"
+
+      - alert: TransactionPoolStalled
+        expr: rate(alys_txpool_processed_total[10m]) == 0 and alys_txpool_size > 100
+        for: 10m
+        labels:
+          severity: critical
+          service: alys-core
+          component: txpool
+        annotations:
+          summary: "Transaction pool processing stalled"
+          description: "No transactions processed in 10 minutes with {{ $value }} transactions queued"
+          runbook_url: "https://docs.alys.dev/runbooks/txpool-stall"
+
+      - alert: HighTransactionRejectionRate
+        expr: rate(alys_txpool_rejected_total[5m]) / rate(alys_txpool_received_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: txpool
+        annotations:
+          summary: "High transaction rejection rate"
+          description: "Transaction rejection rate is {{ $value | humanizePercentage }}"
+
+      # Network Connectivity Alerts
+      - alert: LowPeerCount
+        expr: alys_peer_count < 5
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: network
+        annotations:
+          summary: "Low peer count detected"
+          description: "Only {{ $value }} peers connected, below minimum threshold of 5"
+
+      - alert: NoPeersConnected
+        expr: alys_peer_count == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: alys-core
+          component: network
+        annotations:
+          summary: "No peers connected"
+          description: "Node has no peer connections, network isolation detected"
+          runbook_url: "https://docs.alys.dev/runbooks/network-isolation"
+
+      - alert: PeerConnectionInstability
+        expr: rate(alys_peer_disconnections_total[5m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: network
+        annotations:
+          summary: "High peer disconnection rate"
+          description: "Peer disconnection rate is {{ $value | humanize }} disconnections/second"
+
+      - alert: NetworkLatencyHigh
+        expr: histogram_quantile(0.95, rate(alys_network_latency_seconds_bucket[5m])) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: network
+        annotations:
+          summary: "High network latency detected"
+          description: "P95 network latency is {{ $value | humanizeDuration }}"
+
+      # Block and Chain Health Alerts
+      - alert: StaleBlocksDetected
+        expr: rate(alys_stale_blocks_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: chain
+        annotations:
+          summary: "Stale blocks being produced"
+          description: "Stale block rate is {{ $value | humanize }} blocks/second"
+
+      - alert: OrphanBlocksHigh
+        expr: rate(alys_orphan_blocks_total[10m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: chain
+        annotations:
+          summary: "High orphan block rate"
+          description: "Orphan block rate is {{ $value | humanize }} blocks/second"
+
+      - alert: ForkDetected
+        expr: increase(alys_chain_forks_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          service: alys-core
+          component: chain
+        annotations:
+          summary: "Chain fork detected"
+          description: "{{ $value }} chain forks detected in the last 5 minutes"
+          runbook_url: "https://docs.alys.dev/runbooks/chain-fork"
+
+      # Consensus Alerts  
+      - alert: ConsensusParticipationLow
+        expr: alys_consensus_participation_rate < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-core
+          component: consensus
+        annotations:
+          summary: "Low consensus participation"
+          description: "Consensus participation rate is {{ $value | humanizePercentage }}"
+
+      - alert: MissedBlockProposals
+        expr: rate(alys_missed_block_proposals_total[10m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: consensus
+        annotations:
+          summary: "Missing block proposals"
+          description: "Missed block proposal rate is {{ $value | humanize }} proposals/second"
+
+      # Resource Impact on Performance
+      - alert: SyncImpactingPerformance
+        expr: rate(alys_sync_cpu_seconds_total[5m]) > 0.7
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: resources
+        annotations:
+          summary: "Sync process consuming high CPU"
+          description: "Sync process CPU usage is {{ $value | humanizePercentage }}"
+
+      - alert: MemoryPressureAffectingSync
+        expr: alys_sync_memory_usage_bytes / alys_system_memory_total_bytes > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-core
+          component: resources
+        annotations:
+          summary: "High memory pressure affecting sync"
+          description: "Sync memory usage is {{ $value | humanizePercentage }} of total system memory"

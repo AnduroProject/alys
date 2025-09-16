@@ -1,9 +1,10 @@
-use crate::aura::AuraError;
-use bridge::Error as FederationError;
-use lighthouse_wrapper::execution_layer;
+use crate::types::consensus::AuraError;
+use crate::bridge_compat::Error as FederationError;
+use lighthouse_facade::execution_layer;
 use std::time::SystemTimeError;
 use strum::Display;
 use thiserror::Error;
+use eyre;
 
 #[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, Error, Display)]
@@ -128,5 +129,25 @@ impl From<execution_layer::Error> for Error {
 impl From<ChainError> for Error {
     fn from(e: ChainError) -> Self {
         Error::ChainError(e)
+    }
+}
+
+impl From<crate::types::errors::ChainError> for Error {
+    fn from(e: crate::types::errors::ChainError) -> Self {
+        // Convert V2 ChainError to legacy Error
+        match e {
+            crate::types::errors::ChainError::InvalidBlock { reason } => Error::InvalidBlock,
+            crate::types::errors::ChainError::BlockNotFound { .. } => Error::MissingBlock,
+            crate::types::errors::ChainError::InvalidParentBlock { .. } => Error::MissingParent,
+            crate::types::errors::ChainError::InvalidTransaction { .. } => Error::InvalidBlock,
+            crate::types::errors::ChainError::StateUpdateFailed { .. } => Error::InvalidBlock,
+            crate::types::errors::ChainError::NotValidator => Error::UnknownAuthority,
+            crate::types::errors::ChainError::InvalidSignature => Error::InvalidSignature,
+            crate::types::errors::ChainError::ConsensusFailure { reason } => Error::GenericError(eyre::eyre!(reason)),
+            crate::types::errors::ChainError::ProductionPaused { .. } => Error::ChainSyncing,
+            crate::types::errors::ChainError::InternalError { reason, .. } => Error::GenericError(eyre::eyre!(reason)),
+            // Map other variants as appropriate
+            _ => Error::GenericError(eyre::eyre!("Chain error: {:?}", e)),
+        }
     }
 }

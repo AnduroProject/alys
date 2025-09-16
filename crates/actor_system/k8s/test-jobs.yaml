@@ -1,0 +1,218 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: integration-test-job
+  namespace: alys-v2-testing
+  labels:
+    app: integration-test
+    test-type: integration
+spec:
+  ttlSecondsAfterFinished: 3600  # Clean up after 1 hour
+  template:
+    metadata:
+      labels:
+        app: integration-test
+        test-type: integration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: alys-test-runner
+      containers:
+      - name: integration-test
+        image: alys-v2-test-runner:latest
+        command: ["cargo"]
+        args: ["test", "--", "--test-threads=1", "integration_tests", "--nocapture"]
+        env:
+        - name: RUST_LOG
+          value: "debug"
+        - name: TEST_ENVIRONMENT
+          value: "k8s"
+        - name: GOVERNANCE_ENDPOINTS
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: governance_mock_endpoints
+        - name: BITCOIN_RPC_URL
+          value: "http://mock-bitcoin-node:18332"
+        - name: ETHEREUM_RPC_URL
+          value: "http://mock-ethereum-node:8545"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: test-results
+          mountPath: /test-results
+      volumes:
+      - name: test-results
+        emptyDir: {}
+  backoffLimit: 2
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: supervision-test-job
+  namespace: alys-v2-testing
+  labels:
+    app: supervision-test
+    test-type: supervision
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: supervision-test
+        test-type: supervision
+    spec:
+      restartPolicy: Never
+      serviceAccountName: alys-test-runner
+      containers:
+      - name: supervision-test
+        image: alys-v2-test-runner:latest
+        command: ["cargo"]
+        args: ["test", "--", "--test-threads=1", "supervision_tests", "--nocapture"]
+        env:
+        - name: RUST_LOG
+          value: "debug"
+        - name: TEST_ENVIRONMENT
+          value: "k8s"
+        - name: MAX_TEST_ACTORS
+          valueFrom:
+            configMapKeyRef:
+              name: test-config
+              key: max_test_actors
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: test-results
+          mountPath: /test-results
+      volumes:
+      - name: test-results
+        emptyDir: {}
+  backoffLimit: 2
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: performance-test-job
+  namespace: alys-v2-testing
+  labels:
+    app: performance-test
+    test-type: performance
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: performance-test
+        test-type: performance
+    spec:
+      restartPolicy: Never
+      serviceAccountName: alys-test-runner
+      containers:
+      - name: performance-test
+        image: alys-v2-test-runner:latest
+        command: ["cargo"]
+        args: ["test", "--release", "--", "--test-threads=1", "performance", "--nocapture"]
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: TEST_ENVIRONMENT
+          value: "k8s"
+        - name: PERFORMANCE_TEST_DURATION
+          value: "300"  # 5 minutes
+        - name: TARGET_MESSAGE_RATE
+          value: "1000"  # messages per second
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        volumeMounts:
+        - name: test-results
+          mountPath: /test-results
+      volumes:
+      - name: test-results
+        emptyDir: {}
+  backoffLimit: 1
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-regression-tests
+  namespace: alys-v2-testing
+  labels:
+    app: regression-test
+    test-type: regression
+    schedule: nightly
+spec:
+  schedule: "0 2 * * *"  # Run at 2 AM every day
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 7200  # Clean up after 2 hours
+      template:
+        metadata:
+          labels:
+            app: regression-test
+            test-type: regression
+        spec:
+          restartPolicy: Never
+          serviceAccountName: alys-test-runner
+          containers:
+          - name: regression-test
+            image: alys-v2-test-runner:latest
+            command: ["cargo"]
+            args: ["test", "--release", "--", "--test-threads=1", "--nocapture"]
+            env:
+            - name: RUST_LOG
+              value: "info"
+            - name: TEST_ENVIRONMENT
+              value: "k8s_nightly"
+            - name: COMPREHENSIVE_TESTING
+              value: "true"
+            - name: GOVERNANCE_ENDPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: test-config
+                  key: governance_mock_endpoints
+            resources:
+              requests:
+                memory: "4Gi"
+                cpu: "2000m"
+              limits:
+                memory: "16Gi"
+                cpu: "8000m"
+            volumeMounts:
+            - name: test-results
+              mountPath: /test-results
+            - name: test-reports
+              mountPath: /test-reports
+          volumes:
+          - name: test-results
+            emptyDir: {}
+          - name: test-reports
+            persistentVolumeClaim:
+              claimName: test-reports-pvc
+          backoffLimit: 1
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-reports-pvc
+  namespace: alys-v2-testing
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard

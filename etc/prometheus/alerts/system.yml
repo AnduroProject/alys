@@ -1,0 +1,265 @@
+# ALYS V2 System Resource Alert Rules
+# For ALYS-003-24: Comprehensive alert rules for system failures and resource monitoring
+
+groups:
+  - name: system_alerts
+    interval: 30s  
+    rules:
+      # Critical System Alerts
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: system
+          component: availability
+        annotations:
+          summary: "Instance is down"
+          description: "Instance {{ $labels.instance }} has been down for more than 1 minute"
+          runbook_url: "https://docs.alys.dev/runbooks/instance-down"
+
+      - alert: SystemOutOfMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          service: system
+          component: memory
+        annotations:
+          summary: "System critically low on memory"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+          runbook_url: "https://docs.alys.dev/runbooks/out-of-memory"
+
+      - alert: SystemDiskSpaceCritical
+        expr: (1 - (node_filesystem_free_bytes / node_filesystem_size_bytes)) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          service: system
+          component: disk
+        annotations:
+          summary: "Critical disk space shortage"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          runbook_url: "https://docs.alys.dev/runbooks/disk-space-critical"
+
+      - alert: SystemCPUOverload
+        expr: (1 - (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.9
+        for: 10m
+        labels:
+          severity: critical  
+          service: system
+          component: cpu
+        annotations:
+          summary: "System CPU overloaded"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+          runbook_url: "https://docs.alys.dev/runbooks/cpu-overload"
+
+      # Warning Level System Alerts
+      - alert: SystemHighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: memory
+        annotations:
+          summary: "High system memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: SystemHighDiskUsage
+        expr: (1 - (node_filesystem_free_bytes / node_filesystem_size_bytes)) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: disk
+        annotations:
+          summary: "High disk usage detected"
+          description: "Disk usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+
+      - alert: SystemHighCPUUsage  
+        expr: (1 - (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.7
+        for: 15m
+        labels:
+          severity: warning
+          service: system
+          component: cpu
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # I/O Performance Alerts
+      - alert: SystemHighDiskIOWait
+        expr: rate(node_cpu_seconds_total{mode="iowait"}[5m]) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: io
+        annotations:
+          summary: "High disk I/O wait time"
+          description: "I/O wait time is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: SystemDiskIOSaturation
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: io
+        annotations:
+          summary: "Disk I/O saturation detected"  
+          description: "Disk I/O utilization is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: SystemNetworkSaturation
+        expr: rate(node_network_receive_bytes_total[5m]) + rate(node_network_transmit_bytes_total[5m]) > 100000000
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: network
+        annotations:
+          summary: "High network utilization"
+          description: "Network utilization is {{ $value | humanizeBytes }}/sec on {{ $labels.instance }}"
+
+      # File System Alerts
+      - alert: SystemInodeFull
+        expr: node_filesystem_files_free / node_filesystem_files < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: system
+          component: filesystem
+        annotations:
+          summary: "File system inodes nearly exhausted"
+          description: "Only {{ $value | humanizePercentage }} inodes remaining on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          runbook_url: "https://docs.alys.dev/runbooks/inode-exhaustion"
+
+      - alert: SystemDiskReadErrors
+        expr: rate(node_disk_read_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: system
+          component: disk
+        annotations:
+          summary: "Disk read errors detected"
+          description: "{{ $value | humanize }} disk read errors/second on {{ $labels.instance }}"
+
+      - alert: SystemDiskWriteErrors
+        expr: rate(node_disk_write_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: system
+          component: disk
+        annotations:
+          summary: "Disk write errors detected"
+          description: "{{ $value | humanize }} disk write errors/second on {{ $labels.instance }}"
+
+      # Process and Service Monitoring
+      - alert: SystemTooManyProcesses
+        expr: node_procs_running > 500
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: processes
+        annotations:
+          summary: "High number of running processes"
+          description: "{{ $value }} processes running on {{ $labels.instance }}"
+
+      - alert: SystemLoadAverage
+        expr: node_load15 > node_cpu_count * 2
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          component: load
+        annotations:
+          summary: "High system load average"
+          description: "15-minute load average is {{ $value }} on {{ $labels.instance }} ({{ $labels.cpu_count }} CPUs)"
+
+      # ALYS-Specific System Resource Alerts
+      - alert: ALYSProcessMemoryHigh
+        expr: alys_process_memory_usage_bytes > 8000000000
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-system
+          component: memory
+        annotations:
+          summary: "ALYS process using excessive memory"
+          description: "ALYS process memory usage is {{ $value | humanizeBytes }} on {{ $labels.instance }}"
+
+      - alert: ALYSProcessCPUHigh
+        expr: rate(alys_process_cpu_seconds_total[5m]) > 0.8
+        for: 15m
+        labels:
+          severity: warning
+          service: alys-system
+          component: cpu
+        annotations:
+          summary: "ALYS process high CPU usage"
+          description: "ALYS process CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      - alert: ALYSFileDescriptorLimit
+        expr: alys_process_open_file_descriptors / alys_process_max_file_descriptors > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-system
+          component: resources
+        annotations:
+          summary: "ALYS process approaching file descriptor limit"
+          description: "ALYS process using {{ $value | humanizePercentage }} of available file descriptors"
+
+      # Database/Storage Specific (if applicable)
+      - alert: DatabaseConnectionPoolExhausted
+        expr: alys_db_connection_pool_active / alys_db_connection_pool_max > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: alys-system
+          component: database
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "{{ $value | humanizePercentage }} of database connections in use"
+          runbook_url: "https://docs.alys.dev/runbooks/db-connection-pool"
+
+      - alert: DatabaseQuerySlow
+        expr: histogram_quantile(0.95, rate(alys_db_query_duration_seconds_bucket[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: alys-system
+          component: database
+        annotations:
+          summary: "Slow database queries detected"
+          description: "P95 database query time is {{ $value | humanizeDuration }}"
+
+      # Time and Clock Synchronization
+      - alert: SystemClockSkew
+        expr: abs(node_timex_offset_seconds) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+          component: time
+        annotations:
+          summary: "System clock skew detected"
+          description: "System clock offset is {{ $value | humanizeDuration }} on {{ $labels.instance }}"
+          runbook_url: "https://docs.alys.dev/runbooks/clock-skew"
+
+      # Security and Monitoring Alerts
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful != 1
+        for: 5m
+        labels:
+          severity: warning
+          service: monitoring
+          component: prometheus
+        annotations:
+          summary: "Prometheus configuration reload failed"
+          description: "Prometheus failed to reload configuration on {{ $labels.instance }}"
+          runbook_url: "https://docs.alys.dev/runbooks/prometheus-config-reload"

@@ -1,0 +1,153 @@
+# ALYS V2 Migration Alert Rules
+# For ALYS-003-24: Comprehensive alert rules for migration stalls, error rates, rollbacks, and system failures
+
+groups:
+  - name: migration_alerts
+    interval: 30s
+    rules:
+      # Critical Migration Alerts
+      - alert: MigrationRollback
+        expr: increase(alys_migration_rollbacks_total[1m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          service: alys-migration
+          component: migration
+        annotations:
+          summary: "Migration rollback detected"
+          description: "A migration rollback has been detected. This indicates a critical failure in the migration process."
+          runbook_url: "https://docs.alys.dev/runbooks/migration-rollback"
+          dashboard_url: "http://grafana:3000/d/migration/migration-dashboard"
+
+      - alert: MigrationStalled
+        expr: rate(alys_migration_progress_percent[10m]) == 0 and alys_migration_phase > 0
+        for: 15m
+        labels:
+          severity: critical  
+          service: alys-migration
+          component: migration
+        annotations:
+          summary: "Migration progress has stalled"
+          description: "Migration phase {{ $labels.phase }} has not progressed in 15 minutes. Current progress: {{ $value }}%"
+          runbook_url: "https://docs.alys.dev/runbooks/migration-stall"
+          dashboard_url: "http://grafana:3000/d/migration/migration-dashboard"
+
+      - alert: MigrationErrorRateHigh
+        expr: rate(alys_migration_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: alys-migration  
+          component: migration
+        annotations:
+          summary: "High migration error rate detected"
+          description: "Migration error rate is {{ $value | humanize }} errors/second over the last 5 minutes"
+          runbook_url: "https://docs.alys.dev/runbooks/migration-errors"
+          dashboard_url: "http://grafana:3000/d/migration/migration-dashboard"
+
+      - alert: MigrationPhaseTimeout
+        expr: time() - alys_migration_phase_start_timestamp > 3600 and alys_migration_phase > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-migration
+          component: migration
+        annotations:
+          summary: "Migration phase running longer than expected" 
+          description: "Migration phase {{ $labels.phase }} has been running for over 1 hour"
+          runbook_url: "https://docs.alys.dev/runbooks/migration-timeout"
+
+      # Migration Progress Alerts
+      - alert: MigrationProgressSlow
+        expr: rate(alys_migration_progress_percent[30m]) < 0.1 and alys_migration_phase > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: alys-migration
+          component: migration
+        annotations:
+          summary: "Migration progress is unusually slow"
+          description: "Migration progress rate is {{ $value | humanize }}%/min, which is below normal thresholds"
+
+      - alert: MigrationDataIntegrityIssue
+        expr: alys_migration_data_integrity_errors_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: alys-migration
+          component: data
+        annotations:
+          summary: "Migration data integrity issues detected"
+          description: "{{ $value }} data integrity errors detected during migration"
+          runbook_url: "https://docs.alys.dev/runbooks/data-integrity"
+
+      - alert: MigrationMemoryUsageHigh
+        expr: alys_migration_memory_usage_bytes / alys_migration_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-migration
+          component: resources
+        annotations:
+          summary: "Migration process memory usage is high"
+          description: "Migration process is using {{ $value | humanizePercentage }} of available memory"
+
+      - alert: MigrationDiskSpaceLow
+        expr: alys_migration_disk_free_bytes / alys_migration_disk_total_bytes < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: alys-migration
+          component: resources
+        annotations:
+          summary: "Low disk space during migration"
+          description: "Only {{ $value | humanizePercentage }} disk space remaining for migration data"
+          runbook_url: "https://docs.alys.dev/runbooks/disk-space"
+
+      # Migration State Validation
+      - alert: MigrationStateInconsistent
+        expr: alys_migration_state_validation_failures_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: alys-migration
+          component: validation
+        annotations:
+          summary: "Migration state validation failures"
+          description: "{{ $value }} state validation failures detected during migration"
+          runbook_url: "https://docs.alys.dev/runbooks/state-validation"
+
+      - alert: MigrationBatchProcessingFailed
+        expr: rate(alys_migration_batch_failures_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: alys-migration  
+          component: processing
+        annotations:
+          summary: "Migration batch processing failures detected"
+          description: "Batch processing failure rate: {{ $value | humanize }} failures/second"
+
+      # Recovery and Checkpoint Alerts  
+      - alert: MigrationCheckpointFailed
+        expr: alys_migration_checkpoint_failures_total > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: alys-migration
+          component: checkpoint
+        annotations:
+          summary: "Migration checkpoint creation failed"
+          description: "{{ $value }} checkpoint creation failures detected"
+          runbook_url: "https://docs.alys.dev/runbooks/checkpoint-failure"
+
+      - alert: MigrationRecoveryTriggered
+        expr: increase(alys_migration_recovery_attempts_total[1m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          service: alys-migration
+          component: recovery
+        annotations:
+          summary: "Migration recovery mechanism triggered"
+          description: "Migration recovery has been triggered {{ $value }} times in the last minute"

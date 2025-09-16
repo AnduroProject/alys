@@ -17,12 +17,9 @@ edition = "2021"
 #store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
 #bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
 
-lighthouse_wrapper = { package = "lighthouse_wrapper", path = "../crates/lighthouse_wrapper" }
-
-
-
 # workspace
-bridge = { package = "federation", path = "../crates/federation" }
+actor_system = { path = "../crates/actor_system" }
+lighthouse_facade = { path = "../crates/lighthouse_facade" }
 
 # misc
 clap = { workspace = true }
@@ -45,6 +42,12 @@ once_cell = "1.19.0"
 prometheus = { workspace = true }
 lazy_static = { workspace = true }
 svix-ksuid = "0.8.0"
+sysinfo = "0.30"
+
+# feature flags
+chrono = { workspace = true, features = ["serde"] }
+ipnetwork = "0.20"
+notify = "6.1"
 
 # async
 futures = { workspace = true }
@@ -52,10 +55,37 @@ futures-timer = "3.0.1"
 tokio = { workspace = true, features = ["time"] }
 tokio-util = { version = "0.6", features = ["codec", "compat", "time"] }
 tokio-io-timeout = "1"
-async-trait = "0.1"
+async-trait = { workspace = true }
+
+# Additional dependencies for compilation
+dashmap = "5.5"
+serde_yaml = "0.9"
+
+# Missing dependencies for compilation
+actix-rt = { workspace = true }
+parking_lot = "0.12"
+
+# V2 Actor System
+actix = { workspace = true }
+uuid = { workspace = true }
+num_cpus = { workspace = true }
+toml = { workspace = true }
+
+# gRPC for governance communication
+tonic = "0.10"
+prost = "0.12"
+tokio-stream = "0.1"
+
+# Compression
+flate2 = "1.0"
+
+# CBOR serialization
+serde_cbor = "0.11"
 
 # storage
 leveldb = { version = "0.8" }
+rocksdb = "0.22"
+lru = "0.12"
 
 # encoding
 ethereum_ssz = { version = "0.5", features = ["arbitrary"] }
@@ -78,12 +108,45 @@ bitcoin = { workspace = true, features = ["serde"] }
 
 # networking
 hyper = { version = "0.14", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+tokio-tungstenite = "0.20"
 rust_decimal = { version = "1.37.1", features = ["macros"] }
 
+# Network Actor Dependencies
+rayon = "1.8"       # Parallel processing for sync validation
+bincode = "1.3"     # Fast serialization for network messages
+
+# Cryptographic hashing and system info
+sha2 = "0.10"
+hostname = "0.3"
+rustc_version = "0.4"
+validator = "0.18"
+
+# Optional SIMD optimizations
+wide = { version = "0.7", features = ["std"], optional = true }
+
 [dependencies.libp2p]
-version = "0.52"
+version = "0.54"
 default-features = false
-features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
+features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic","kad", "request-response", "ping"]
+
+[build-dependencies]
+tonic-build = "0.10"
 
 [dev-dependencies]
 tempfile = "3.8.1"
+criterion = { version = "0.5", features = ["html_reports"] }
+sha2 = "0.10"
+validator = "0.18"
+tracing-test = "0.2"
+hostname = "0.3"
+rustc_version = "0.4"
+dashmap = "5.5"
+
+[[bench]]
+name = "sync_benchmarks"
+harness = false
+
+[features]
+default = []
+simd = ["wide"]

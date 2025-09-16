@@ -1,0 +1,11 @@
+{
+    "test_suite": "lighthouse_e2e_compatibility",
+    "start_time": "2025-08-22T20:14:53.3NZ",
+    "environment": {
+        "os": "Darwin",
+        "arch": "arm64", 
+        "rust_version": "rustc 1.87.0 (17067e9ac 2025-05-09)",
+        "alys_version": "4f29b7f"
+    },
+    "tests": {}
+}

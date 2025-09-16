@@ -1,0 +1,308 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-governance-1
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-governance
+      instance: governance-1
+  template:
+    metadata:
+      labels:
+        app: mock-governance
+        instance: governance-1
+    spec:
+      containers:
+      - name: mock-governance
+        image: mock-governance:latest
+        ports:
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: GOVERNANCE_NODE_ID
+          value: "governance-node-1"
+        - name: GRPC_PORT
+          value: "50051"
+        - name: MOCK_DELAY_MS
+          value: "10"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-governance-1
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-1
+spec:
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+  selector:
+    app: mock-governance
+    instance: governance-1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-governance-2
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-governance
+      instance: governance-2
+  template:
+    metadata:
+      labels:
+        app: mock-governance
+        instance: governance-2
+    spec:
+      containers:
+      - name: mock-governance
+        image: mock-governance:latest
+        ports:
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: GOVERNANCE_NODE_ID
+          value: "governance-node-2"
+        - name: GRPC_PORT
+          value: "50051"
+        - name: MOCK_DELAY_MS
+          value: "15"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-governance-2
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-2
+spec:
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+  selector:
+    app: mock-governance
+    instance: governance-2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-governance-3
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-governance
+      instance: governance-3
+  template:
+    metadata:
+      labels:
+        app: mock-governance
+        instance: governance-3
+    spec:
+      containers:
+      - name: mock-governance
+        image: mock-governance:latest
+        ports:
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: GOVERNANCE_NODE_ID
+          value: "governance-node-3"
+        - name: GRPC_PORT
+          value: "50051"
+        - name: MOCK_DELAY_MS
+          value: "20"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-governance-3
+  namespace: alys-v2-testing
+  labels:
+    app: mock-governance
+    instance: governance-3
+spec:
+  ports:
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+  selector:
+    app: mock-governance
+    instance: governance-3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-bitcoin-node
+  namespace: alys-v2-testing
+  labels:
+    app: mock-bitcoin-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-bitcoin-node
+  template:
+    metadata:
+      labels:
+        app: mock-bitcoin-node
+    spec:
+      containers:
+      - name: mock-bitcoin
+        image: mock-bitcoin-node:latest
+        ports:
+        - containerPort: 18332
+          name: rpc
+        - containerPort: 18333
+          name: p2p
+        env:
+        - name: BITCOIN_NETWORK
+          value: "regtest"
+        - name: RPC_PORT
+          value: "18332"
+        - name: P2P_PORT
+          value: "18333"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        volumeMounts:
+        - name: bitcoin-data
+          mountPath: /bitcoin-data
+      volumes:
+      - name: bitcoin-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-bitcoin-node
+  namespace: alys-v2-testing
+  labels:
+    app: mock-bitcoin-node
+spec:
+  ports:
+  - port: 18332
+    targetPort: 18332
+    protocol: TCP
+    name: rpc
+  - port: 18333
+    targetPort: 18333
+    protocol: TCP
+    name: p2p
+  selector:
+    app: mock-bitcoin-node
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-ethereum-node
+  namespace: alys-v2-testing
+  labels:
+    app: mock-ethereum-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-ethereum-node
+  template:
+    metadata:
+      labels:
+        app: mock-ethereum-node
+    spec:
+      containers:
+      - name: mock-ethereum
+        image: mock-ethereum-node:latest
+        ports:
+        - containerPort: 8545
+          name: http-rpc
+        - containerPort: 8546
+          name: ws-rpc
+        env:
+        - name: ETHEREUM_NETWORK
+          value: "development"
+        - name: HTTP_RPC_PORT
+          value: "8545"
+        - name: WS_RPC_PORT
+          value: "8546"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        volumeMounts:
+        - name: ethereum-data
+          mountPath: /ethereum-data
+      volumes:
+      - name: ethereum-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-ethereum-node
+  namespace: alys-v2-testing
+  labels:
+    app: mock-ethereum-node
+spec:
+  ports:
+  - port: 8545
+    targetPort: 8545
+    protocol: TCP
+    name: http-rpc
+  - port: 8546
+    targetPort: 8546
+    protocol: TCP
+    name: ws-rpc
+  selector:
+    app: mock-ethereum-node

@@ -1,11 +1,11 @@
 use crate::error::Error;
-use lighthouse_wrapper::bls::SignatureSet;
-use lighthouse_wrapper::types::AggregateSignature;
-use lighthouse_wrapper::types::BitList;
-use lighthouse_wrapper::types::Hash256;
-use lighthouse_wrapper::types::PublicKey;
-use lighthouse_wrapper::types::Signature;
-use lighthouse_wrapper::types::Unsigned;
+use lighthouse_facade::bls::SignatureSet;
+use lighthouse_facade::types::AggregateSignature;
+use lighthouse_facade::types::BitList;
+use lighthouse_facade::types::Hash256;
+use lighthouse_facade::types::PublicKey;
+use lighthouse_facade::types::Signature;
+use lighthouse_facade::types::Unsigned;
 use serde_derive::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use ssz_types::typenum::U15;
@@ -66,7 +66,7 @@ impl IndividualApproval {
 
 #[derive(Debug, Encode, Decode, Serialize, Deserialize, TreeHash, Clone, PartialEq)]
 pub struct AggregateApproval {
-    aggregation_bits: BitList<MaxValidators>,
+    aggregation_bits: BitList,
     aggregate_signature: AggregateSignature,
 }
 
@@ -125,7 +125,7 @@ impl AggregateApproval {
 #[cfg(test)]
 mod test {
     use super::*;
-    use lighthouse_wrapper::types::SecretKey;
+    use lighthouse_facade::types::SecretKey;
 
     #[test]
     fn test_aggregate_signatures() {

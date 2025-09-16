@@ -1,0 +1,1286 @@
+//! Bridge and two-way peg related types
+
+use crate::types::*;
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime};
+use bitcoin::Address as BtcAddress;
+// Use consolidated federation types from actor_system
+pub use actor_system::{FederationConfig, FederationMember};
+
+/// Consolidated request type for all bridge stream operations
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequestType {
+    /// Peg-out signature requests
+    PegOutSignature,
+    /// Federation update requests
+    FederationUpdate,
+    /// Heartbeat requests
+    Heartbeat,
+    /// Status check requests
+    StatusCheck,
+    /// Node registration requests
+    NodeRegistration,
+    /// Peg-in notification requests
+    PegInNotification,
+}
+
+/// Status of signature collection for bridge operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureCollectionStatus {
+    /// No signatures requested yet
+    NotRequested,
+    /// Signatures have been requested
+    Requested,
+    /// All required signatures collected
+    Complete,
+    /// Signature collection timed out
+    Timeout,
+    /// Signature collection failed
+    Failed,
+}
+
+/// Signature collection status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureStatus {
+    pub request_id: Option<String>,
+    pub requested_at: Option<SystemTime>,
+    pub signatures_collected: u32,
+    pub signatures_required: u32,
+    pub status: SignatureCollectionStatus,
+}
+
+/// Pending peg-out operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPegOut {
+    pub burn_tx_hash: Hash256,
+    pub destination_address: BtcAddress,
+    pub amount: u64,
+    pub requester: Address,
+    pub unsigned_tx: Option<bitcoin::Transaction>,
+    pub signature_status: SignatureStatus,
+    pub witnesses: Vec<Hash256>,
+    pub signed_tx: Option<bitcoin::Transaction>,
+    pub broadcast_txid: Option<bitcoin::Txid>,
+    pub status: PegOperationStatus,
+}
+
+/// Pending request tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequest {
+    pub request_id: String,
+    pub request_type: RequestType,
+    pub pegout_id: Option<String>,
+    pub created_at: SystemTime,
+    pub timestamp: SystemTime,
+    pub timeout: Option<Duration>,
+    pub retry_count: u32,
+}
+
+/// Governance endpoint configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceEndpoint {
+    pub url: String,
+    pub priority: u32,
+    pub timeout: Duration,
+    pub enabled: bool,
+}
+
+/// Federation migration strategy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FederationMigrationStrategy {
+    Gradual { phases: u32 },
+    Immediate,
+    Scheduled { at_block: u64 },
+    Manual,
+}
+
+/// Federation authority information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationAuthority {
+    pub id: String,
+    pub public_key: Vec<u8>,
+    pub weight: u64,
+    pub active: bool,
+}
+
+/// Status of refund operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefundStatus {
+    /// Refund not initiated
+    NotInitiated,
+    /// Refund in progress
+    Pending,
+    /// Refund completed successfully
+    Completed,
+    /// Refund failed
+    Failed,
+    /// Refund cancelled
+    Cancelled,
+}
+
+/// Who initiated an operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OperationInitiator {
+    /// User-initiated operation
+    User { user_address: Address },
+    /// System-initiated operation
+    System { component: String },
+    /// Governance-initiated operation
+    Governance { decision_id: String },
+    /// Automatic operation (scheduled)
+    Automatic { trigger: String },
+}
+
+/// Governance decision structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceDecision {
+    /// Unique decision ID
+    pub id: String,
+    /// Decision type
+    pub decision_type: String,
+    /// Decision outcome
+    pub approved: bool,
+    /// Voting details
+    pub votes: Vec<ProposalVote>,
+    /// Decision timestamp
+    pub decided_at: SystemTime,
+    /// Implementation deadline
+    pub deadline: Option<SystemTime>,
+}
+
+/// Governance approval information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceApproval {
+    /// Approval ID
+    pub id: String,
+    /// Approver identity
+    pub approver: String,
+    /// Approval timestamp
+    pub approved_at: SystemTime,
+    /// Signature/proof of approval
+    pub signature: Vec<u8>,
+}
+
+/// Detailed governance approval information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceApprovalDetails {
+    /// Basic approval info
+    pub approval: GovernanceApproval,
+    /// Additional context
+    pub context: String,
+    /// Approval conditions
+    pub conditions: Vec<String>,
+    /// Expiry time
+    pub expires_at: Option<SystemTime>,
+}
+
+/// Proposal vote information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposalVote {
+    /// Voter identity
+    pub voter: String,
+    /// Vote value
+    pub vote: bool,
+    /// Voting timestamp
+    pub voted_at: SystemTime,
+    /// Vote weight (if applicable)
+    pub weight: Option<u64>,
+}
+
+/// Required governance action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RequiredGovernanceAction {
+    /// Requires simple approval
+    SimpleApproval { threshold: f64 },
+    /// Requires multi-signature
+    MultiSignature { required_signatures: u32 },
+    /// Requires unanimous consent
+    Unanimous,
+    /// Emergency override possible
+    EmergencyOverride { override_conditions: Vec<String> },
+}
+
+/// Recovery option for failed operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RecoveryOption {
+    /// Retry the operation
+    Retry { max_attempts: u32 },
+    /// Use alternative method
+    Alternative { method: String },
+    /// Manual intervention required
+    Manual { instructions: String },
+    /// Skip/cancel operation
+    Skip { reason: String },
+}
+
+/// Progress stage for long-running operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProgressStage {
+    /// Initial validation
+    Validation,
+    /// Signature collection
+    SignatureCollection,
+    /// Transaction building
+    TransactionBuilding,
+    /// Broadcasting
+    Broadcasting,
+    /// Confirmation waiting
+    Confirming,
+    /// Completion
+    Completed,
+}
+
+/// Load balancing information for distributed operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadBalancingInfo {
+    /// Current load level
+    pub load_level: f64,
+    /// Available capacity
+    pub available_capacity: u64,
+    /// Active operations count
+    pub active_operations: u32,
+    /// Average response time
+    pub avg_response_time: Duration,
+    /// Last updated timestamp
+    pub last_updated: SystemTime,
+}
+
+/// Execution window for time-constrained operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionWindow {
+    /// Window start time
+    pub start_time: SystemTime,
+    /// Window end time
+    pub end_time: SystemTime,
+    /// Priority within the window
+    pub priority: u32,
+    /// Maximum allowed delay
+    pub max_delay: Duration,
+}
+
+/// Emergency bypass configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmergencyBypass {
+    /// Enable emergency bypass
+    pub enabled: bool,
+    /// Required authorization level
+    pub auth_level: String,
+    /// Emergency codes
+    pub bypass_codes: Vec<String>,
+    /// Maximum usage count
+    pub max_uses: Option<u32>,
+    /// Expiry time
+    pub expires_at: Option<SystemTime>,
+}
+
+/// Blockchain for confirmation tracking
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConfirmationBlockchain {
+    /// Bitcoin blockchain
+    Bitcoin,
+    /// Alys sidechain
+    Alys,
+    /// Ethereum mainnet (for bridge contracts)
+    Ethereum,
+}
+
+/// Federation update information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationUpdate {
+    pub update_type: String,
+    pub timestamp: SystemTime,
+}
+
+/// Escalation event for governance
+#[derive(Debug, Clone, Serialize, Deserialize)]  
+pub struct EscalationEvent {
+    pub severity: u32,
+    pub timestamp: SystemTime,
+}
+
+/// Validation steps for bridge operations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ValidationStep {
+    /// Check transaction validity
+    TransactionValidation,
+    /// Verify signatures
+    SignatureVerification,
+    /// Check amount and limits
+    AmountValidation,
+    /// Verify destination address
+    AddressValidation,
+    /// Check federation consensus
+    FederationConsensusCheck,
+    /// Verify blockchain confirmations
+    ConfirmationValidation,
+    /// Final approval step
+    FinalApproval,
+}
+
+/// Peg operation types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PegOperationType {
+    /// Peg-in from Bitcoin to Alys
+    PegIn {
+        bitcoin_txid: bitcoin::Txid,
+        bitcoin_output_index: u32,
+        amount_satoshis: u64,
+        recipient_address: Address,
+    },
+    /// Peg-out from Alys to Bitcoin
+    PegOut {
+        burn_tx_hash: H256,
+        amount_satoshis: u64,
+        bitcoin_recipient: bitcoin::Address,
+        fee_rate: Option<u64>,
+    },
+}
+
+/// Enhanced peg operation status with detailed workflow states
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PegOperationStatus {
+    /// Operation initiated
+    Initiated {
+        initiated_at: std::time::SystemTime,
+        initiator: OperationInitiator,
+    },
+    /// Validating initial conditions
+    Validating {
+        validation_started: std::time::SystemTime,
+        validations_completed: Vec<ValidationStep>,
+        validations_pending: Vec<ValidationStep>,
+    },
+    /// Waiting for governance approval
+    PendingGovernanceApproval {
+        submitted_to_governance: std::time::SystemTime,
+        governance_id: String,
+        required_approvals: u32,
+        current_approvals: u32,
+        approval_deadline: Option<std::time::SystemTime>,
+    },
+    /// Governance approved, ready for execution
+    Approved {
+        approved_at: std::time::SystemTime,
+        approved_by: Vec<GovernanceApproval>,
+        execution_window: Option<ExecutionWindow>,
+    },
+    /// Operation in progress
+    InProgress {
+        started_at: std::time::SystemTime,
+        progress_stages: Vec<ProgressStage>,
+        current_stage: String,
+        estimated_completion: Option<std::time::SystemTime>,
+    },
+    /// Waiting for confirmations
+    AwaitingConfirmations {
+        confirmations_started: std::time::SystemTime,
+        required_confirmations: u32,
+        current_confirmations: u32,
+        blockchain: ConfirmationBlockchain,
+    },
+    /// Operation completed successfully
+    Completed {
+        completed_at: std::time::SystemTime,
+        final_confirmations: u32,
+        // completion_proof: CompletionProof,
+        gas_used: Option<u64>,
+    },
+    /// Operation failed
+    Failed {
+        failed_at: std::time::SystemTime,
+        // failure_reason: FailureReason,
+        recovery_possible: bool,
+        recovery_options: Vec<RecoveryOption>,
+    },
+    /// Operation cancelled
+    Cancelled {
+        cancelled_at: std::time::SystemTime,
+        cancelled_by: OperationInitiator,
+        cancellation_reason: String,
+        refund_status: Option<RefundStatus>,
+    },
+    /// Operation suspended by governance
+    Suspended {
+        suspended_at: std::time::SystemTime,
+        suspended_by: String, // Governance decision ID
+        suspension_reason: String,
+        review_deadline: Option<std::time::SystemTime>,
+    },
+}
+
+/// Operation workflow state machine
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegOperationWorkflow {
+    /// Current workflow state
+    pub current_state: WorkflowState,
+    /// State transition history
+    pub state_history: Vec<StateTransition>,
+    /// Available next states
+    pub available_transitions: Vec<WorkflowTransition>,
+    /// Workflow configuration
+    pub workflow_config: WorkflowConfig,
+    /// State timeouts and deadlines
+    pub timeouts: WorkflowTimeouts,
+}
+
+/// Workflow configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowConfig {
+    /// Enable automatic state transitions
+    pub auto_transitions: bool,
+    /// Maximum retry attempts per state
+    pub max_retries: u32,
+    /// Enable state validation
+    pub enable_validation: bool,
+    /// Workflow priority level
+    pub priority: u32,
+}
+
+impl Default for WorkflowConfig {
+    fn default() -> Self {
+        Self {
+            auto_transitions: true,
+            max_retries: 3,
+            enable_validation: true,
+            priority: 1,
+        }
+    }
+}
+
+/// Workflow timeout configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTimeouts {
+    /// Timeout for state initialization
+    pub init_timeout: Duration,
+    /// Timeout for state transitions
+    pub transition_timeout: Duration,
+    /// Timeout for validation operations
+    pub validation_timeout: Duration,
+    /// Global workflow timeout
+    pub workflow_timeout: Duration,
+}
+
+impl Default for WorkflowTimeouts {
+    fn default() -> Self {
+        Self {
+            init_timeout: Duration::from_secs(30),
+            transition_timeout: Duration::from_secs(60),
+            validation_timeout: Duration::from_secs(45),
+            workflow_timeout: Duration::from_secs(300),
+        }
+    }
+}
+
+/// Workflow states
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum WorkflowState {
+    /// Initial state after creation
+    Created,
+    /// Validation phase
+    Validating,
+    /// Governance review phase
+    GovernanceReview,
+    /// Execution phase
+    Executing,
+    /// Confirmation phase
+    Confirming,
+    /// Final state - completed
+    Completed,
+    /// Final state - failed
+    Failed,
+    /// Final state - cancelled
+    Cancelled,
+    /// Suspended state
+    Suspended,
+}
+
+/// State transition record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateTransition {
+    /// Previous state
+    pub from_state: WorkflowState,
+    /// New state
+    pub to_state: WorkflowState,
+    /// When transition occurred
+    pub transitioned_at: std::time::SystemTime,
+    /// Actor that triggered the transition
+    pub triggered_by: Option<String>,
+    /// Transition reason/context
+    pub reason: String,
+    /// Additional metadata
+    pub metadata: std::collections::HashMap<String, String>,
+}
+
+/// Available workflow transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTransition {
+    /// Target state
+    pub to_state: WorkflowState,
+    /// Transition name/action
+    pub action: String,
+    /// Required conditions
+    pub conditions: Vec<TransitionCondition>,
+    /// Estimated time for transition
+    pub estimated_duration: Option<std::time::Duration>,
+}
+
+/// Conditions required for state transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransitionCondition {
+    /// Requires governance approval
+    GovernanceApproval { required_votes: u32 },
+    /// Requires specific confirmations
+    ConfirmationThreshold { confirmations: u32, blockchain: ConfirmationBlockchain },
+    /// Requires timeout to expire
+    TimeoutExpired { timeout: std::time::Duration },
+    /// Requires specific actor action
+    ActorAction { actor: String, action: String },
+    /// Custom condition
+    Custom { condition_id: String, description: String },
+}
+
+/// Governance integration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceIntegration {
+    /// Governance system configuration
+    pub governance_config: GovernanceConfig,
+    /// Current governance status
+    pub governance_status: GovernanceStatus,
+    /// Governance history for this operation
+    pub governance_history: Vec<GovernanceEvent>,
+    /// Required governance actions
+    pub required_actions: Vec<RequiredGovernanceAction>,
+    /// Governance decision trail
+    pub decision_trail: Vec<GovernanceDecision>,
+}
+
+/// Governance configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceConfig {
+    /// Governance system endpoint
+    pub governance_endpoint: String,
+    /// Required approval threshold
+    pub approval_threshold: u32,
+    /// Governance timeout
+    pub governance_timeout: std::time::Duration,
+    /// Governance categories that apply
+    pub applicable_categories: Vec<String>,
+    /// Emergency bypass conditions
+    pub emergency_bypass: Option<EmergencyBypass>,
+}
+
+/// Current governance status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceStatus {
+    /// Not yet submitted to governance
+    NotSubmitted,
+    /// Submitted and pending review
+    PendingReview {
+        submitted_at: std::time::SystemTime,
+        governance_id: String,
+    },
+    /// Under active review
+    UnderReview {
+        review_started: std::time::SystemTime,
+        assigned_reviewers: Vec<String>,
+    },
+    /// Additional information requested
+    InformationRequested {
+        requested_at: std::time::SystemTime,
+        requested_by: String,
+        information_needed: String,
+        response_deadline: std::time::SystemTime,
+    },
+    /// Approved by governance
+    Approved {
+        approved_at: std::time::SystemTime,
+        approval_details: GovernanceApprovalDetails,
+    },
+    /// Rejected by governance
+    Rejected {
+        rejected_at: std::time::SystemTime,
+        rejection_reason: String,
+        appeal_possible: bool,
+    },
+    /// Suspended pending further review
+    Suspended {
+        suspended_at: std::time::SystemTime,
+        suspension_reason: String,
+    },
+}
+
+/// Governance events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceEvent {
+    /// Event type
+    pub event_type: GovernanceEventType,
+    /// When event occurred
+    pub timestamp: std::time::SystemTime,
+    /// Event source/actor
+    pub source: String,
+    /// Event details
+    pub details: String,
+    /// Related governance ID
+    pub governance_id: Option<String>,
+}
+
+/// Types of governance events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceEventType {
+    /// Submission to governance
+    Submitted,
+    /// Review assigned
+    ReviewAssigned,
+    /// Vote cast
+    VoteCast,
+    /// Information requested
+    InformationRequested,
+    /// Information provided
+    InformationProvided,
+    /// Decision made
+    DecisionMade,
+    /// Appeal filed
+    AppealFiled,
+    /// Emergency action
+    EmergencyAction,
+}
+
+/// Actor system metadata for peg operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PegOperationActorMetadata {
+    /// Processing actor ID
+    pub processing_actor: Option<String>,
+    /// Actor that initiated the operation
+    pub initiating_actor: Option<String>,
+    /// Correlation ID for distributed tracing
+    pub correlation_id: Option<uuid::Uuid>,
+    /// Distributed tracing context
+    pub trace_context: crate::types::blockchain::TraceContext,
+    /// Operation priority
+    pub priority: OperationPriority,
+    /// Actor performance metrics
+    pub actor_metrics: ActorOperationMetrics,
+    /// Message routing information
+    pub routing_info: OperationRoutingInfo,
+}
+
+/// Operation priority levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum OperationPriority {
+    /// Low priority background operation
+    Low = 0,
+    /// Normal priority operation
+    Normal = 1,
+    /// High priority operation
+    High = 2,
+    /// Critical priority operation
+    Critical = 3,
+    /// Emergency operation
+    Emergency = 4,
+}
+
+/// Actor-specific operation metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActorOperationMetrics {
+    /// Processing time in actor
+    pub processing_time_ms: Option<u64>,
+    /// Queue time before processing
+    pub queue_time_ms: Option<u64>,
+    /// Number of actor hops
+    pub actor_hops: u32,
+    /// Messages sent during processing
+    pub messages_sent: u32,
+    /// Messages received during processing
+    pub messages_received: u32,
+    /// Memory usage during processing
+    pub memory_usage_bytes: Option<u64>,
+}
+
+/// Operation routing information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationRoutingInfo {
+    /// Route taken through actor system
+    pub actor_route: Vec<String>,
+    /// Routing decisions made
+    pub routing_decisions: Vec<RoutingDecision>,
+    /// Load balancing information
+    pub load_balancing: Option<LoadBalancingInfo>,
+}
+
+/// Routing decisions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingDecision {
+    /// Decision point
+    pub decision_point: String,
+    /// Available options
+    pub available_options: Vec<String>,
+    /// Chosen option
+    pub chosen_option: String,
+    /// Decision criteria
+    pub decision_criteria: String,
+    /// Decision timestamp
+    pub decided_at: std::time::SystemTime,
+}
+
+/// Performance tracking for operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationPerformanceMetrics {
+    /// Operation start time
+    pub started_at: std::time::SystemTime,
+    /// Operation completion time
+    pub completed_at: Option<std::time::SystemTime>,
+    /// Total processing duration
+    pub total_duration: Option<std::time::Duration>,
+    /// Time spent in each stage
+    pub stage_durations: std::collections::HashMap<String, std::time::Duration>,
+    /// Throughput metrics
+    pub throughput: ThroughputMetrics,
+    /// Resource utilization
+    pub resource_utilization: OperationResourceUtilization,
+    /// Performance benchmarks
+    pub benchmarks: PerformanceBenchmarks,
+}
+
+/// Throughput metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThroughputMetrics {
+    /// Operations per second
+    pub operations_per_second: f64,
+    /// Bytes processed per second
+    pub bytes_per_second: u64,
+    /// Transactions per second
+    pub transactions_per_second: f64,
+    /// Average latency
+    pub average_latency: std::time::Duration,
+}
+
+/// Operation-specific resource utilization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationResourceUtilization {
+    /// CPU usage percentage
+    pub cpu_usage: f64,
+    /// Memory usage in bytes
+    pub memory_usage: u64,
+    /// Network bandwidth used
+    pub network_usage: u64,
+    /// Disk I/O operations
+    pub disk_io_operations: u64,
+    /// Gas usage (for Alys transactions)
+    pub gas_used: Option<u64>,
+    /// Bitcoin transaction fees
+    pub bitcoin_fees_satoshis: Option<u64>,
+}
+
+/// Performance benchmarks and comparisons
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceBenchmarks {
+    /// Expected duration for this operation type
+    pub expected_duration: std::time::Duration,
+    /// Historical average duration
+    pub historical_average: Option<std::time::Duration>,
+    /// Performance percentile (vs historical operations)
+    pub performance_percentile: Option<f64>,
+    /// Efficiency score (0.0 to 1.0)
+    pub efficiency_score: f64,
+}
+
+/// Peg-in operation status and tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PegInStatus {
+    Detected {
+        bitcoin_txid: bitcoin::Txid,
+        detected_at: std::time::SystemTime,
+        confirmations: u32,
+    },
+    Confirming {
+        bitcoin_txid: bitcoin::Txid,
+        current_confirmations: u32,
+        required_confirmations: u32,
+        estimated_completion: Option<std::time::SystemTime>,
+    },
+    Confirmed {
+        bitcoin_txid: bitcoin::Txid,
+        alys_recipient: Address,
+        amount_satoshis: u64,
+        confirmed_at: std::time::SystemTime,
+    },
+    Processing {
+        bitcoin_txid: bitcoin::Txid,
+        alys_recipient: Address,
+        amount_satoshis: u64,
+        processing_started: std::time::SystemTime,
+    },
+    Completed {
+        bitcoin_txid: bitcoin::Txid,
+        alys_tx_hash: H256,
+        alys_recipient: Address,
+        amount_satoshis: u64,
+        completed_at: std::time::SystemTime,
+    },
+    Failed {
+        bitcoin_txid: bitcoin::Txid,
+        error_reason: String,
+        failed_at: std::time::SystemTime,
+        retry_count: u32,
+    },
+}
+
+/// Peg-out operation status and tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PegOutStatus {
+    Initiated {
+        burn_tx_hash: H256,
+        bitcoin_recipient: bitcoin::Address,
+        amount_satoshis: u64,
+        initiated_at: std::time::SystemTime,
+    },
+    ValidatingBurn {
+        burn_tx_hash: H256,
+        bitcoin_recipient: bitcoin::Address,
+        amount_satoshis: u64,
+        validation_started: std::time::SystemTime,
+    },
+    CollectingSignatures {
+        burn_tx_hash: H256,
+        bitcoin_tx_unsigned: bitcoin::Transaction,
+        signatures_collected: usize,
+        signatures_required: usize,
+        collection_started: std::time::SystemTime,
+        deadline: std::time::SystemTime,
+    },
+    SigningComplete {
+        burn_tx_hash: H256,
+        bitcoin_tx_signed: bitcoin::Transaction,
+        signatures: Vec<FederationSignature>,
+        completed_at: std::time::SystemTime,
+    },
+    Broadcasting {
+        burn_tx_hash: H256,
+        bitcoin_txid: bitcoin::Txid,
+        broadcast_attempts: u32,
+        last_attempt: std::time::SystemTime,
+    },
+    Broadcast {
+        burn_tx_hash: H256,
+        bitcoin_txid: bitcoin::Txid,
+        broadcast_at: std::time::SystemTime,
+        confirmations: u32,
+    },
+    Completed {
+        burn_tx_hash: H256,
+        bitcoin_txid: bitcoin::Txid,
+        amount_satoshis: u64,
+        completed_at: std::time::SystemTime,
+        final_confirmations: u32,
+    },
+    Failed {
+        burn_tx_hash: H256,
+        error_reason: String,
+        failed_at: std::time::SystemTime,
+        recovery_possible: bool,
+    },
+}
+
+// FederationMember and FederationConfig are now imported from actor_system crate above
+
+/// Federation signature for multi-sig operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationSignature {
+    pub signer_address: Address,
+    pub signature_data: Vec<u8>,
+    pub public_key: bitcoin::PublicKey,
+    pub signature_type: FederationSignatureType,
+    pub created_at: std::time::SystemTime,
+    pub message_hash: Hash256,
+}
+
+/// Types of federation signatures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FederationSignatureType {
+    ECDSA,
+    Schnorr,
+    BLS,
+    Threshold,
+}
+
+/// Bitcoin UTXO information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UtxoInfo {
+    pub outpoint: bitcoin::OutPoint,
+    pub value_satoshis: u64,
+    pub script_pubkey: bitcoin::ScriptBuf,
+    pub confirmations: u32,
+    pub is_locked: bool,
+    pub locked_until: Option<std::time::SystemTime>,
+    pub reserved_for: Option<String>, // Operation ID that reserved this UTXO
+}
+
+/// Bitcoin transaction fee estimation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeEstimate {
+    pub sat_per_vbyte: u64,
+    pub total_fee_satoshis: u64,
+    pub confidence_level: f64,
+    pub estimated_confirmation_blocks: u32,
+    pub estimated_confirmation_time: std::time::Duration,
+}
+
+/// Bridge operation metrics and statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeMetrics {
+    // Peg-in metrics
+    pub total_pegins: u64,
+    pub successful_pegins: u64,
+    pub failed_pegins: u64,
+    pub pending_pegins: u64,
+    pub total_pegin_value_satoshis: u64,
+    pub average_pegin_time: std::time::Duration,
+    
+    // Peg-out metrics
+    pub total_pegouts: u64,
+    pub successful_pegouts: u64,
+    pub failed_pegouts: u64,
+    pub pending_pegouts: u64,
+    pub total_pegout_value_satoshis: u64,
+    pub average_pegout_time: std::time::Duration,
+    
+    // Federation metrics
+    pub federation_health_score: f64,
+    pub active_federation_members: usize,
+    pub successful_signatures_24h: u64,
+    pub failed_signatures_24h: u64,
+    
+    // System metrics
+    pub bridge_uptime: std::time::Duration,
+    pub last_bitcoin_block_seen: u64,
+    pub bitcoin_node_sync_status: bool,
+}
+
+/// Bridge configuration parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfig {
+    pub bitcoin_network: bitcoin::Network,
+    pub bitcoin_node_url: String,
+    pub bitcoin_node_auth: BitcoinNodeAuth,
+    pub federation_config: FederationConfig,
+    pub monitoring_addresses: Vec<MonitoredAddress>,
+    pub operation_limits: OperationLimits,
+    pub security_params: SecurityParams,
+}
+
+/// Bitcoin node authentication
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BitcoinNodeAuth {
+    None,
+    UserPass { username: String, password: String },
+    Cookie { cookie_file: String },
+}
+
+/// Monitored Bitcoin address
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitoredAddress {
+    pub address: bitcoin::Address,
+    pub purpose: AddressPurpose,
+    pub derivation_path: Option<String>,
+    pub created_at: std::time::SystemTime,
+    pub last_activity: Option<std::time::SystemTime>,
+}
+
+/// Purpose of monitored addresses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AddressPurpose {
+    PegIn,
+    Federation,
+    Emergency,
+    Change,
+    Temporary { expires_at: std::time::SystemTime },
+}
+
+/// Operation limits and constraints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationLimits {
+    pub min_pegin_amount: u64,
+    pub max_pegin_amount: u64,
+    pub min_pegout_amount: u64,
+    pub max_pegout_amount: u64,
+    pub daily_volume_limit: u64,
+    pub max_pending_operations: usize,
+    pub operation_timeout: std::time::Duration,
+}
+
+/// Security parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityParams {
+    pub required_confirmations_pegin: u32,
+    pub required_confirmations_pegout: u32,
+    pub reorg_protection_depth: u32,
+    pub signature_timeout: std::time::Duration,
+    pub emergency_pause_threshold: f64,
+    pub max_federation_offline: usize,
+}
+
+/// Bitcoin blockchain reorg handling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReorgInfo {
+    pub old_chain_tip: BlockHash,
+    pub new_chain_tip: BlockHash,
+    pub reorg_depth: u32,
+    pub affected_transactions: Vec<bitcoin::Txid>,
+    pub detected_at: std::time::SystemTime,
+    pub resolved: bool,
+}
+
+/// Bridge health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BridgeHealth {
+    Healthy,
+    Warning { issues: Vec<String> },
+    Critical { critical_issues: Vec<String> },
+    Emergency { reason: String, paused_at: std::time::SystemTime },
+}
+
+/// Bridge operational state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BridgeState {
+    Active,
+    Paused { reason: String, paused_at: std::time::SystemTime },
+    Emergency { reason: String, triggered_at: std::time::SystemTime },
+    Maintenance { 
+        reason: String, 
+        started_at: std::time::SystemTime,
+        estimated_duration: std::time::Duration,
+    },
+}
+
+impl PegInStatus {
+    /// Check if peg-in is in a final state
+    pub fn is_final(&self) -> bool {
+        matches!(self, PegInStatus::Completed { .. } | PegInStatus::Failed { .. })
+    }
+    
+    /// Get current confirmation count
+    pub fn confirmations(&self) -> u32 {
+        match self {
+            PegInStatus::Detected { confirmations, .. } => *confirmations,
+            PegInStatus::Confirming { current_confirmations, .. } => *current_confirmations,
+            _ => 0,
+        }
+    }
+    
+    /// Get estimated completion time if available
+    pub fn estimated_completion(&self) -> Option<std::time::SystemTime> {
+        match self {
+            PegInStatus::Confirming { estimated_completion, .. } => *estimated_completion,
+            _ => None,
+        }
+    }
+    
+    /// Get processing duration
+    pub fn processing_duration(&self) -> Option<std::time::Duration> {
+        let now = std::time::SystemTime::now();
+        match self {
+            PegInStatus::Completed { completed_at, .. } => {
+                Some(now.duration_since(*completed_at).unwrap_or_default())
+            }
+            _ => None,
+        }
+    }
+}
+
+impl PegOutStatus {
+    /// Check if peg-out is in a final state
+    pub fn is_final(&self) -> bool {
+        matches!(self, PegOutStatus::Completed { .. } | PegOutStatus::Failed { .. })
+    }
+    
+    /// Get signature collection progress
+    pub fn signature_progress(&self) -> Option<(usize, usize)> {
+        match self {
+            PegOutStatus::CollectingSignatures { signatures_collected, signatures_required, .. } => {
+                Some((*signatures_collected, *signatures_required))
+            }
+            _ => None,
+        }
+    }
+    
+    /// Check if signature collection deadline has passed
+    pub fn is_signature_deadline_passed(&self) -> bool {
+        match self {
+            PegOutStatus::CollectingSignatures { deadline, .. } => {
+                std::time::SystemTime::now() > *deadline
+            }
+            _ => false,
+        }
+    }
+}
+
+impl FederationMember {
+    /// Create new federation member
+    pub fn new(
+        alys_address: Address,
+        bitcoin_public_key: bitcoin::PublicKey,
+        signing_weight: u32,
+    ) -> Self {
+        Self {
+            alys_address,
+            bitcoin_public_key,
+            signing_weight,
+            is_active: true,
+            joined_at: std::time::SystemTime::now(),
+            last_activity: std::time::SystemTime::now(),
+            reputation_score: 0,
+            successful_signatures: 0,
+            failed_signatures: 0,
+        }
+    }
+    
+    /// Update member activity
+    pub fn update_activity(&mut self) {
+        self.last_activity = std::time::SystemTime::now();
+    }
+    
+    /// Record successful signature
+    pub fn record_successful_signature(&mut self) {
+        self.successful_signatures += 1;
+        self.reputation_score += 1;
+        self.update_activity();
+    }
+    
+    /// Record failed signature
+    pub fn record_failed_signature(&mut self) {
+        self.failed_signatures += 1;
+        self.reputation_score -= 2;
+        self.update_activity();
+    }
+    
+    /// Get success rate
+    pub fn success_rate(&self) -> f64 {
+        let total = self.successful_signatures + self.failed_signatures;
+        if total == 0 {
+            1.0
+        } else {
+            self.successful_signatures as f64 / total as f64
+        }
+    }
+    
+    /// Check if member is considered reliable
+    pub fn is_reliable(&self) -> bool {
+        self.reputation_score > -10 && self.success_rate() > 0.8
+    }
+    
+    /// Check if member has been active recently
+    pub fn is_recently_active(&self, threshold: std::time::Duration) -> bool {
+        std::time::SystemTime::now()
+            .duration_since(self.last_activity)
+            .unwrap_or_default() < threshold
+    }
+}
+
+impl FederationConfig {
+    /// Check if threshold is met with active members
+    pub fn has_sufficient_active_members(&self) -> bool {
+        let active_count = self.members.iter().filter(|m| m.is_active).count();
+        active_count >= self.threshold
+    }
+    
+    /// Get active members
+    pub fn active_members(&self) -> Vec<&FederationMember> {
+        self.members.iter().filter(|m| m.is_active).collect()
+    }
+    
+    /// Get total voting weight of active members
+    pub fn total_active_weight(&self) -> u32 {
+        self.active_members()
+            .iter()
+            .map(|m| m.signing_weight)
+            .sum()
+    }
+    
+    /// Check if enough signatures are collected
+    pub fn is_threshold_met(&self, signatures: &[FederationSignature]) -> bool {
+        let collected_weight: u32 = signatures
+            .iter()
+            .filter_map(|sig| {
+                self.members
+                    .iter()
+                    .find(|m| m.alys_address == sig.signer_address)
+                    .map(|m| m.signing_weight)
+            })
+            .sum();
+            
+        let required_weight: u32 = self.total_active_weight() * self.threshold as u32 / self.members.len() as u32;
+        collected_weight >= required_weight
+    }
+}
+
+impl BridgeMetrics {
+    /// Create new bridge metrics
+    pub fn new() -> Self {
+        Self {
+            total_pegins: 0,
+            successful_pegins: 0,
+            failed_pegins: 0,
+            pending_pegins: 0,
+            total_pegin_value_satoshis: 0,
+            average_pegin_time: std::time::Duration::from_secs(0),
+            total_pegouts: 0,
+            successful_pegouts: 0,
+            failed_pegouts: 0,
+            pending_pegouts: 0,
+            total_pegout_value_satoshis: 0,
+            average_pegout_time: std::time::Duration::from_secs(0),
+            federation_health_score: 1.0,
+            active_federation_members: 0,
+            successful_signatures_24h: 0,
+            failed_signatures_24h: 0,
+            bridge_uptime: std::time::Duration::from_secs(0),
+            last_bitcoin_block_seen: 0,
+            bitcoin_node_sync_status: false,
+        }
+    }
+    
+    /// Get peg-in success rate
+    pub fn pegin_success_rate(&self) -> f64 {
+        if self.total_pegins == 0 {
+            0.0
+        } else {
+            self.successful_pegins as f64 / self.total_pegins as f64
+        }
+    }
+    
+    /// Get peg-out success rate
+    pub fn pegout_success_rate(&self) -> f64 {
+        if self.total_pegouts == 0 {
+            0.0
+        } else {
+            self.successful_pegouts as f64 / self.total_pegouts as f64
+        }
+    }
+    
+    /// Get federation signature success rate
+    pub fn federation_signature_success_rate(&self) -> f64 {
+        let total_signatures = self.successful_signatures_24h + self.failed_signatures_24h;
+        if total_signatures == 0 {
+            1.0
+        } else {
+            self.successful_signatures_24h as f64 / total_signatures as f64
+        }
+    }
+    
+    /// Check if bridge is performing well
+    pub fn is_healthy(&self) -> bool {
+        self.pegin_success_rate() > 0.95
+            && self.pegout_success_rate() > 0.95
+            && self.federation_health_score > 0.8
+            && self.bitcoin_node_sync_status
+    }
+}
+
+// Type alias for backward compatibility
+pub type BridgeStatus = BridgeState;
+
+impl Default for BridgeMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}

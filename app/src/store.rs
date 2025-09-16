@@ -1,13 +1,14 @@
 use crate::{
-    block::*,
+    types::blockchain::*,
     error::{BlockErrorBlockTypes, Error},
     metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
 use ethers_core::types::U256;
-use lighthouse_wrapper::store::{
-    get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore,
+use lighthouse_facade::store::{
+    get_key_for_col, KeyValueStoreOp, LevelDB, MemoryStore,
 };
-use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
+use lighthouse_facade::types::store::ItemStore;
+use lighthouse_facade::types::{EthSpec, Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode, Encode};
@@ -55,18 +56,18 @@ pub struct Storage<E: EthSpec, DB> {
 pub trait BlockByHeight {
     fn put_block_by_height(
         &self,
-        block: &SignedConsensusBlock<MainnetEthSpec>,
+        block: &SignedConsensusBlock,
     ) -> Result<(), Error>;
     fn get_block_by_height(
         &self,
         height: u64,
-    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error>;
+    ) -> Result<Option<SignedConsensusBlock>, Error>;
 }
 
-impl Storage<MainnetEthSpec, MemoryStore<MainnetEthSpec>> {
+impl Storage<MainnetEthSpec, MemoryStore> {
     #[allow(unused)]
     pub fn new_memory() -> Self {
-        let memory_store = MemoryStore::<MainnetEthSpec>::open();
+        let memory_store = MemoryStore::open();
         Self {
             db: memory_store,
             _phantom: PhantomData,
@@ -74,7 +75,7 @@ impl Storage<MainnetEthSpec, MemoryStore<MainnetEthSpec>> {
     }
 }
 
-impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
+impl Storage<MainnetEthSpec, LevelDB> {
     pub fn new_disk(path_override: Option<String>) -> Self {
         let db_path = if let Some(path) = path_override {
             PathBuf::from(path)
@@ -84,7 +85,7 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
 
         info!("Using db path {}", db_path.display());
         let db_path = ensure_dir_exists(db_path).unwrap();
-        let level_db = LevelDB::<MainnetEthSpec>::open(&db_path).unwrap();
+        let level_db = LevelDB::open(&db_path).unwrap();
         Self {
             db: level_db,
             _phantom: PhantomData,
@@ -95,7 +96,7 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
 impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB> {
     fn put_block_by_height(
         &self,
-        block: &SignedConsensusBlock<MainnetEthSpec>,
+        block: &SignedConsensusBlock,
     ) -> Result<(), Error> {
         let block_root = block.canonical_root();
         let height = block.message.execution_payload.block_number;
@@ -109,7 +110,7 @@ impl<DB: ItemStore<MainnetEthSpec>> BlockByHeight for Storage<MainnetEthSpec, DB
     fn get_block_by_height(
         &self,
         height: u64,
-    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+    ) -> Result<Option<SignedConsensusBlock>, Error> {
         match self
             .db
             .get_bytes(DbColumn::BlockByHeight.into(), &height.to_be_bytes())
@@ -179,7 +180,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     pub fn put_block(
         &self,
         block_root: &Hash256,
-        block: SignedConsensusBlock<MainnetEthSpec>,
+        block: SignedConsensusBlock,
     ) -> Vec<KeyValueStoreOp> {
         let mut ops = vec![KeyValueStoreOp::PutKeyValue(
             get_key_for_col(DbColumn::Block.into(), block_root.as_bytes()),
@@ -221,7 +222,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     pub fn get_block(
         &self,
         block_root: &Hash256,
-    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+    ) -> Result<Option<SignedConsensusBlock>, Error> {
         self.get_block_with(block_root, |bytes| {
             rmp_serde::from_slice(bytes).map_err(|_| Error::CodecError)
         })
@@ -230,8 +231,8 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
     pub fn get_block_with(
         &self,
         block_root: &Hash256,
-        decoder: impl FnOnce(&[u8]) -> Result<SignedConsensusBlock<MainnetEthSpec>, Error>,
-    ) -> Result<Option<SignedConsensusBlock<MainnetEthSpec>>, Error> {
+        decoder: impl FnOnce(&[u8]) -> Result<SignedConsensusBlock, Error>,
+    ) -> Result<Option<SignedConsensusBlock>, Error> {
         self.db
             .get_bytes(DbColumn::Block.into(), block_root.as_bytes())
             .unwrap()

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: alys-v2-testing
+  labels:
+    name: alys-v2-testing
+    purpose: integration-testing
+    component: actor-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+  namespace: alys-v2-testing
+data:
+  test_environment: "k8s"
+  log_level: "debug"
+  test_timeout: "300s"
+  max_test_actors: "100"
+  prometheus_enabled: "true"
+  metrics_port: "9090"
+  governance_mock_endpoints: |
+    - "http://mock-governance-1:50051"
+    - "http://mock-governance-2:50051"
+    - "http://mock-governance-3:50051"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secrets
+  namespace: alys-v2-testing
+type: Opaque
+data:
+  # Base64 encoded test secrets
+  test_bitcoin_private_key: dGVzdF9wcml2YXRlX2tleV9oZXJl # test_private_key_here
+  test_ethereum_private_key: dGVzdF9ldGhfcHJpdmF0ZV9rZXk= # test_eth_private_key

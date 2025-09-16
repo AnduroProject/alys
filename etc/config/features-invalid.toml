@@ -1,0 +1,183 @@
+# ALYS V2 Feature Flags - Invalid Configuration for Testing Validation
+# This file contains intentional validation errors to test error reporting
+
+version = "invalid-version-format"  # Invalid: should be semantic version
+default_environment = "production"
+
+[global_settings]
+cache_ttl_seconds = 0               # Invalid: must be > 0
+enable_audit_log = true
+enable_metrics = true
+max_evaluation_time_ms = 0          # Invalid: must be > 0
+
+# Example 1: Multiple validation errors
+[flags."Invalid Flag Name"]         # Invalid: spaces in name, quotes needed for TOML
+enabled = true
+rollout_percentage = 150            # Invalid: > 100
+# Missing description (required for production)
+created_at = "2025-12-31T00:00:00Z" # Invalid: future date
+updated_at = "2023-01-01T00:00:00Z" # Invalid: updated before created
+updated_by = "test"
+
+# Example 2: Invalid flag name formats
+[flags.Test_Flag_With_Caps]         # Invalid: capital letters
+enabled = true
+rollout_percentage = 50
+
+[flags._starts_with_underscore]     # Invalid: starts with underscore
+enabled = false
+rollout_percentage = 25
+
+[flags.ends_with_underscore_]       # Invalid: ends with underscore
+enabled = true
+
+[flags."with-hyphens"]              # Invalid: contains hyphens
+enabled = false
+
+# Example 3: Invalid conditions
+[flags.invalid_conditions]
+enabled = true
+description = "Flag with invalid conditions"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.invalid_conditions.metadata]
+owner = "test-team"
+risk = "invalid-risk-level"         # Invalid: not in [low, medium, high, critical]
+
+[[flags.invalid_conditions.conditions]]
+type = "SyncProgressAbove"
+value = 1.5                         # Invalid: > 1.0
+
+[[flags.invalid_conditions.conditions]]
+type = "SyncProgressBelow"
+value = -0.5                        # Invalid: < 0.0
+
+[[flags.invalid_conditions.conditions]]
+type = "TimeWindow"
+start_hour = 25                     # Invalid: > 23
+end_hour = 30                       # Invalid: > 23
+
+[[flags.invalid_conditions.conditions]]
+type = "NodeHealth"
+max_cpu_usage_percent = 150         # Invalid: > 100
+min_memory_mb = 0                   # Invalid: cannot be 0
+max_load_average = -1.0             # Invalid: negative load
+
+# Example 4: Invalid targeting
+[flags.invalid_targets]
+enabled = true
+description = "Flag with invalid targeting"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.invalid_targets.metadata]
+owner = "test-team"
+risk = "low"
+
+[flags.invalid_targets.targets]
+node_ids = ["", "valid-node", ""]   # Invalid: empty node IDs
+ip_ranges = [
+    "192.168.1.0/24",               # Valid
+    "invalid-ip-range",             # Invalid: not a valid CIDR
+    "256.256.256.256/24"            # Invalid: invalid IP address
+]
+validator_keys = [
+    "0x123",                        # Invalid: too short
+    "not-hex-string"                # Invalid: not hex
+]
+
+# Example 5: Security issues
+[flags.security_issues]
+enabled = true
+description = "This flag controls password validation features"  # Security issue: mentions password
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.security_issues.metadata]
+owner = "security-team"
+risk = "low"
+secret_key = "super-secret-value"   # Security issue: sensitive data in metadata
+password = "admin123"               # Security issue: password in metadata
+
+# Example 6: Performance issues
+[flags.performance_issues]
+enabled = true
+description = "Flag with performance problems"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.performance_issues.metadata]
+owner = "test-team"
+risk = "low"
+
+# Many complex conditions that could cause slow evaluation
+[[flags.performance_issues.conditions]]
+type = "SyncProgressAbove"
+value = 0.9
+
+[[flags.performance_issues.conditions]]
+type = "TimeWindow"
+start_hour = 0
+end_hour = 23
+
+[[flags.performance_issues.conditions]]
+type = "NodeHealth"
+max_cpu_usage_percent = 90
+min_memory_mb = 1024
+max_load_average = 5.0
+
+# Example 7: Inconsistent configuration
+[flags.inconsistent_config]
+enabled = false
+rollout_percentage = 100           # Inconsistent: disabled but 100% rollout
+description = "Disabled flag with full rollout"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.inconsistent_config.metadata]
+owner = "test-team"
+risk = "low"
+experimental = true                # Inconsistent: experimental but disabled
+
+# Example 8: Production requirements missing
+[flags.production_missing_requirements]
+enabled = true
+rollout_percentage = 50
+# Missing description (required for production)
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+# Missing required metadata for production
+[flags.production_missing_requirements.metadata]
+# Missing owner (required)
+# Missing risk (required)
+category = "test"
+
+# Example 9: Empty flag name (will cause TOML parse error)
+# This would need to be uncommented to test TOML parsing errors:
+# [flags.""]
+# enabled = true
+
+# Example 10: Extremely high values that trigger warnings
+[flags.extreme_values]
+enabled = true
+rollout_percentage = 1
+description = "Flag with extreme configuration values"
+created_at = "2024-01-01T00:00:00Z"
+updated_at = "2024-01-01T00:00:00Z"
+updated_by = "test"
+
+[flags.extreme_values.metadata]
+owner = "test-team"
+risk = "low"
+
+[[flags.extreme_values.conditions]]
+type = "NodeHealth"
+min_memory_mb = 131072              # 128GB - excessive memory requirement
