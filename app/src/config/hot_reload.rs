@@ -946,6 +946,36 @@ impl ConfigReloadManager {
 }
 
 impl ValidationEngine {
+    /// Create new validation engine
+    pub fn new() -> Self {
+        Self {
+            validation_rules: Vec::new(),
+            custom_validators: HashMap::new(),
+            validation_cache: HashMap::new(),
+        }
+    }
+
+    /// Validate bitcoin transaction
+    pub fn validate_bitcoin_transaction(&self, tx: &bitcoin::Transaction) -> Result<bool, crate::actors::bridge::shared::errors::BridgeError> {
+        // Placeholder implementation for bitcoin transaction validation
+        // In a real implementation, this would validate transaction format, inputs, outputs, etc.
+        Ok(tx.input.len() > 0 && tx.output.len() > 0)
+    }
+
+    /// Perform final validation
+    pub fn perform_final_validation(&self, tx: &bitcoin::Transaction) -> Result<bool, crate::actors::bridge::shared::errors::BridgeError> {
+        // Placeholder implementation for final transaction validation
+        // This would perform comprehensive checks before transaction broadcast
+        self.validate_bitcoin_transaction(tx)
+    }
+
+    /// Validate signed transaction
+    pub fn validate_signed_transaction(&self, tx: &bitcoin::Transaction) -> Result<bool, crate::actors::bridge::shared::errors::BridgeError> {
+        // Placeholder implementation for signed transaction validation
+        // This would verify signatures and script execution
+        Ok(tx.input.iter().all(|input| !input.script_sig.is_empty() || !input.witness.is_empty()))
+    }
+
     /// Validate configuration against all rules
     fn validate(&self, config: &AlysConfig) -> ValidationResult {
         let mut result = ValidationResult {
@@ -1034,6 +1064,12 @@ impl ValidationEngine {
             ValidationCondition::Dependency { field, .. } => field.clone(),
             ValidationCondition::Custom { .. } => "unknown".to_string(),
         }
+    }
+}
+
+impl Default for ValidationEngine {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

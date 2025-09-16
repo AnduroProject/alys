@@ -3,7 +3,7 @@
 //! Lifecycle implementation for PegIn actors with actor_system compatibility
 
 use actix::prelude::*;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::actors::bridge::{
@@ -12,9 +12,11 @@ use crate::actors::bridge::{
     config::PegInConfig,
 };
 use actor_system::{
-    lifecycle::{LifecycleAware, ActorState, LifecycleMetadata},
+    lifecycle::{ActorState, LifecycleMetadata, StateTransition},
     error::ActorError,
 };
+use tokio::sync::{Arc, RwLock};
+use std::sync::atomic::AtomicU64;
 
 /// Lifecycle manager for PegIn actors
 pub struct PegInLifecycle {
@@ -72,7 +74,16 @@ impl PegInLifecycle {
             actor_ref: None,
             phase: ActorState::Initializing,
             config,
-            metrics: LifecycleMetadata::default(),
+            metrics: LifecycleMetadata {
+                actor_id: "pegin_lifecycle".to_string(),
+                actor_type: "PegInLifecycle".to_string(),
+                state: Arc::new(RwLock::new(ActorState::Initializing)),
+                state_history: Arc::new(RwLock::new(Vec::new())),
+                spawn_time: std::time::SystemTime::now(),
+                last_state_change: Arc::new(RwLock::new(std::time::SystemTime::now())),
+                health_failures: AtomicU64::new(0),
+                config: actor_system::lifecycle::LifecycleConfig::default(),
+            },
             hooks: PegInLifecycleHooks::default(),
             startup_start: None,
             last_health_check: None,
@@ -95,15 +106,17 @@ impl PegInLifecycle {
             match check() {
                 Ok(connected) => {
                     if !connected {
-                        return Err(ActorError::StartupFailed(
-                            "Bitcoin connection not available".to_string()
-                        ));
+                        return Err(ActorError::StartupFailed {
+                            actor_type: "PegInActor".to_string(),
+                            reason: "Bitcoin connection not available".to_string(),
+                        });
                     }
                 },
                 Err(e) => {
-                    return Err(ActorError::StartupFailed(
-                        format!("Bitcoin connection check failed: {}", e)
-                    ));
+                    return Err(ActorError::StartupFailed {
+                        actor_type: "PegInActor".to_string(),
+                        reason: format!("Bitcoin connection check failed: {}", e),
+                    });
                 }
             }
         }
@@ -111,18 +124,20 @@ impl PegInLifecycle {
         // Queue validation
         if let Some(validate) = &self.hooks.queue_validation {
             if let Err(e) = validate() {
-                return Err(ActorError::StartupFailed(
-                    format!("PegIn queue validation failed: {}", e)
-                ));
+                return Err(ActorError::StartupFailed {
+                    actor_type: "PegInActor".to_string(),
+                    reason: format!("PegIn queue validation failed: {}", e),
+                });
             }
         }
         
         // Signature setup
         if let Some(setup) = &self.hooks.signature_setup {
             if let Err(e) = setup() {
-                return Err(ActorError::StartupFailed(
-                    format!("Signature setup failed: {}", e)
-                ));
+                return Err(ActorError::StartupFailed {
+                    actor_type: "PegInActor".to_string(),
+                    reason: format!("Signature setup failed: {}", e),
+                });
             }
         }
         
@@ -133,19 +148,35 @@ impl PegInLifecycle {
     async fn health_check(&mut self) -> Result<bool, ActorError> {
         if let Some(actor_ref) = &self.actor_ref {
             match actor_ref.send(crate::actors::bridge::actors::pegin::handlers::GetPegInStatus).await {
-                Ok(status) => {
-                    self.last_health_check = Some(Instant::now());
-                    self.metrics.record_health_check(true);
-                    Ok(status.healthy)
+                Ok(status_result) => {
+                    match status_result {
+                        Ok(status) => {
+                            self.last_health_check = Some(Instant::now());
+                            // Health check based on actor state - simplified check
+                            let is_healthy = status.processing_deposits > 0 || status.error_count < 10;
+                            Ok(is_healthy)
+                        },
+                        Err(e) => {
+                            warn!("PegIn status check failed: {}", e);
+                            self.metrics.health_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            Ok(false) // Actor responding but in error state
+                        }
+                    }
                 },
                 Err(e) => {
                     warn!("PegIn health check failed: {}", e);
-                    self.metrics.record_health_check(false);
-                    Err(ActorError::HealthCheckFailed(format!("Actor communication failed: {}", e)))
+                    self.metrics.health_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Err(ActorError::ActorNotReady {
+                        actor_type: "PegInActor".to_string(),
+                        reason: format!("Actor communication failed: {}", e)
+                    })
                 }
             }
         } else {
-            Err(ActorError::HealthCheckFailed("No actor reference available".to_string()))
+            Err(ActorError::ActorNotReady {
+                actor_type: "PegInActor".to_string(),
+                reason: "No actor reference available".to_string()
+            })
         }
     }
 }

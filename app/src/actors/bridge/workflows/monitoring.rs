@@ -293,38 +293,47 @@ impl WorkflowMonitor {
         let monitoring_start = SystemTime::now();
         let now = SystemTime::now();
 
-        // Check each monitored workflow
-        for (workflow_id, monitoring_state) in &mut self.monitored_workflows {
-            // Check for stalls
-            let time_since_heartbeat = now.duration_since(monitoring_state.last_heartbeat)
-                .unwrap_or_default();
+        // Check each monitored workflow - collect workflow IDs first to avoid borrow conflicts
+        let workflow_ids: Vec<String> = self.monitored_workflows.keys().cloned().collect();
+        let stall_threshold = self.monitoring_config.stall_detection_threshold;
 
-            if time_since_heartbeat > self.monitoring_config.stall_detection_threshold {
-                if monitoring_state.status != WorkflowMonitoringStatus::Stalled {
-                    monitoring_state.status = WorkflowMonitoringStatus::Stalled;
-                    self.generate_alert(workflow_id, AlertType::WorkflowStalled, AlertLevel::Critical,
-                        format!("Workflow {} has stalled (no heartbeat for {:?})", workflow_id, time_since_heartbeat)).await?;
+        for workflow_id in workflow_ids {
+            let mut alerts_to_generate = Vec::new();
+
+            if let Some(monitoring_state) = self.monitored_workflows.get_mut(&workflow_id) {
+                // Check for stalls
+                let time_since_heartbeat = now.duration_since(monitoring_state.last_heartbeat)
+                    .unwrap_or_default();
+
+                if time_since_heartbeat > stall_threshold {
+                    if monitoring_state.status != WorkflowMonitoringStatus::Stalled {
+                        monitoring_state.status = WorkflowMonitoringStatus::Stalled;
+                        alerts_to_generate.push((AlertType::WorkflowStalled, AlertLevel::Critical,
+                            format!("Workflow {} has stalled (no heartbeat for {:?})", workflow_id, time_since_heartbeat)));
+                    }
                 }
+
+                // Check for delays
+                if now > monitoring_state.expected_completion {
+                    if monitoring_state.status != WorkflowMonitoringStatus::Delayed
+                        && monitoring_state.status != WorkflowMonitoringStatus::Stalled {
+                        monitoring_state.status = WorkflowMonitoringStatus::Delayed;
+                        let delay = now.duration_since(monitoring_state.expected_completion).unwrap_or_default();
+                        alerts_to_generate.push((AlertType::PerformanceDegradation, AlertLevel::Warning,
+                            format!("Workflow {} is delayed by {:?}", workflow_id, delay)));
+                    }
+                }
+
+                // Update performance metrics while in scope
+                monitoring_state.performance_metrics.execution_time = now
+                    .duration_since(monitoring_state.started_at)
+                    .unwrap_or_default();
             }
 
-            // Check for delays
-            if now > monitoring_state.expected_completion {
-                if monitoring_state.status != WorkflowMonitoringStatus::Delayed 
-                    && monitoring_state.status != WorkflowMonitoringStatus::Stalled {
-                    monitoring_state.status = WorkflowMonitoringStatus::Delayed;
-                    let delay = now.duration_since(monitoring_state.expected_completion).unwrap_or_default();
-                    self.generate_alert(workflow_id, AlertType::PerformanceDegradation, AlertLevel::Warning,
-                        format!("Workflow {} is delayed by {:?}", workflow_id, delay)).await?;
-                }
+            // Generate alerts after updating state
+            for (alert_type, level, message) in alerts_to_generate {
+                self.generate_alert(&workflow_id, alert_type, level, message).await?;
             }
-
-            // Detect performance anomalies
-            self.detect_performance_anomalies(workflow_id, monitoring_state).await?;
-
-            // Update performance metrics
-            monitoring_state.performance_metrics.execution_time = now
-                .duration_since(monitoring_state.started_at)
-                .unwrap_or_default();
         }
 
         // Process alert escalations

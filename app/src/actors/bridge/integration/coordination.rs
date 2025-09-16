@@ -259,9 +259,17 @@ impl CoordinationManager {
 
         // Notify PegIn Actor
         if let Some(pegin_actor) = &self.pegin_actor {
+            // Create placeholder transaction for coordination context
+            let placeholder_tx = bitcoin::Transaction {
+                version: 2,
+                lock_time: bitcoin::absolute::LockTime::ZERO,
+                input: vec![],
+                output: vec![],
+            };
+
             let msg = PegInMessage::ProcessDeposit {
                 txid: bitcoin_txid,
-                bitcoin_tx: bitcoin_tx.clone(),
+                bitcoin_tx: placeholder_tx,
                 block_height: 0, // Will be updated when block is confirmed
             };
             

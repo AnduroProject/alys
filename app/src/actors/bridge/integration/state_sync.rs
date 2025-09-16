@@ -10,20 +10,19 @@ use serde::{Serialize, Deserialize};
 
 use crate::actors::bridge::{
     messages::{
-        bridge_messages::{BridgeCoordinationMessage, ActorType},
-        pegin_messages::*,
-        pegout_messages::*,
-        stream_messages::{StreamMessage, StreamResponse}
+        bridge_messages::{BridgeCoordinationMessage, BridgeSystemStatus, ActorType},
+        pegin_messages::{PegInActorStatus},
+        pegout_messages::{PegOutMessage, PegOutResponse, PegOutStatus},
+        stream_messages::{StreamMessage, StreamResponse, NodeConnectionStatus}
     },
     actors::{
         bridge::BridgeActor,
         pegin::{PegInActor, handlers::GetPegInStatus},
-        pegout::{PegOutActor, handlers::GetPegOutStatus},
+        pegout::{PegOutActor},
         stream::StreamActor
     },
 };
-use crate::types::{bridge::*};
-use actor_system::lifecycle::ActorState;
+use crate::types::bridge::*;
 
 /// State synchronization manager
 pub struct StateSyncManager {
@@ -68,14 +67,7 @@ pub enum StateValue {
     List(Vec<StateValue>),
 }
 
-/// Actor types for state sync
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ActorType {
-    Bridge,
-    PegIn,
-    PegOut,
-    Stream,
-}
+// Using ActorType from bridge_messages
 
 /// Synchronization operation
 #[derive(Debug, Clone)]
@@ -241,33 +233,39 @@ impl StateSyncManager {
         match actor_type {
             ActorType::Bridge => {
                 if let Some(actor) = &self.bridge_actor {
-                    let response = actor.send(BridgeCoordinationMessage::GetSystemStatus).await
+                    let status = actor.send(BridgeCoordinationMessage::GetSystemStatus).await
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("Bridge: {}", e)))?
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("Bridge: {:?}", e)))?;
 
-                    Ok(self.bridge_status_to_state(response))
+                    Ok(self.bridge_status_to_state(status))
                 } else {
                     Err(StateSyncError::ActorNotRegistered(actor_type.clone()))
                 }
             }
             ActorType::PegIn => {
                 if let Some(actor) = &self.pegin_actor {
-                    let response = actor.send(GetPegInStatus).await
+                    let status = actor.send(GetPegInStatus).await
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("PegIn: {}", e)))?
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("PegIn: {:?}", e)))?;
 
-                    Ok(self.pegin_status_to_state(response))
+                    Ok(self.pegin_status_to_state(status))
                 } else {
                     Err(StateSyncError::ActorNotRegistered(actor_type.clone()))
                 }
             }
             ActorType::PegOut => {
                 if let Some(actor) = &self.pegout_actor {
-                    let response = actor.send(GetPegOutStatus).await
+                    let msg = PegOutMessage::GetPegOutStatus { pegout_id: "system_status".to_string() };
+                    let response = actor.send(msg).await
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("PegOut: {}", e)))?
                         .map_err(|e| StateSyncError::ActorCommunicationFailed(format!("PegOut: {:?}", e)))?;
 
-                    Ok(self.pegout_status_to_state(response))
+                    // Extract status from response
+                    let status = match response {
+                        PegOutResponse::PegOutStatus(s) => s,
+                        _ => PegOutStatus::Failed { reason: "Unexpected response".to_string(), recoverable: false }
+                    };
+                    Ok(self.pegout_status_to_state(status))
                 } else {
                     Err(StateSyncError::ActorNotRegistered(actor_type.clone()))
                 }
@@ -287,25 +285,18 @@ impl StateSyncManager {
     }
 
     /// Convert bridge status to actor state
-    fn bridge_status_to_state(&self, response: BridgeResponse) -> ActorStateSnapshot {
-        // Extract status from response
-        let status = match response {
-            BridgeResponse::Status(s) => s,
-            _ => {
-                warn!("Unexpected bridge response type");
-                return self.create_default_state_snapshot(ActorType::Bridge);
-            }
-        };
+    fn bridge_status_to_state(&self, status: BridgeSystemStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("bridge_status".to_string(), StateValue::String("active".to_string()));
 
+        let checksum = self.calculate_state_checksum(&key_metrics);
         ActorStateSnapshot {
             actor_type: ActorType::Bridge,
             version: self.state_versions.get(&ActorType::Bridge).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
             health_status: "healthy".to_string(),
             key_metrics,
-            checksum: self.calculate_state_checksum(&key_metrics),
+            checksum,
         }
     }
 
@@ -314,67 +305,123 @@ impl StateSyncManager {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("status".to_string(), StateValue::String("unknown".to_string()));
 
+        let checksum = self.calculate_state_checksum(&key_metrics);
         ActorStateSnapshot {
-            actor_type,
+            actor_type: actor_type.clone(),
             version: self.state_versions.get(&actor_type).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
             health_status: "unknown".to_string(),
             key_metrics,
-            checksum: self.calculate_state_checksum(&key_metrics),
+            checksum,
         }
     }
 
     /// Convert pegin status to actor state
-    fn pegin_status_to_state(&self, response: PegInResponse) -> ActorStateSnapshot {
+    fn pegin_status_to_state(&self, status: PegInActorStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
         key_metrics.insert("pending_deposits".to_string(), StateValue::Integer(status.pending_deposits as i64));
-        key_metrics.insert("confirmed_deposits".to_string(), StateValue::Integer(status.confirmed_deposits as i64));
-        key_metrics.insert("total_amount".to_string(), StateValue::Integer(status.total_amount as i64));
-        key_metrics.insert("error_rate".to_string(), StateValue::Float(status.error_rate));
+        key_metrics.insert("total_deposits_processed".to_string(), StateValue::Integer(status.total_deposits_processed as i64));
+        key_metrics.insert("last_block_checked".to_string(), StateValue::Integer(status.last_block_checked as i64));
+        key_metrics.insert("recent_errors".to_string(), StateValue::Integer(status.recent_errors as i64));
 
+        let checksum = self.calculate_state_checksum(&key_metrics);
         ActorStateSnapshot {
             actor_type: ActorType::PegIn,
             version: self.state_versions.get(&ActorType::PegIn).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
-            health_status: format!("{:?}", status.status),
+            health_status: format!("{:?}", status.state),
             key_metrics,
-            checksum: self.calculate_state_checksum(&key_metrics),
+            checksum,
         }
     }
 
     /// Convert pegout status to actor state
-    fn pegout_status_to_state(&self, status: crate::actors::bridge::messages::pegout_messages::PegOutStatus) -> ActorStateSnapshot {
+    fn pegout_status_to_state(&self, status: PegOutStatus) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
-        key_metrics.insert("pending_withdrawals".to_string(), StateValue::Integer(status.pending_withdrawals as i64));
-        key_metrics.insert("completed_withdrawals".to_string(), StateValue::Integer(status.completed_withdrawals as i64));
-        key_metrics.insert("available_utxos".to_string(), StateValue::Integer(status.available_utxos as i64));
-        key_metrics.insert("total_value".to_string(), StateValue::Integer(status.total_value as i64));
 
+        // Extract meaningful metrics from the PegOutStatus enum
+        let (status_str, error_count) = match &status {
+            PegOutStatus::BurnDetected => ("burn_detected".to_string(), 0),
+            PegOutStatus::ValidatingBurn => ("validating_burn".to_string(), 0),
+            PegOutStatus::ValidationFailed { reason: _ } => ("validation_failed".to_string(), 1),
+            PegOutStatus::BuildingTransaction => ("building_transaction".to_string(), 0),
+            PegOutStatus::TransactionBuilt { fee } => {
+                key_metrics.insert("transaction_fee".to_string(), StateValue::Integer(*fee as i64));
+                ("transaction_built".to_string(), 0)
+            },
+            PegOutStatus::RequestingSignatures => ("requesting_signatures".to_string(), 0),
+            PegOutStatus::CollectingSignatures { collected, required } => {
+                key_metrics.insert("signatures_collected".to_string(), StateValue::Integer(*collected as i64));
+                key_metrics.insert("signatures_required".to_string(), StateValue::Integer(*required as i64));
+                ("collecting_signatures".to_string(), 0)
+            },
+            PegOutStatus::SignaturesComplete => ("signatures_complete".to_string(), 0),
+            PegOutStatus::Broadcasting => ("broadcasting".to_string(), 0),
+            PegOutStatus::Broadcast { txid: _, confirmations } => {
+                key_metrics.insert("confirmations".to_string(), StateValue::Integer(*confirmations as i64));
+                ("broadcast".to_string(), 0)
+            },
+            PegOutStatus::Confirmed { txid: _, confirmations } => {
+                key_metrics.insert("confirmations".to_string(), StateValue::Integer(*confirmations as i64));
+                ("confirmed".to_string(), 0)
+            },
+            PegOutStatus::Completed { txid: _, final_confirmations } => {
+                key_metrics.insert("final_confirmations".to_string(), StateValue::Integer(*final_confirmations as i64));
+                ("completed".to_string(), 0)
+            },
+            PegOutStatus::Failed { reason: _, recoverable } => {
+                key_metrics.insert("recoverable".to_string(), StateValue::Boolean(*recoverable));
+                ("failed".to_string(), 1)
+            },
+            PegOutStatus::Cancelled { reason: _ } => ("cancelled".to_string(), 0),
+        };
+
+        key_metrics.insert("status".to_string(), StateValue::String(status_str.clone()));
+        key_metrics.insert("error_count".to_string(), StateValue::Integer(error_count));
+
+        let checksum = self.calculate_state_checksum(&key_metrics);
         ActorStateSnapshot {
             actor_type: ActorType::PegOut,
             version: self.state_versions.get(&ActorType::PegOut).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
-            health_status: format!("{:?}", status.status),
+            health_status: status_str,
             key_metrics,
-            checksum: self.calculate_state_checksum(&key_metrics),
+            checksum,
         }
     }
 
     /// Convert stream status to actor state
-    fn stream_status_to_state(&self, status: NodeConnectionStatus) -> ActorStateSnapshot {
+    fn stream_status_to_state(&self, response: StreamResponse) -> ActorStateSnapshot {
         let mut key_metrics = HashMap::new();
-        key_metrics.insert("is_connected".to_string(), StateValue::Boolean(status.connected));
-        key_metrics.insert("message_count".to_string(), StateValue::Integer(status.message_count as i64));
-        key_metrics.insert("last_message_time".to_string(), StateValue::String(format!("{:?}", status.last_message_time)));
-        key_metrics.insert("reconnect_count".to_string(), StateValue::Integer(status.reconnect_count as i64));
 
+        // Extract connection status from StreamResponse
+        let (is_connected, status_str) = match response {
+            StreamResponse::ConnectionStatus(status) => {
+                match status {
+                    NodeConnectionStatus::Connected => (true, "connected".to_string()),
+                    NodeConnectionStatus::Connecting => (false, "connecting".to_string()),
+                    NodeConnectionStatus::Disconnected => (false, "disconnected".to_string()),
+                    NodeConnectionStatus::Failed { error } => {
+                        key_metrics.insert("error".to_string(), StateValue::String(error));
+                        (false, "failed".to_string())
+                    },
+                    NodeConnectionStatus::Timeout => (false, "timeout".to_string()),
+                }
+            },
+            _ => (false, "unknown".to_string()),
+        };
+
+        key_metrics.insert("is_connected".to_string(), StateValue::Boolean(is_connected));
+        key_metrics.insert("status".to_string(), StateValue::String(status_str.clone()));
+
+        let checksum = self.calculate_state_checksum(&key_metrics);
         ActorStateSnapshot {
             actor_type: ActorType::Stream,
             version: self.state_versions.get(&ActorType::Stream).unwrap_or(&0) + 1,
             timestamp: SystemTime::now(),
-            health_status: if status.connected { "Connected".to_string() } else { "Disconnected".to_string() },
+            health_status: status_str,
             key_metrics,
-            checksum: self.calculate_state_checksum(&key_metrics),
+            checksum,
         }
     }
 
@@ -436,7 +483,7 @@ impl StateSyncManager {
     }
 
     /// Get current actor states
-    pub fn get_actor_states(&self) -> &HashMap<ActorType, ActorState> {
+    pub fn get_actor_states(&self) -> &HashMap<ActorType, ActorStateSnapshot> {
         &self.actor_states
     }
 }

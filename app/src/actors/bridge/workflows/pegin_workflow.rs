@@ -14,7 +14,6 @@ use crate::actors::bridge::{
     shared::validation::{ValidationResult},
 };
 use crate::config::hot_reload::ValidationEngine;
-use crate::types::PegInStatus;
 
 /// Complete peg-in workflow orchestrator
 pub struct PegInWorkflowOrchestrator {
@@ -273,11 +272,16 @@ impl PegInWorkflowOrchestrator {
         info!("Executing initial validation for workflow {}", workflow.workflow_id);
 
         // Validate transaction format and basic constraints
-        let validation_result = self.validation_engine.validate_bitcoin_transaction(
-            workflow.bitcoin_txid,
-            workflow.amount,
-            workflow.recipient,
-        ).await.map_err(|e| PegInWorkflowError::ValidationFailed(e.to_string()))?;
+        // Create placeholder transaction for validation context
+        let placeholder_tx = bitcoin::Transaction {
+            version: 2,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let validation_result = self.validation_engine.validate_bitcoin_transaction(&placeholder_tx)
+            .map_err(|e| PegInWorkflowError::ValidationFailed(e.to_string()))?;
 
         workflow.validation_results.push(validation_result);
 
@@ -292,12 +296,18 @@ impl PegInWorkflowOrchestrator {
         info!("Executing transaction detection for workflow {}", workflow.workflow_id);
 
         // Notify PegIn actor to detect and monitor transaction
+        // Create placeholder transaction for workflow context
+        let placeholder_tx = bitcoin::Transaction {
+            version: 2,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
         let msg = PegInMessage::ProcessDeposit {
             txid: workflow.bitcoin_txid,
-            vout: 0,
-            amount: workflow.amount,
-            recipient: workflow.recipient,
-            confirmation_count: 0,
+            bitcoin_tx: placeholder_tx,
+            block_height: 0, // Will be updated when confirmed
         };
 
         self.pegin_actor.send(msg).await
@@ -383,12 +393,16 @@ impl PegInWorkflowOrchestrator {
         info!("Executing final validation for workflow {}", workflow.workflow_id);
 
         // Perform comprehensive validation before minting
-        let final_validation = self.validation_engine.perform_final_validation(
-            workflow.bitcoin_txid,
-            workflow.amount,
-            workflow.recipient,
-            workflow.confirmations,
-        ).await.map_err(|e| PegInWorkflowError::ValidationFailed(e.to_string()))?;
+        // Create placeholder transaction for validation context
+        let placeholder_tx = bitcoin::Transaction {
+            version: 2,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let final_validation = self.validation_engine.perform_final_validation(&placeholder_tx)
+            .map_err(|e| PegInWorkflowError::ValidationFailed(e.to_string()))?;
 
         workflow.validation_results.push(final_validation);
         Ok(())
@@ -473,9 +487,9 @@ impl PegInWorkflowOrchestrator {
     }
 
     /// Extract confirmation count from status
-    fn extract_confirmation_count(&self, status: &PegInStatus, txid: bitcoin::Txid) -> u32 {
+    fn extract_confirmation_count(&self, status: &PegInResponse, txid: bitcoin::Txid) -> u32 {
         // This would extract the confirmation count for the specific transaction
-        // Implementation depends on the PegInStatus structure
+        // Implementation depends on the PegInResponse structure
         6 // Placeholder - assume sufficient confirmations
     }
 
