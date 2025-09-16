@@ -4,8 +4,7 @@
 
 use actix::prelude::*;
 use std::time::{Duration, Instant};
-use tracing::{info, warn, error, debug};
-use uuid::Uuid;
+use tracing::{info, warn};
 
 use crate::actors::bridge::{
     actors::pegin::PegInActor,
@@ -71,9 +70,9 @@ impl PegInLifecycle {
     pub fn new(config: PegInConfig) -> Self {
         Self {
             actor_ref: None,
-            phase: ActorState::Initialized,
+            phase: ActorState::Initializing,
             config,
-            metrics: LifecycleMetadata::new("pegin"),
+            metrics: LifecycleMetadata::default(),
             hooks: PegInLifecycleHooks::default(),
             startup_start: None,
             last_health_check: None,

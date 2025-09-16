@@ -10,18 +10,17 @@ use tracing::{info, warn, error, debug};
 use uuid::Uuid;
 
 use actor_system::{
-    actor::AlysActor,
+    metrics::ActorMetrics as SystemActorMetrics,
 };
 
 use crate::actors::bridge::{
     config::StreamConfig,
     messages::*,
 };
-use crate::actors::bridge::messages::stream_messages::StreamMessage;
 use crate::integration::{GovernanceMessage, GovernanceMessageType};
 use super::{reconnection::*, metrics::*, protocol::*, request_tracking::*};
 use super::reconnection::BackoffDecision;
-use crate::actors::bridge::shared::errors::BridgeError;
+use crate::types::errors::BridgeError;
 
 /// Enhanced StreamActor for bridge operations
 pub struct StreamActor {
@@ -49,7 +48,7 @@ pub struct StreamActor {
     pub metrics: StreamMetrics,
 
     /// actor_system integration
-    pub actor_system_metrics: actor_system::metrics::ActorMetrics,
+    pub actor_system_metrics: SystemActorMetrics,
 
     /// Protocol handler for gRPC communication
     protocol_handler: Option<BridgeGovernanceProtocol>,
@@ -105,7 +104,7 @@ impl StreamActor {
         
         let metrics = StreamMetrics::new()?;
         
-        let actor_system_metrics = actor_system::metrics::ActorMetrics::new();
+        let actor_system_metrics = SystemActorMetrics::new();
         
         Ok(Self {
             instance_id: Uuid::new_v4().to_string(),
@@ -283,7 +282,7 @@ impl StreamActor {
         }
 
         // Complete the request
-        if let Some(request) = self.request_tracker.complete_request(&response.request_id) {
+        if let Some(_request) = self.request_tracker.complete_request(&response.request_id) {
             self.metrics.record_signature_response_received(&response.request_id);
 
             // Forward signatures to PegOutActor
@@ -645,7 +644,7 @@ impl StreamActor {
     /// Check if there are healthy governance connections
     pub fn has_healthy_connections(&self) -> bool {
         self.governance_connections.values()
-            .any(|conn| matches!(conn.status, ConnectionStatus::Connected))
+            .any(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
     }
 }
 
@@ -667,7 +666,7 @@ impl Actor for StreamActor {
 
         let fut = async {
             // Initialize actor state here if needed
-            Ok(())
+            Ok::<(), StreamError>(())
         };
         let fut = actix::fut::wrap_future::<_, Self>(fut);
         ctx.spawn(fut.map(|result, _actor, ctx| {
@@ -689,7 +688,77 @@ impl Actor for StreamActor {
     }
 }
 
+/// Handler implementation for StreamMessage
+impl Handler<StreamMessage> for StreamActor {
+    type Result = Result<StreamResponse, BridgeError>;
+
+    fn handle(&mut self, msg: StreamMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        match msg {
+            StreamMessage::GetConnectionStatus => {
+                let connection_status = self.build_governance_connection_status();
+                Ok(StreamResponse::ConnectionStatus(connection_status))
+            }
+            StreamMessage::GetStatus => {
+                let status = StreamActorStatus {
+                    connected_nodes: self.governance_connections.keys().cloned().collect(),
+                    active_connections: self.governance_connections.len(),
+                    last_heartbeat: self.last_heartbeat,
+                    status: format!("{:?}", self.connection_status),
+                };
+                Ok(StreamResponse::StatusReported(status))
+            }
+            StreamMessage::Initialize => {
+                info!("StreamActor initialized");
+                Ok(StreamResponse::Initialized)
+            }
+            StreamMessage::Shutdown => {
+                info!("StreamActor shutdown requested");
+                Ok(StreamResponse::Shutdown)
+            }
+            StreamMessage::SendHeartbeat => {
+                self.last_heartbeat = Some(SystemTime::now());
+                Ok(StreamResponse::HeartbeatSent)
+            }
+            _ => {
+                warn!("Unhandled StreamMessage variant: {:?}", msg);
+                Err(BridgeError::UnsupportedOperation("Message not implemented".to_string()))
+            }
+        }
+    }
+}
+
+impl StreamActor {
+    /// Build governance connection status
+    fn build_governance_connection_status(&self) -> GovernanceConnectionStatus {
+        GovernanceConnectionStatus {
+            total_nodes: self.governance_connections.len(),
+            connected_nodes: self.governance_connections.values()
+                .filter(|conn| matches!(conn.status, NodeConnectionStatus::Connected))
+                .count(),
+            node_statuses: self.governance_connections.iter()
+                .map(|(id, conn)| (id.clone(), conn.status.clone()))
+                .collect(),
+            last_heartbeat: self.last_heartbeat,
+            overall_health: self.calculate_overall_health(),
+        }
+    }
+
+    /// Calculate overall health score
+    fn calculate_overall_health(&self) -> f64 {
+        if self.governance_connections.is_empty() {
+            return 0.0;
+        }
+
+        let avg_health: f64 = self.governance_connections.values()
+            .map(|conn| conn.health_score)
+            .sum::<f64>() / self.governance_connections.len() as f64;
+
+        avg_health
+    }
+}
+
 // Old RequestTracker implementation removed - functionality moved to AdvancedRequestTracker
+
 
 /// StreamActor errors
 #[derive(Debug, thiserror::Error)]

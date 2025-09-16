@@ -4,8 +4,7 @@
 
 use actix::prelude::*;
 use std::time::{Duration, Instant};
-use tracing::{info, warn, error, debug};
-use uuid::Uuid;
+use tracing::{info, warn};
 
 use crate::actors::bridge::{
     actors::stream::StreamActor,
@@ -75,9 +74,9 @@ impl StreamLifecycle {
     pub fn new(config: StreamConfig) -> Self {
         Self {
             actor_ref: None,
-            phase: ActorState::Initialized,
+            phase: ActorState::Initializing,
             config,
-            metrics: LifecycleMetadata::new("stream"),
+            metrics: LifecycleMetadata::default(),
             hooks: StreamLifecycleHooks::default(),
             startup_start: None,
             last_health_check: None,

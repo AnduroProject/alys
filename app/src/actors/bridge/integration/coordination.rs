@@ -215,7 +215,7 @@ impl CoordinationManager {
             operation_type: CoordinationType::PegOut {
                 burn_tx_hash,
                 amount,
-                destination,
+                destination: destination.clone(),
             },
             participants,
             started_at: SystemTime::now(),
@@ -261,10 +261,8 @@ impl CoordinationManager {
         if let Some(pegin_actor) = &self.pegin_actor {
             let msg = PegInMessage::ProcessDeposit {
                 txid: bitcoin_txid,
-                vout: 0,
-                amount,
-                recipient: destination,
-                confirmation_count: 0,
+                bitcoin_tx: bitcoin_tx.clone(),
+                block_height: 0, // Will be updated when block is confirmed
             };
             
             pegin_actor.send(msg).await
@@ -298,10 +296,9 @@ impl CoordinationManager {
         // Notify PegOut Actor
         if let Some(pegout_actor) = &self.pegout_actor {
             let msg = PegOutMessage::ProcessWithdrawal {
-                withdrawal_id: operation_id.to_string(),
-                destination,
+                pegout_id: operation_id.to_string(),
+                destination: destination.to_string(),
                 amount,
-                fee_rate: 10, // Default fee rate
             };
             
             pegout_actor.send(msg).await

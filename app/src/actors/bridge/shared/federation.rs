@@ -3,10 +3,64 @@
 //! Utilities for managing federation configuration and operations
 
 use bitcoin::{Address as BtcAddress, PublicKey, ScriptBuf, Network};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use std::str::FromStr;
 use crate::types::*;
+
+/// Custom serde module for Bitcoin addresses
+mod bitcoin_address_serde {
+    use super::*;
+
+    pub fn serialize<S>(address: &BtcAddress, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&address.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BtcAddress, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        BtcAddress::from_str(&s)
+            .map(|addr| addr.assume_checked())
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Custom serde module for optional Bitcoin addresses
+mod optional_bitcoin_address_serde {
+    use super::*;
+
+    pub fn serialize<S>(address: &Option<BtcAddress>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match address {
+            Some(addr) => serializer.serialize_some(&addr.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<BtcAddress>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt_s: Option<String> = Option::deserialize(deserializer)?;
+        match opt_s {
+            Some(s) => {
+                let addr = BtcAddress::from_str(&s)
+                    .map(|addr| addr.assume_checked())
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Some(addr))
+            }
+            None => Ok(None),
+        }
+    }
+}
 
 /// Federation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,18 +136,23 @@ pub struct MemberMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationAddresses {
     /// Legacy P2SH multisig address
+    #[serde(with = "optional_bitcoin_address_serde")]
     pub p2sh: Option<BtcAddress>,
-    
+
     /// P2SH-wrapped P2WSH multisig address
+    #[serde(with = "optional_bitcoin_address_serde")]
     pub p2sh_p2wsh: Option<BtcAddress>,
-    
+
     /// Native P2WSH multisig address
+    #[serde(with = "optional_bitcoin_address_serde")]
     pub p2wsh: Option<BtcAddress>,
-    
+
     /// Taproot address (main federation address)
+    #[serde(with = "bitcoin_address_serde")]
     pub taproot: BtcAddress,
-    
+
     /// Emergency recovery address
+    #[serde(with = "optional_bitcoin_address_serde")]
     pub recovery: Option<BtcAddress>,
 }
 
@@ -230,7 +289,7 @@ impl FederationManager {
     pub fn get_federation_address(&self, script_type: FederationScriptType) -> Option<&BtcAddress> {
         match script_type {
             FederationScriptType::P2SH => self.current_config.addresses.p2sh.as_ref(),
-            FederationScriptType::P2SH_P2WSH => self.current_config.addresses.p2sh_p2wsh.as_ref(),
+            FederationScriptType::P2ShP2Wsh => self.current_config.addresses.p2sh_p2wsh.as_ref(),
             FederationScriptType::P2WSH => self.current_config.addresses.p2wsh.as_ref(),
             FederationScriptType::Taproot => Some(&self.current_config.addresses.taproot),
             FederationScriptType::Recovery => self.current_config.addresses.recovery.as_ref(),
@@ -339,7 +398,7 @@ impl FederationManager {
                 // Validate new member doesn't already exist
                 // Additional validation logic
             }
-            FederationUpdateType::MemberRemoval { member_id } => {
+            FederationUpdateType::MemberRemoval { member_id: _ } => {
                 // Ensure we don't go below minimum threshold
                 let remaining_members = update.new_config.members.len();
                 if remaining_members < update.new_config.threshold {
@@ -360,7 +419,7 @@ impl FederationManager {
 #[derive(Debug, Clone)]
 pub enum FederationScriptType {
     P2SH,
-    P2SH_P2WSH,
+    P2ShP2Wsh,
     P2WSH,
     Taproot,
     Recovery,
@@ -400,7 +459,7 @@ impl Default for FederationConfig {
                 p2sh: None,
                 p2sh_p2wsh: None,
                 p2wsh: None,
-                taproot: BtcAddress::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap(),
+                taproot: BtcAddress::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap().assume_checked(),
                 recovery: None,
             },
             version: 1,

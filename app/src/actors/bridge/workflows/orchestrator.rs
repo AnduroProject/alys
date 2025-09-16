@@ -3,7 +3,6 @@
 //! High-level orchestrator managing all bridge workflows
 
 use actix::prelude::*;
-use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn, error};
 
@@ -85,7 +84,7 @@ pub enum ComponentStatus {
 }
 
 /// Orchestrator metrics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct OrchestratorMetrics {
     pub total_workflows_initiated: u64,
     pub workflows_completed: u64,

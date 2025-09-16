@@ -4,11 +4,33 @@
 
 use bitcoin::{Transaction, TxOut, Address as BtcAddress, Network, ScriptBuf};
 use ethereum_types::{H160, H256};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use std::str::FromStr;
 use std::collections::HashMap;
 use crate::types::*;
 use super::constants::*;
+
+/// Custom serde module for Bitcoin addresses
+mod bitcoin_address_serde {
+    use super::*;
+
+    pub fn serialize<S>(address: &BtcAddress, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&address.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BtcAddress, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        BtcAddress::from_str(&s)
+            .map(|addr| addr.assume_checked())
+            .map_err(serde::de::Error::custom)
+    }
+}
 
 /// Validation error placeholder (since validator crate is not available)
 #[derive(Debug, Clone)]
@@ -190,7 +212,7 @@ impl BitcoinTransactionValidator {
     /// Validate a peg-out burn event
     pub fn validate_pegout_burn(&self, burn_event: &BurnEvent) -> ValidationResult<PegOutValidation> {
         let mut errors = Vec::new();
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
 
         // Validate destination address
         if let Err(e) = self.validate_bitcoin_address(&burn_event.destination_address) {
@@ -238,7 +260,7 @@ impl BitcoinTransactionValidator {
     }
 
     /// Find federation output in transaction
-    fn find_federation_output(&self, tx: &Transaction) -> Option<&TxOut> {
+    fn find_federation_output<'a>(&self, tx: &'a Transaction) -> Option<&'a TxOut> {
         tx.output.iter().find(|output| {
             self.federation_scripts.iter().any(|script| {
                 output.script_pubkey == *script
@@ -313,6 +335,7 @@ pub struct BurnEvent {
     pub burn_tx_hash: H256,
     pub block_number: u64,
     pub log_index: u32,
+    #[serde(with = "bitcoin_address_serde")]
     pub destination_address: BtcAddress,
     pub amount: u64,
     pub requester: H160,
@@ -338,7 +361,7 @@ pub mod address_validation {
             });
         }
 
-        Ok(address)
+        Ok(address.assume_checked())
     }
 
     /// Validate Ethereum address string

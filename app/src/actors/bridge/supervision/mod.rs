@@ -8,18 +8,17 @@ pub mod recovery;
 
 use actix::prelude::*;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn, error};
-use uuid::Uuid;
 
 use crate::actors::bridge::{
-    config::{BridgeSystemConfig, SupervisionConfig},
+    config::SupervisionConfig,
     messages::*,
     actors::{bridge::BridgeActor, pegin::PegInActor, pegout::PegOutActor, stream::StreamActor},
     shared::*,
 };
 use crate::types::*;
-use strategies::*;
 use health::*;
 use recovery::*;
 
@@ -104,7 +103,7 @@ pub enum RestartStrategy {
 }
 
 /// Supervision metrics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SupervisionMetrics {
     pub actors_supervised: u32,
     pub total_restarts: u64,

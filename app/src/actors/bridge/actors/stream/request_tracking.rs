@@ -677,14 +677,11 @@ impl AdvancedRequestTracker {
     /// Complete a request and return its details
     pub fn complete_request(&mut self, request_id: &str) -> Option<PendingRequestEntry> {
         if let Some(mut entry) = self.pending_requests.remove(request_id) {
-            entry.state = RequestState::Completed {
-                result: Ok(()),
-                response_time: entry.created_at.elapsed().unwrap_or_default(),
-            };
+            entry.state = RequestState::Completed;
 
             // Update statistics
             self.stats.total_requests += 1;
-            self.stats.completed_requests += 1;
+            self.stats.successful_requests += 1;
 
             Some(entry)
         } else {

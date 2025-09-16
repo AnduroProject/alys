@@ -5,7 +5,7 @@
 use bitcoin::{OutPoint, TxOut, Address as BtcAddress, ScriptBuf, Txid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use tracing::{info, warn, error, debug};
 use crate::types::*;
 
@@ -94,7 +94,7 @@ pub enum SelectionStrategy {
     OldestFirst,
     /// Select largest UTXOs first (minimizes transaction size)
     LargestFirst,
-    /// Select to minimize fees (branch and bound)
+    /// Select to minimize fees
     MinimizeFees,
     /// Random selection (privacy)
     Random,
@@ -205,7 +205,7 @@ impl UtxoManager {
     /// Mark UTXOs as spent
     pub fn mark_spent(&mut self, utxos: Vec<OutPoint>, spending_txid: Txid) -> Result<(), UtxoError> {
         for outpoint in &utxos {
-            if let Some(utxo) = self.utxo_set.remove(outpoint) {
+            if let Some(_utxo) = self.utxo_set.remove(outpoint) {
                 self.spent_utxos.insert(*outpoint);
                 self.reserved_utxos.remove(outpoint);
                 info!("Marked UTXO {} as spent in transaction {}", outpoint, spending_txid);
@@ -220,12 +220,13 @@ impl UtxoManager {
 
     /// Add new UTXO to the set
     pub fn add_utxo(&mut self, outpoint: OutPoint, output: TxOut, confirmations: u32, block_height: u32) {
+        let output_value = output.value;
         let utxo = Utxo {
             outpoint,
             output,
             confirmations,
             block_height,
-            spendable: confirmations >= MIN_CONFIRMATIONS && output.value >= DUST_LIMIT,
+            spendable: confirmations >= MIN_CONFIRMATIONS && output_value >= DUST_LIMIT,
             reserved: false,
             reserved_for: None,
             created_at: SystemTime::now(),
@@ -234,7 +235,7 @@ impl UtxoManager {
 
         self.utxo_set.insert(outpoint, utxo);
         self.update_stats();
-        debug!("Added UTXO {} with value {} sats", outpoint, output.value);
+        debug!("Added UTXO {} with value {} sats", outpoint, output_value);
     }
 
     /// Update UTXO confirmations
