@@ -4,3 +4,6 @@
 //! without the custom actor_system crate dependency.
 
 pub mod storage;
+
+#[cfg(test)]
+pub mod testing;

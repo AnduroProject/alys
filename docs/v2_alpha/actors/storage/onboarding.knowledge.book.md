@@ -335,7 +335,16 @@ cargo build --bin alys-v2
 cargo run --example storage_demo
 
 # Run storage-specific tests
-cargo test --lib storage_actor -- --nocapture
+# cargo test --lib storage_actor -- --nocapture
+
+# Run unit tests
+cargo test --package app actors_v2::testing::storage::unit
+
+# Run integration tests  
+cargo test --package app actors_v2::testing::storage::integration
+
+# Run all storage tests
+cargo test --package app actors_v2::testing::storage
 ```
 
 #### **Configuration Setup**

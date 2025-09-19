@@ -61,6 +61,15 @@ actix = "0.13"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 lru = "0.12"
 
+# Testing infrastructure
+proptest = "1.4"
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+mockall = "0.11"
+wiremock = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+chrono = "0.4"
+
 # encoding
 ethereum_ssz = { version = "0.5", features = ["arbitrary"] }
 ethereum_ssz_derive = "0.5"
@@ -91,6 +100,13 @@ features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "to
 
 [dev-dependencies]
 tempfile = "3.8.1"
+
+# Additional testing tools
+test-case = "3.3"
+rstest = "0.18"
+serial_test = "3.0"
+tokio-test = "0.4"
+env_logger = "0.10"
 
 [[example]]
 name = "storage_demo"
