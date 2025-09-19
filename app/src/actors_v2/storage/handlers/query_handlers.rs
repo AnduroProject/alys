@@ -113,7 +113,7 @@ impl Handler<GetTransactionByHashMessage> for StorageActor {
         let indexing = self.indexing.clone();
 
         Box::pin(async move {
-            match indexing.read().unwrap().get_transaction(&tx_hash).await? {
+            match indexing.read().await.get_transaction(&tx_hash).await? {
                 Some(tx_index) => {
                     let tx_info = TransactionWithBlockInfo {
                         transaction_hash: tx_index.transaction_hash,
@@ -141,7 +141,7 @@ impl Handler<GetAddressTransactionsMessage> for StorageActor {
         let indexing = self.indexing.clone();
 
         Box::pin(async move {
-            let address_indices = indexing.read().unwrap().get_address_transactions(&address, limit).await?;
+            let address_indices = indexing.read().await.get_address_transactions(&address, limit).await?;
 
             let tx_info: Vec<AddressTransactionInfo> = address_indices
                 .into_iter()
@@ -176,7 +176,7 @@ impl Handler<QueryLogsMessage> for StorageActor {
                 vec![]
             };
 
-            let eth_logs = indexing.read().unwrap().query_logs(
+            let eth_logs = indexing.read().await.query_logs(
                 filter.from_block,
                 filter.to_block,
                 &addresses,

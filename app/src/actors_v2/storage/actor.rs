@@ -13,7 +13,8 @@ use crate::block::{ConsensusBlock, ConvertBlockHash};
 use crate::auxpow_miner::BlockIndex;
 use actix::prelude::*;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use std::time::{Duration, Instant};
 use tracing::*;
 use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
@@ -220,7 +221,7 @@ impl StorageActor {
         self.database.put_block(&block).await?;
 
         // Index the block for advanced queries
-        if let Err(e) = self.indexing.write().unwrap().index_block(&block).await {
+        if let Err(e) = self.indexing.write().await.index_block(&block).await {
             error!("Failed to index block {}: {}", block_hash, e);
             // Continue execution - indexing failure shouldn't stop block storage
         }

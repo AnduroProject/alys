@@ -44,7 +44,7 @@ impl Handler<StoreBlockMessage> for StorageActor {
             database.put_block(&block).await?;
 
             // Index the block for advanced queries
-            if let Err(e) = indexing.write().unwrap().index_block(&block).await {
+            if let Err(e) = indexing.write().await.index_block(&block).await {
                 error!("Failed to index block {}: {}", block_hash, e);
                 // Continue execution - indexing failure shouldn't stop block storage
             }

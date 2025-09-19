@@ -61,7 +61,7 @@ impl Handler<RebuildIndexMessage> for StorageActor {
         let indexing = self.indexing.clone();
 
         Box::pin(async move {
-            indexing.write().unwrap().rebuild_index(index_type).await?;
+            indexing.write().await.rebuild_index(index_type).await?;
             info!("Index rebuild completed");
             Ok(())
         })
@@ -81,7 +81,7 @@ impl Handler<AnalyzeDatabaseMessage> for StorageActor {
 
         Box::pin(async move {
             let db_stats = database.get_stats().await?;
-            let consistency_issues = indexing.read().unwrap().check_consistency().await?;
+            let consistency_issues = indexing.read().await.check_consistency().await?;
 
             let analysis = DatabaseAnalysis {
                 total_size_bytes: db_stats.total_size_bytes,
@@ -128,7 +128,7 @@ impl Handler<OptimizeDatabaseMessage> for StorageActor {
                 }
                 OptimizationType::Full => {
                     database.compact_database().await?;
-                    indexing.write().unwrap().optimize_indices().await?;
+                    indexing.write().await.optimize_indices().await?;
                     metrics.record_compaction();
                 }
                 _ => {
