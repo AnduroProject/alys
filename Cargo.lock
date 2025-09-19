@@ -317,6 +317,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "actix",
+ "anyhow",
  "async-trait",
  "bitcoin",
  "chrono",
@@ -334,6 +335,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "hex",
+ "humantime",
  "hyper",
  "lazy_static",
  "leveldb",
@@ -4429,6 +4431,7 @@ dependencies = [
  "libp2p-noise",
  "libp2p-plaintext",
  "libp2p-quic",
+ "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-tcp",
  "libp2p-upnp",
@@ -4704,6 +4707,24 @@ dependencies = [
  "socket2 0.5.5",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "libp2p-request-response"
+version = "0.25.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8e3b4d67870478db72bac87bfc260ee6641d0734e0e3e275798f089c3fecfd4"
+dependencies = [
+ "async-trait",
+ "futures",
+ "instant",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-swarm",
+ "log",
+ "rand 0.8.5",
+ "smallvec",
+ "void",
 ]
 
 [[package]]
