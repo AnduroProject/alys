@@ -1,8 +1,8 @@
 mod app;
 mod aura;
 mod auxpow;
-mod auxpow_miner;
-mod block;
+pub mod auxpow_miner;
+pub mod block;
 mod block_candidate;
 mod block_hash_cache;
 mod chain;
@@ -14,6 +14,7 @@ mod rpc;
 mod signatures;
 mod spec;
 mod store;
+pub mod actors_v2;
 
 // for main.rs
 pub use app::run;
