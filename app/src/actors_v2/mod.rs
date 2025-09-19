@@ -5,5 +5,4 @@
 
 pub mod storage;
 
-#[cfg(test)]
 pub mod testing;

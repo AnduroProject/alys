@@ -69,6 +69,7 @@ mockall = "0.11"
 wiremock = "0.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 chrono = "0.4"
+tempfile = "3.8"
 
 # encoding
 ethereum_ssz = { version = "0.5", features = ["arbitrary"] }
@@ -99,7 +100,6 @@ default-features = false
 features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
 
 [dev-dependencies]
-tempfile = "3.8.1"
 
 # Additional testing tools
 test-case = "3.3"
@@ -111,3 +111,4 @@ env_logger = "0.10"
 [[example]]
 name = "storage_demo"
 path = "../examples/storage_demo.rs"
+

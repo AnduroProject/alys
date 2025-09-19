@@ -58,17 +58,14 @@ pub trait PropertyTestable: ActorTestHarness {
 
 /// Trait for chaos testing support
 #[async_trait]
-pub trait ChaosTestable: ActorTestHarness {
-    type FailureScenario: Send + Sync;
+pub trait ChaosTestable: Send + Sync {
+    type ChaosConfig: Send + Sync;
+
+    /// Run comprehensive chaos test with configuration
+    async fn run_chaos_test(&mut self, config: Self::ChaosConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     /// Inject a failure scenario
-    async fn inject_failure(&mut self, scenario: Self::FailureScenario) -> Result<(), Self::Error>;
-
-    /// Monitor system state during chaos
-    async fn monitor_state(&self) -> Result<SystemHealthReport, Self::Error>;
-
-    /// Recover from injected failures
-    async fn recover(&mut self) -> Result<(), Self::Error>;
+    async fn inject_failure(&mut self, scenario: crate::actors_v2::testing::chaos::ChaosScenario) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// System health monitoring for chaos testing
