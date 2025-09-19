@@ -27,6 +27,8 @@ bridge = { package = "federation", path = "../crates/federation" }
 # misc
 clap = { workspace = true }
 eyre = { workspace = true }
+anyhow = "1.0"  # V2 NetworkActor error handling (replaces actor_system)
+humantime = "2.1"  # V2 NetworkActor RPC timestamp formatting
 hex = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -97,7 +99,10 @@ rust_decimal = { version = "1.37.1", features = ["macros"] }
 [dependencies.libp2p]
 version = "0.52"
 default-features = false
-features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic"]
+# V2 NetworkActor simplified features + V1 compatibility
+# V2 uses: identify, yamux, noise, gossipsub, tcp, request-response
+# V1 needs: mdns, quic (temporarily included for compatibility)
+features = ["identify", "yamux", "mdns", "noise", "gossipsub", "dns", "tcp", "tokio", "plaintext", "secp256k1", "macros", "ecdsa", "quic", "request-response"]
 
 [dev-dependencies]
 
@@ -111,4 +116,20 @@ env_logger = "0.10"
 [[example]]
 name = "storage_demo"
 path = "../examples/storage_demo.rs"
+
+[[example]]
+name = "network_v2_validation"
+path = "../examples/network_v2_validation.rs"
+
+[[example]]
+name = "network_v2_simple_test"
+path = "../examples/network_v2_simple_test.rs"
+
+[[example]]
+name = "network_v2_production_demo"
+path = "../examples/network_v2_production_demo.rs"
+
+[[example]]
+name = "network_v2_mdns_demo"
+path = "../examples/network_v2_mdns_demo.rs"
 
