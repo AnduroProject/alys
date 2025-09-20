@@ -16,7 +16,7 @@ use crate::actors_v2::network::{
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
     NetworkMetrics,
     managers::PeerManager,
-    messages::{PeerId as MessagePeerId, PeerInfo, NetworkStatus},
+    messages::{PeerInfo, NetworkStatus},
 };
 
 /// NetworkActor V2 - P2P protocols with working libp2p integration
@@ -289,14 +289,14 @@ impl NetworkActor {
     }
 
     /// Handle request from peer
-    fn handle_peer_request(&mut self, request: crate::actors_v2::network::messages::NetworkRequest, source_peer: String, request_id: String) -> Result<()> {
+    fn handle_peer_request(&mut self, request: crate::actors_v2::network::messages::NetworkRequest, source_peer: String, _request_id: String) -> Result<()> {
         match request {
             crate::actors_v2::network::messages::NetworkRequest::GetBlocks { start_height, count } => {
                 tracing::debug!("Peer {} requested {} blocks starting from height {}",
                     source_peer, count, start_height);
 
                 // Forward to SyncActor for handling
-                if let Some(ref sync_actor) = self.sync_actor {
+                if let Some(ref _sync_actor) = self.sync_actor {
                     // TODO: Send message to SyncActor to get blocks and respond
                     tracing::debug!("Forwarding block request to SyncActor");
                 }
@@ -306,7 +306,7 @@ impl NetworkActor {
                 tracing::debug!("Peer {} requested chain status", source_peer);
 
                 // Forward to SyncActor for current status
-                if let Some(ref sync_actor) = self.sync_actor {
+                if let Some(ref _sync_actor) = self.sync_actor {
                     // TODO: Get status from SyncActor and respond
                     tracing::debug!("Forwarding status request to SyncActor");
                 }

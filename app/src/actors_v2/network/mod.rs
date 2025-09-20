@@ -15,8 +15,7 @@ pub mod metrics;
 pub mod managers;
 pub mod protocols;
 pub mod handlers;
-// TODO: Re-enable once RPC pattern matching is fixed
-// pub mod rpc;
+pub mod rpc;
 
 pub use network_actor::NetworkActor;
 pub use sync_actor::SyncActor;
@@ -24,4 +23,4 @@ pub use config::{NetworkConfig, SyncConfig};
 pub use messages::{NetworkMessage, SyncMessage, NetworkResponse, SyncResponse, NetworkError, SyncError};
 pub use behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent};
 pub use metrics::{NetworkMetrics, SyncMetrics};
-// pub use rpc::{NetworkRpcHandler, NetworkSubsystem, NetworkRpcRequest, NetworkRpcResponse};
+pub use rpc::{NetworkRpcHandler, NetworkSubsystem, NetworkRpcRequest, NetworkRpcResponse};

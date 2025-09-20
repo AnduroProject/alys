@@ -12,7 +12,6 @@ use crate::actors_v2::network::{
     NetworkActor, SyncActor,
     NetworkMessage, SyncMessage,
     NetworkResponse, SyncResponse,
-    NetworkError, SyncError,
 };
 
 /// RPC request types for NetworkActor V2
@@ -172,6 +171,7 @@ impl NetworkRpcHandler {
 
                 match self.network_actor.send(msg).await {
                     Ok(Ok(NetworkResponse::Started)) => Ok(NetworkRpcResult::Success),
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Network start failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -182,6 +182,7 @@ impl NetworkRpcHandler {
 
                 match self.network_actor.send(msg).await {
                     Ok(Ok(NetworkResponse::Stopped)) => Ok(NetworkRpcResult::Success),
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Network stop failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -199,6 +200,7 @@ impl NetworkRpcHandler {
                             is_running: status.is_running,
                         })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get network status: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -218,6 +220,7 @@ impl NetworkRpcHandler {
 
                         Ok(NetworkRpcResult::Peers { peers: rpc_peers })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get peers: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -237,6 +240,8 @@ impl NetworkRpcHandler {
                     Ok(Ok(NetworkResponse::Broadcasted { message_id })) => {
                         Ok(NetworkRpcResult::Broadcast { message_id })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Broadcast failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -253,6 +258,7 @@ impl NetworkRpcHandler {
                     Ok(Ok(NetworkResponse::Broadcasted { message_id })) => {
                         Ok(NetworkRpcResult::Broadcast { message_id })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Broadcast failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -265,6 +271,7 @@ impl NetworkRpcHandler {
                     Ok(Ok(NetworkResponse::Connected { peer_id })) => {
                         Ok(NetworkRpcResult::Connection { peer_id, success: true })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Connection failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -277,6 +284,7 @@ impl NetworkRpcHandler {
                     Ok(Ok(NetworkResponse::Disconnected { .. })) => {
                         Ok(NetworkRpcResult::Connection { peer_id, success: false })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Disconnection failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -294,6 +302,7 @@ impl NetworkRpcHandler {
                             gossip_messages_published: metrics.gossip_messages_published,
                         })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get metrics: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -304,6 +313,7 @@ impl NetworkRpcHandler {
 
                 match self.sync_actor.send(msg).await {
                     Ok(Ok(SyncResponse::Started)) => Ok(NetworkRpcResult::Success),
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Sync start failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -314,6 +324,7 @@ impl NetworkRpcHandler {
 
                 match self.sync_actor.send(msg).await {
                     Ok(Ok(SyncResponse::Stopped)) => Ok(NetworkRpcResult::Success),
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Sync stop failed: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -332,6 +343,7 @@ impl NetworkRpcHandler {
                             pending_requests: status.pending_requests,
                         })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get sync status: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -349,6 +361,7 @@ impl NetworkRpcHandler {
                             current_height: metrics.current_height,
                         })
                     }
+                    Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get sync metrics: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
                 }
@@ -503,6 +516,9 @@ impl NetworkSubsystem {
             Ok(Ok(NetworkResponse::Status(net_status))) => {
                 status.insert("network".to_string(), serde_json::to_value(net_status)?);
             }
+            Ok(Ok(_)) => {
+                status.insert("network_error".to_string(), serde_json::Value::String("Unexpected response type".to_string()));
+            }
             Ok(Err(e)) => {
                 status.insert("network_error".to_string(), serde_json::Value::String(format!("{:?}", e)));
             }
@@ -515,6 +531,9 @@ impl NetworkSubsystem {
         match self.sync_actor.send(SyncMessage::GetSyncStatus).await {
             Ok(Ok(SyncResponse::Status(sync_status))) => {
                 status.insert("sync".to_string(), serde_json::to_value(sync_status)?);
+            }
+            Ok(Ok(_)) => {
+                status.insert("sync_error".to_string(), serde_json::Value::String("Unexpected response type".to_string()));
             }
             Ok(Err(e)) => {
                 status.insert("sync_error".to_string(), serde_json::Value::String(format!("{:?}", e)));

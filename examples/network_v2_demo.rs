@@ -98,17 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   📊 BlockRequestManager: {} completed requests, {} blocks received",
         stats.completed_requests, stats.total_blocks_received);
 
-    // Demonstrate complexity reduction
-    println!("\n5. Complexity Reduction Achieved:");
-    println!("   📉 V1: 26,125+ lines across 4 actors");
-    println!("   📈 V2: ~4,000 lines in 2 actors (85% reduction)");
-    println!("   🔄 V1: Complex supervision and fault tolerance");
-    println!("   ⚡ V2: Simple actor lifecycle management");
-    println!("   🌐 V1: 7 libp2p protocols");
-    println!("   🎯 V2: 3 essential protocols only");
-
     println!("\n🎉 NetworkActor V2 Demo Complete!");
-    println!("   Ready for libp2p integration and production deployment");
 
     Ok(())
 }
