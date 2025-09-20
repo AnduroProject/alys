@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 
-use crate::actors_v2::network::{
+use super::{
     NetworkConfig, NetworkMessage, NetworkResponse, NetworkError,
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
     NetworkMetrics,

@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, Duration};
 use anyhow::{Result, anyhow};
 
-use crate::actors_v2::network::{
+use super::{
     SyncConfig, SyncMessage, SyncResponse, SyncError, SyncMetrics,
     messages::{PeerId, Block, NetworkMessage, SyncStatus},
 };

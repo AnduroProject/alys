@@ -44,8 +44,24 @@ pub struct NetworkMetrics {
 impl NetworkMetrics {
     pub fn new() -> Self {
         Self {
+            connected_peers: 0,
+            total_connections: 0,
+            failed_connections: 0,
+            messages_sent: 0,
+            messages_received: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
+            gossip_messages_published: 0,
+            gossip_messages_received: 0,
+            gossip_subscription_count: 0,
+            requests_sent: 0,
+            requests_received: 0,
+            responses_sent: 0,
+            responses_received: 0,
+            protocol_errors: 0,
+            connection_errors: 0,
+            average_latency_ms: 0.0,
             last_updated: SystemTime::now(),
-            ..Default::default()
         }
     }
 
@@ -142,8 +158,25 @@ pub struct SyncMetrics {
 impl SyncMetrics {
     pub fn new() -> Self {
         Self {
+            current_height: 0,
+            target_height: 0,
+            blocks_synced: 0,
+            block_requests_sent: 0,
+            block_responses_received: 0,
+            block_request_failures: 0,
+            blocks_processed: 0,
+            blocks_validated: 0,
+            blocks_rejected: 0,
+            average_block_processing_time_ms: 0.0,
+            sync_rate_blocks_per_second: 0.0,
+            sync_peers_active: 0,
+            peer_request_counts: HashMap::new(),
+            validation_errors: 0,
+            storage_errors: 0,
+            network_errors: 0,
+            is_syncing: false,
+            sync_start_time: None,
             last_updated: SystemTime::now(),
-            ..Default::default()
         }
     }
 
