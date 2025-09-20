@@ -133,3 +133,7 @@ path = "../examples/network_v2_production_demo.rs"
 name = "network_v2_mdns_demo"
 path = "../examples/network_v2_mdns_demo.rs"
 
+[[example]]
+name = "network_debug_creation"
+path = "../examples/network_debug_creation.rs"
+
