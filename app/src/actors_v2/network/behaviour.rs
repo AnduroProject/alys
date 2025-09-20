@@ -23,7 +23,7 @@ pub struct AlysNetworkBehaviour {
 
 impl AlysNetworkBehaviour {
     /// Create new network behaviour with complete protocol stack including mDNS
-    pub fn new(config: &crate::actors_v2::network::NetworkConfig) -> Result<Self> {
+    pub fn new(config: &super::NetworkConfig) -> Result<Self> {
         tracing::info!("Creating AlysNetworkBehaviour with complete protocol stack including mDNS");
 
         Ok(Self {
@@ -93,7 +93,7 @@ impl AlysNetworkBehaviour {
     }
 
     /// Send direct request to peer
-    pub fn send_request(&mut self, peer_id: &str, request: &crate::actors_v2::network::messages::NetworkRequest) -> Result<String> {
+    pub fn send_request(&mut self, peer_id: &str, request: &super::messages::NetworkRequest) -> Result<String> {
         if !self.is_initialized {
             return Err(anyhow!("Network behaviour not initialized"));
         }
@@ -176,7 +176,7 @@ pub enum AlysNetworkBehaviourEvent {
     },
     /// Request received from peer
     RequestReceived {
-        request: crate::actors_v2::network::messages::NetworkRequest,
+        request: super::messages::NetworkRequest,
         source_peer: String,
         request_id: String,
     },

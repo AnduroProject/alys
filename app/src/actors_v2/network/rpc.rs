@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 
-use crate::actors_v2::network::{
+use super::{
     NetworkActor, SyncActor,
     NetworkMessage, SyncMessage,
     NetworkResponse, SyncResponse,

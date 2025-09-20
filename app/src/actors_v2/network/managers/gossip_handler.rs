@@ -9,7 +9,7 @@ use std::time::{SystemTime, Duration};
 use serde::{Serialize, Deserialize};
 use anyhow::{Result, anyhow};
 
-use crate::actors_v2::network::messages::{GossipMessage, PeerId};
+use super::super::messages::{GossipMessage, PeerId};
 
 /// Message type classification
 #[derive(Debug, Clone, PartialEq, Eq)]

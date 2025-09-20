@@ -5,7 +5,7 @@
 
 use anyhow::{Result, anyhow};
 
-use crate::actors_v2::network::{
+use super::super::{
     SyncMessage, SyncResponse, SyncError,
     messages::{SyncStatus, PeerId, Block},
 };

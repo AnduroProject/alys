@@ -8,7 +8,7 @@ use std::time::{SystemTime, Duration};
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 
-use crate::actors_v2::network::messages::PeerId;
+use super::super::messages::PeerId;
 
 /// Block request information
 #[derive(Debug, Clone)]

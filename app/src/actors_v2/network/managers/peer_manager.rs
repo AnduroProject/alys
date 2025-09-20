@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use anyhow::{Result, anyhow};
 use serde::{Serialize, Deserialize};
 
-use crate::actors_v2::network::messages::PeerId;
+use super::super::messages::PeerId;
 
 /// Simplified peer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
