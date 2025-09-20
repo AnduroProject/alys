@@ -663,10 +663,6 @@ Protocol Complexity: 7 protocols -> 4         (43% reduction - includes mDNS)
 
 **Advanced Features (Evaluate):**
 - 🔍 Complex sync state machines (simplify)
-- 🔍 Advanced peer reputation (basic version)
-- 🔍 Kademlia DHT (remove - use bootstrap + mDNS)
-- ✅ mDNS discovery (REQUIRED - preserve from V1)
-- 🔍 Sophisticated fault tolerance (simplify)
 
 **Federation Features (Keep if Used):**
 - ✅ Federation-aware message routing (if needed)
