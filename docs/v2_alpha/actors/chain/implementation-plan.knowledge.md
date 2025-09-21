@@ -258,12 +258,121 @@ if let Some(ref storage_actor) = self.storage_actor {
 }
 ```
 
-**NetworkActor Integration:**
+**NetworkActor V2 Integration (Dual-Actor System):**
+ChainActor integrates with both NetworkActor (P2P protocols) and SyncActor (blockchain sync):
+
 ```rust
-// Broadcast block via NetworkActor
-if let Some(ref network_actor) = self.network_actor {
-    let broadcast_msg = NetworkMessage::BroadcastBlock { block_data, priority: true };
-    network_actor.send(broadcast_msg).await?;
+/// ChainActor struct includes both network actors
+pub struct ChainActor {
+    // ... other fields
+    network_actor: Option<Addr<NetworkActor>>,
+    sync_actor: Option<Addr<SyncActor>>,
+}
+
+/// Essential network operations
+impl ChainActor {
+    /// Broadcast produced blocks to network
+    async fn broadcast_block(&self, block_data: Vec<u8>) -> Result<(), ChainError> {
+        if let Some(ref network_actor) = self.network_actor {
+            let msg = NetworkMessage::BroadcastBlock { block_data, priority: true };
+            network_actor.send(msg).await
+                .map_err(|e| ChainError::NetworkError(e.to_string()))?
+                .map_err(ChainError::Network)?;
+        }
+        Ok(())
+    }
+
+    /// Request missing blocks for sync
+    async fn request_blocks(&self, start_height: u64, count: u32) -> Result<(), ChainError> {
+        if let Some(ref sync_actor) = self.sync_actor {
+            let msg = SyncMessage::RequestBlocks { start_height, count, peer_id: None };
+            sync_actor.send(msg).await
+                .map_err(|e| ChainError::NetworkError(e.to_string()))?
+                .map_err(ChainError::Sync)?;
+        }
+        Ok(())
+    }
+
+    /// Get network status for consensus decisions
+    async fn get_network_status(&self) -> Result<NetworkStatus, ChainError> {
+        if let Some(ref network_actor) = self.network_actor {
+            let response = network_actor.send(NetworkMessage::GetNetworkStatus).await
+                .map_err(|e| ChainError::NetworkError(e.to_string()))?
+                .map_err(ChainError::Network)?;
+            match response {
+                NetworkResponse::Status(status) => Ok(status),
+                _ => Err(ChainError::UnexpectedResponse),
+            }
+        } else {
+            Err(ChainError::NetworkNotAvailable)
+        }
+    }
+
+    /// Broadcast transactions to mempool
+    async fn broadcast_transaction(&self, tx_data: Vec<u8>) -> Result<(), ChainError> {
+        if let Some(ref network_actor) = self.network_actor {
+            let msg = NetworkMessage::BroadcastTransaction { tx_data };
+            network_actor.send(msg).await
+                .map_err(|e| ChainError::NetworkError(e.to_string()))?
+                .map_err(ChainError::Network)?;
+        }
+        Ok(())
+    }
+}
+```
+
+**Incoming Network Messages (SyncActor → ChainActor):**
+```rust
+/// ChainActor receives blocks from SyncActor
+#[derive(Debug, Message)]
+#[rtype(result = "Result<(), ChainError>")]
+pub struct NetworkBlockReceived {
+    pub block: Block,
+    pub peer_id: PeerId,
+}
+
+impl Handler<NetworkBlockReceived> for ChainActor {
+    type Result = ResponseFuture<Result<(), ChainError>>;
+
+    fn handle(&mut self, msg: NetworkBlockReceived, _: &mut Context<Self>) -> Self::Result {
+        // Import block received from network
+        let import_msg = ImportBlock {
+            block: msg.block,
+            source: BlockSource::Network(msg.peer_id)
+        };
+        Box::pin(self.handle_import_block(import_msg))
+    }
+}
+```
+
+**Network Coordination Setup:**
+```rust
+impl ChainActor {
+    /// Initialize network actor coordination
+    pub async fn setup_network_integration(
+        &mut self,
+        network_addr: Addr<NetworkActor>,
+        sync_addr: Addr<SyncActor>
+    ) -> Result<(), ChainError> {
+        // Set actor references
+        self.network_actor = Some(network_addr);
+        self.sync_actor = Some(sync_addr.clone());
+
+        // Register ChainActor with SyncActor for block delivery
+        sync_addr.send(SyncMessage::SetChainActor {
+            addr: ctx.address()
+        }).await?;
+
+        Ok(())
+    }
+
+    /// Network health check (for consensus decisions)
+    async fn is_network_ready(&self) -> bool {
+        match self.get_network_status().await {
+            Ok(status) => status.is_running && status.connected_peers > 0,
+            Err(_) => false,
+        }
+    }
 }
 ```
 
