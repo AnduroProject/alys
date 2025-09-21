@@ -1,6 +1,6 @@
 # Revised Systematic Plan for Porting ChainActor to V2
 
-Based on your clarification and following the successful patterns from StorageActor and NetworkActor V2, this is a comprehensive plan for porting the ChainActor from V1 to V2 while significantly simplifying its implementation.
+This is a comprehensive plan for porting the ChainActor from V1 to V2 while significantly simplifying its implementation.
 
 ## Architecture Clarification
 
@@ -30,10 +30,36 @@ use actix::prelude::*;
 ```
 
 ### 1.2 Dependencies to Keep/Add
-- **Keep:** `actix`, `lighthouse_wrapper`, `eyre`, `bitcoin`, `bridge`, `ethereum_types`
-- **Keep:** All blockchain-related dependencies (Engine, Storage, Aura, Bridge)
+
+#### **Core Blockchain Dependencies (Keep)**
+- **`lighthouse_wrapper`**: Ethereum consensus layer integration, execution payload handling
+- **`bitcoin`**: Bitcoin types for AuxPoW operations (Txid, BlockHash, Transaction)
+- **`bridge`**: Two-way peg operations (BitcoinSigner, Bridge, PegInInfo, UtxoManager)
+- **`ethereum_types`**: Ethereum types (Address, H256, U256) for EVM integration
+- **`eyre`**: Error handling and reporting framework
+
+#### **Engine & Execution Dependencies (Keep)**
+- **Engine**: Block building, execution payload creation, EL integration
+- **Aura**: Proof-of-Authority consensus, validator rotation, slot scheduling
+- **Storage integration**: Via StorageActor V2 for block persistence
+- **Network integration**: Via NetworkActor V2 for block broadcasting
+
+#### **AuxPoW & Mining Dependencies (Keep - for future EngineActor/AuxPowActor coordination)**
+- **AuxPow types**: AuxPowHeader, difficulty calculation, merged mining validation
+- **BitcoinConsensusParams**: Difficulty retargeting, mining parameters
+- **ChainManager trait**: Interface that will be implemented by ChainActor for EngineActor/AuxPowActor
+
+#### **Peg Operation Dependencies (Keep)**
+- **BitcoinWallet**: UTXO management, transaction creation
+- **BitcoinSignatureCollector**: Federation signature aggregation
+- **PegInInfo/PegOutInfo**: Peg operation state and validation
+
+#### **Framework Dependencies**
+- **Keep:** `actix` (standard actor framework)
+- **Keep:** `tokio` (async runtime)
+- **Keep:** `tracing` (structured logging)
 - **Remove:** `actor_system` references
-- **Add to V2:** Any missing blockchain dependencies from chain.rs
+- **Add to V2:** Missing blockchain dependencies identified during porting
 
 ### 1.3 Core Blockchain Operations (No Changes to Logic)
 - **Keep:** Block production logic from chain.rs
@@ -117,10 +143,24 @@ pub struct ChainActor {
 - `GetBlockByHeight` / `GetBlockByHash` - Block retrieval for RPC
 - `BroadcastBlock` - Block broadcasting via NetworkActor
 
+**ChainManager Interface (for future EngineActor/AuxPowActor coordination):**
+- `IsSynced` - Check if chain is synchronized for mining decisions
+- `GetHead` - Get current chain head for mining operations
+- `GetAggregateHashes` - Get block hashes for aggregate hash calculation
+- `GetLastFinalizedBlock` - Get most recent finalized block for mining
+- `PushAuxPow` - Submit validated AuxPow for block finalization
+
+**Future Expansion (Comment Placeholders):**
+```rust
+// TODO: Add when federation governance is implemented
+// - `UpdateFederation` - Hot-reload federation membership and thresholds
+// - `VerifyFederationSignature` - Validate federation member signatures
+// - `MigrateFederation` - Handle federation configuration transitions
+```
+
 **Remove Complex Messages:**
 - Complex subscription systems
 - Over-engineered metrics messages
-- Complex federation update messages
 - Detailed validation messages with multiple levels
 - Complex reorganization messages
 
@@ -253,27 +293,250 @@ ethereum_types = "0.14"
 eyre = "0.6"
 ```
 
-## Phase 7: Testing (Direct Port and Simplify)
+## Phase 7: Testing Strategy (Based on StorageActor Framework)
 
-### 7.1 Test Migration Strategy
-- **Port:** Essential tests from V1 ChainActor
-- **Port:** Chain logic tests from chain.rs
-- **Remove:** Over-engineered supervision tests
-- **Remove:** Complex metrics tests
-- **Keep:** Block production, validation, AuxPoW, peg operation tests
-- **Follow:** StorageActor V2 testing patterns
+### 7.1 Testing Architecture Overview
 
-### 7.2 Test Structure
+The ChainActor V2 employs a comprehensive testing strategy following StorageActor V2 patterns:
+
+```mermaid
+graph TD
+    subgraph "ChainActor Test Pyramid"
+        UT[Unit Tests - 60%]
+        IT[Integration Tests - 25%]
+        PT[Property Tests - 10%]
+        CHT[Chaos Tests - 5%]
+    end
+
+    subgraph "Test Infrastructure"
+        TH[Test Harnesses]
+        CI[CI/CD Pipeline]
+        BF[Test Fixtures]
+        CF[Component Framework]
+    end
+
+    subgraph "File Structure"
+        BASE["app/src/actors_v2/testing/chain/"]
+        UNIT["unit/chain_tests.rs, block_tests.rs, auxpow_tests.rs"]
+        INTEG["integration/coordination_tests.rs, workflow_tests.rs"]
+    end
 ```
-testing/
-├── unit/
-│   ├── chain_actor_tests.rs     # Core actor functionality
-│   ├── block_production_tests.rs # Block production logic
-│   ├── auxpow_tests.rs          # AuxPoW processing
-│   └── peg_operation_tests.rs   # Peg operations
-└── integration/
-    ├── chain_coordination_tests.rs # Actor coordination
-    └── blockchain_workflow_tests.rs # End-to-end blockchain operations
+
+#### **Testing Principles (Following StorageActor Pattern)**
+1. **Fast Feedback**: Unit tests run in <10ms each with component isolation
+2. **Real Integration**: Actor tests create actual ChainActor instances
+3. **Determinism**: Reproducible test data with predictable blockchain operations
+4. **Comprehensive Coverage**: All essential blockchain functionality validated
+5. **Production Realism**: Tests use actual message types and coordination patterns
+
+### 7.2 Working Unit Testing Framework
+
+#### **Core Testing Infrastructure** (`app/src/actors_v2/testing/chain/mod.rs`)
+
+```rust
+/// ChainActor specific test harness following StorageActor pattern
+pub struct ChainTestHarness {
+    pub base: BaseTestHarness<ChainActor>,
+    pub temp_dir: TempDir,
+    pub config: ChainConfig,
+    pub mock_engine: MockEngine,
+    pub mock_bridge: MockBridge,
+}
+
+#[async_trait]
+impl ActorTestHarness for ChainTestHarness {
+    type Actor = ChainActor;
+    type Config = ChainConfig;
+    type Message = ChainMessage;
+    type Error = ChainTestError;
+
+    async fn send_message(&mut self, message: Self::Message) -> Result<(), Self::Error> {
+        self.base.start_operation().await;
+        self.base.metrics.messages_sent += 1;
+
+        // Use spawn_blocking following StorageActor pattern for async compatibility
+        let result = match message {
+            ChainMessage::ProduceBlock { slot, timestamp } => {
+                let actor = self.base.get_actor_ref().await;
+                tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async {
+                        let _actor_guard = actor.read().await;
+                        info!("Producing block for slot {} at timestamp {:?}", slot, timestamp);
+                        Ok::<(), anyhow::Error>(())
+                    })
+                }).await.unwrap().map_err(|e| ChainTestError::BlockOperation(e.to_string()))
+            },
+            // Additional message handling...
+        };
+
+        match result {
+            Ok(_) => {
+                self.base.record_success().await;
+                Ok(())
+            },
+            Err(e) => {
+                self.base.record_error(&e.to_string()).await;
+                Err(e)
+            }
+        }
+    }
+}
+```
+
+### 7.3 Test Categories and Implementation
+
+#### **Unit Tests (60% of coverage)**
+**File Structure:**
+```
+unit/
+├── chain_actor_tests.rs        # Actor lifecycle, configuration, basic operations
+├── block_production_tests.rs   # Block production logic and validation
+├── block_import_tests.rs       # Block import and processing pipeline
+├── auxpow_tests.rs             # AuxPoW processing and finalization
+├── peg_operation_tests.rs      # Peg-in and peg-out operations
+└── consensus_tests.rs          # Aura consensus and validator operations
+```
+
+**Example Test Implementation:**
+```rust
+#[actix::test]
+async fn test_chain_actor_creation_and_configuration() {
+    let mut harness = ChainTestHarness::new().await.unwrap();
+    harness.setup().await.unwrap();
+
+    // Test configuration validation
+    assert!(harness.config.validate().is_ok());
+
+    // Verify blockchain state consistency
+    harness.verify_blockchain_state().await.unwrap();
+    harness.teardown().await.unwrap();
+}
+
+#[actix::test]
+async fn test_block_production_workflow() {
+    let mut harness = ChainTestHarness::new().await.unwrap();
+    harness.setup().await.unwrap();
+
+    // Test block production for validator
+    let produce_msg = ChainMessage::ProduceBlock {
+        slot: 1,
+        timestamp: Duration::from_secs(1000),
+    };
+    harness.send_message(produce_msg).await.unwrap();
+
+    // Verify block was produced and broadcasted
+    harness.verify_blockchain_state().await.unwrap();
+    harness.teardown().await.unwrap();
+}
+```
+
+#### **Integration Tests (25% of coverage)**
+**File Structure:**
+```
+integration/
+├── chain_coordination_tests.rs    # ChainActor ↔ StorageActor ↔ NetworkActor
+├── blockchain_workflow_tests.rs   # End-to-end blockchain operations
+├── auxpow_integration_tests.rs    # AuxPoW with mining workflow
+└── peg_operation_integration_tests.rs # Cross-actor peg operations
+```
+
+**Example Integration Test:**
+```rust
+#[actix::test]
+async fn test_chain_storage_network_coordination() {
+    let mut env = ChainIntegrationTestEnvironment::new().await.unwrap();
+    env.setup_coordination().await.unwrap();
+
+    // Test complete block production → storage → broadcast workflow
+    let block_msg = ChainMessage::ProduceBlock { slot: 1, timestamp: Duration::from_secs(1000) };
+    env.chain_harness.send_message(block_msg).await.unwrap();
+
+    // Verify storage received block
+    let stored_blocks = env.storage_harness.get_stored_blocks().await.unwrap();
+    assert!(!stored_blocks.is_empty());
+
+    // Verify network broadcasted block
+    let broadcast_messages = env.network_harness.get_broadcast_messages().await.unwrap();
+    assert!(!broadcast_messages.is_empty());
+
+    env.teardown().await.unwrap();
+}
+```
+
+### 7.4 Test Execution Commands
+
+#### **Basic Test Execution**
+```bash
+# Navigate to the app directory
+cd app
+
+# Run all ChainActor tests
+cargo test --lib actors_v2::testing::chain
+
+# Run specific test categories
+cargo test --lib actors_v2::testing::chain::unit        # Unit tests
+cargo test --lib actors_v2::testing::chain::integration # Integration tests
+cargo test --lib actors_v2::testing::chain::property    # Property tests
+cargo test --lib actors_v2::testing::chain::chaos       # Chaos tests
+```
+
+#### **Advanced Test Configuration**
+```bash
+# Run with debugging output
+RUST_LOG=debug cargo test --lib actors_v2::testing::chain::unit -- --nocapture
+
+# Run with custom configuration
+CHAIN_TEST_CONFIG=test_config.json cargo test --lib actors_v2::testing::chain
+
+# Run integration tests with coordination
+cargo test --lib actors_v2::testing::chain::integration -- --test-threads=1
+```
+
+### 7.5 Test Migration Strategy
+
+#### **Port from V1 Sources**
+- **Essential blockchain tests** from both V1 ChainActor and chain.rs
+- **Block production and validation tests** with actor patterns
+- **AuxPoW processing tests** with mining integration
+- **Peg operation tests** with Bridge integration
+
+#### **Remove V1 Complexity**
+- Over-engineered supervision tests
+- Complex metrics and monitoring tests
+- Custom `actor_system` integration tests
+
+#### **Add V2 Specific Tests**
+- **Actor coordination tests** with StorageActor V2 and NetworkActor V2
+- **Message protocol tests** following StorageActor patterns
+- **Performance tests** for blockchain operations
+
+### 7.6 Continuous Integration Integration
+
+**GitHub Actions Workflow** (`.github/workflows/v2-chain-testing.yml`):
+```yaml
+name: ChainActor V2 Testing
+
+on: [push, pull_request]
+
+jobs:
+  chain-actor-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Run ChainActor Unit Tests
+        run: cargo test --lib actors_v2::testing::chain::unit
+      - name: Run ChainActor Integration Tests
+        run: cargo test --lib actors_v2::testing::chain::integration
+      - name: Run ChainActor Property Tests
+        run: PROPTEST_CASES=1000 cargo test --lib actors_v2::testing::chain::property
+      - name: Run ChainActor Chaos Tests (main branch only)
+        if: github.ref == 'refs/heads/main'
+        run: cargo test --lib actors_v2::testing::chain::chaos
 ```
 
 ## Implementation Strategy
@@ -313,11 +576,79 @@ And creating:
 - **Clean actor integration** (StorageActor + NetworkActor coordination)
 - **Maintained functionality** (all essential blockchain logic preserved)
 
+## Co-existence Strategy with Current Codebase
+
+### Current Integration Approach
+The ChainActor V2 will be developed in parallel with the existing codebase to ensure smooth transition:
+
+#### **File Organization for Co-existence**
+```
+app/src/
+├── chain.rs                           # V1 monolithic implementation (unchanged)
+└── actors_v2/
+    ├── chain/                         # V2 ChainActor (new)
+    │   ├── actor.rs                   # Simplified ChainActor
+    │   ├── messages.rs                # Essential messages + ChainManager interface
+    │   └── handlers.rs                # Message handlers with chain.rs logic
+    ├── storage/                       # StorageActor V2 (existing)
+    └── network/                       # NetworkActor V2 (existing)
+```
+
+#### **Integration Points for Future EngineActor/AuxPowActor**
+The ChainActor V2 will implement the `ChainManager` trait interface to support future actor integrations:
+
+```rust
+// ChainManager trait implementation for EngineActor/AuxPowActor coordination
+#[async_trait]
+impl ChainManager for ChainActor {
+    async fn is_synced(&self) -> Result<bool> { /* Implementation */ }
+    async fn get_head(&self) -> Result<SignedConsensusBlock> { /* Implementation */ }
+    async fn get_aggregate_hashes(&self) -> Result<Vec<bitcoin::BlockHash>> { /* Implementation */ }
+    async fn get_last_finalized_block(&self) -> Result<ConsensusBlock> { /* Implementation */ }
+    async fn push_auxpow(&mut self, auxpow: AuxPow, params: AuxPowParams) -> Result<bool> { /* Implementation */ }
+}
+```
+
+#### **Migration Strategy**
+1. **Phase 1**: ChainActor V2 co-exists with V1 systems
+2. **Phase 2**: EngineActor and AuxPowActor are ported to use ChainActor V2 interface
+3. **Phase 3**: V1 chain.rs and ChainActor are deprecated once V2 ecosystem is complete
+
+### Dependencies and Actor Coordination
+
+#### **Actor Ecosystem Preparation**
+```mermaid
+graph TD
+    subgraph "Current V1 (preserved)"
+        V1_CHAIN[chain.rs]
+        V1_CHAIN_ACTOR[ChainActor V1]
+    end
+
+    subgraph "V2 Actor System (new)"
+        CHAIN_V2[ChainActor V2]
+        STORAGE_V2[StorageActor V2]
+        NETWORK_V2[NetworkActor V2]
+
+        ENGINE_V2[EngineActor V2 - Future]
+        AUXPOW_V2[AuxPowActor V2 - Future]
+    end
+
+    CHAIN_V2 <--> STORAGE_V2
+    CHAIN_V2 <--> NETWORK_V2
+    ENGINE_V2 -.-> CHAIN_V2
+    AUXPOW_V2 -.-> CHAIN_V2
+
+    V1_CHAIN -.->|Will be replaced| CHAIN_V2
+    V1_CHAIN_ACTOR -.->|Will be replaced| CHAIN_V2
+```
+
 **Estimated Effort:** Medium complexity - requires understanding blockchain logic from chain.rs and simplifying V1 ChainActor complexity, but follows established V2 patterns from StorageActor and NetworkActor implementations.
 
 **Success Criteria:**
 1. ChainActor V2 handles all essential blockchain operations
 2. Clean integration with StorageActor V2 and NetworkActor V2
 3. Maintains AuxPoW, peg operations, and consensus functionality
-4. Follows standard Actix patterns without custom `actor_system`
-5. Significantly simpler than V1 while preserving essential features
+4. Implements ChainManager interface for future EngineActor/AuxPowActor integration
+5. Co-exists cleanly with current V1 codebase
+6. Follows standard Actix patterns without custom `actor_system`
+7. Significantly simpler than V1 while preserving essential features
