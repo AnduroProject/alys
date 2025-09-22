@@ -6,6 +6,7 @@
 use actix::prelude::*;
 use std::time::Instant;
 use tracing::info;
+use uuid::Uuid;
 
 use super::{
     ChainConfig, ChainError, ChainMetrics, ChainState,
@@ -111,12 +112,21 @@ impl ChainActor {
     }
 
     /// Store block via StorageActor
-    pub(crate) async fn store_block(&self, _block: crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>, _canonical: bool) -> Result<(), ChainError> {
-        if let Some(ref _storage_actor) = self.storage_actor {
-            // This would use the actual StorageMessage when available
-            // let store_msg = StorageMessage::StoreBlock { block, canonical };
-            // storage_actor.send(store_msg).await
-            //     .map_err(|e| ChainError::Storage(e.to_string()))?;
+    pub(crate) async fn store_block(&self, block: crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>, canonical: bool) -> Result<(), ChainError> {
+        if let Some(ref storage_actor) = self.storage_actor {
+            // Convert SignedConsensusBlock to AlysConsensusBlock (ConsensusBlock) for StorageActor
+            // Extract the consensus block from the signed wrapper
+            let alys_block = block.message; // SignedConsensusBlock.message contains the ConsensusBlock
+
+            let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
+                block: alys_block,
+                canonical,
+                correlation_id: Some(Uuid::new_v4()), // Generate correlation ID for tracing
+            };
+
+            storage_actor.send(store_msg).await
+                .map_err(|e| ChainError::NetworkError(format!("Failed to send store message: {}", e)))?
+                .map_err(|e| ChainError::Storage(e.to_string()))?;
         }
         Ok(())
     }

@@ -15,6 +15,9 @@ pub enum ChainError {
     #[error("Block import error: {0}")]
     BlockImport(String),
 
+    #[error("Invalid block: {0}")]
+    InvalidBlock(String),
+
     #[error("AuxPoW processing error: {0}")]
     AuxPowProcessing(String),
 
