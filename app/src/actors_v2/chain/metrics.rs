@@ -120,6 +120,31 @@ impl ChainMetrics {
         self.network_peers.set(count as i64);
         self.record_activity();
     }
+
+    // Getter methods for testing
+
+    /// Get activity count (total operations performed)
+    pub fn get_activity_count(&self) -> u64 {
+        // Sum of various operations as a proxy for activity count
+        (self.blocks_produced.get() + self.blocks_imported.get() +
+         self.auxpow_processed.get() + self.pegins_processed.get() +
+         self.pegouts_processed.get()) as u64
+    }
+
+    /// Get current chain height
+    pub fn get_chain_height(&self) -> u64 {
+        self.chain_height.get() as u64
+    }
+
+    /// Get sync status
+    pub fn get_sync_status(&self) -> bool {
+        self.sync_status.get() == 1
+    }
+
+    /// Get network peers count
+    pub fn get_network_peers(&self) -> usize {
+        self.network_peers.get() as usize
+    }
 }
 
 impl Default for ChainMetrics {

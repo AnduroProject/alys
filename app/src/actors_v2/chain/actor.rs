@@ -40,13 +40,19 @@ pub struct ChainActor {
 impl ChainActor {
     /// Create new ChainActor
     pub fn new(config: ChainConfig, state: ChainState) -> Self {
+        let mut metrics = ChainMetrics::new();
+
+        // Initialize metrics based on current state
+        metrics.set_sync_status(state.is_synced());
+        metrics.set_chain_height(state.get_height());
+
         Self {
             config,
             state,
             storage_actor: None,
             network_actor: None,
             sync_actor: None,
-            metrics: ChainMetrics::new(),
+            metrics,
             last_activity: Instant::now(),
         }
     }

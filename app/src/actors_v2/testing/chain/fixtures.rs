@@ -103,6 +103,43 @@ pub fn mock_auxpow_params() -> AuxPowParams {
     }
 }
 
+/// Test fixture for mock AuxPow
+pub fn mock_auxpow() -> crate::auxpow::AuxPow {
+    crate::auxpow::AuxPow {
+        coinbase_txn: bitcoin::Transaction {
+            version: 1,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::ZERO,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: 5000000000, // 50 BTC
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        },
+        block_hash: bitcoin::BlockHash::from_byte_array([1u8; 32]),
+        coinbase_branch: crate::auxpow::MerkleBranch {
+            branch_hash: vec![],
+            branch_side_mask: 0,
+        },
+        blockchain_branch: crate::auxpow::MerkleBranch {
+            branch_hash: vec![],
+            branch_side_mask: 0,
+        },
+        parent_block: bitcoin::block::Header {
+            version: bitcoin::block::Version::ONE,
+            prev_blockhash: bitcoin::BlockHash::from_byte_array([0u8; 32]),
+            merkle_root: bitcoin::hash_types::TxMerkleNode::from_byte_array([1u8; 32]),
+            time: 1640995200,
+            bits: bitcoin::CompactTarget::from_consensus(0x207fffff),
+            nonce: 12345,
+        },
+    }
+}
+
 /// Test fixture for multiple peg-in infos
 pub fn mock_multiple_pegins() -> Vec<PegInInfo> {
     vec![

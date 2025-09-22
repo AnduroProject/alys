@@ -78,6 +78,11 @@ impl AggregateApproval {
         }
     }
 
+    /// Create empty aggregate approval (alias for new)
+    pub fn empty() -> Self {
+        Self::new()
+    }
+
     pub fn add_approval(&mut self, approval: CheckedIndividualApproval) -> Result<(), Error> {
         if self
             .aggregation_bits
