@@ -133,8 +133,6 @@ ChainMessage::ProduceBlock { slot, timestamp } => {
 
 **Required Implementation:**
 - Block template creation via Engine
-- Transaction pool integration
-- Fee calculation and distribution
 - Peg-in/peg-out processing
 - AuxPoW header generation
 - Consensus validation via Aura
@@ -342,46 +340,592 @@ impl ChainActor {
 **Decision**: **Direct integration maintains 5-actor architecture** without unnecessary complexity.
 
 #### 3. **MiningCoordinatorActor** (High Priority for Phase 3)
+
+**Architecture Decision**: **REQUIRED** for V2's mining operations - coordinates complex inter-actor workflows that cannot be handled by any single actor alone.
+
+**V0 vs V1 vs V2 Mining Architecture Analysis:**
+
+**V0 Mining System (Current Working - 2000+ lines in chain.rs):**
 ```rust
-// Coordinate between ChainActor, AuxPowActor, and mining operations
+// V0: Monolithic integration with all mining coordination in Chain
+impl<DB> ChainManager<ConsensusBlock> for Chain<DB> {
+    async fn get_aggregate_hashes(&self) -> Vec<BlockHash> { /* 30 lines of logic */ }
+    async fn push_auxpow(&self, /*8 parameters*/) -> bool { /* 50 lines */ }
+    async fn check_pow(&self, header: &AuxPowHeader, override: bool) { /* 200+ lines */ }
+    async fn share_pow(&self, pow: AuxPowHeader) { /* Network broadcasting */ }
+    // + difficulty calculation, work queueing, signature coordination, etc.
+}
+
+// Integrated with: Engine, Storage, Network, Bridge, Bitcoin wallet, Aura
+// spawn_background_miner() creates continuous mining loop
+```
+
+**V1 Mining System (Failed Attempt - Over-complex):**
+```rust
+// V1: Over-engineered with dedicated actors and complex message passing
+pub struct AuxPowActor { /* 600+ lines */ }
+pub struct DifficultyManager { /* Separate actor for calculations */ }
+// 20+ message types, complex supervision, never functional
+```
+
+**V2 Mining System (Strategic Coordination):**
+```rust
+/// MiningCoordinatorActor - Strategic coordinator between V2's 5-actor system
+///
+/// NOT a direct port of V0/V1, but a NEW coordination layer that:
+/// - Orchestrates workflows between ChainActor, StorageActor, NetworkActor, EngineActor
+/// - Integrates directly with V0's proven AuxPow/difficulty systems
+/// - Manages mining loop and work distribution
+/// - Handles cross-actor error recovery and state consistency
 pub struct MiningCoordinatorActor {
+    /// V2 Actor coordination
     chain_actor: Addr<ChainActor>,
-    auxpow_coordinator: Option<AuxPowCoordinator>,
-    mining_state: MiningState,
+    storage_actor: Addr<StorageActor>,
+    network_actor: Addr<NetworkActor>,
+    engine_actor: Addr<EngineActor>,
+
+    /// Direct V0 component integration (proven systems)
+    auxpow_miner: AuxPowMiner<ConsensusBlock, ChainManagerProxy>,
+    aura: Arc<Aura>,
+    bridge: Arc<Bridge>,
+
+    /// Mining state and coordination
+    mining_config: MiningConfig,
+    active_work: BTreeMap<BlockHash, MiningWork>,
+    coordination_state: CoordinationState,
+    metrics: MiningCoordinatorMetrics,
+}
+
+/// Core coordination messages
+#[derive(Message)]
+#[rtype(result = "Result<AuxBlock, MiningError>")]
+pub struct CoordinateBlockCreation {
+    pub address: EvmAddress,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), MiningError>")]
+pub struct CoordinateBlockSubmission {
+    pub hash: BlockHash,
+    pub auxpow: AuxPow,
+}
+
+/// Multi-actor workflow coordination
+#[derive(Message)]
+#[rtype(result = "Result<(), MiningError>")]
+pub struct CoordinateBlockFinalization {
+    pub signed_block: SignedConsensusBlock,
+    pub auxpow_header: AuxPowHeader,
 }
 ```
 
-**Decision**: **NEEDED** for AuxPow integration, but **Phase 3 priority**.
+**Why MiningCoordinatorActor is Essential for V2:**
+
+1. **Complex Multi-Actor Workflows**: Mining operations require coordination across all 5 V2 actors:
+   - **ChainActor**: Block validation, consensus checks, state management
+   - **StorageActor**: Block persistence, hash caching, finalized block retrieval
+   - **NetworkActor**: AuxPow broadcasting, peer coordination
+   - **EngineActor**: Execution payload building, validation
+   - **MiningCoordinatorActor**: Orchestrates the entire workflow
+
+2. **V0 ChainManager Integration**: V0's `ChainManager` trait requires complex operations that span multiple actors:
+   ```rust
+   // V0's ChainManager operations that need multi-actor coordination in V2:
+   async fn get_aggregate_hashes() -> Vec<BlockHash> {
+       // Requires: StorageActor (block hash cache) + ChainActor (head state)
+   }
+
+   async fn push_auxpow(/*8 parameters*/) -> bool {
+       // Requires: ChainActor (validation) + StorageActor (persistence) +
+       //           NetworkActor (broadcasting) + Bridge (peg operations)
+   }
+
+   async fn check_pow(header: &AuxPowHeader) -> Result<()> {
+       // Requires: StorageActor (latest pow block) + ChainActor (finalization checks) +
+       //           Bridge (pegout validation) + Network (gossip validation)
+   }
+   ```
+
+3. **Mining Loop Coordination**: V0's `spawn_background_miner` creates continuous mining that requires:
+   ```rust
+   // V2 mining loop - multi-actor coordination required
+   async fn mining_loop(&self) {
+       loop {
+           // 1. Create AuxBlock (ChainActor + StorageActor coordination)
+           let aux_block = self.coordinate_block_creation().await?;
+
+           // 2. Mine AuxPow (direct V0 AuxPow::mine - proven)
+           let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
+
+           // 3. Submit and finalize (All 5 actors coordinated)
+           self.coordinate_block_submission(aux_block.hash, auxpow).await?;
+       }
+   }
+   ```
+
+4. **Error Recovery and State Consistency**: Mining operations can fail at multiple points:
+   - Engine payload building fails → Coordinator handles fallback
+   - Network broadcasting fails → Coordinator retries with different peers
+   - Storage persistence fails → Coordinator prevents state corruption
+   - Cross-actor message timeouts → Coordinator maintains consistency
+
+**V2 MiningCoordinatorActor Implementation Requirements:**
+
+```rust
+impl MiningCoordinatorActor {
+    /// Replace V0's ChainManager::get_aggregate_hashes with multi-actor coordination
+    async fn coordinate_aggregate_hash_collection(&self) -> Result<Vec<BlockHash>, MiningError> {
+        // 1. Get chain head from ChainActor
+        let head_ref = self.chain_actor
+            .send(GetChainHead)
+            .await??;
+
+        // 2. Check for queued work
+        let has_work = self.coordination_state.has_pending_work(&head_ref.hash);
+
+        if !has_work {
+            return Err(MiningError::NoWorkToDo);
+        }
+
+        // 3. Get block hashes from StorageActor's cache
+        let hashes = self.storage_actor
+            .send(GetBlockHashCache)
+            .await??;
+
+        Ok(hashes)
+    }
+
+    /// Replace V0's ChainManager::push_auxpow with coordinated workflow
+    async fn coordinate_auxpow_finalization(
+        &self,
+        auxpow_header: AuxPowHeader
+    ) -> Result<bool, MiningError> {
+        // 1. Validate via ChainActor (check_pow equivalent)
+        let validation_result = self.chain_actor
+            .send(ValidateAuxPow { header: auxpow_header.clone() })
+            .await??;
+
+        if !validation_result.valid {
+            return Ok(false);
+        }
+
+        // 2. Create signed block via EngineActor + ChainActor coordination
+        let signed_block = self.coordinate_block_production(&auxpow_header).await?;
+
+        // 3. Persist via StorageActor
+        self.storage_actor
+            .send(StoreBlock {
+                block: signed_block.clone(),
+                canonical: true
+            })
+            .await??;
+
+        // 4. Broadcast via NetworkActor
+        self.network_actor
+            .send(BroadcastAuxPow { header: auxpow_header.clone() })
+            .await??;
+
+        // 5. Update coordination state
+        self.coordination_state.finalize_work(&auxpow_header);
+
+        Ok(true)
+    }
+
+    /// Complex block production coordination (Engine + Chain + Consensus)
+    async fn coordinate_block_production(
+        &self,
+        auxpow_header: &AuxPowHeader
+    ) -> Result<SignedConsensusBlock, MiningError> {
+        // 1. Build execution payload via EngineActor
+        let payload = self.engine_actor
+            .send(BuildPayloadForAuxPow {
+                range_start: auxpow_header.range_start,
+                range_end: auxpow_header.range_end,
+                fee_recipient: auxpow_header.fee_recipient,
+            })
+            .await??;
+
+        // 2. Create consensus block structure via ChainActor
+        let consensus_block = self.chain_actor
+            .send(CreateConsensusBlock {
+                execution_payload: payload,
+                auxpow_header: auxpow_header.clone(),
+            })
+            .await??;
+
+        // 3. Sign via direct Aura integration (stateless - no actor needed)
+        let signed_block = self.aura.sign_consensus_block(consensus_block)?;
+
+        Ok(signed_block)
+    }
+}
+
+/// ChainManagerProxy - Adapter for V0's AuxPowMiner to work with V2 actors
+pub struct ChainManagerProxy {
+    mining_coordinator: Addr<MiningCoordinatorActor>,
+}
+
+#[async_trait::async_trait]
+impl ChainManager<ConsensusBlock> for ChainManagerProxy {
+    async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>> {
+        self.mining_coordinator
+            .send(CoordinateAggregateHashes)
+            .await?
+            .map_err(Into::into)
+    }
+
+    async fn push_auxpow(/*...*/) -> bool {
+        self.mining_coordinator
+            .send(CoordinateAuxPowFinalization { /*...*/ })
+            .await
+            .unwrap_or(false)
+    }
+    // ... other ChainManager methods delegated to coordinator
+}
+```
+
+**Integration with V0 Proven Components:**
+- **Direct AuxPow integration**: Use V0's `AuxPow::mine`, `AuxPow::check`, `AuxPow::aggregate_hash`
+- **Direct difficulty calculation**: Use V0's `get_next_work_required` algorithm
+- **Direct consensus validation**: Use V0's Aura for signing and validation
+- **ChainManagerProxy**: Adapter pattern to integrate V0's `AuxPowMiner` with V2 actors
+
+**Decision**: **REQUIRED** for V2 architecture. Mining coordination cannot be handled by any single actor - requires dedicated orchestration across all 5 V2 actors while leveraging V0's proven mining algorithms.
+
+### V2 RPC Integration: Learning from V0 and V1
+
+**Critical Requirement**: External mining pools and mining software require Bitcoin-compatible `createauxblock` and `submitauxblock` RPC endpoints for merged mining operations.
+
+#### V0 RPC Architecture (Current Working)
+```rust
+// V0: Direct integration - Simple but tightly coupled
+pub async fn start_rpc<DB: ItemStore<MainnetEthSpec>>(
+    chain: Arc<Chain<DB>>,
+    retarget_params: BitcoinConsensusParams,
+    federation_address: Address<NetworkChecked>,
+    rpc_port: u16,
+) {
+    let miner = Arc::new(Mutex::new(AuxPowMiner::new(chain.clone(), retarget_params)));
+
+    // RPC handlers directly call miner methods
+    match json_req.method {
+        "createauxblock" => {
+            miner.create_aux_block(script_pub_key).await?  // Direct call
+        }
+        "submitauxblock" => {
+            miner.submit_aux_block(hash, auxpow).await?    // Direct call
+        }
+        // ...
+    }
+}
+```
+
+**V0 Strengths**: Simple, proven in production, handles external miners successfully
+**V0 Weaknesses**: Monolithic, tightly coupled, doesn't support actor-based architecture
+
+#### V1 RPC Architecture (Failed Attempt)
+```rust
+// V1: Actor-based but over-engineered
+pub struct AuxPowRpcContext {
+    pub auxpow_actor: Addr<AuxPowActor>,  // Single dedicated actor
+}
+
+impl AuxPowRpcContext {
+    pub async fn create_aux_block_rpc(&self, address: String) -> Result<AuxBlock, RpcError> {
+        self.auxpow_actor.send(CreateAuxBlock { address }).await??  // Actor message
+    }
+
+    pub async fn submit_aux_block_rpc(&self, hash_hex: String, auxpow_hex: String) -> Result<bool, RpcError> {
+        self.auxpow_actor.send(SubmitAuxBlock { hash, auxpow }).await??  // Actor message
+    }
+}
+```
+
+**V1 Strengths**: Clean actor abstraction, proper error handling, Bitcoin RPC compatibility
+**V1 Weaknesses**: Over-engineered single actor approach, never reached functional state
+
+#### V2 RPC Architecture (Strategic Design)
+
+**Design Principle**: Combine V0's proven simplicity with V1's clean actor abstraction, while leveraging V2's MiningCoordinatorActor for multi-actor orchestration.
+
+```rust
+/// V2 RPC Context - Delegates to MiningCoordinatorActor for orchestration
+pub struct AlysRpcContextV2 {
+    /// MiningCoordinatorActor handles all mining operations across 6 actors
+    mining_coordinator: Addr<MiningCoordinatorActor>,
+    /// ChainActor for blockchain queries that don't require coordination
+    chain_actor: Addr<ChainActor>,
+    /// StorageActor for direct block queries
+    storage_actor: Addr<StorageActor>,
+    /// Federation address for deposit queries
+    federation_address: Address<NetworkChecked>,
+}
+
+impl AlysRpcContextV2 {
+    /// RPC: createauxblock <address>
+    ///
+    /// V2 Implementation: Delegates to MiningCoordinatorActor which orchestrates
+    /// the entire workflow across all 6 V2 actors + V0 proven components
+    pub async fn create_aux_block_rpc(&self, address: String) -> Result<AuxBlock, RpcError> {
+        // Parse mining address (same as V1)
+        let evm_address = address.parse::<EvmAddress>()
+            .map_err(|_| RpcError::invalid_address(address))?;
+
+        // Delegate to MiningCoordinatorActor - this triggers multi-actor coordination:
+        // 1. ChainActor: Check sync status, get chain head
+        // 2. StorageActor: Get block hash cache for aggregate calculation
+        // 3. V0 AuxPow: Calculate aggregate hash (proven algorithm)
+        // 4. V0 Difficulty: Calculate next work required (proven algorithm)
+        // 5. MiningCoordinatorActor: Orchestrate and manage state
+        let aux_block = self.mining_coordinator
+            .send(CoordinateBlockCreation { address: evm_address })
+            .await
+            .map_err(RpcError::from_mailbox_error)?
+            .map_err(RpcError::from_mining_error)?;
+
+        info!(
+            block_hash = %aux_block.hash,
+            chain_id = aux_block.chain_id,
+            height = aux_block.height,
+            difficulty = %aux_block.bits.to_consensus(),
+            "V2 created aux block for external miner"
+        );
+
+        Ok(aux_block)
+    }
+
+    /// RPC: submitauxblock <hash> <auxpow>
+    ///
+    /// V2 Implementation: Delegates to MiningCoordinatorActor for multi-actor
+    /// validation and finalization workflow
+    pub async fn submit_aux_block_rpc(
+        &self,
+        hash_hex: String,
+        auxpow_hex: String
+    ) -> Result<bool, RpcError> {
+        // Parse inputs (same as V1)
+        let hash = BlockHash::from_str(&hash_hex)
+            .map_err(|_| RpcError::invalid_hash(hash_hex))?;
+
+        let auxpow = self.parse_auxpow_hex(&auxpow_hex)?;
+
+        // Delegate to MiningCoordinatorActor - this triggers complex multi-actor workflow:
+        // 1. ChainActor: Validate AuxPow structure and consensus rules
+        // 2. EngineActor: Build execution payload for the block range
+        // 3. V0 AuxPow: Validate proof-of-work (proven validation)
+        // 4. StorageActor: Persist signed block with AuxPow header
+        // 5. NetworkActor: Broadcast AuxPow to peer network
+        // 6. MiningCoordinatorActor: Orchestrate entire workflow with error recovery
+        let result = self.mining_coordinator
+            .send(CoordinateBlockSubmission { hash, auxpow })
+            .await
+            .map_err(RpcError::from_mailbox_error)?;
+
+        match result {
+            Ok(_) => {
+                info!(block_hash = %hash, "V2 AuxPow submission accepted by mining coordinator");
+                Ok(true)
+            }
+            Err(e) => {
+                warn!(block_hash = %hash, error = ?e, "V2 AuxPow submission rejected");
+                Ok(false)  // Bitcoin RPC compatibility - return false, not error
+            }
+        }
+    }
+
+    /// RPC: getqueuedpow
+    ///
+    /// V2 Implementation: Direct query to ChainActor (no coordination needed)
+    pub async fn get_queued_pow_rpc(&self) -> Result<Option<AuxPowHeader>, RpcError> {
+        let queued_pow = self.chain_actor
+            .send(GetQueuedAuxPow)
+            .await
+            .map_err(RpcError::from_mailbox_error)?
+            .map_err(RpcError::from_chain_error)?;
+
+        Ok(queued_pow)
+    }
+
+    /// RPC: getheadblock
+    ///
+    /// V2 Implementation: Direct query to ChainActor (no coordination needed)
+    pub async fn get_head_block_rpc(&self) -> Result<SignedConsensusBlock, RpcError> {
+        let head = self.chain_actor
+            .send(GetChainHead)
+            .await
+            .map_err(RpcError::from_mailbox_error)?
+            .map_err(RpcError::from_chain_error)?;
+
+        Ok(head)
+    }
+
+    /// RPC: getblockbyheight <height>
+    ///
+    /// V2 Implementation: Direct query to StorageActor (no coordination needed)
+    pub async fn get_block_by_height_rpc(&self, height: u64) -> Result<Option<SignedConsensusBlock>, RpcError> {
+        let block = self.storage_actor
+            .send(GetBlockByHeight { height })
+            .await
+            .map_err(RpcError::from_mailbox_error)?
+            .map_err(RpcError::from_storage_error)?;
+
+        Ok(block)
+    }
+
+    /// Helper: Parse AuxPow hex data
+    fn parse_auxpow_hex(&self, auxpow_hex: &str) -> Result<AuxPow, RpcError> {
+        let auxpow_bytes = hex::decode(auxpow_hex)
+            .map_err(|_| RpcError::invalid_auxpow_hex(auxpow_hex))?;
+
+        use bitcoin::consensus::Decodable;
+        AuxPow::consensus_decode_from_finite_reader(&mut auxpow_bytes.as_slice())
+            .map_err(|e| RpcError::invalid_auxpow_structure(e))
+    }
+}
+
+/// V2 RPC Server Integration
+pub async fn start_rpc_v2(
+    mining_coordinator: Addr<MiningCoordinatorActor>,
+    chain_actor: Addr<ChainActor>,
+    storage_actor: Addr<StorageActor>,
+    federation_address: Address<NetworkChecked>,
+    rpc_port: u16,
+) {
+    let rpc_context = Arc::new(AlysRpcContextV2 {
+        mining_coordinator,
+        chain_actor,
+        storage_actor,
+        federation_address,
+    });
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], rpc_port));
+
+    info!("Starting V2 RPC server on {} with MiningCoordinatorActor integration", addr);
+
+    let server = Server::bind(&addr).serve(make_service_fn(move |_conn| {
+        let rpc_context = rpc_context.clone();
+
+        async move {
+            Ok::<_, GenericError>(service_fn(move |req| {
+                let rpc_context = rpc_context.clone();
+                http_req_json_rpc_v2(req, rpc_context)
+            }))
+        }
+    }));
+
+    tokio::spawn(async move {
+        if let Err(e) = server.await {
+            error!("V2 RPC server error: {}", e);
+        }
+    });
+}
+
+/// V2 RPC Request Handler
+async fn http_req_json_rpc_v2(
+    req: Request<Body>,
+    rpc_context: Arc<AlysRpcContextV2>,
+) -> Result<Response<Body>> {
+    // Standard JSON-RPC parsing (same as V0/V1)
+    let json_req = parse_json_rpc_request(req).await?;
+
+    let response = match json_req.method {
+        "createauxblock" => {
+            let [address] = parse_single_param::<String>(json_req.params)?;
+            rpc_context.create_aux_block_rpc(address).await
+                .map(|aux_block| json_rpc_success(json_req.id, aux_block))
+                .unwrap_or_else(|e| json_rpc_error(json_req.id, e))
+        }
+
+        "submitauxblock" => {
+            let (hash_hex, auxpow_hex) = parse_dual_params::<String, String>(json_req.params)?;
+            rpc_context.submit_aux_block_rpc(hash_hex, auxpow_hex).await
+                .map(|accepted| json_rpc_success(json_req.id, accepted))
+                .unwrap_or_else(|e| json_rpc_error(json_req.id, e))
+        }
+
+        "getqueuedpow" => {
+            rpc_context.get_queued_pow_rpc().await
+                .map(|queued| json_rpc_success(json_req.id, queued))
+                .unwrap_or_else(|e| json_rpc_error(json_req.id, e))
+        }
+
+        "getheadblock" => {
+            rpc_context.get_head_block_rpc().await
+                .map(|head| json_rpc_success(json_req.id, head))
+                .unwrap_or_else(|e| json_rpc_error(json_req.id, e))
+        }
+
+        "getblockbyheight" => {
+            let [height] = parse_single_param::<u64>(json_req.params)?;
+            rpc_context.get_block_by_height_rpc(height).await
+                .map(|block| json_rpc_success(json_req.id, block))
+                .unwrap_or_else(|e| json_rpc_error(json_req.id, e))
+        }
+
+        "getdepositaddress" => {
+            json_rpc_success(json_req.id, rpc_context.federation_address.to_string())
+        }
+
+        _ => json_rpc_error(json_req.id, RpcError::method_not_found(json_req.method))
+    };
+
+    Ok(response)
+}
+```
+
+**V2 RPC Architecture Advantages**:
+
+1. **Multi-Actor Coordination**: Mining operations properly orchestrated across all 6 V2 actors
+2. **V0 Algorithm Integration**: Leverages proven V0 AuxPow and difficulty algorithms via MiningCoordinatorActor
+3. **Clean Separation**: Complex coordination delegated to MiningCoordinatorActor, simple queries go direct to actors
+4. **Bitcoin Compatibility**: Maintains exact Bitcoin RPC interface for mining pool compatibility
+5. **Error Recovery**: MiningCoordinatorActor handles cross-actor failures and state consistency
+6. **Incremental Migration**: Can run alongside V0 RPC during transition period
+7. **Scalable**: Each actor type handles its domain expertise, coordinator orchestrates workflows
+
+**V2 vs V0 vs V1 Comparison**:
+- **V0**: Simple but monolithic - `AuxPowMiner` directly coupled to `Chain<DB>`
+- **V1**: Clean but over-engineered - Single `AuxPowActor` tried to handle everything
+- **V2**: Strategic coordination - `MiningCoordinatorActor` orchestrates multi-actor workflows while leveraging proven V0 components
+
+**Integration with V2 Phase Strategy**:
+- **Phase 1**: Implement `AlysRpcContextV2` with basic MiningCoordinatorActor integration
+- **Phase 2**: Add full multi-actor coordination for block production/finalization
+- **Phase 3**: Migrate from V0 RPC to V2 RPC with external miner validation
 
 ### Corrected V2 Actor Architecture
 
-Based on proper analysis of V0 component complexity:
+Based on proper analysis of V0 component complexity and mining coordination requirements:
 
-**5-Actor V2 System (Updated):**
+**6-Actor V2 System (Final Architecture):**
 1. **ChainActor V2** - Blockchain coordination and consensus ✅
 2. **StorageActor V2** - Persistence layer ✅ (Production-ready)
 3. **NetworkActor V2** - P2P networking ✅ (Working foundation)
 4. **SyncActor V2** - Block synchronization ✅ (Working foundation)
 5. **EngineActor V2** - Execution layer coordination ✅ **REQUIRED**
+6. **MiningCoordinatorActor V2** - Multi-actor mining workflows ⭐ **REQUIRED**
 
 ### V0 Component Integration Strategy
 
 #### Phase 1: Hybrid Integration (Updated Priority)
 ```rust
-// ChainActor coordinates with both actors and direct V0 components
+// V2 System Architecture - 6 actors + direct V0 component integration
 impl ChainActor {
-    pub fn new_with_v2_architecture(
+    pub fn new(
         config: ChainConfig,
         state: ChainState,
-        storage_actor: Addr<StorageActor>,   // V2 actor integration
-        network_actor: Addr<NetworkActor>,   // V2 actor integration
-        sync_actor: Addr<SyncActor>,         // V2 actor integration
-        engine_actor: Addr<EngineActor>,     // V2 actor integration - NEW
-        aura: Arc<Aura>,                     // Direct V0 integration (stateless)
-        bridge: Arc<Bridge>,                 // Direct V0 integration (encapsulated)
+        storage_actor: Addr<StorageActor>,           // V2 actor integration
+        network_actor: Addr<NetworkActor>,           // V2 actor integration
+        sync_actor: Addr<SyncActor>,                 // V2 actor integration
+        engine_actor: Addr<EngineActor>,             // V2 actor integration - NEW
+        mining_coordinator: Addr<MiningCoordinatorActor>, // V2 actor integration - NEW
+        aura: Arc<Aura>,                             // Direct V0 integration (stateless)
+        bridge: Arc<Bridge>,                         // Direct V0 integration (encapsulated)
     ) -> Self {
-        // ChainActor coordinates execution via EngineActor
-        // but uses Aura/Bridge directly for simple operations
+        // ChainActor focuses on blockchain coordination
+        // EngineActor handles execution layer
+        // MiningCoordinatorActor orchestrates mining workflows across all actors
+        // Aura/Bridge remain direct integrations for proven functionality
     }
 }
 ```
@@ -956,13 +1500,14 @@ The ChainActor V2 implementation represents a **strategic evolutionary step** fr
 8. **Test end-to-end execution coordination** between ChainActor and EngineActor
 
 **Strategic Advantages over V1 Approach:**
-- **Pragmatic Actor Design**: Create actors only for complex, stateful components (Engine) while using direct integration for simple ones (Aura)
+- **Pragmatic Actor Design**: Create actors only for complex, stateful components (Engine, MiningCoordinator) while using direct integration for simple ones (Aura, Bridge)
 - **Working System First**: Focus on functional blockchain operations over perfect actor patterns
 - **Incremental Risk**: Each phase delivers working functionality with fallback to V0
-- **Sustainable Complexity**: 5-actor system vs V1's complex hierarchy - right-sized architecture
-- **Resource Isolation**: EngineActor properly isolates expensive execution operations from ChainActor coordination
+- **Sustainable Complexity**: 6-actor system vs V1's complex hierarchy - right-sized architecture
+- **Resource Isolation**: EngineActor isolates expensive execution operations, MiningCoordinatorActor orchestrates complex multi-actor workflows
+- **V0 Integration**: Leverages proven V0 components (AuxPow, difficulty calculation) rather than reimplementation
 
 **Long-term Vision:**
-The V2 system positions Alys for **sustainable blockchain evolution** with a **right-sized 5-actor architecture**: ChainActor for coordination, dedicated actors for complex components (Storage, Network, Sync, Engine), and direct integration for simple components (Aura, Bridge). This approach avoids both V0's monolithic complexity and V1's over-engineering, creating a maintainable foundation for future blockchain evolution.
+The V2 system positions Alys for **sustainable blockchain evolution** with a **strategically-designed 6-actor architecture**: ChainActor for blockchain coordination, specialized actors for complex components (Storage, Network, Sync, Engine), MiningCoordinatorActor for multi-actor workflow orchestration, and direct integration for proven components (Aura, Bridge). This approach avoids both V0's monolithic complexity and V1's over-engineering, creating a maintainable foundation that learns from both successes and failures in blockchain architecture evolution.
 
 **Assessment**: The path to a working V2 system is **well-defined and achievable**, with Phase 1 representing **high-impact, low-risk** integration work that builds on existing functionality rather than replacing working systems. The co-existence strategy ensures **zero-downtime migration** from V0's monolithic architecture to V2's actor-based future.
