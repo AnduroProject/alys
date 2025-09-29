@@ -1,4 +1,5 @@
-use crate::actors_v2::testing::storage::{StorageTestHarness, StorageMessage};
+use crate::actors_v2::testing::storage::StorageTestHarness;
+use crate::actors_v2::common::StorageMessage;
 use crate::actors_v2::testing::base::{ActorTestHarness, ChaosTestable};
 use crate::actors_v2::testing::chaos::{FailureInjector, ChaosScenario, NetworkChaos, DiskChaos, MemoryChaos};
 use crate::actors_v2::storage::messages::*;

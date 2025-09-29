@@ -1,4 +1,5 @@
-use crate::actors_v2::testing::storage::{StorageTestHarness, StorageMessage};
+use crate::actors_v2::testing::storage::StorageTestHarness;
+use crate::actors_v2::common::StorageMessage;
 use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::storage::messages::*;
 use crate::auxpow_miner::BlockIndex;

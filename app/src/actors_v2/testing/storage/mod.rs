@@ -7,6 +7,7 @@ pub mod fixtures;
 use super::base::*;
 use crate::actors_v2::storage::actor::{StorageActor, StorageConfig, AlysConsensusBlock, StorageError};
 use crate::actors_v2::storage::messages::*;
+use crate::actors_v2::common::StorageMessage;
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
 use async_trait::async_trait;
@@ -232,18 +233,6 @@ impl ActorTestHarness for StorageTestHarness {
     }
 }
 
-/// Storage-specific message wrapper
-#[derive(Debug)]
-pub enum StorageMessage {
-    StoreBlock(StoreBlockMessage),
-    GetBlock(GetBlockMessage),
-    GetBlockByHeight(GetBlockByHeightMessage),
-    BlockExists(BlockExistsMessage),
-    UpdateState(UpdateStateMessage),
-    GetState(GetStateMessage),
-    GetChainHead(GetChainHeadMessage),
-    // Add more message types as needed for comprehensive testing
-}
 
 /// Storage test error types
 #[derive(Debug, thiserror::Error)]
