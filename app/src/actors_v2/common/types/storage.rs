@@ -2,6 +2,16 @@
 //!
 //! This module defines shared storage-related types.
 
+use crate::actors_v2::storage::messages::{
+    StoreBlockMessage,
+    GetBlockMessage,
+    GetBlockByHeightMessage,
+    BlockExistsMessage,
+    UpdateStateMessage,
+    GetStateMessage,
+    GetChainHeadMessage,
+};
+
 #[derive(Debug)]
 pub enum StorageMessage {
     StoreBlock(StoreBlockMessage),
