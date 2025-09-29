@@ -21,10 +21,10 @@
 
 ### V2 (Current Refactoring Effort)
 - **Location**: `/Users/michael/zDevelopment/Mara/alys-v2/app/src/actors_v2/` (85 files)
-- **Status**: =§ **IN DEVELOPMENT** - 30% functionally complete
+- **Status**: =ï¿½ **IN DEVELOPMENT** - 30% functionally complete
 - **Goal**: Simple, concise, easy-to-understand actor-based model
 - **Strategy**: Incremental migration with V0 co-existence
-- **Architecture**: Streamlined 4-actor system (Chain, Storage, Network, Sync)
+- **Architecture**: Streamlined n-actor system (Chain, Storage, Network, Sync, ...n)
 
 ## Key Development Principles
 
