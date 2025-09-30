@@ -6,6 +6,7 @@
 pub mod storage;
 pub mod network;
 pub mod chain;
+pub mod engine;
 pub mod common;
 
 pub mod testing;

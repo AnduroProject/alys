@@ -15,6 +15,7 @@ use super::{
 use crate::actors_v2::{
     storage::StorageActor,
     network::{NetworkActor, SyncActor},
+    engine::EngineActor,
 };
 
 /// Simplified ChainActor - core blockchain functionality
@@ -29,6 +30,7 @@ pub struct ChainActor {
     pub(crate) storage_actor: Option<Addr<StorageActor>>,
     pub(crate) network_actor: Option<Addr<NetworkActor>>,
     pub(crate) sync_actor: Option<Addr<SyncActor>>,
+    pub(crate) engine_actor: Option<Addr<EngineActor>>,
 
     /// Simple metrics
     pub(crate) metrics: ChainMetrics,
@@ -52,6 +54,7 @@ impl ChainActor {
             storage_actor: None,
             network_actor: None,
             sync_actor: None,
+            engine_actor: None,
             metrics,
             last_activity: Instant::now(),
         }
@@ -66,6 +69,11 @@ impl ChainActor {
     pub fn set_network_actors(&mut self, network_addr: Addr<NetworkActor>, sync_addr: Addr<SyncActor>) {
         self.network_actor = Some(network_addr);
         self.sync_actor = Some(sync_addr);
+    }
+
+    /// Set engine actor address
+    pub fn set_engine_actor(&mut self, addr: Addr<EngineActor>) {
+        self.engine_actor = Some(addr);
     }
 
     /// Record activity and update metrics

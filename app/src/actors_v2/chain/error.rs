@@ -63,6 +63,9 @@ pub enum ChainError {
     #[error("Engine operation failed: {0}")]
     Engine(String),
 
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

@@ -120,7 +120,6 @@ impl ChainTestHarness {
     ) -> crate::actors_v2::chain::ChainState {
         use crate::actors_v2::chain::ChainState;
         ChainState::new(
-            self.engine,
             self.aura,
             self.federation,
             self.bridge,

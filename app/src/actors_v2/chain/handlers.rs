@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use super::{
     ChainActor, ChainError,
@@ -21,6 +21,8 @@ use crate::block::{SignedConsensusBlock};
 use crate::auxpow::AuxPow;
 use bridge::PegInInfo;
 use lighthouse_wrapper::types::MainnetEthSpec;
+use ssz_types::VariableList;
+use crate::actors_v2::common::serialization::{serialize_block, calculate_block_hash};
 
 impl ChainActor {
     /// Handle block production (ported from chain.rs:437-692)

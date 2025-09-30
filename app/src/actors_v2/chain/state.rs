@@ -12,7 +12,6 @@ use crate::block::{AuxPowHeader};
 use crate::block_hash_cache::BlockHashCache;
 use crate::store::BlockRef;
 use bridge::{Bridge, PegInInfo, BitcoinSignatureCollector, BitcoinSigner};
-use crate::engine::Engine;
 use crate::aura::Aura;
 
 pub(crate) type BitcoinWallet = bridge::UtxoManager<bridge::Tree>;
@@ -29,7 +28,6 @@ pub enum SyncStatus {
 /// ChainActor state (simplified from chain.rs)
 pub struct ChainState {
     /// Core blockchain state (derived from chain.rs)
-    pub engine: Engine,
     pub aura: Aura,
     pub head: Option<BlockRef>,
     pub sync_status: SyncStatus,
@@ -70,7 +68,6 @@ impl std::fmt::Debug for ChainState {
             .field("block_hash_cache", &self.block_hash_cache)
             .field("blocks_without_pow", &self.blocks_without_pow)
             .field("last_block_time", &self.last_block_time)
-            .field("engine", &"<Engine>")
             .field("aura", &"<Aura>")
             .field("bridge", &"<Bridge>")
             .field("bitcoin_wallet", &"<BitcoinWallet>")
@@ -83,7 +80,6 @@ impl std::fmt::Debug for ChainState {
 impl ChainState {
     /// Create new chain state
     pub fn new(
-        engine: Engine,
         aura: Aura,
         federation: Vec<Address>,
         bridge: Bridge,
@@ -96,7 +92,6 @@ impl ChainState {
         head: Option<BlockRef>,
     ) -> Self {
         Self {
-            engine,
             aura,
             head,
             sync_status: SyncStatus::Synced,

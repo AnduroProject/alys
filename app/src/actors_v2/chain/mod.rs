@@ -17,6 +17,7 @@ pub mod handlers;
 pub mod messages;
 pub mod metrics;
 pub mod state;
+pub mod withdrawals;
 
 pub use actor::ChainActor;
 pub use config::ChainConfig;

@@ -27,7 +27,7 @@ use tracing::{debug, trace};
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
 const ENGINE_API_QUERY_RETRY_COUNT: i32 = 1;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9
 
 impl ConsensusAmount {
@@ -54,6 +54,7 @@ impl std::ops::Add for ConsensusAmount {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AddBalance(Address, ConsensusAmount);
 
 impl From<(Address, ConsensusAmount)> for AddBalance {
