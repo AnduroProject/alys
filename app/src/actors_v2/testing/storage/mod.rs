@@ -292,7 +292,7 @@ impl StorageTestHarness {
         }
 
         use crate::block::ConvertBlockHash;
-        let block_hash = self.test_blocks[index].block_hash().to_block_hash();
+        let block_hash = self.test_blocks[index].message.block_hash().to_block_hash();
 
         Ok(StorageMessage::GetBlock(GetBlockMessage {
             block_hash,

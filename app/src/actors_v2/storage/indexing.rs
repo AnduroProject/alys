@@ -101,7 +101,7 @@ impl StorageIndexing {
 
     /// Index a block and its transactions
     pub async fn index_block(&mut self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
-        debug!("Indexing block: {} at height: {}", block.block_hash().to_block_hash(), block.slot);
+        debug!("Indexing block: {} at height: {}", block.message.block_hash().to_block_hash(), block.message.slot);
 
         let mut batch = rocksdb::WriteBatch::default();
 
@@ -121,17 +121,17 @@ impl StorageIndexing {
 
         // Update statistics
         self.stats.blocks_indexed += 1;
-        self.stats.last_indexed_block = Some(block.slot);
+        self.stats.last_indexed_block = Some(block.message.slot);
 
-        debug!("Successfully indexed block: {} with {} simulated transactions", block.block_hash().to_block_hash(), 1);
+        debug!("Successfully indexed block: {} with {} simulated transactions", block.message.block_hash().to_block_hash(), 1);
         Ok(())
     }
 
     /// Index block height mapping
     fn index_block_height(&self, batch: &mut rocksdb::WriteBatch, block: &AlysConsensusBlock) -> Result<(), StorageError> {
         // Create height -> block_hash mapping for efficient height lookups
-        let height_key = format!("height:{}", block.slot);
-        let block_hash = block.block_hash().to_block_hash();
+        let height_key = format!("height:{}", block.message.slot);
+        let block_hash = block.message.block_hash().to_block_hash();
         let block_hash_value = block_hash.as_bytes();
 
         batch.put(height_key.as_bytes(), block_hash_value);
@@ -147,11 +147,11 @@ impl StorageIndexing {
         // 4. Index transaction logs and events
 
         // For now, create a placeholder transaction index entry
-        let placeholder_tx_hash = H256::from_low_u64_be(block.slot);
+        let placeholder_tx_hash = H256::from_low_u64_be(block.message.slot);
         let tx_index = TransactionIndex {
             transaction_hash: placeholder_tx_hash,
-            block_hash: block.block_hash().to_block_hash(),
-            block_number: block.slot,
+            block_hash: block.message.block_hash().to_block_hash(),
+            block_number: block.message.slot,
             transaction_index: 0,
             from_address: Address::zero(),
             to_address: Some(Address::zero()),

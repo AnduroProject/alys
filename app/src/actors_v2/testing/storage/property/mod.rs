@@ -87,7 +87,7 @@ mod property_regression_tests {
             harness.send_message(store_msg).await.unwrap();
 
             use crate::block::ConvertBlockHash;
-            stored_hashes.insert(block.block_hash().to_block_hash());
+            stored_hashes.insert(block.message.block_hash().to_block_hash());
         }
 
         // Verify all blocks can be retrieved
@@ -160,7 +160,7 @@ mod property_regression_tests {
         // Verify blocks can be retrieved by height in order
         for block in &blocks {
             let get_msg = StorageMessage::GetBlockByHeight(GetBlockByHeightMessage {
-                height: block.slot,
+                height: block.message.slot,
                 correlation_id: Some(Uuid::new_v4()),
             });
 
@@ -218,7 +218,7 @@ mod property_regression_tests {
             harness.send_message(store_msg).await.unwrap();
 
             use crate::block::ConvertBlockHash;
-            stored_hashes.insert(block.block_hash().to_block_hash());
+            stored_hashes.insert(block.message.block_hash().to_block_hash());
         }
 
         // Check existence of stored blocks
@@ -308,7 +308,7 @@ mod property_regression_tests {
             for block in &blocks {
                 use crate::block::ConvertBlockHash;
                 let get_msg = StorageMessage::GetBlock(GetBlockMessage {
-                    block_hash: block.block_hash().to_block_hash(),
+                    block_hash: block.message.block_hash().to_block_hash(),
                     correlation_id: Some(Uuid::new_v4()),
                 });
 

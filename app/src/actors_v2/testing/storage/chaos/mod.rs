@@ -202,7 +202,7 @@ impl StorageTestHarness {
                 let block_idx = rng.gen_range(0..blocks.len());
                 use crate::block::ConvertBlockHash;
                 StorageMessage::GetBlock(GetBlockMessage {
-                    block_hash: blocks[block_idx].block_hash().to_block_hash(),
+                    block_hash: blocks[block_idx].message.block_hash().to_block_hash(),
                     correlation_id: Some(Uuid::new_v4()),
                 })
             }
@@ -359,7 +359,7 @@ mod chaos_tests {
         // Verify data persistence after recovery
         use crate::block::ConvertBlockHash;
         let get_msg = StorageMessage::GetBlock(GetBlockMessage {
-            block_hash: test_block.block_hash().to_block_hash(),
+            block_hash: test_block.message.block_hash().to_block_hash(),
             correlation_id: Some(Uuid::new_v4()),
         });
 

@@ -163,7 +163,7 @@ impl DatabaseManager {
         let cf = db.cf_handle(column_families::BLOCKS)
             .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
 
-        let block_hash = block.block_hash().to_block_hash();
+        let block_hash = block.message.block_hash().to_block_hash();
         let key = block_hash.as_bytes();
         let value = serde_json::to_vec(block)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -175,11 +175,11 @@ impl DatabaseManager {
         let height_cf = db.cf_handle(column_families::BLOCK_HEIGHTS)
             .ok_or_else(|| StorageError::Database("BLOCK_HEIGHTS column family not found".to_string()))?;
 
-        let height_key = block.slot.to_be_bytes();
+        let height_key = block.message.slot.to_be_bytes();
         db.put_cf(&height_cf, &height_key, key)
             .map_err(|e| StorageError::Database(format!("Failed to store block height index: {}", e)))?;
 
-        debug!("Stored block {} at height {}", block.block_hash().to_block_hash(), block.slot);
+        debug!("Stored block {} at height {}", block.message.block_hash().to_block_hash(), block.message.slot);
         Ok(())
     }
 
@@ -295,7 +295,7 @@ impl DatabaseManager {
                 WriteOperation::PutBlock { block, canonical: _ } => {
                     let cf = db.cf_handle(column_families::BLOCKS)
                         .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
-                    let block_hash = block.block_hash().to_block_hash();
+                    let block_hash = block.message.block_hash().to_block_hash();
                     let key = block_hash.as_bytes();
                     let value = serde_json::to_vec(&block)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?;

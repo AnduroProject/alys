@@ -22,7 +22,7 @@ async fn test_database_block_storage_retrieval() {
 
     // Test block retrieval
     use crate::block::ConvertBlockHash;
-    let block_hash = test_block.block_hash().to_block_hash();
+    let block_hash = test_block.message.block_hash().to_block_hash();
     let get_message = StorageMessage::GetBlock(GetBlockMessage {
         block_hash,
         correlation_id: Some(Uuid::new_v4()),
@@ -184,7 +184,7 @@ async fn test_database_persistence() {
     // Store test data
     let test_block = harness.test_blocks[0].clone();
     use crate::block::ConvertBlockHash;
-    let block_hash = test_block.block_hash().to_block_hash();
+    let block_hash = test_block.message.block_hash().to_block_hash();
 
     let store_message = StorageMessage::StoreBlock(StoreBlockMessage {
         block: test_block.clone(),

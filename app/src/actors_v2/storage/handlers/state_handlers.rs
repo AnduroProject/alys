@@ -102,11 +102,11 @@ impl Handler<BatchWriteMessage> for StorageActor {
             for operation in &operations {
                 match operation {
                     WriteOperation::PutBlock { block, canonical } => {
-                        let block_hash = block.block_hash().to_block_hash();
+                        let block_hash = block.message.block_hash().to_block_hash();
                         cache.put_block(block_hash, block.clone()).await;
 
                         if *canonical {
-                            metrics.record_block_stored(block.slot, std::time::Duration::default(), true);
+                            metrics.record_block_stored(block.message.slot, std::time::Duration::default(), true);
                         }
                     },
                     WriteOperation::Put { key, value } => {

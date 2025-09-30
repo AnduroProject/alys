@@ -22,12 +22,12 @@ async fn test_full_actor_lifecycle() {
     for (i, block) in test_blocks.iter().enumerate().take(5) {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = block.block_hash().to_block_hash();
+        let block_hash = block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
 
         assert!(result.is_some(), "Block {} should exist", i);
         let retrieved_block = result.unwrap();
-        assert_eq!(retrieved_block.slot, block.slot, "Block slot mismatch for block {}", i);
+        assert_eq!(retrieved_block.message.slot, block.message.slot, "Block slot mismatch for block {}", i);
     }
 
     // Verify final state
@@ -75,7 +75,7 @@ async fn test_concurrent_read_write_operations() {
             let block_hash = {
                 use crate::block::ConvertBlockHash;
                 harness.test_blocks[i % harness.test_blocks.len()]
-                    .block_hash()
+                    .message.block_hash()
                     .to_block_hash()
             };
 
@@ -127,7 +127,7 @@ async fn test_performance_under_load() {
     for (i, block) in performance_blocks.iter().enumerate().take(10) { // Sample first 10
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = block.block_hash().to_block_hash();
+        let block_hash = block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
         assert!(result.is_some(), "Performance test block {} should be retrievable", i);
     }
@@ -157,7 +157,7 @@ async fn test_cache_and_database_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
         assert!(result.is_some(), "Block should exist");
     }
@@ -168,7 +168,7 @@ async fn test_cache_and_database_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
         assert!(result.is_some(), "Block should exist in cache");
     }
@@ -212,7 +212,7 @@ async fn test_error_handling_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await;
         assert!(result.is_ok(), "Get operation should succeed after storage");
         assert!(result.unwrap().is_some(), "Stored block should exist");
@@ -254,8 +254,8 @@ async fn test_chain_head_management() {
 
         let head_ref = head.unwrap();
         use crate::block::ConvertBlockHash;
-        assert_eq!(head_ref.hash, first_block.block_hash().to_block_hash());
-        assert_eq!(head_ref.number, first_block.slot);
+        assert_eq!(head_ref.hash, first_block.message.block_hash().to_block_hash());
+        assert_eq!(head_ref.number, first_block.message.slot);
     }
 
     // Store a newer canonical block
@@ -276,8 +276,8 @@ async fn test_chain_head_management() {
 
         let head_ref = head.unwrap();
         use crate::block::ConvertBlockHash;
-        assert_eq!(head_ref.hash, second_block.block_hash().to_block_hash());
-        assert_eq!(head_ref.number, second_block.slot);
+        assert_eq!(head_ref.hash, second_block.message.block_hash().to_block_hash());
+        assert_eq!(head_ref.number, second_block.message.slot);
     }
 
     harness.teardown().await.unwrap();

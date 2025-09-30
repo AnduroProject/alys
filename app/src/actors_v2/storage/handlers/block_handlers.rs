@@ -16,7 +16,7 @@ impl Handler<StoreBlockMessage> for StorageActor {
         let _correlation_id = msg.correlation_id;
         debug!(
             "Handling StoreBlockMessage for block at height {}",
-            msg.block.slot
+            msg.block.message.slot
         );
 
         let block = msg.block;
@@ -27,8 +27,8 @@ impl Handler<StoreBlockMessage> for StorageActor {
         let mut metrics = self.metrics.clone();
 
         Box::pin(async move {
-            let block_hash = block.block_hash().to_block_hash();
-            let height = block.slot;
+            let block_hash = block.message.block_hash().to_block_hash();
+            let height = block.message.slot;
 
             debug!(
                 "Storing block: {} at height: {} (canonical: {})",

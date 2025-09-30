@@ -41,7 +41,7 @@ mod tests {
             withdrawals: Default::default(),
         };
 
-        AlysConsensusBlock {
+        let consensus_block = crate::block::ConsensusBlock {
             parent_hash: Hash256::from_low_u64_be(slot - 1),
             slot,
             auxpow_header: None,
@@ -49,6 +49,11 @@ mod tests {
             pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+        };
+
+        AlysConsensusBlock {
+            message: consensus_block,
+            signature: crate::signatures::AggregateApproval::new(),
         }
     }
 
@@ -65,7 +70,7 @@ mod tests {
         let mut storage = StorageActor::new(config).await.unwrap();
 
         let test_block = create_test_block(100);
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
 
         // Test block storage
         let store_result = storage.store_block(test_block.clone(), true).await;
@@ -76,8 +81,8 @@ mod tests {
         assert!(retrieved_block.is_some(), "Block not found");
 
         let retrieved = retrieved_block.unwrap();
-        assert_eq!(retrieved.slot, test_block.slot);
-        assert_eq!(retrieved.execution_payload.state_root, test_block.execution_payload.state_root);
+        assert_eq!(retrieved.message.slot, test_block.message.slot);
+        assert_eq!(retrieved.message.execution_payload.state_root, test_block.message.execution_payload.state_root);
     }
 
     #[actix::test]
@@ -135,7 +140,7 @@ mod tests {
         let storage = StorageActor::new(config).await.unwrap();
 
         let test_block = create_test_block(200);
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
 
         // Test cache storage
         storage.cache.put_block(block_hash, test_block.clone()).await;
@@ -145,7 +150,7 @@ mod tests {
         assert!(cached_block.is_some(), "Block not found in cache");
 
         let cached = cached_block.unwrap();
-        assert_eq!(cached.slot, test_block.slot);
+        assert_eq!(cached.message.slot, test_block.message.slot);
 
         // Test cache miss
         let missing_block = storage.cache.get_block(&Hash256::from_low_u64_be(999)).await;
@@ -188,15 +193,15 @@ mod tests {
             correlation_id: Some(correlation_id),
         };
 
-        assert_eq!(store_msg.block.slot, 400);
+        assert_eq!(store_msg.block.message.slot, 400);
         assert!(store_msg.canonical);
         assert_eq!(store_msg.correlation_id, Some(correlation_id));
 
         let get_msg = GetBlockMessage {
-            block_hash: test_block.block_hash().to_block_hash(),
+            block_hash: test_block.message.block_hash().to_block_hash(),
             correlation_id: Some(correlation_id),
         };
 
-        assert_eq!(get_msg.block_hash, test_block.block_hash().to_block_hash());
+        assert_eq!(get_msg.block_hash, test_block.message.block_hash().to_block_hash());
     }
 }

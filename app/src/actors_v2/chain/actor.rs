@@ -128,12 +128,9 @@ impl ChainActor {
     /// Store block via StorageActor
     pub(crate) async fn store_block(&self, block: crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>, canonical: bool) -> Result<(), ChainError> {
         if let Some(ref storage_actor) = self.storage_actor {
-            // Convert SignedConsensusBlock to AlysConsensusBlock (ConsensusBlock) for StorageActor
-            // Extract the consensus block from the signed wrapper
-            let alys_block = block.message; // SignedConsensusBlock.message contains the ConsensusBlock
-
+            // Store the complete signed block (AlysConsensusBlock now expects SignedConsensusBlock)
             let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
-                block: alys_block,
+                block,
                 canonical,
                 correlation_id: Some(Uuid::new_v4()), // Generate correlation ID for tracing
             };

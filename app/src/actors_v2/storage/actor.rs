@@ -9,7 +9,7 @@ use super::cache::{StorageCache, CacheConfig};
 use super::indexing::{StorageIndexing};
 use super::messages::*;
 use super::metrics::StorageActorMetrics;
-use crate::block::{ConsensusBlock, ConvertBlockHash};
+use crate::block::{ConsensusBlock, ConvertBlockHash, SignedConsensusBlock};
 use crate::auxpow_miner::BlockIndex;
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -41,8 +41,8 @@ pub struct BlockRef {
     pub number: u64,
 }
 
-/// Consensus block type alias for MainnetEthSpec
-pub type AlysConsensusBlock = ConsensusBlock<MainnetEthSpec>;
+/// Signed consensus block type alias for MainnetEthSpec - matches V0 storage pattern
+pub type AlysConsensusBlock = crate::block::SignedConsensusBlock<MainnetEthSpec>;
 
 /// Storage actor that manages all persistent storage operations
 #[derive(Debug)]
@@ -207,8 +207,8 @@ impl StorageActor {
 
     /// Store a block with caching and persistence
     pub async fn store_block(&mut self, block: AlysConsensusBlock, canonical: bool) -> Result<(), StorageError> {
-        let block_hash = block.block_hash().to_block_hash();
-        let height = block.slot;
+        let block_hash = block.message.block_hash().to_block_hash();
+        let height = block.message.slot;
 
         debug!("Storing block: {} at height: {} (canonical: {})", block_hash, height, canonical);
 

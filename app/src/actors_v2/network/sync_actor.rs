@@ -322,18 +322,21 @@ impl SyncActor {
     fn convert_block_to_storage_format(&self, block: Block) -> crate::actors_v2::storage::actor::AlysConsensusBlock {
         // TODO: Implement proper block format conversion from network to storage format
         // For now, create a basic block structure
-        let mut storage_block = crate::actors_v2::storage::actor::AlysConsensusBlock::default();
+        let mut storage_block = crate::actors_v2::storage::actor::AlysConsensusBlock {
+            message: crate::block::ConsensusBlock::default(),
+            signature: crate::signatures::AggregateApproval::new(),
+        };
 
         // Basic conversion logic (would be more sophisticated in production)
         if block.len() >= 8 {
             // Try to extract height from block data (simplified)
             let height_bytes: [u8; 8] = block[0..8].try_into().unwrap_or([0; 8]);
-            storage_block.slot = u64::from_le_bytes(height_bytes);
+            storage_block.message.slot = u64::from_le_bytes(height_bytes);
         }
 
         // Set other basic fields
-        storage_block.execution_payload.block_number = self.current_height;
-        storage_block.execution_payload.timestamp = std::time::SystemTime::now()
+        storage_block.message.execution_payload.block_number = self.current_height;
+        storage_block.message.execution_payload.timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();

@@ -6,6 +6,8 @@ pub use config::*;
 
 use crate::actors_v2::storage::actor::AlysConsensusBlock;
 use crate::auxpow_miner::BlockIndex;
+use crate::block::ConsensusBlock;
+use crate::signatures::AggregateApproval;
 use lighthouse_wrapper::types::{Hash256, MainnetEthSpec, ExecutionPayloadCapella, Address, ExecutionBlockHash};
 use tempfile::TempDir;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,7 +21,7 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
         let parent_hash = if i == 0 {
             Hash256::zero()
         } else {
-            blocks[i - 1].parent_hash  // Use parent_hash field directly to keep Hash256 type
+            blocks[i - 1].message.parent_hash  // Use parent_hash field directly to keep Hash256 type
         };
 
         let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
@@ -40,7 +42,7 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
             withdrawals: Default::default(),
         };
 
-        blocks.push(AlysConsensusBlock {
+        let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
             auxpow_header: None,
@@ -48,6 +50,11 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
             pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+        };
+
+        blocks.push(AlysConsensusBlock {
+            message: consensus_block,
+            signature: AggregateApproval::new(),
         });
     }
 
@@ -74,7 +81,7 @@ pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
         withdrawals: Default::default(),
     };
 
-    AlysConsensusBlock {
+    let consensus_block = ConsensusBlock {
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
         auxpow_header: None,
@@ -82,6 +89,11 @@ pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
         pegins: vec![],
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
+    };
+
+    AlysConsensusBlock {
+        message: consensus_block,
+        signature: AggregateApproval::new(),
     }
 }
 
@@ -110,7 +122,7 @@ pub fn create_test_block_with_properties(
         withdrawals: Default::default(),
     };
 
-    AlysConsensusBlock {
+    let consensus_block = ConsensusBlock {
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
         auxpow_header: None,
@@ -118,6 +130,11 @@ pub fn create_test_block_with_properties(
         pegins: vec![],
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
+    };
+
+    AlysConsensusBlock {
+        message: consensus_block,
+        signature: AggregateApproval::new(),
     }
 }
 
@@ -129,41 +146,41 @@ pub fn create_fork_test_blocks(common_ancestor_slot: u64, fork_length: usize) ->
     let fork_parent = common_chain.last().unwrap().clone();
 
     // Create fork A
-    let mut fork_a: Vec<crate::block::ConsensusBlock<MainnetEthSpec>> = Vec::new();
+    let mut fork_a: Vec<AlysConsensusBlock> = Vec::new();
     for i in 0..fork_length {
         let slot = common_ancestor_slot + 1 + i as u64;
         let parent_hash = if i == 0 {
-            fork_parent.parent_hash
+            fork_parent.message.parent_hash
         } else {
-            fork_a[i - 1].parent_hash
+            fork_a[i - 1].message.parent_hash
         };
 
-        let block = create_test_block_with_properties(
+        let signed_block = create_test_block_with_properties(
             slot,
             slot * 1000, // Different gas usage pattern
             1600000000 + slot * 12,
             format!("fork_a_{}", slot).into_bytes(),
         );
-        fork_a.push(block);
+        fork_a.push(signed_block);
     }
 
     // Create fork B with different properties
-    let mut fork_b: Vec<crate::block::ConsensusBlock<MainnetEthSpec>> = Vec::new();
+    let mut fork_b: Vec<AlysConsensusBlock> = Vec::new();
     for i in 0..fork_length {
         let slot = common_ancestor_slot + 1 + i as u64;
         let parent_hash = if i == 0 {
-            fork_parent.parent_hash
+            fork_parent.message.parent_hash
         } else {
-            fork_b[i - 1].parent_hash
+            fork_b[i - 1].message.parent_hash
         };
 
-        let block = create_test_block_with_properties(
+        let signed_block = create_test_block_with_properties(
             slot,
             slot * 2000, // Different gas usage pattern
             1600000000 + slot * 12 + 1, // Slightly different timestamp
             format!("fork_b_{}", slot).into_bytes(),
         );
-        fork_b.push(block);
+        fork_b.push(signed_block);
     }
 
     (fork_a, fork_b)
@@ -200,7 +217,7 @@ pub fn create_performance_test_blocks(count: usize, with_transactions: bool) -> 
         let parent_hash = if i == 0 {
             Hash256::zero()
         } else {
-            blocks[i - 1].parent_hash
+            blocks[i - 1].message.parent_hash
         };
 
         let mut execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
@@ -228,7 +245,7 @@ pub fn create_performance_test_blocks(count: usize, with_transactions: bool) -> 
             execution_payload.gas_used = execution_payload.gas_limit / 2;
         }
 
-        blocks.push(AlysConsensusBlock {
+        let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
             auxpow_header: None,
@@ -236,6 +253,11 @@ pub fn create_performance_test_blocks(count: usize, with_transactions: bool) -> 
             pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+        };
+
+        blocks.push(AlysConsensusBlock {
+            message: consensus_block,
+            signature: AggregateApproval::new(),
         });
     }
 
@@ -299,7 +321,7 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
         let parent_hash = if i == 0 {
             Hash256::zero()
         } else {
-            blocks[i - 1].parent_hash
+            blocks[i - 1].message.parent_hash
         };
 
         let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
@@ -320,7 +342,7 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
             withdrawals: Default::default(),
         };
 
-        blocks.push(AlysConsensusBlock {
+        let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
             auxpow_header: None,
@@ -328,6 +350,11 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
             pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+        };
+
+        blocks.push(AlysConsensusBlock {
+            message: consensus_block,
+            signature: AggregateApproval::new(),
         });
     }
 

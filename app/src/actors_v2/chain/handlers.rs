@@ -8,6 +8,7 @@ use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use super::{
     ChainActor, ChainError,
@@ -366,22 +367,95 @@ impl Handler<ChainMessage> for ChainActor {
                 }
             }
             ChainMessage::GetBlockByHash { hash } => {
-                info!(block_hash = %hash, "GetBlockByHash not yet implemented");
+                let storage_actor = self.storage_actor.clone();
                 Box::pin(async move {
-                    Err(ChainError::Internal("GetBlockByHash handler not yet implemented".to_string()))
+                    match storage_actor {
+                        Some(actor) => {
+                            let storage_msg = crate::actors_v2::storage::messages::GetBlockMessage {
+                                block_hash: lighthouse_wrapper::types::Hash256::from_slice(hash.as_bytes()),
+                                correlation_id: Some(Uuid::new_v4()),
+                            };
+
+                            match actor.send(storage_msg).await {
+                                Ok(storage_result) => {
+                                    match storage_result {
+                                        Ok(Some(signed_block)) => {
+                                            // Storage now returns complete SignedConsensusBlock (matches V0 pattern)
+                                            Ok(ChainResponse::Block(Some(signed_block)))
+                                        },
+                                        Ok(None) => Ok(ChainResponse::Block(None)),
+                                        Err(e) => Err(ChainError::Storage(e.to_string())),
+                                    }
+                                }
+                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with storage actor: {}", e))),
+                            }
+                        }
+                        None => Err(ChainError::Internal("Storage actor not configured".to_string())),
+                    }
                 })
             }
             ChainMessage::GetBlockByHeight { height } => {
-                info!(height = height, "GetBlockByHeight not yet implemented");
+                let storage_actor = self.storage_actor.clone();
                 Box::pin(async move {
-                    Err(ChainError::Internal("GetBlockByHeight handler not yet implemented".to_string()))
+                    match storage_actor {
+                        Some(actor) => {
+                            let storage_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+                                height,
+                                correlation_id: Some(Uuid::new_v4()),
+                            };
+
+                            match actor.send(storage_msg).await {
+                                Ok(storage_result) => {
+                                    match storage_result {
+                                        Ok(Some(signed_block)) => {
+                                            // Storage now returns complete SignedConsensusBlock (matches V0 pattern)
+                                            Ok(ChainResponse::Block(Some(signed_block)))
+                                        },
+                                        Ok(None) => Ok(ChainResponse::Block(None)),
+                                        Err(e) => Err(ChainError::Storage(e.to_string())),
+                                    }
+                                }
+                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with storage actor: {}", e))),
+                            }
+                        }
+                        None => Err(ChainError::Internal("Storage actor not configured".to_string())),
+                    }
                 })
             }
             ChainMessage::BroadcastBlock { block } => {
+                let network_actor = self.network_actor.clone();
                 let block_height = block.message.execution_payload.block_number;
-                info!(block_height = block_height, "BroadcastBlock not yet implemented");
                 Box::pin(async move {
-                    Err(ChainError::Internal("BroadcastBlock handler not yet implemented".to_string()))
+                    match network_actor {
+                        Some(actor) => {
+                            // Serialize block for network transmission
+                            let block_data = match serialize_block(&block) {
+                                Ok(data) => data,
+                                Err(e) => {
+                                    return Err(ChainError::Serialization(format!("Failed to serialize block: {}", e)));
+                                }
+                            };
+
+                            let network_msg = crate::actors_v2::network::NetworkMessage::BroadcastBlock {
+                                block_data,
+                                priority: true, // Broadcast blocks with high priority
+                            };
+
+                            match actor.send(network_msg).await {
+                                Ok(network_result) => {
+                                    match network_result {
+                                        Ok(_response) => {
+                                            let block_hash = calculate_block_hash(&block);
+                                            Ok(ChainResponse::BlockBroadcasted { block_hash })
+                                        },
+                                        Err(e) => Err(ChainError::Network(e)),
+                                    }
+                                }
+                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with network actor: {}", e))),
+                            }
+                        }
+                        None => Err(ChainError::Internal("Network actor not configured".to_string())),
+                    }
                 })
             }
             ChainMessage::NetworkBlockReceived { block, peer_id } => {
