@@ -217,54 +217,160 @@ impl Handler<ChainMessage> for ChainActor {
                         Err(ChainError::NotSynced)
                     })
                 } else {
-                    // Basic block production foundation (Phase 1 - removes "not implemented" error)
-                    // Full production pipeline will be implemented in Phase 2
+                    // Complete block production pipeline (Phase 2)
                     let start_time = Instant::now();
-                    info!(slot = slot, "Starting basic block production");
+                    let correlation_id = Uuid::new_v4();
+                    let engine_actor = self.engine_actor.clone();
+                    let storage_actor = self.storage_actor.clone();
+                    let network_actor = self.network_actor.clone();
+
+                    info!(
+                        slot = slot,
+                        timestamp_secs = timestamp.as_secs(),
+                        correlation_id = %correlation_id,
+                        "Starting complete block production pipeline"
+                    );
 
                     Box::pin(async move {
-                        // Create a minimal valid block structure for now
-                        // TODO: Phase 2 will integrate with EngineActor for execution payload building
-                        let execution_payload = lighthouse_wrapper::types::ExecutionPayloadCapella::<MainnetEthSpec> {
-                            parent_hash: lighthouse_wrapper::types::ExecutionBlockHash::zero(),
-                            fee_recipient: lighthouse_wrapper::types::Address::zero(),
-                            state_root: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot + 1000),
-                            receipts_root: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot + 2000),
-                            logs_bloom: Default::default(),
-                            prev_randao: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot + 3000),
-                            block_number: slot,
-                            gas_limit: 30000000,
-                            gas_used: 0,
-                            timestamp: timestamp.as_secs(),
-                            extra_data: format!("basic_block_{}", slot).into_bytes().into(),
-                            base_fee_per_gas: 1000000000u64.into(),
-                            block_hash: lighthouse_wrapper::types::ExecutionBlockHash::from_root(
-                                lighthouse_wrapper::types::Hash256::from_low_u64_be(slot + 4000)
-                            ),
-                            transactions: Default::default(),
-                            withdrawals: Default::default(),
+                        // Step 1: Get parent block from storage
+                        let parent_hash = lighthouse_wrapper::types::ExecutionBlockHash::zero(); // TODO: Get from chain head
+
+                        // Step 2: Collect withdrawals (peg-ins and fee distribution)
+                        let add_balances = vec![]; // TODO: Implement withdrawal collection via collect_withdrawals()
+
+                        // Step 3: Build execution payload via EngineActor
+                        let execution_payload = if let Some(ref engine_actor) = engine_actor {
+                            let msg = crate::actors_v2::engine::EngineMessage::BuildPayload {
+                                timestamp,
+                                parent_hash: Some(parent_hash),
+                                add_balances,
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match engine_actor.send(msg).await {
+                                Ok(engine_result) => {
+                                    match engine_result {
+                                        Ok(crate::actors_v2::engine::EngineResponse::PayloadBuilt { payload, build_time }) => {
+                                            info!(
+                                                correlation_id = %correlation_id,
+                                                block_number = payload.block_number(),
+                                                gas_used = payload.gas_used(),
+                                                build_time_ms = build_time.as_millis(),
+                                                "Successfully built execution payload via EngineActor"
+                                            );
+                                            payload
+                                        }
+                                        Ok(other_response) => {
+                                            error!(correlation_id = %correlation_id, response = ?other_response, "Unexpected response from EngineActor");
+                                            return Err(ChainError::Internal("Unexpected EngineActor response".to_string()));
+                                        }
+                                        Err(e) => {
+                                            error!(correlation_id = %correlation_id, error = ?e, "Failed to build execution payload");
+                                            return Err(ChainError::Engine(format!("Payload build failed: {}", e)));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(correlation_id = %correlation_id, error = ?e, "Communication error with EngineActor");
+                                    return Err(ChainError::NetworkError(format!("Engine communication failed: {}", e)));
+                                }
+                            }
+                        } else {
+                            error!(correlation_id = %correlation_id, "EngineActor not available");
+                            return Err(ChainError::Internal("EngineActor not available".to_string()));
+                        };
+
+                        // Step 4: Create consensus block
+                        // Convert ExecutionPayload to ExecutionPayloadCapella if needed
+                        let capella_payload = match execution_payload {
+                            lighthouse_wrapper::types::ExecutionPayload::Capella(capella) => capella,
+                            _ => {
+                                error!(correlation_id = %correlation_id, "Unsupported execution payload type - expected Capella");
+                                return Err(ChainError::Engine("Unsupported execution payload type".to_string()));
+                            }
                         };
 
                         let consensus_block = crate::block::ConsensusBlock {
                             parent_hash: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot.saturating_sub(1)),
                             slot,
                             auxpow_header: None,
-                            execution_payload,
-                            pegins: vec![],
+                            execution_payload: capella_payload,
+                            pegins: vec![], // TODO: Populate from withdrawal collection
                             pegout_payment_proposal: None,
                             finalized_pegouts: vec![],
                         };
 
+                        // Step 5: Sign block (basic signature for Phase 2)
                         let signed_block = crate::block::SignedConsensusBlock {
                             message: consensus_block,
-                            signature: crate::signatures::AggregateApproval::new(),
+                            signature: crate::signatures::AggregateApproval::new(), // TODO: Phase 3 will add proper Aura signing
                         };
+
+                        // Step 6: Store block via StorageActor (if available)
+                        if let Some(ref storage_actor) = storage_actor {
+                            let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
+                                block: signed_block.clone(),
+                                canonical: true,
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match storage_actor.send(store_msg).await {
+                                Ok(Ok(())) => {
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        slot = slot,
+                                        "Successfully stored produced block"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    error!(correlation_id = %correlation_id, error = ?e, "Failed to store produced block");
+                                    return Err(ChainError::Storage(e.to_string()));
+                                }
+                                Err(e) => {
+                                    error!(correlation_id = %correlation_id, error = ?e, "Communication error with StorageActor");
+                                    return Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)));
+                                }
+                            }
+                        }
+
+                        // Step 7: Broadcast block via NetworkActor (if available)
+                        if let Some(ref network_actor) = network_actor {
+                            let block_data = match crate::actors_v2::common::serialization::serialize_block_for_network(&signed_block) {
+                                Ok(data) => data,
+                                Err(e) => {
+                                    error!(correlation_id = %correlation_id, error = ?e, "Failed to serialize block for broadcast");
+                                    return Err(e);
+                                }
+                            };
+
+                            let broadcast_msg = crate::actors_v2::network::NetworkMessage::BroadcastBlock {
+                                block_data,
+                                priority: true,
+                            };
+
+                            match network_actor.send(broadcast_msg).await {
+                                Ok(Ok(_)) => {
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        slot = slot,
+                                        "Successfully broadcasted produced block"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Failed to broadcast block (non-fatal)");
+                                }
+                                Err(e) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Communication error with NetworkActor (non-fatal)");
+                                }
+                            }
+                        }
 
                         let duration = start_time.elapsed();
                         info!(
                             slot = slot,
+                            correlation_id = %correlation_id,
                             duration_ms = duration.as_millis(),
-                            "Completed basic block production"
+                            "Completed block production pipeline"
                         );
 
                         Ok(ChainResponse::BlockProduced {

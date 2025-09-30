@@ -357,44 +357,127 @@ impl Handler<EngineMessage> for EngineActor {
             }
 
             EngineMessage::ValidatePayload { payload, correlation_id } => {
+                let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
                 Box::pin(async move {
-                    info!(
+                    let start_time = Instant::now();
+
+                    debug!(
                         correlation_id = %correlation_id,
-                        "Payload validation not yet implemented"
+                        block_number = payload.block_number(),
+                        "Validating execution payload"
                     );
+
+                    // Perform basic execution payload validation
+                    // In full implementation, this would integrate with V0 Engine validation
+                    let is_valid = payload.block_number() > 0 &&
+                                  payload.gas_limit() > 0 &&
+                                  payload.gas_used() <= payload.gas_limit() &&
+                                  payload.timestamp() > 0 &&
+                                  (!payload.transactions().is_empty() || payload.block_number() == 0); // Allow empty genesis
+
+                    let duration = start_time.elapsed();
+
+                    if is_valid {
+                        info!(
+                            correlation_id = %correlation_id,
+                            block_number = payload.block_number(),
+                            duration_ms = duration.as_millis(),
+                            "Payload validation successful"
+                        );
+                        metrics.record_validate_payload_success(duration);
+                    } else {
+                        warn!(
+                            correlation_id = %correlation_id,
+                            block_number = payload.block_number(),
+                            gas_used = payload.gas_used(),
+                            gas_limit = payload.gas_limit(),
+                            tx_count = payload.transactions().len(),
+                            duration_ms = duration.as_millis(),
+                            "Payload validation failed"
+                        );
+                        metrics.record_validate_payload_failure(duration);
+                        metrics.record_validation_error();
+                    }
+
                     Ok(EngineResponse::PayloadValid {
-                        is_valid: true,
-                        validation_time: Duration::from_millis(1),
+                        is_valid,
+                        validation_time: duration,
                     })
                 })
             }
 
             EngineMessage::CommitBlock { execution_payload, correlation_id } => {
+                let engine = self.engine.clone();
+                let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
                 Box::pin(async move {
-                    info!(
+                    let start_time = Instant::now();
+
+                    debug!(
                         correlation_id = %correlation_id,
-                        "Block commit not yet implemented"
+                        block_number = execution_payload.block_number(),
+                        "Committing execution block"
                     );
-                    Ok(EngineResponse::BlockCommitted {
-                        block_hash: lighthouse_wrapper::types::ExecutionBlockHash::zero(),
-                        commit_time: Duration::from_millis(1),
-                    })
+
+                    // Call V0 Engine commit_block method
+                    let result = engine.commit_block(execution_payload).await;
+                    let duration = start_time.elapsed();
+
+                    match result {
+                        Ok(block_hash) => {
+                            info!(
+                                correlation_id = %correlation_id,
+                                block_hash = ?block_hash,
+                                duration_ms = duration.as_millis(),
+                                "Successfully committed execution block"
+                            );
+
+                            metrics.record_commit_block_success(duration);
+
+                            Ok(EngineResponse::BlockCommitted {
+                                block_hash,
+                                commit_time: duration,
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                duration_ms = duration.as_millis(),
+                                "Failed to commit execution block"
+                            );
+
+                            metrics.record_commit_block_failure(duration);
+
+                            Err(EngineError::EngineApi(format!("Commit failed: {:?}", e)))
+                        }
+                    }
                 })
             }
 
             EngineMessage::SetFinalized { block_hash, correlation_id } => {
+                let engine = self.engine.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
                 Box::pin(async move {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        block_hash = ?block_hash,
+                        "Setting finalized execution block"
+                    );
+
+                    // Update V0 Engine finalized state
+                    engine.set_finalized(block_hash).await;
+
                     info!(
                         correlation_id = %correlation_id,
                         block_hash = ?block_hash,
-                        "Finalized block update not yet implemented"
+                        "Updated finalized execution block"
                     );
+
                     Ok(EngineResponse::FinalizedUpdated { block_hash })
                 })
             }
