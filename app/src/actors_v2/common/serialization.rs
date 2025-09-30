@@ -10,41 +10,43 @@ use serde_json;
 use crate::actors_v2::chain::ChainError;
 use crate::block::SignedConsensusBlock;
 
-/// Block serialization for network broadcasting and storage
+/// Block serialization for network broadcasting (MessagePack format - matches V0)
+pub fn serialize_block_for_network(block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<Vec<u8>, ChainError> {
+    // Use MessagePack for network compatibility - matches V0 RPC protocol (line 60 in ssz_snappy.rs)
+    rmp_serde::to_vec(block)
+        .map_err(|e| ChainError::Serialization(format!("MessagePack encoding failed: {}", e)))
+}
+
+/// Block serialization for storage (backwards compatibility with V0)
 pub fn serialize_block(block: &SignedConsensusBlock<MainnetEthSpec>) -> Result<Vec<u8>, ChainError> {
-    // Use serde_json as fallback since SSZ traits may not be implemented yet
+    // Use JSON for storage during development - can be optimized later
     serde_json::to_vec(block)
         .map_err(|e| ChainError::Serialization(format!("Failed to serialize block: {}", e)))
 }
 
-/// Block deserialization from network and storage
+/// Block deserialization from network (MessagePack format - matches V0)
+pub fn deserialize_block_from_network(data: &[u8]) -> Result<SignedConsensusBlock<MainnetEthSpec>, ChainError> {
+    // Use MessagePack for network compatibility - matches V0 RPC protocol
+    rmp_serde::from_slice(data)
+        .map_err(|e| ChainError::Serialization(format!("MessagePack decoding failed: {}", e)))
+}
+
+/// Block deserialization from storage (backwards compatibility)
 pub fn deserialize_block(data: &[u8]) -> Result<SignedConsensusBlock<MainnetEthSpec>, ChainError> {
-    // Use serde_json as fallback since SSZ traits may not be implemented yet
+    // Use JSON for storage during development - can be optimized later
     serde_json::from_slice(data)
         .map_err(|e| ChainError::Serialization(format!("Failed to deserialize block: {}", e)))
 }
 
 /// Block hash calculation for identification and merkle proofs
 pub fn calculate_block_hash(block: &SignedConsensusBlock<MainnetEthSpec>) -> H256 {
-    // For now, use a simple hash based on slot and parent hash
-    // In full implementation, would use proper TreeHash when trait is implemented
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    // Use the BlockIndex trait's block_hash method (matches V0 pattern)
+    use crate::auxpow_miner::BlockIndex;
+    use crate::block::ConvertBlockHash;
 
-    let mut hasher = DefaultHasher::new();
-    block.message.slot.hash(&mut hasher);
-    // Hash the slot and block number since ExecutionBlockHash access is complex
-    block.message.slot.hash(&mut hasher);
-    block.message.execution_payload.block_number.hash(&mut hasher);
-    block.message.execution_payload.timestamp.hash(&mut hasher);
-
-    let hash_result = hasher.finish();
-
-    // Convert u64 hash to H256
-    let mut hash_bytes = [0u8; 32];
-    hash_bytes[0..8].copy_from_slice(&hash_result.to_le_bytes());
-
-    H256::from(hash_bytes)
+    let block_hash = block.message.block_hash(); // Returns BlockHash (via BlockIndex trait)
+    let hash256: lighthouse_wrapper::types::Hash256 = block_hash.to_block_hash(); // Convert to Hash256
+    H256::from_slice(hash256.as_bytes()) // Convert to H256
 }
 
 /// Compact block information for lightweight operations
