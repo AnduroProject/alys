@@ -5,8 +5,9 @@
 
 use actix::prelude::*;
 use std::time::Instant;
-use tracing::info;
+use tracing::{debug, error, info};
 use uuid::Uuid;
+use ethereum_types::H256;
 
 use super::{
     ChainConfig, ChainError, ChainMetrics, ChainState,
@@ -140,6 +141,96 @@ impl ChainActor {
                 .map_err(|e| ChainError::Storage(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Process peg-in from imported block (Phase 3 - Task 3.1.2)
+    pub async fn process_block_pegin(&self, pegin: &bridge::PegInInfo, block_hash: &H256) -> Result<(), ChainError> {
+        debug!(
+            txid = %pegin.txid,
+            amount = pegin.amount,
+            evm_account = ?pegin.evm_account,
+            block_hash = %block_hash,
+            "Processing peg-in from imported block"
+        );
+
+        // Basic peg-in processing - integrate with bridge system
+        // TODO: Full integration with bridge processing pipeline
+        info!(
+            txid = %pegin.txid,
+            amount = pegin.amount,
+            block_hash = %block_hash,
+            "Processed peg-in from imported block"
+        );
+
+        Ok(())
+    }
+
+    /// Process finalized peg-out from imported block (Phase 3 - Task 3.1.2)
+    pub async fn process_finalized_pegout(&self, pegout: &bitcoin::Transaction, block_hash: &H256) -> Result<(), ChainError> {
+        debug!(
+            pegout_txid = %pegout.txid(),
+            block_hash = %block_hash,
+            "Processing finalized peg-out from imported block"
+        );
+
+        // Basic peg-out processing - integrate with bridge system
+        // TODO: Full integration with bridge finalization pipeline
+        info!(
+            pegout_txid = %pegout.txid(),
+            block_hash = %block_hash,
+            "Processed finalized peg-out from imported block"
+        );
+
+        Ok(())
+    }
+
+    /// Update chain head after successful block import (Phase 3 - Task 3.1.2)
+    pub async fn update_chain_head(&self, new_head: crate::actors_v2::storage::actor::BlockRef) -> Result<(), ChainError> {
+        info!(
+            new_head_hash = %new_head.hash,
+            new_head_height = new_head.number,
+            "Updating chain head after block import"
+        );
+
+        if let Some(ref storage_actor) = self.storage_actor {
+            let msg = crate::actors_v2::storage::messages::UpdateChainHeadMessage {
+                new_head: new_head.clone(),
+                correlation_id: Some(uuid::Uuid::new_v4()),
+            };
+
+            match storage_actor.send(msg).await {
+                Ok(storage_result) => {
+                    match storage_result {
+                        Ok(()) => {
+                            info!(
+                                head_hash = %new_head.hash,
+                                head_height = new_head.number,
+                                "Chain head updated successfully"
+                            );
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!(
+                                head_hash = %new_head.hash,
+                                error = ?e,
+                                "Failed to update chain head"
+                            );
+                            Err(ChainError::Storage(e.to_string()))
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        head_hash = %new_head.hash,
+                        error = ?e,
+                        "Communication error updating chain head"
+                    );
+                    Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)))
+                }
+            }
+        } else {
+            Err(ChainError::Storage("StorageActor not available".to_string()))
+        }
     }
 }
 

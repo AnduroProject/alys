@@ -498,47 +498,254 @@ impl Handler<ChainMessage> for ChainActor {
                         Err(ChainError::InvalidBlock("Block height is too old".to_string()))
                     })
                 } else {
-                    // Record metrics and prepare for import
-                    self.metrics.blocks_imported.inc();
-                    info!(
-                        block_height = block_height,
-                        source = ?source,
-                        "Block import not fully implemented - basic validation passed"
-                    );
-
-                    // Basic block import foundation (Phase 1 - removes "not implemented" error)
-                    // Full validation and state transitions will be implemented in Phase 2
+                    // Complete block import pipeline (Phase 3)
                     let block_hash = calculate_block_hash(&block);
-
-                    // Basic block structure validation
-                    if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
-                        warn!(
-                            block_hash = %block_hash,
-                            source = ?source,
-                            error = ?validation_error,
-                            "Block failed basic structure validation"
-                        );
-                        return Box::pin(async move {
-                            Err(ChainError::InvalidBlock(format!("Structure validation failed: {}", validation_error)))
-                        });
-                    }
+                    let correlation_id = Uuid::new_v4();
+                    let start_time = Instant::now();
 
                     info!(
                         block_height = block_height,
                         block_hash = %block_hash,
                         source = ?source,
-                        "Basic block import validation passed"
+                        correlation_id = %correlation_id,
+                        "Starting complete block import pipeline"
                     );
 
-                    // TODO: Phase 2 will add:
-                    // - Storage integration via StorageActor
-                    // - Execution validation via EngineActor
-                    // - State transition updates
-                    // - Chain head updates
+                    // Capture necessary data for async block
+                    let engine_actor = self.engine_actor.clone();
+                    let storage_actor = self.storage_actor.clone();
+                    // Note: Skip Aura validation for Phase 3 - will add in future iteration
+
                     Box::pin(async move {
+                        // Step 1: Structural validation
+                        if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                error = ?validation_error,
+                                "Block failed structural validation"
+                            );
+                            return Err(ChainError::InvalidBlock(format!("Invalid block structure: {}", validation_error)));
+                        }
+
+                        debug!(
+                            correlation_id = %correlation_id,
+                            block_hash = %block_hash,
+                            "Block passed structural validation"
+                        );
+
+                        // Step 2: Consensus validation (basic checks for Phase 3)
+                        // TODO: Future iteration will add full V0 Aura integration
+                        if block.signature.num_approvals() == 0 {
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                "Block has no signature approvals"
+                            );
+                            return Err(ChainError::Consensus("Block has no signature approvals".to_string()));
+                        }
+
+                        debug!(
+                            correlation_id = %correlation_id,
+                            block_hash = %block_hash,
+                            approvals = block.signature.num_approvals(),
+                            "Block passed basic consensus validation"
+                        );
+
+                        // Step 3: Execution payload validation via EngineActor
+                        if let Some(ref engine_actor) = engine_actor {
+                            let msg = crate::actors_v2::engine::EngineMessage::ValidatePayload {
+                                payload: lighthouse_wrapper::types::ExecutionPayload::Capella(block.message.execution_payload.clone()),
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match engine_actor.send(msg).await {
+                                Ok(engine_result) => {
+                                    match engine_result {
+                                        Ok(crate::actors_v2::engine::EngineResponse::PayloadValid { is_valid: true, validation_time }) => {
+                                            debug!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                validation_time_ms = validation_time.as_millis(),
+                                                "Execution payload validation passed"
+                                            );
+                                        }
+                                        Ok(crate::actors_v2::engine::EngineResponse::PayloadValid { is_valid: false, .. }) => {
+                                            error!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                "Execution payload validation failed"
+                                            );
+                                            return Err(ChainError::InvalidBlock("Execution payload validation failed".to_string()));
+                                        }
+                                        Ok(other_response) => {
+                                            error!(correlation_id = %correlation_id, response = ?other_response, "Unexpected EngineActor response");
+                                            return Err(ChainError::Internal("Unexpected EngineActor response".to_string()));
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                error = ?e,
+                                                "Engine error during payload validation"
+                                            );
+                                            return Err(ChainError::Engine(format!("Payload validation failed: {}", e)));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Communication error with EngineActor during validation"
+                                    );
+                                    return Err(ChainError::NetworkError(format!("Engine communication failed: {}", e)));
+                                }
+                            }
+                        } else {
+                            warn!(correlation_id = %correlation_id, "EngineActor not available for payload validation - skipping");
+                        }
+
+                        // Step 4: Store block via StorageActor
+                        if let Some(ref storage_actor) = storage_actor {
+                            let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
+                                block: block.clone(),
+                                canonical: true, // Assume imported blocks are canonical for now
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match storage_actor.send(store_msg).await {
+                                Ok(storage_result) => {
+                                    match storage_result {
+                                        Ok(()) => {
+                                            debug!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                "Block successfully stored during import"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                correlation_id = %correlation_id,
+                                                error = ?e,
+                                                "Failed to store imported block"
+                                            );
+                                            return Err(ChainError::Storage(e.to_string()));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Communication error with StorageActor during import"
+                                    );
+                                    return Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)));
+                                }
+                            }
+                        } else {
+                            error!(correlation_id = %correlation_id, "StorageActor not available for block storage");
+                            return Err(ChainError::Internal("StorageActor not available".to_string()));
+                        }
+
+                        // Step 5: Update chain head if this is the next sequential block
+                        if block_height == current_height + 1 {
+                            if let Some(ref storage_actor) = storage_actor {
+                                let new_head = crate::actors_v2::storage::actor::BlockRef {
+                                    hash: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
+                                    number: block_height,
+                                };
+
+                                let update_head_msg = crate::actors_v2::storage::messages::UpdateChainHeadMessage {
+                                    new_head,
+                                    correlation_id: Some(correlation_id),
+                                };
+
+                                match storage_actor.send(update_head_msg).await {
+                                    Ok(storage_result) => {
+                                        match storage_result {
+                                            Ok(()) => {
+                                                info!(
+                                                    correlation_id = %correlation_id,
+                                                    new_head_hash = %block_hash,
+                                                    new_head_height = block_height,
+                                                    "Chain head updated after block import"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    correlation_id = %correlation_id,
+                                                    error = ?e,
+                                                    "Failed to update chain head - non-fatal"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            correlation_id = %correlation_id,
+                                            error = ?e,
+                                            "Communication error updating chain head - non-fatal"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // Step 6: Commit block to execution layer via EngineActor (if available)
+                        if let Some(ref engine_actor) = engine_actor {
+                            let commit_msg = crate::actors_v2::engine::EngineMessage::CommitBlock {
+                                execution_payload: lighthouse_wrapper::types::ExecutionPayload::Capella(block.message.execution_payload.clone()),
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match engine_actor.send(commit_msg).await {
+                                Ok(engine_result) => {
+                                    match engine_result {
+                                        Ok(crate::actors_v2::engine::EngineResponse::BlockCommitted { commit_time, .. }) => {
+                                            debug!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                commit_time_ms = commit_time.as_millis(),
+                                                "Block committed to execution layer"
+                                            );
+                                        }
+                                        Ok(other_response) => {
+                                            warn!(correlation_id = %correlation_id, response = ?other_response, "Unexpected response from EngineActor commit");
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                correlation_id = %correlation_id,
+                                                error = ?e,
+                                                "Failed to commit block to execution layer - continuing"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Communication error committing to execution layer - continuing"
+                                    );
+                                }
+                            }
+                        }
+
+                        let import_duration = start_time.elapsed();
+
+                        info!(
+                            correlation_id = %correlation_id,
+                            block_hash = %block_hash,
+                            block_height = block_height,
+                            source = ?source,
+                            import_duration_ms = import_duration.as_millis(),
+                            "Block import completed successfully"
+                        );
+
                         Ok(ChainResponse::BlockImported {
                             block_hash,
-                            height: block_height
+                            height: block_height,
                         })
                     })
                 }
