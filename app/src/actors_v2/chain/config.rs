@@ -12,6 +12,9 @@ pub struct ChainConfig {
     /// Whether this node is a validator (can produce blocks)
     pub is_validator: bool,
 
+    /// Validator fee recipient address (for block production rewards)
+    pub validator_address: Option<Address>,
+
     /// Federation member addresses
     pub federation: Vec<Address>,
 
@@ -50,6 +53,7 @@ impl Default for ChainConfig {
     fn default() -> Self {
         Self {
             is_validator: false,
+            validator_address: None,
             federation: Vec::new(),
             max_blocks_without_pow: 100,
             block_production_timeout: Duration::from_secs(30),

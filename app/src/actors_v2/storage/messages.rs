@@ -186,6 +186,32 @@ pub struct StoreLogsMessage {
 }
 
 // =============================================================================
+// FEE ACCUMULATION OPERATIONS (V0 Compatibility)
+// =============================================================================
+
+/// Message to get accumulated fees for a block (matches V0 storage.get_accumulated_block_fees)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<U256>, StorageError>")]
+pub struct GetAccumulatedFeesMessage {
+    /// Block root hash to get accumulated fees for
+    pub block_root: Hash256,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to set accumulated fees for a block (matches V0 storage.set_accumulated_block_fees)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct SetAccumulatedFeesMessage {
+    /// Block root hash to set accumulated fees for
+    pub block_root: Hash256,
+    /// Total accumulated fees amount
+    pub fees: U256,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+// =============================================================================
 // CHAIN HEAD OPERATIONS
 // =============================================================================
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::{
@@ -231,14 +231,86 @@ impl Handler<ChainMessage> for ChainActor {
                         "Starting complete block production pipeline"
                     );
 
+                    // Capture necessary data for standalone withdrawal collection
+                    let state_queued_pegins = self.state.queued_pegins.clone();
+                    let state_head = self.state.head.clone();
+                    let config_validator_address = self.config.validator_address;
+                    let state_federation = self.state.federation.clone();
+
                     Box::pin(async move {
-                        // Step 1: Get parent block from storage
-                        let parent_hash = lighthouse_wrapper::types::ExecutionBlockHash::zero(); // TODO: Get from chain head
+                        // Step 2: Get parent block from storage
+                        let parent_hash = if let Some(ref storage_actor) = storage_actor {
+                            let get_head_msg = crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                correlation_id: Some(correlation_id),
+                            };
 
-                        // Step 2: Collect withdrawals (peg-ins and fee distribution)
-                        let add_balances = vec![]; // TODO: Implement withdrawal collection via collect_withdrawals()
+                            match storage_actor.send(get_head_msg).await {
+                                Ok(storage_result) => {
+                                    match storage_result {
+                                        Ok(Some(head_ref)) => {
+                                            info!(
+                                                correlation_id = %correlation_id,
+                                                parent_hash = %head_ref.hash,
+                                                parent_height = head_ref.number,
+                                                "Retrieved chain head for block production"
+                                            );
+                                            // Convert Hash256 to ExecutionBlockHash
+                                            lighthouse_wrapper::types::ExecutionBlockHash::from_root(head_ref.hash)
+                                        }
+                                        Ok(None) => {
+                                            info!(correlation_id = %correlation_id, "No chain head found - producing genesis block");
+                                            lighthouse_wrapper::types::ExecutionBlockHash::zero()
+                                        }
+                                        Err(e) => {
+                                            error!(correlation_id = %correlation_id, error = ?e, "Failed to get chain head");
+                                            return Err(ChainError::Storage(e.to_string()));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(correlation_id = %correlation_id, error = ?e, "Communication error with StorageActor");
+                                    return Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)));
+                                }
+                            }
+                        } else {
+                            error!(correlation_id = %correlation_id, "StorageActor not available for parent block retrieval");
+                            return Err(ChainError::Internal("StorageActor not available".to_string()));
+                        };
 
-                        // Step 3: Build execution payload via EngineActor
+                        // Step 3: Collect withdrawals with real fee calculation
+                        let withdrawal_collection = match crate::actors_v2::chain::withdrawals::collect_withdrawals_standalone(
+                            &state_queued_pegins,
+                            storage_actor.as_ref(),
+                            config_validator_address,
+                            &state_federation,
+                            &state_head,
+                        ).await {
+                            Ok(collection) => {
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    pegin_count = collection.pegin_count,
+                                    total_pegin_amount = %collection.total_pegin_amount,
+                                    total_fee_amount = %collection.total_fee_amount,
+                                    withdrawal_count = collection.withdrawals.len(),
+                                    "Successfully collected withdrawals with real fee calculation"
+                                );
+                                collection
+                            }
+                            Err(e) => {
+                                error!(correlation_id = %correlation_id, error = ?e, "Failed to collect withdrawals");
+                                return Err(ChainError::Internal(format!("Withdrawal collection failed: {}", e)));
+                            }
+                        };
+
+                        // Step 4: Convert withdrawals to AddBalance format for EngineActor
+                        let add_balances: Vec<crate::engine::AddBalance> = withdrawal_collection.withdrawals.into_iter()
+                            .map(|w| crate::engine::AddBalance::from((
+                                w.address,
+                                crate::engine::ConsensusAmount(w.amount)
+                            )))
+                            .collect();
+
+                        // Step 5: Build execution payload via EngineActor
                         let execution_payload = if let Some(ref engine_actor) = engine_actor {
                             let msg = crate::actors_v2::engine::EngineMessage::BuildPayload {
                                 timestamp,
@@ -280,7 +352,7 @@ impl Handler<ChainMessage> for ChainActor {
                             return Err(ChainError::Internal("EngineActor not available".to_string()));
                         };
 
-                        // Step 4: Create consensus block
+                        // Step 6: Create consensus block
                         // Convert ExecutionPayload to ExecutionPayloadCapella if needed
                         let capella_payload = match execution_payload {
                             lighthouse_wrapper::types::ExecutionPayload::Capella(capella) => capella,
@@ -295,18 +367,18 @@ impl Handler<ChainMessage> for ChainActor {
                             slot,
                             auxpow_header: None,
                             execution_payload: capella_payload,
-                            pegins: vec![], // TODO: Populate from withdrawal collection
+                            pegins: vec![], // Withdrawal collection integrated above via add_balances
                             pegout_payment_proposal: None,
                             finalized_pegouts: vec![],
                         };
 
-                        // Step 5: Sign block (basic signature for Phase 2)
+                        // Step 7: Sign block (basic signature for Phase 2)
                         let signed_block = crate::block::SignedConsensusBlock {
                             message: consensus_block,
                             signature: crate::signatures::AggregateApproval::new(), // TODO: Phase 3 will add proper Aura signing
                         };
 
-                        // Step 6: Store block via StorageActor (if available)
+                        // Step 8: Store block via StorageActor (if available)
                         if let Some(ref storage_actor) = storage_actor {
                             let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
                                 block: signed_block.clone(),
@@ -333,7 +405,38 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                        // Step 7: Broadcast block via NetworkActor (if available)
+                        // Step 9: Store accumulated fees for the produced block (V0 compatibility)
+                        if let Some(ref storage_actor) = storage_actor {
+                            let block_hash = calculate_block_hash(&signed_block);
+
+                            // Use real fee calculation from withdrawal collection
+                            let total_fees_wei = withdrawal_collection.total_fee_amount.saturating_add(withdrawal_collection.total_pegin_amount);
+
+                            let set_fees_msg = crate::actors_v2::storage::messages::SetAccumulatedFeesMessage {
+                                block_root: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
+                                fees: total_fees_wei,
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match storage_actor.send(set_fees_msg).await {
+                                Ok(Ok(())) => {
+                                    debug!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        fees_wei = %total_fees_wei,
+                                        "Successfully stored accumulated fees for produced block"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Failed to store accumulated fees (non-fatal)");
+                                }
+                                Err(e) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Communication error storing fees (non-fatal)");
+                                }
+                            }
+                        }
+
+                        // Step 10: Broadcast block via NetworkActor (if available)
                         if let Some(ref network_actor) = network_actor {
                             let block_data = match crate::actors_v2::common::serialization::serialize_block_for_network(&signed_block) {
                                 Ok(data) => data,

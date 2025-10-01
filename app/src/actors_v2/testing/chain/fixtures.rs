@@ -42,6 +42,7 @@ pub fn non_validator_config() -> ChainConfig {
 pub fn minimal_config() -> ChainConfig {
     ChainConfig {
         is_validator: false,
+        validator_address: None,
         federation: vec![Address::from_low_u64_be(1)],
         max_blocks_without_pow: 10,
         block_production_timeout: Duration::from_secs(5),

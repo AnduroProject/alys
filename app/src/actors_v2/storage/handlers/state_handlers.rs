@@ -9,6 +9,7 @@ use crate::block::ConvertBlockHash;
 use actix::prelude::*;
 use tracing::*;
 use std::time::Instant;
+use ethereum_types::U256;
 
 impl Handler<UpdateStateMessage> for StorageActor {
     type Result = ResponseFuture<Result<(), StorageError>>;
@@ -122,6 +123,128 @@ impl Handler<BatchWriteMessage> for StorageActor {
 
             info!("Batch write completed with {} operations in {:?}", operations_len, batch_time);
             Ok(())
+        })
+    }
+}
+
+// =============================================================================
+// FEE ACCUMULATION HANDLERS (V0 Compatibility)
+// =============================================================================
+
+impl Handler<GetAccumulatedFeesMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Option<U256>, StorageError>>;
+
+    fn handle(&mut self, msg: GetAccumulatedFeesMessage, _: &mut Context<Self>) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        debug!(
+            correlation_id = ?correlation_id,
+            block_root = %msg.block_root,
+            "Getting accumulated fees for block"
+        );
+
+        let database = self.database.clone();
+        let block_root = msg.block_root;
+
+        Box::pin(async move {
+            // Use same key format as V0 storage (fee accumulation by block root)
+            let fee_key = format!("accumulated_fees_{}", block_root);
+
+            match database.get_state(fee_key.as_bytes()).await {
+                Ok(Some(fee_data)) => {
+                    // Deserialize U256 from stored bytes
+                    match serde_json::from_slice::<U256>(&fee_data) {
+                        Ok(fees) => {
+                            debug!(
+                                correlation_id = ?correlation_id,
+                                block_root = %block_root,
+                                accumulated_fees = %fees,
+                                "Retrieved accumulated fees from storage"
+                            );
+                            Ok(Some(fees))
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = ?correlation_id,
+                                error = ?e,
+                                "Failed to deserialize accumulated fees"
+                            );
+                            Err(StorageError::Serialization(format!("Fee deserialization failed: {}", e)))
+                        }
+                    }
+                }
+                Ok(None) => {
+                    debug!(
+                        correlation_id = ?correlation_id,
+                        block_root = %block_root,
+                        "No accumulated fees found for block (genesis or first block)"
+                    );
+                    Ok(None)
+                }
+                Err(e) => {
+                    error!(
+                        correlation_id = ?correlation_id,
+                        error = ?e,
+                        "Failed to get accumulated fees from storage"
+                    );
+                    Err(StorageError::Database(format!("Failed to get accumulated fees: {}", e)))
+                }
+            }
+        })
+    }
+}
+
+impl Handler<SetAccumulatedFeesMessage> for StorageActor {
+    type Result = ResponseFuture<Result<(), StorageError>>;
+
+    fn handle(&mut self, msg: SetAccumulatedFeesMessage, _: &mut Context<Self>) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        debug!(
+            correlation_id = ?correlation_id,
+            block_root = %msg.block_root,
+            fees = %msg.fees,
+            "Setting accumulated fees for block"
+        );
+
+        let database = self.database.clone();
+        let block_root = msg.block_root;
+        let fees = msg.fees;
+
+        Box::pin(async move {
+            // Serialize U256 fees for storage
+            let fee_data = match serde_json::to_vec(&fees) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!(
+                        correlation_id = ?correlation_id,
+                        error = ?e,
+                        "Failed to serialize accumulated fees"
+                    );
+                    return Err(StorageError::Serialization(format!("Fee serialization failed: {}", e)));
+                }
+            };
+
+            // Use same key format as V0 storage
+            let fee_key = format!("accumulated_fees_{}", block_root);
+
+            match database.put_state(fee_key.as_bytes(), &fee_data).await {
+                Ok(()) => {
+                    info!(
+                        correlation_id = ?correlation_id,
+                        block_root = %block_root,
+                        fees = %fees,
+                        "Successfully stored accumulated fees"
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    error!(
+                        correlation_id = ?correlation_id,
+                        error = ?e,
+                        "Failed to store accumulated fees"
+                    );
+                    Err(StorageError::Database(format!("Failed to store accumulated fees: {}", e)))
+                }
+            }
         })
     }
 }
