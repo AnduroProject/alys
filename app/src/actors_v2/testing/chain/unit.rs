@@ -70,7 +70,7 @@ mod tests {
         assert_eq!(state.blocks_without_pow, 0);
         assert!(!state.needs_auxpow());
         assert!(state.get_queued_pow().is_none());
-        assert!(state.queued_pegins.is_empty());
+        assert!(state.queued_pegins.read().await.is_empty());
         assert_eq!(state.is_validator, true);
         assert!(state.block_hash_cache.is_some());
         assert!(state.last_block_time.is_none());
@@ -226,37 +226,37 @@ mod tests {
         let max_blocks_without_pow = harness.config.max_blocks_without_pow;
         let mut state = harness.into_chain_state(is_validator, max_blocks_without_pow, None);
 
-        // Test initial state
-        assert!(state.queued_pegins.is_empty());
+        // Test initial state (async RwLock access)
+        assert!(state.queued_pegins.read().await.is_empty());
 
-        // Add peg-ins
+        // Add peg-ins (async methods)
         let pegin = mock_pegin_info();
         let txid1 = Txid::from_byte_array([1u8; 32]);
         let txid2 = Txid::from_byte_array([2u8; 32]);
 
-        state.add_queued_pegin(txid1, pegin.clone());
-        assert_eq!(state.queued_pegins.len(), 1);
-        assert!(state.queued_pegins.contains_key(&txid1));
+        state.add_queued_pegin(txid1, pegin.clone()).await;
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
+        assert!(state.queued_pegins.read().await.contains_key(&txid1));
 
-        state.add_queued_pegin(txid2, pegin.clone());
-        assert_eq!(state.queued_pegins.len(), 2);
+        state.add_queued_pegin(txid2, pegin.clone()).await;
+        assert_eq!(state.queued_pegins.read().await.len(), 2);
 
-        // Remove peg-in
-        let removed = state.remove_queued_pegin(&txid1);
+        // Remove peg-in (async method)
+        let removed = state.remove_queued_pegin(&txid1).await;
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().amount, pegin.amount);
-        assert_eq!(state.queued_pegins.len(), 1);
-        assert!(!state.queued_pegins.contains_key(&txid1));
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
+        assert!(!state.queued_pegins.read().await.contains_key(&txid1));
 
         // Try to remove non-existent peg-in
-        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32]));
+        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32])).await;
         assert!(non_existent.is_none());
-        assert_eq!(state.queued_pegins.len(), 1);
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
 
         // Remove remaining peg-in
-        let removed2 = state.remove_queued_pegin(&txid2);
+        let removed2 = state.remove_queued_pegin(&txid2).await;
         assert!(removed2.is_some());
-        assert!(state.queued_pegins.is_empty());
+        assert!(state.queued_pegins.read().await.is_empty());
     }
 
     #[tokio::test]

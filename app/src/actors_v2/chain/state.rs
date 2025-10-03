@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 use std::time::SystemTime;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use bitcoin::Txid;
 use ethereum_types::{Address, H256};
 
@@ -25,24 +27,27 @@ pub enum SyncStatus {
     Error(String),
 }
 
-/// ChainActor state (simplified from chain.rs)
+/// ChainActor state (simplified from chain.rs) - Arc/RwLock pattern for functional bridge processing
+#[derive(Clone)]
 pub struct ChainState {
-    /// Core blockchain state (derived from chain.rs)
-    pub aura: Aura,
+    /// Core blockchain state (derived from chain.rs) - Read-only Arc-wrapped V0 components
+    pub aura: Arc<Aura>, // ✅ Read-only: consensus validation only
+
+    /// Essential blockchain state (simple types - cloneable as-is)
     pub head: Option<BlockRef>,
     pub sync_status: SyncStatus,
+    pub federation: Vec<Address>,
 
     /// Essential AuxPoW and consensus
     pub queued_pow: Option<AuxPowHeader>,
     pub max_blocks_without_pow: u64,
-    pub federation: Vec<Address>,
 
-    /// Peg operations (simplified from chain.rs)
-    pub bridge: Bridge,
-    pub queued_pegins: BTreeMap<Txid, PegInInfo>,
-    pub bitcoin_wallet: BitcoinWallet,
-    pub bitcoin_signature_collector: BitcoinSignatureCollector,
-    pub maybe_bitcoin_signer: Option<BitcoinSigner>,
+    /// Peg operations (Arc<RwLock<T>> for mutable bridge processing)
+    pub bridge: Arc<RwLock<Bridge>>,
+    pub queued_pegins: Arc<RwLock<BTreeMap<Txid, PegInInfo>>>,
+    pub bitcoin_wallet: Arc<RwLock<BitcoinWallet>>,
+    pub bitcoin_signature_collector: Arc<RwLock<BitcoinSignatureCollector>>,
+    pub maybe_bitcoin_signer: Option<Arc<RwLock<BitcoinSigner>>>,
 
     /// Essential configuration
     pub is_validator: bool,
@@ -78,7 +83,7 @@ impl std::fmt::Debug for ChainState {
 }
 
 impl ChainState {
-    /// Create new chain state
+    /// Create new chain state with Arc-wrapped V0 components
     pub fn new(
         aura: Aura,
         federation: Vec<Address>,
@@ -92,17 +97,17 @@ impl ChainState {
         head: Option<BlockRef>,
     ) -> Self {
         Self {
-            aura,
+            aura: Arc::new(aura),
             head,
             sync_status: SyncStatus::Synced,
             queued_pow: None,
             max_blocks_without_pow,
             federation,
-            bridge,
-            queued_pegins: BTreeMap::new(),
-            bitcoin_wallet,
-            bitcoin_signature_collector,
-            maybe_bitcoin_signer,
+            bridge: Arc::new(RwLock::new(bridge)),
+            queued_pegins: Arc::new(RwLock::new(BTreeMap::new())),
+            bitcoin_wallet: Arc::new(RwLock::new(bitcoin_wallet)),
+            bitcoin_signature_collector: Arc::new(RwLock::new(bitcoin_signature_collector)),
+            maybe_bitcoin_signer: maybe_bitcoin_signer.map(|signer| Arc::new(RwLock::new(signer))),
             is_validator,
             retarget_params,
             block_hash_cache: Some(BlockHashCache::new(None)),
@@ -127,14 +132,14 @@ impl ChainState {
         self.sync_status = status;
     }
 
-    /// Add queued peg-in
-    pub fn add_queued_pegin(&mut self, txid: Txid, pegin: PegInInfo) {
-        self.queued_pegins.insert(txid, pegin);
+    /// Add queued peg-in (async due to RwLock)
+    pub async fn add_queued_pegin(&self, txid: Txid, pegin: PegInInfo) {
+        self.queued_pegins.write().await.insert(txid, pegin);
     }
 
-    /// Remove processed peg-in
-    pub fn remove_queued_pegin(&mut self, txid: &Txid) -> Option<PegInInfo> {
-        self.queued_pegins.remove(txid)
+    /// Remove processed peg-in (async due to RwLock)
+    pub async fn remove_queued_pegin(&self, txid: &Txid) -> Option<PegInInfo> {
+        self.queued_pegins.write().await.remove(txid)
     }
 
     /// Get current height

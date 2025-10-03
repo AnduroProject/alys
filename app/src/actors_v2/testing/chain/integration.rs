@@ -684,27 +684,27 @@ mod tests {
         let txid1 = Txid::from_byte_array([1u8; 32]);
         let txid2 = Txid::from_byte_array([2u8; 32]);
 
-        assert!(state.queued_pegins.is_empty());
+        assert!(state.queued_pegins.read().await.is_empty());
 
-        // Add peg-ins
-        state.add_queued_pegin(txid1, pegins[0].clone());
-        state.add_queued_pegin(txid2, pegins[1].clone());
-        assert_eq!(state.queued_pegins.len(), 2);
+        // Add peg-ins (async methods)
+        state.add_queued_pegin(txid1, pegins[0].clone()).await;
+        state.add_queued_pegin(txid2, pegins[1].clone()).await;
+        assert_eq!(state.queued_pegins.read().await.len(), 2);
 
-        // Remove peg-ins
-        let removed = state.remove_queued_pegin(&txid1);
+        // Remove peg-ins (async method)
+        let removed = state.remove_queued_pegin(&txid1).await;
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().amount, pegins[0].amount);
-        assert_eq!(state.queued_pegins.len(), 1);
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
 
         // Remove non-existent peg-in
-        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32]));
+        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32])).await;
         assert!(non_existent.is_none());
-        assert_eq!(state.queued_pegins.len(), 1);
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
 
         // Clear remaining
-        state.remove_queued_pegin(&txid2);
-        assert!(state.queued_pegins.is_empty());
+        state.remove_queued_pegin(&txid2).await;
+        assert!(state.queued_pegins.read().await.is_empty());
     }
 
     #[tokio::test]
@@ -944,14 +944,14 @@ mod tests {
         pegin2.amount = 200000000; // Different amount
 
         let txid = bitcoin::Txid::from_byte_array([42u8; 32]);
-        state.add_queued_pegin(txid, pegin1);
-        assert_eq!(state.queued_pegins.len(), 1);
-        assert_eq!(state.queued_pegins[&txid].amount, 100000000);
+        state.add_queued_pegin(txid, pegin1).await;
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
+        assert_eq!(state.queued_pegins.read().await.get(&txid).unwrap().amount, 100000000);
 
         // Adding same txid should overwrite
-        state.add_queued_pegin(txid, pegin2);
-        assert_eq!(state.queued_pegins.len(), 1);
-        assert_eq!(state.queued_pegins[&txid].amount, 200000000);
+        state.add_queued_pegin(txid, pegin2).await;
+        assert_eq!(state.queued_pegins.read().await.len(), 1);
+        assert_eq!(state.queued_pegins.read().await.get(&txid).unwrap().amount, 200000000);
     }
 
     #[tokio::test]

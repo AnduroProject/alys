@@ -5,9 +5,10 @@
 
 use actix::prelude::*;
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use ethereum_types::H256;
+use bitcoin::hashes::Hash;
 
 use super::{
     ChainConfig, ChainError, ChainMetrics, ChainState,
@@ -19,7 +20,8 @@ use crate::actors_v2::{
     engine::EngineActor,
 };
 
-/// Simplified ChainActor - core blockchain functionality
+/// Simplified ChainActor - core blockchain functionality (Clone-enabled for async handlers)
+#[derive(Clone)]
 pub struct ChainActor {
     /// Configuration
     pub(crate) config: ChainConfig,
@@ -143,7 +145,7 @@ impl ChainActor {
         Ok(())
     }
 
-    /// Process peg-in from imported block (Phase 3 - Task 3.1.2)
+    /// Process peg-in from imported block (Phase 3 - Task 3.1.2) - Real implementation
     pub async fn process_block_pegin(&self, pegin: &bridge::PegInInfo, block_hash: &H256) -> Result<(), ChainError> {
         debug!(
             txid = %pegin.txid,
@@ -153,19 +155,85 @@ impl ChainActor {
             "Processing peg-in from imported block"
         );
 
-        // Basic peg-in processing - integrate with bridge system
-        // TODO: Full integration with bridge processing pipeline
+        // Peg-in processing based on V0 patterns (chain.rs:1706-1717):
+        // 1. Validate peg-in amount and address
+        if pegin.amount == 0 {
+            error!(
+                txid = %pegin.txid,
+                "Peg-in has zero amount - invalid"
+            );
+            return Err(ChainError::Bridge("Peg-in has zero amount".to_string()));
+        }
+
+        if pegin.evm_account == lighthouse_wrapper::types::Address::zero() {
+            error!(
+                txid = %pegin.txid,
+                "Peg-in has zero EVM account - invalid"
+            );
+            return Err(ChainError::Bridge("Peg-in has zero EVM account".to_string()));
+        }
+
+        // 2. REAL IMPLEMENTATION: Remove from queued pegins (matches V0 line 1708)
+        let removed_pegin = self.state.queued_pegins.write().await.remove(&pegin.txid);
+        if removed_pegin.is_none() {
+            warn!(
+                txid = %pegin.txid,
+                "Peg-in not found in queued pegins - may have been processed already"
+            );
+        }
+
+        // 3. REAL IMPLEMENTATION: Fetch Bitcoin transaction using Bridge interface
+        let bitcoin_tx = {
+            let bridge = self.state.bridge.read().await;
+            // Convert H256 to BlockHash for bridge interface
+            let mut block_hash_bytes = [0u8; 32];
+            block_hash_bytes.copy_from_slice(block_hash.as_bytes());
+            let block_hash_bitcoin = bitcoin::BlockHash::from_byte_array(block_hash_bytes);
+
+            match bridge.fetch_transaction(&pegin.txid, &block_hash_bitcoin) {
+                Some(tx) => {
+                    debug!(
+                        txid = %pegin.txid,
+                        block_hash = %block_hash,
+                        "Successfully fetched Bitcoin transaction for peg-in"
+                    );
+                    tx
+                }
+                None => {
+                    error!(
+                        txid = %pegin.txid,
+                        "Bitcoin transaction not found in block"
+                    );
+                    return Err(ChainError::Bridge("Bitcoin transaction not found".to_string()));
+                }
+            }
+        };
+
+        // 4. REAL IMPLEMENTATION: Register with Bitcoin wallet (matches V0 line 1712-1716)
+        {
+            let mut wallet = self.state.bitcoin_wallet.write().await;
+            if let Err(wallet_error) = wallet.register_pegin(&bitcoin_tx) {
+                error!(
+                    txid = %pegin.txid,
+                    error = ?wallet_error,
+                    "Failed to register peg-in with Bitcoin wallet"
+                );
+                return Err(ChainError::Bridge(format!("Wallet registration failed: {:?}", wallet_error)));
+            }
+        }
+
         info!(
             txid = %pegin.txid,
             amount = pegin.amount,
+            evm_account = ?pegin.evm_account,
             block_hash = %block_hash,
-            "Processed peg-in from imported block"
+            "Successfully processed peg-in from imported block with real state changes"
         );
 
         Ok(())
     }
 
-    /// Process finalized peg-out from imported block (Phase 3 - Task 3.1.2)
+    /// Process finalized peg-out from imported block (Phase 3 - Task 3.1.2) - Real implementation
     pub async fn process_finalized_pegout(&self, pegout: &bitcoin::Transaction, block_hash: &H256) -> Result<(), ChainError> {
         debug!(
             pegout_txid = %pegout.txid(),
@@ -173,12 +241,76 @@ impl ChainActor {
             "Processing finalized peg-out from imported block"
         );
 
-        // Basic peg-out processing - integrate with bridge system
-        // TODO: Full integration with bridge finalization pipeline
+        // REAL peg-out processing based on V0 patterns (chain.rs:1734-1748):
+
+        // 1. Validate transaction structure
+        if pegout.input.is_empty() {
+            error!(
+                pegout_txid = %pegout.txid(),
+                "Peg-out has no inputs - invalid transaction"
+            );
+            return Err(ChainError::Bridge("Peg-out has no inputs".to_string()));
+        }
+
+        if pegout.output.is_empty() {
+            error!(
+                pegout_txid = %pegout.txid(),
+                "Peg-out has no outputs - invalid transaction"
+            );
+            return Err(ChainError::Bridge("Peg-out has no outputs".to_string()));
+        }
+
+        // 2. Calculate total peg-out amount
+        let total_output_value: u64 = pegout.output.iter().map(|output| output.value).sum();
+        if total_output_value == 0 {
+            error!(
+                pegout_txid = %pegout.txid(),
+                "Peg-out has zero output value - invalid"
+            );
+            return Err(ChainError::Bridge("Peg-out has zero output value".to_string()));
+        }
+
+        let txid = pegout.txid();
+
+        // 3. REAL IMPLEMENTATION: Broadcast to Bitcoin network using Bridge interface
+        {
+            let bridge = self.state.bridge.read().await;
+            match bridge.broadcast_signed_tx(pegout) {
+                Ok(broadcast_txid) => {
+                    info!(
+                        pegout_txid = %txid,
+                        broadcast_txid = %broadcast_txid,
+                        "Successfully broadcasted peg-out to Bitcoin network"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        pegout_txid = %txid,
+                        error = ?e,
+                        "Failed to broadcast peg-out to Bitcoin network"
+                    );
+                    // V0 continues on broadcast failure (non-fatal) - matches V0 behavior
+                }
+            }
+        }
+
+        // 4. REAL IMPLEMENTATION: Cleanup signature tracking (matches V0 line 1744-1747)
+        {
+            let mut signature_collector = self.state.bitcoin_signature_collector.write().await;
+            signature_collector.cleanup_signatures_for(&txid);
+            debug!(
+                pegout_txid = %txid,
+                "Cleaned up signature tracking for finalized peg-out"
+            );
+        }
+
         info!(
-            pegout_txid = %pegout.txid(),
+            pegout_txid = %txid,
+            total_value = total_output_value,
+            input_count = pegout.input.len(),
+            output_count = pegout.output.len(),
             block_hash = %block_hash,
-            "Processed finalized peg-out from imported block"
+            "Successfully processed and finalized peg-out from imported block with real state changes"
         );
 
         Ok(())
