@@ -25,160 +25,6 @@ use lighthouse_wrapper::types::MainnetEthSpec;
 use ssz_types::VariableList;
 use crate::actors_v2::common::serialization::{serialize_block, calculate_block_hash};
 
-impl ChainActor {
-    /// Handle block production (ported from chain.rs:437-692)
-    async fn handle_produce_block(&mut self, slot: u64, _timestamp: Duration) -> Result<ChainResponse, ChainError> {
-        let _start_time = Instant::now();
-
-        // Check sync status
-        if !self.state.is_synced() {
-            info!("Node is not synced, skipping block production");
-            return Err(ChainError::NotSynced);
-        }
-
-        // Check if we're a validator
-        if !self.config.is_validator {
-            return Err(ChainError::Configuration("Node is not configured as validator".to_string()));
-        }
-
-        // Check network connectivity for consensus
-        if !self.is_network_ready().await {
-            return Err(ChainError::NetworkNotAvailable);
-        }
-
-        info!(slot, "Starting block production");
-
-        // Get previous block (simplified from chain.rs logic)
-        let _prev_block_ref = match &self.state.head {
-            Some(head) => {
-                // Verify we have the previous block data available
-                // This would interact with StorageActor in full implementation
-                head.clone()
-            }
-            None => {
-                // Genesis case
-                info!("No head block found, producing genesis block");
-                // TODO: Implement genesis block production
-                return Err(ChainError::Internal("Genesis block production not implemented".to_string()));
-            }
-        };
-
-        // TODO: Implement full block production logic
-        // For now, return error as this is a complex operation
-        Err(ChainError::Internal("Full block production not yet implemented".to_string()))
-
-        // This would include:
-        // - Fee calculation and distribution
-        // - Peg-in processing
-        // - AuxPoW handling
-        // - Execution payload building
-        // - Block signing
-        // - Storage and broadcasting
-    }
-
-    /// Handle block import (ported from chain.rs:923-1124)
-    async fn handle_import_block(&mut self, block: SignedConsensusBlock<MainnetEthSpec>, source: BlockSource) -> Result<ChainResponse, ChainError> {
-        let block_height = block.message.execution_payload.block_number;
-        // TODO: Use proper block hash calculation when signing_root is available
-        let block_hash = H256::zero(); // Placeholder
-
-        info!(
-            block_height,
-            source = ?source,
-            "Starting block import"
-        );
-
-        // TODO: Implement full block import logic including:
-        // - Block validation
-        // - Consensus rule checking
-        // - Execution payload validation
-        // - Peg operation processing
-        // - Chain state updates
-
-        // For now, return success with placeholder
-        Ok(ChainResponse::BlockImported {
-            block_hash,
-            height: block_height
-        })
-    }
-
-    /// Handle AuxPoW processing (ported from chain.rs:1293-1380)
-    async fn handle_process_auxpow(&mut self, _auxpow: AuxPow, block_hash: H256) -> Result<ChainResponse, ChainError> {
-        info!(
-            block_hash = %block_hash,
-            "Processing AuxPoW"
-        );
-
-        // TODO: Implement full AuxPoW processing including:
-        // - AuxPoW validation
-        // - Difficulty checking
-        // - Chain ID verification
-        // - Header creation and queuing
-        // - Finalization logic
-
-        self.metrics.auxpow_processed.inc();
-
-        // For now, return success placeholder
-        Ok(ChainResponse::AuxPowProcessed { success: true, finalized: false })
-    }
-
-    /// Handle peg-in processing (ported from chain.rs:252-382)
-    async fn handle_process_pegins(&mut self, pegin_infos: Vec<PegInInfo>) -> Result<ChainResponse, ChainError> {
-        let mut processed_count = 0;
-        let mut total_amount = U256::zero();
-
-        info!(pegin_count = pegin_infos.len(), "Processing peg-ins");
-
-        for pegin_info in pegin_infos {
-            // Validate peg-in
-            if self.validate_pegin(&pegin_info).await? {
-                total_amount += U256::from(pegin_info.amount);
-                self.state.add_queued_pegin(pegin_info.txid, pegin_info);
-                processed_count += 1;
-            } else {
-                warn!(txid = %pegin_info.txid, "Invalid peg-in rejected");
-            }
-        }
-
-        self.metrics.pegins_processed.inc_by(processed_count as u64);
-
-        info!(
-            processed = processed_count,
-            total_amount = %total_amount,
-            "Peg-ins processed"
-        );
-
-        Ok(ChainResponse::PeginsProcessed { count: processed_count, total_amount })
-    }
-
-    /// Handle peg-out processing
-    async fn handle_process_pegouts(&mut self, pegout_requests: Vec<PegOutRequest>) -> Result<ChainResponse, ChainError> {
-        let processed_count = pegout_requests.len();
-
-        info!(pegout_count = processed_count, "Processing peg-outs");
-
-        // Create Bitcoin transaction for peg-outs
-        let transaction_id = if !pegout_requests.is_empty() {
-            Some(self.create_pegout_transaction(&pegout_requests).await?)
-        } else {
-            None
-        };
-
-        self.metrics.pegouts_processed.inc_by(processed_count as u64);
-
-        info!(
-            processed = processed_count,
-            transaction_id = ?transaction_id,
-            "Peg-outs processed"
-        );
-
-        Ok(ChainResponse::PegoutsProcessed { count: processed_count, transaction_id })
-    }
-
-    // Helper methods (placeholder implementations - would be completed in full implementation)
-    // These are commented out to avoid compilation issues during development
-}
-
 // Message handler implementations
 impl Handler<ChainMessage> for ChainActor {
     type Result = ResponseFuture<Result<ChainResponse, ChainError>>;
@@ -195,7 +41,7 @@ impl Handler<ChainMessage> for ChainActor {
                     is_validator: self.config.is_validator,
                     network_connected: false, // Would check network status
                     peer_count: 0, // Would be updated from NetworkActor
-                    pending_pegins: self.state.queued_pegins.len(),
+                    pending_pegins: 0, // TODO: Count async - self.state.queued_pegins.read().await.len(),
                     last_block_time: self.state.last_block_time.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
                     auxpow_enabled: self.config.enable_auxpow,
                     blocks_without_pow: self.state.blocks_without_pow,
@@ -224,18 +70,18 @@ impl Handler<ChainMessage> for ChainActor {
                     let storage_actor = self.storage_actor.clone();
                     let network_actor = self.network_actor.clone();
 
+                    // Capture simple state data and clone for async
+                    let state_head = self.state.head.clone();
+                    let config_validator_address = self.config.validator_address;
+                    let state_federation = self.state.federation.clone();
+                    let self_clone = self.clone();
+
                     info!(
                         slot = slot,
                         timestamp_secs = timestamp.as_secs(),
                         correlation_id = %correlation_id,
                         "Starting complete block production pipeline"
                     );
-
-                    // Capture necessary data for standalone withdrawal collection
-                    let state_queued_pegins = self.state.queued_pegins.clone();
-                    let state_head = self.state.head.clone();
-                    let config_validator_address = self.config.validator_address;
-                    let state_federation = self.state.federation.clone();
 
                     Box::pin(async move {
                         // Step 2: Get parent block from storage
@@ -277,7 +123,13 @@ impl Handler<ChainMessage> for ChainActor {
                             return Err(ChainError::Internal("StorageActor not available".to_string()));
                         };
 
-                        // Step 3: Collect withdrawals with real fee calculation
+                        // Step 3: Collect withdrawals with real fee calculation (get state inside async)
+                        let state_queued_pegins = {
+                            // Must do async operations inside the async block
+                            let queued_pegins_guard = self_clone.state.queued_pegins.read().await;
+                            queued_pegins_guard.clone()
+                        };
+
                         let withdrawal_collection = match crate::actors_v2::chain::withdrawals::collect_withdrawals_standalone(
                             &state_queued_pegins,
                             storage_actor.as_ref(),
@@ -498,7 +350,7 @@ impl Handler<ChainMessage> for ChainActor {
                         Err(ChainError::InvalidBlock("Block height is too old".to_string()))
                     })
                 } else {
-                    // Complete block import pipeline (Phase 3)
+                    // Complete block import pipeline (Phase 3) with real V0 integration
                     let block_hash = calculate_block_hash(&block);
                     let correlation_id = Uuid::new_v4();
                     let start_time = Instant::now();
@@ -508,13 +360,15 @@ impl Handler<ChainMessage> for ChainActor {
                         block_hash = %block_hash,
                         source = ?source,
                         correlation_id = %correlation_id,
-                        "Starting complete block import pipeline"
+                        "Starting complete block import pipeline with V0 integration"
                     );
 
-                    // Capture necessary data for async block
+                    // Clone self to enable async method calls (Critical Blocker 1 solution)
+                    let self_clone = self.clone();
+
+                    // Capture actor references for async block
                     let engine_actor = self.engine_actor.clone();
                     let storage_actor = self.storage_actor.clone();
-                    // Note: Skip Aura validation for Phase 3 - will add in future iteration
 
                     Box::pin(async move {
                         // Step 1: Structural validation
@@ -534,22 +388,21 @@ impl Handler<ChainMessage> for ChainActor {
                             "Block passed structural validation"
                         );
 
-                        // Step 2: Consensus validation (basic checks for Phase 3)
-                        // TODO: Future iteration will add full V0 Aura integration
-                        if block.signature.num_approvals() == 0 {
+                        // Step 2: Consensus validation via V0 Aura (Critical Blocker 2 solution)
+                        if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
                             error!(
                                 correlation_id = %correlation_id,
                                 block_hash = %block_hash,
-                                "Block has no signature approvals"
+                                error = ?aura_error,
+                                "Block failed V0 Aura consensus validation"
                             );
-                            return Err(ChainError::Consensus("Block has no signature approvals".to_string()));
+                            return Err(ChainError::Consensus(format!("Aura validation failed: {:?}", aura_error)));
                         }
 
                         debug!(
                             correlation_id = %correlation_id,
                             block_hash = %block_hash,
-                            approvals = block.signature.num_approvals(),
-                            "Block passed basic consensus validation"
+                            "Block passed V0 Aura consensus validation"
                         );
 
                         // Step 3: Execution payload validation via EngineActor
@@ -606,7 +459,64 @@ impl Handler<ChainMessage> for ChainActor {
                             warn!(correlation_id = %correlation_id, "EngineActor not available for payload validation - skipping");
                         }
 
-                        // Step 4: Store block via StorageActor
+                        // Step 4: Process peg operations (Critical Blocker 3 solution)
+                        if !block.message.pegins.is_empty() || !block.message.finalized_pegouts.is_empty() {
+                            debug!(
+                                correlation_id = %correlation_id,
+                                pegin_count = block.message.pegins.len(),
+                                pegout_count = block.message.finalized_pegouts.len(),
+                                "Processing peg operations from imported block"
+                            );
+
+                            // Process peg-ins with real validation
+                            for (pegin_txid, pegin_block_hash) in &block.message.pegins {
+                                // Look up full PegInInfo from queued pegins
+                                let pegin_info = {
+                                    let queued_pegins = self_clone.state.queued_pegins.read().await;
+                                    queued_pegins.get(pegin_txid).cloned()
+                                };
+
+                                if let Some(pegin_info) = pegin_info {
+                                    if let Err(pegin_error) = self_clone.process_block_pegin(&pegin_info, &block_hash).await {
+                                        error!(
+                                            correlation_id = %correlation_id,
+                                            txid = %pegin_txid,
+                                            error = ?pegin_error,
+                                            "Failed to process peg-in from imported block"
+                                        );
+                                        return Err(pegin_error);
+                                    }
+                                } else {
+                                    warn!(
+                                        correlation_id = %correlation_id,
+                                        txid = %pegin_txid,
+                                        "Peg-in not found in queued pegins - skipping"
+                                    );
+                                }
+                            }
+
+                            // Process finalized peg-outs with real validation
+                            for pegout in &block.message.finalized_pegouts {
+                                if let Err(pegout_error) = self_clone.process_finalized_pegout(pegout, &block_hash).await {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        pegout_txid = %pegout.txid(),
+                                        error = ?pegout_error,
+                                        "Failed to process finalized peg-out from imported block"
+                                    );
+                                    return Err(pegout_error);
+                                }
+                            }
+
+                            info!(
+                                correlation_id = %correlation_id,
+                                pegin_count = block.message.pegins.len(),
+                                pegout_count = block.message.finalized_pegouts.len(),
+                                "Successfully processed all peg operations from imported block"
+                            );
+                        }
+
+                        // Step 5: Store block via StorageActor
                         if let Some(ref storage_actor) = storage_actor {
                             let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
                                 block: block.clone(),
@@ -648,7 +558,7 @@ impl Handler<ChainMessage> for ChainActor {
                             return Err(ChainError::Internal("StorageActor not available".to_string()));
                         }
 
-                        // Step 5: Update chain head if this is the next sequential block
+                        // Step 6: Update chain head if this is the next sequential block
                         if block_height == current_height + 1 {
                             if let Some(ref storage_actor) = storage_actor {
                                 let new_head = crate::actors_v2::storage::actor::BlockRef {
@@ -692,7 +602,7 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                        // Step 6: Commit block to execution layer via EngineActor (if available)
+                        // Step 7: Commit block to execution layer via EngineActor (if available)
                         if let Some(ref engine_actor) = engine_actor {
                             let commit_msg = crate::actors_v2::engine::EngineMessage::CommitBlock {
                                 execution_payload: lighthouse_wrapper::types::ExecutionPayload::Capella(block.message.execution_payload.clone()),
@@ -1094,74 +1004,3 @@ impl Handler<ChainManagerMessage> for ChainActor {
     }
 }
 
-impl ChainActor {
-    /// Validate AuxPoW with specific parameters (for ChainManager interface)
-    async fn validate_auxpow_with_params(&self, auxpow: &AuxPow, params: &AuxPowParams) -> Result<bool, ChainError> {
-        // Comprehensive AuxPoW validation using existing validation logic
-        info!("Validating AuxPoW with difficulty and chain parameters");
-
-        // 1. Validate basic AuxPoW structure and merkle proofs
-        let current_head_hash = self.state.get_head_hash().unwrap_or(H256::zero());
-        let block_hash = bitcoin::BlockHash::from_byte_array(current_head_hash.0);
-
-        // Chain ID for ALYS - this should be configurable in production
-        let chain_id = 1337u32; // Example chain ID - would be configurable
-
-        // Use existing AuxPoW validation logic
-        if let Err(auxpow_error) = auxpow.check(block_hash, chain_id) {
-            warn!(
-                error = ?auxpow_error,
-                "AuxPoW structural validation failed"
-            );
-            return Ok(false);
-        }
-
-        // 2. Validate difficulty requirements
-        let parent_target = auxpow.parent_block.target();
-        // Convert U256 to compact target format for comparison
-        let required_target = bitcoin::Target::from_be_bytes([0u8; 32]); // Placeholder - would compute from params.target_difficulty
-
-        if parent_target > required_target {
-            warn!(
-                parent_target = ?parent_target,
-                required_target = ?required_target,
-                "AuxPoW parent block does not meet difficulty requirement"
-            );
-            return Ok(false);
-        }
-
-        // 3. Validate retargeting parameters if provided
-        if let Some(ref retarget_params) = params.retarget_params {
-            // Validate against Bitcoin consensus parameters
-            info!(
-                target_spacing = ?retarget_params.target_spacing,
-                retarget_interval = retarget_params.retarget_interval,
-                "Validating AuxPoW against retargeting parameters"
-            );
-            // Additional retargeting validation would go here
-        }
-
-        info!("AuxPoW validation passed all checks");
-        Ok(true)
-    }
-
-    /// Validate peg-in information
-    async fn validate_pegin(&self, _pegin_info: &PegInInfo) -> Result<bool, ChainError> {
-        // Placeholder implementation - would validate:
-        // - Transaction exists and is confirmed
-        // - Amount is within limits
-        // - Destination address is valid
-        // - No double-spending
-        Ok(true)
-    }
-
-    /// Create Bitcoin transaction for peg-outs
-    async fn create_pegout_transaction(&self, _pegout_requests: &[PegOutRequest]) -> Result<bitcoin::Txid, ChainError> {
-        // Placeholder implementation - would:
-        // - Create Bitcoin transaction with multiple outputs
-        // - Sign with federation keys
-        // - Broadcast to Bitcoin network
-        // - Return transaction ID
-        Ok(bitcoin::Txid::from_byte_array([0u8; 32]))
-    }
-}
