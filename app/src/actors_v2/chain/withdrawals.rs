@@ -206,8 +206,9 @@ impl ChainActor {
 
         debug!("Starting withdrawal collection for block production");
 
-        // 1. Process queued peg-ins from bridge
-        for (txid, pegin_info) in &self.state.queued_pegins {
+        // 1. Process queued peg-ins from bridge (async RwLock access)
+        let queued_pegins_snapshot = self.state.queued_pegins.read().await.clone();
+        for (txid, pegin_info) in &queued_pegins_snapshot {
             debug!(
                 txid = %txid,
                 amount = pegin_info.amount,
