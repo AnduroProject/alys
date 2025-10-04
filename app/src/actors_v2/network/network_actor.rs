@@ -527,6 +527,58 @@ impl Handler<NetworkMessage> for NetworkActor {
                     Err(e) => Err(NetworkError::Protocol(e.to_string())),
                 }
             }
+
+            // Phase 4 messages
+            NetworkMessage::BroadcastAuxPow { auxpow_data, correlation_id } => {
+                tracing::debug!(
+                    correlation_id = ?correlation_id,
+                    data_len = auxpow_data.len(),
+                    "Broadcasting AuxPoW to network"
+                );
+
+                let peer_count = self.peer_manager.get_connected_peers().len();
+                // TODO: Actual AuxPoW broadcast implementation
+
+                Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
+            }
+
+            NetworkMessage::RequestBlocks { start_height, count, correlation_id } => {
+                tracing::debug!(
+                    correlation_id = ?correlation_id,
+                    start_height = start_height,
+                    count = count,
+                    "Requesting blocks from network"
+                );
+
+                let peer_count = self.peer_manager.get_connected_peers().len();
+                let request_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
+                // TODO: Actual block request implementation
+
+                Ok(NetworkResponse::BlocksRequested { peer_count, request_id })
+            }
+
+            NetworkMessage::HealthCheck { correlation_id } => {
+                tracing::debug!(
+                    correlation_id = ?correlation_id,
+                    "Performing network health check"
+                );
+
+                let connected_peers = self.peer_manager.get_connected_peers().len();
+                let is_healthy = self.is_running && connected_peers > 0;
+                let issues = if !is_healthy {
+                    vec![
+                        if !self.is_running { "Network not running".to_string() } else { String::new() },
+                        if connected_peers == 0 { "No peers connected".to_string() } else { String::new() },
+                    ]
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect()
+                } else {
+                    vec![]
+                };
+
+                Ok(NetworkResponse::Healthy { is_healthy, connected_peers, issues })
+            }
         }
     }
 }

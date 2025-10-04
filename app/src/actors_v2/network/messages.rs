@@ -28,9 +28,9 @@ pub enum NetworkMessage {
     StopNetwork {
         graceful: bool,
     },
-    /// Get current network status
+    /// Get current network status (Phase 4: Enhanced with readiness check)
     GetNetworkStatus,
-    /// Broadcast block to network
+    /// Broadcast block to network (Phase 1/4: Production-ready with correlation tracking)
     BroadcastBlock {
         block_data: Vec<u8>,
         priority: bool,
@@ -38,6 +38,17 @@ pub enum NetworkMessage {
     /// Broadcast transaction to network
     BroadcastTransaction {
         tx_data: Vec<u8>,
+    },
+    /// Broadcast AuxPoW header for mining coordination (Phase 4: Task 4.2.1)
+    BroadcastAuxPow {
+        auxpow_data: Vec<u8>,
+        correlation_id: Option<Uuid>,
+    },
+    /// Request blocks from peers (Phase 4: Enhanced sync support)
+    RequestBlocks {
+        start_height: u64,
+        count: u32,
+        correlation_id: Option<Uuid>,
     },
     /// Connect to specific peer
     ConnectToPeer {
@@ -65,6 +76,10 @@ pub enum NetworkMessage {
     },
     /// Get network metrics
     GetMetrics,
+    /// Health check for production monitoring (Phase 4: Task 4.3.1)
+    HealthCheck {
+        correlation_id: Option<Uuid>,
+    },
 }
 
 /// SyncActor messages - blockchain sync only
@@ -114,12 +129,34 @@ pub enum SyncMessage {
 pub enum NetworkResponse {
     Started,
     Stopped,
+    /// Network status with readiness information (Phase 4: Enhanced)
     Status(NetworkStatus),
+    /// Block broadcast confirmation with timing (Phase 4: Enhanced monitoring)
+    BlockBroadcasted {
+        peer_count: usize,
+        broadcast_time: std::time::Duration,
+    },
+    /// Generic broadcast confirmation
     Broadcasted { message_id: String },
+    /// AuxPoW broadcast confirmation (Phase 4: Task 4.2.1)
+    AuxPowBroadcasted {
+        peer_count: usize,
+    },
+    /// Block request sent confirmation (Phase 4)
+    BlocksRequested {
+        peer_count: usize,
+        request_id: Uuid,
+    },
     Connected { peer_id: PeerId },
     Disconnected { peer_id: PeerId },
     Peers(Vec<PeerInfo>),
     Metrics(crate::actors_v2::network::NetworkMetrics),
+    /// Health check response (Phase 4: Task 4.3.1)
+    Healthy {
+        is_healthy: bool,
+        connected_peers: usize,
+        issues: Vec<String>,
+    },
 }
 
 /// SyncActor response types
