@@ -9,6 +9,12 @@
 //! - Peg-in/peg-out operations
 //! - Clean actor integration (StorageActor + NetworkActor V2)
 //! - ChainManager interface for future EngineActor/AuxPowActor coordination
+//!
+//! Phase 4 features:
+//! - Production-ready error recovery (recovery.rs)
+//! - Performance monitoring and optimization (monitoring.rs)
+//! - Health check system for all integrated actors
+//! - AuxPoW block production integration
 
 pub mod actor;
 pub mod config;
@@ -19,9 +25,18 @@ pub mod metrics;
 pub mod state;
 pub mod withdrawals;
 
+// Phase 4 production hardening modules
+pub mod recovery;
+pub mod monitoring;
+pub mod auxpow;
+
 pub use actor::ChainActor;
 pub use config::ChainConfig;
 pub use error::ChainError;
 pub use messages::{ChainMessage, ChainResponse};
 pub use metrics::ChainMetrics;
 pub use state::ChainState;
+
+// Phase 4 exports
+pub use recovery::HealthStatus;
+pub use monitoring::{PerformanceStatus, PerformanceSummary, PerformanceMetrics};

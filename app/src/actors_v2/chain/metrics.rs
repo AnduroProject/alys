@@ -1,11 +1,14 @@
 //! ChainActor V2 Metrics
 //!
 //! Basic metrics without over-engineering
+//! Phase 4: Enhanced with performance tracking
 
 use prometheus::{Histogram, IntCounter, IntGauge};
 use std::time::Instant;
 
-/// ChainActor metrics
+use super::monitoring::PerformanceMetrics;
+
+/// ChainActor metrics (Phase 4: Enhanced with performance tracking)
 #[derive(Debug, Clone)]
 pub struct ChainMetrics {
     /// Blocks produced counter
@@ -49,10 +52,13 @@ pub struct ChainMetrics {
 
     /// Last activity timestamp
     pub last_activity: Instant,
+
+    /// Phase 4: Performance metrics for monitoring and optimization
+    pub performance: PerformanceMetrics,
 }
 
 impl ChainMetrics {
-    /// Create new metrics instance
+    /// Create new metrics instance (Phase 4: Enhanced with performance metrics)
     pub fn new() -> Self {
         Self {
             blocks_produced: IntCounter::new("chain_blocks_produced_total", "Total blocks produced").unwrap(),
@@ -69,6 +75,7 @@ impl ChainMetrics {
             block_production_duration: Histogram::with_opts(prometheus::histogram_opts!("chain_block_production_duration_seconds", "Block production duration")).unwrap(),
             block_validation_duration: Histogram::with_opts(prometheus::histogram_opts!("chain_block_validation_duration_seconds", "Block validation duration")).unwrap(),
             last_activity: Instant::now(),
+            performance: PerformanceMetrics::new(), // Phase 4: Performance tracking
         }
     }
 

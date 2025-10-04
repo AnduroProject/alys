@@ -347,6 +347,14 @@ pub struct OptimizeDatabaseMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message for health check (Phase 4: Task 4.3.1)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct HealthCheckMessage {
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 // =============================================================================
 // SUPPORTING DATA STRUCTURES
 // =============================================================================
