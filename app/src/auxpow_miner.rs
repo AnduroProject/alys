@@ -76,6 +76,31 @@ pub struct AuxBlock {
     _target: Target,
 }
 
+impl AuxBlock {
+    /// Create new AuxBlock for mining pool requests
+    ///
+    /// Public constructor to allow V2 ChainActor to create Bitcoin-compatible
+    /// work packages without exposing internal field mutability.
+    pub fn new(
+        hash: BlockHash,
+        chain_id: u32,
+        previous_block_hash: BlockHash,
+        coinbase_value: u64,
+        bits: CompactTarget,
+        height: u64,
+    ) -> Self {
+        Self {
+            hash,
+            chain_id,
+            previous_block_hash,
+            coinbase_value,
+            bits,
+            height,
+            _target: bits.into(),
+        }
+    }
+}
+
 // TODO: Either move this struct out of auxpow__miner or modularize between mining related functionalities, and basic chain functionality
 #[async_trait::async_trait]
 pub trait ChainManager<BI> {
@@ -407,15 +432,14 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
             .with_label_values(&["success"])
             .inc();
 
-        Ok(AuxBlock {
+        Ok(AuxBlock::new(
             hash,
-            chain_id: index_last.chain_id(),
-            previous_block_hash: index_last.block_hash(),
-            coinbase_value: 0,
+            index_last.chain_id(),
+            index_last.block_hash(),
+            0,
             bits,
-            height: index_last.height() + 1,
-            _target: bits.into(),
-        })
+            index_last.height() + 1,
+        ))
     }
 
     /// Submits a solved auxpow for a block that was previously created by 'createauxblock'.
