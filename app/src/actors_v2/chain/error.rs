@@ -54,6 +54,9 @@ pub enum ChainError {
     #[error("Chain not synchronized")]
     NotSynced,
 
+    #[error("No work to do - no unfinalized blocks available")]
+    NoWorkToDo,
+
     #[error("Invalid chain state: {0}")]
     InvalidState(String),
 

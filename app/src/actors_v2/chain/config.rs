@@ -38,6 +38,12 @@ pub struct ChainConfig {
 
     /// Block hash cache size
     pub block_hash_cache_size: Option<usize>,
+
+    /// Chain ID for AuxPoW validation
+    ///
+    /// Default: 1337 (Alys mainnet)
+    /// Testnet should use different value to prevent replay attacks
+    pub chain_id: u32,
 }
 
 /// Bitcoin consensus parameters (simplified from auxpow_miner)
@@ -62,6 +68,7 @@ impl Default for ChainConfig {
             enable_peg_operations: true,
             retarget_params: Some(BitcoinConsensusParams::default()),
             block_hash_cache_size: Some(1000),
+            chain_id: 1337, // Alys mainnet
         }
     }
 }
