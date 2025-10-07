@@ -51,6 +51,7 @@ pub fn minimal_config() -> ChainConfig {
         enable_peg_operations: false,
         retarget_params: None,
         block_hash_cache_size: Some(100),
+        chain_id: 1337, // Priority 5: added field
     }
 }
 
