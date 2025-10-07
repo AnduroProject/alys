@@ -39,6 +39,17 @@ pub struct NetworkMetrics {
     // Performance metrics
     pub average_latency_ms: f64,
     pub last_updated: SystemTime,
+
+    // Phase 4: AuxPoW metrics
+    pub auxpow_broadcasts: u64,
+    pub auxpow_broadcast_bytes: u64,
+    pub auxpow_received: u64,
+
+    // Phase 4: Block request metrics
+    pub block_requests_sent: u64,
+    pub block_request_latency_ms: Vec<u64>,
+    pub block_responses_received: u64,
+    pub block_response_errors: u64,
 }
 
 impl NetworkMetrics {
@@ -62,6 +73,13 @@ impl NetworkMetrics {
             connection_errors: 0,
             average_latency_ms: 0.0,
             last_updated: SystemTime::now(),
+            auxpow_broadcasts: 0,
+            auxpow_broadcast_bytes: 0,
+            auxpow_received: 0,
+            block_requests_sent: 0,
+            block_request_latency_ms: Vec::new(),
+            block_responses_received: 0,
+            block_response_errors: 0,
         }
     }
 
@@ -109,6 +127,50 @@ impl NetworkMetrics {
     pub fn record_protocol_error(&mut self) {
         self.protocol_errors += 1;
         self.last_updated = SystemTime::now();
+    }
+
+    // Phase 4: AuxPoW metrics
+    pub fn record_auxpow_broadcast(&mut self, bytes: usize) {
+        self.auxpow_broadcasts += 1;
+        self.auxpow_broadcast_bytes += bytes as u64;
+        self.last_updated = SystemTime::now();
+    }
+
+    pub fn record_auxpow_received(&mut self) {
+        self.auxpow_received += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    // Phase 4: Block request metrics
+    pub fn record_block_request_sent(&mut self) {
+        self.block_requests_sent += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    pub fn record_block_response(&mut self, latency: Duration) {
+        self.block_responses_received += 1;
+        let latency_ms = latency.as_millis() as u64;
+        self.block_request_latency_ms.push(latency_ms);
+
+        // Keep only last 100 latencies to avoid unbounded growth
+        if self.block_request_latency_ms.len() > 100 {
+            self.block_request_latency_ms.remove(0);
+        }
+
+        self.last_updated = SystemTime::now();
+    }
+
+    pub fn record_block_response_error(&mut self) {
+        self.block_response_errors += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    pub fn get_average_block_request_latency_ms(&self) -> f64 {
+        if self.block_request_latency_ms.is_empty() {
+            return 0.0;
+        }
+        let sum: u64 = self.block_request_latency_ms.iter().sum();
+        sum as f64 / self.block_request_latency_ms.len() as f64
     }
 }
 

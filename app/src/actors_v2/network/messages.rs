@@ -44,10 +44,23 @@ pub enum NetworkMessage {
         auxpow_data: Vec<u8>,
         correlation_id: Option<Uuid>,
     },
+    /// Handle completed AuxPoW from miner (Phase 4: Integration Point 3a)
+    HandleCompletedAuxPow {
+        auxpow_data: Vec<u8>,
+        peer_id: String,
+        correlation_id: Option<Uuid>,
+    },
     /// Request blocks from peers (Phase 4: Enhanced sync support)
     RequestBlocks {
         start_height: u64,
         count: u32,
+        correlation_id: Option<Uuid>,
+    },
+    /// Handle block response from peer (Phase 4: Task 2.6)
+    HandleBlockResponse {
+        blocks: Vec<Block>,
+        request_id: Uuid,
+        peer_id: String,
         correlation_id: Option<Uuid>,
     },
     /// Connect to specific peer
@@ -74,12 +87,18 @@ pub enum NetworkMessage {
     SetSyncActor {
         addr: Addr<crate::actors_v2::network::SyncActor>,
     },
+    /// Set ChainActor address for AuxPoW forwarding (Phase 4: Integration Point 3b)
+    SetChainActor {
+        addr: Addr<crate::actors_v2::chain::ChainActor>,
+    },
     /// Get network metrics
     GetMetrics,
     /// Health check for production monitoring (Phase 4: Task 4.3.1)
     HealthCheck {
         correlation_id: Option<Uuid>,
     },
+    /// Cleanup timed-out requests (Phase 4: Task 7)
+    CleanupTimeouts,
 }
 
 /// SyncActor messages - blockchain sync only

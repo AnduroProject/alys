@@ -37,6 +37,7 @@ impl Default for NetworkConfig {
             gossip_topics: vec![
                 "alys-blocks".to_string(),
                 "alys-transactions".to_string(),
+                "alys-auxpow".to_string(), // Phase 4: AuxPoW mining coordination
             ],
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),

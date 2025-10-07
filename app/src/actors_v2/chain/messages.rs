@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use bitcoin::{BlockHash as BitcoinBlockHash, Txid};
 use ethereum_types::{Address, H256, U256};
+use uuid::Uuid;
 
 // Re-export types that would come from other modules
 pub use crate::auxpow::AuxPow;
+pub use crate::auxpow_miner::AuxBlock;
 pub use crate::block::{ConsensusBlock, SignedConsensusBlock, AuxPowHeader};
 pub use crate::store::BlockRef;
 pub use bridge::PegInInfo;
@@ -35,6 +37,12 @@ pub enum ChainMessage {
     ProcessAuxPow {
         auxpow: AuxPow,
         block_hash: H256,
+    },
+
+    /// Queue completed AuxPoW for next block (Phase 4: Integration Point 3c)
+    QueueAuxPow {
+        auxpow_header: AuxPowHeader,
+        correlation_id: Option<Uuid>,
     },
 
     /// Process peg-in operations
@@ -129,6 +137,9 @@ pub struct AuxPowParams {
 /// ChainActor response types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChainResponse {
+    /// Generic success response
+    Success,
+
     /// Block produced successfully
     BlockProduced {
         block: SignedConsensusBlock<MainnetEthSpec>,
@@ -145,6 +156,11 @@ pub enum ChainResponse {
     AuxPowProcessed {
         success: bool,
         finalized: bool,
+    },
+
+    /// AuxPoW queued successfully (Phase 4: Integration Point 3c)
+    AuxPowQueued {
+        height: u64,
     },
 
     /// Peg-ins processed
@@ -231,4 +247,26 @@ pub struct ChainStatus {
 
     /// Blocks without AuxPoW
     pub blocks_without_pow: u64,
+}
+
+/// Create AuxPoW block for mining (RPC endpoint)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<AuxBlock, crate::actors_v2::chain::ChainError>")]
+pub struct CreateAuxBlock {
+    /// Miner's reward address
+    pub miner_address: Address,
+    /// Correlation ID for distributed tracing
+    pub correlation_id: Uuid,
+}
+
+/// Submit completed AuxPoW for validation and processing (RPC endpoint)
+#[derive(Debug, Message)]
+#[rtype(result = "Result<AuxPowHeader, crate::actors_v2::chain::ChainError>")]
+pub struct SubmitAuxBlock {
+    /// Aggregate hash from createauxblock response
+    pub aggregate_hash: BitcoinBlockHash,
+    /// Completed AuxPoW proof
+    pub auxpow: AuxPow,
+    /// Correlation ID for distributed tracing
+    pub correlation_id: Uuid,
 }

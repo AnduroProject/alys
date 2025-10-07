@@ -14,7 +14,7 @@ use super::{
     ChainActor, ChainError,
     messages::{
         ChainMessage, ChainResponse, ChainManagerMessage, ChainManagerResponse,
-        BlockSource, PegOutRequest, AuxPowParams,
+        BlockSource, PegOutRequest, AuxPowParams, CreateAuxBlock, SubmitAuxBlock,
     },
 };
 
@@ -74,7 +74,7 @@ impl Handler<ChainMessage> for ChainActor {
                     let state_head = self.state.head.clone();
                     let config_validator_address = self.config.validator_address;
                     let state_federation = self.state.federation.clone();
-                    let self_clone = self.clone();
+                    let mut self_clone = self.clone();
 
                     info!(
                         slot = slot,
@@ -217,17 +217,35 @@ impl Handler<ChainMessage> for ChainActor {
                         let consensus_block = crate::block::ConsensusBlock {
                             parent_hash: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot.saturating_sub(1)),
                             slot,
-                            auxpow_header: None,
+                            auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
                             pegins: vec![], // Withdrawal collection integrated above via add_balances
                             pegout_payment_proposal: None,
                             finalized_pegouts: vec![],
                         };
 
-                        // Step 7: Sign block (basic signature for Phase 2)
-                        let signed_block = crate::block::SignedConsensusBlock {
-                            message: consensus_block,
-                            signature: crate::signatures::AggregateApproval::new(), // TODO: Phase 3 will add proper Aura signing
+                        // Step 7: Incorporate AuxPoW if available (Phase 4: Integration Point 1)
+                        let signed_block = match self_clone.incorporate_auxpow(consensus_block).await {
+                            Ok(signed_with_auxpow) => {
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    has_auxpow = signed_with_auxpow.message.auxpow_header.is_some(),
+                                    "Block signed with AuxPoW incorporation result"
+                                );
+                                signed_with_auxpow
+                            }
+                            Err(ChainError::Consensus(msg)) if msg.contains("Too many blocks without PoW") => {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    blocks_without_pow = self_clone.state.blocks_without_pow,
+                                    "Cannot produce block: AuxPoW required but not available"
+                                );
+                                return Err(ChainError::Consensus(msg));
+                            }
+                            Err(e) => {
+                                error!(correlation_id = %correlation_id, error = ?e, "AuxPoW incorporation failed");
+                                return Err(e);
+                            }
                         };
 
                         // Step 8: Store block via StorageActor (if available)
@@ -703,6 +721,41 @@ impl Handler<ChainMessage> for ChainActor {
                     })
                 }
             }
+            ChainMessage::QueueAuxPow { auxpow_header, correlation_id } => {
+                let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
+                let mut self_mut = self.clone();
+
+                info!(
+                    correlation_id = %correlation_id,
+                    auxpow_height = auxpow_header.height,
+                    has_auxpow = auxpow_header.auxpow.is_some(),
+                    "Queueing completed AuxPoW for block production"
+                );
+
+                Box::pin(async move {
+                    // Call the queue_auxpow method from auxpow.rs
+                    match self_mut.queue_auxpow(auxpow_header.clone()).await {
+                        Ok(()) => {
+                            info!(
+                                correlation_id = %correlation_id,
+                                auxpow_height = auxpow_header.height,
+                                "Successfully queued AuxPoW for next block production"
+                            );
+                            Ok(ChainResponse::AuxPowQueued {
+                                height: auxpow_header.height,
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to queue AuxPoW"
+                            );
+                            Err(e)
+                        }
+                    }
+                })
+            }
             ChainMessage::ProcessPegins { pegin_infos } => {
                 // Validate peg operations are enabled
                 if !self.config.enable_peg_operations {
@@ -1001,6 +1054,149 @@ impl Handler<ChainManagerMessage> for ChainActor {
                 }
             }
         }
+    }
+}
+
+// RPC Message Handlers
+
+// Helper function to create aux block without borrowing ChainActor
+async fn create_aux_block_helper(
+    state: &super::state::ChainState,
+    config: &super::config::ChainConfig,
+    miner_address: lighthouse_wrapper::types::Address,
+) -> Result<crate::auxpow_miner::AuxBlock, ChainError> {
+    // Temporarily create a minimal ChainActor-like context
+    // This is a workaround for the lifetime issues with async handlers
+    let actor = ChainActor {
+        state: state.clone(),
+        config: config.clone(),
+        storage_actor: None,
+        network_actor: None,
+        sync_actor: None,
+        engine_actor: None,
+        metrics: super::metrics::ChainMetrics::default(),
+        last_activity: std::time::Instant::now(),
+    };
+
+    actor.create_aux_block(miner_address).await
+}
+
+// Helper function to validate and submit aux block
+async fn submit_aux_block_helper(
+    state: &super::state::ChainState,
+    config: &super::config::ChainConfig,
+    aggregate_hash: bitcoin::BlockHash,
+    auxpow: crate::auxpow::AuxPow,
+) -> Result<crate::block::AuxPowHeader, ChainError> {
+    let actor = ChainActor {
+        state: state.clone(),
+        config: config.clone(),
+        storage_actor: None,
+        network_actor: None,
+        sync_actor: None,
+        engine_actor: None,
+        metrics: super::metrics::ChainMetrics::default(),
+        last_activity: std::time::Instant::now(),
+    };
+
+    actor.validate_submitted_auxpow(aggregate_hash, auxpow).await
+}
+
+impl Handler<CreateAuxBlock> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<crate::auxpow_miner::AuxBlock, ChainError>>;
+
+    fn handle(&mut self, msg: CreateAuxBlock, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        let miner_address = msg.miner_address;
+
+        debug!(
+            correlation_id = %correlation_id,
+            miner_address = %miner_address,
+            "CreateAuxBlock handler invoked"
+        );
+
+        self.record_activity();
+
+        // Clone state and config for async operation
+        let state = self.state.clone();
+        let config = self.config.clone();
+
+        Box::pin(
+            async move {
+                let result = create_aux_block_helper(&state, &config, miner_address).await;
+
+                match &result {
+                    Ok(aux_block) => {
+                        info!(
+                            correlation_id = %correlation_id,
+                            hash = %aux_block.hash,
+                            "AuxBlock created successfully"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            correlation_id = %correlation_id,
+                            error = ?e,
+                            "Failed to create AuxBlock"
+                        );
+                    }
+                }
+
+                result
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<SubmitAuxBlock> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<crate::block::AuxPowHeader, ChainError>>;
+
+    fn handle(&mut self, msg: SubmitAuxBlock, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        let aggregate_hash = msg.aggregate_hash;
+        let auxpow = msg.auxpow;
+
+        debug!(
+            correlation_id = %correlation_id,
+            hash = %aggregate_hash,
+            "SubmitAuxBlock handler invoked"
+        );
+
+        self.record_activity();
+
+        // Clone state and config for async operation
+        let mut state = self.state.clone();
+        let config = self.config.clone();
+
+        Box::pin(
+            async move {
+                // Step 1: Validate submitted AuxPoW
+                let auxpow_header = submit_aux_block_helper(&state, &config, aggregate_hash, auxpow).await?;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    hash = %aggregate_hash,
+                    height = auxpow_header.height,
+                    "AuxPoW validated successfully"
+                );
+
+                // Step 2: Queue validated AuxPoW
+                state.set_queued_pow(Some(auxpow_header.clone()));
+                state.reset_blocks_without_pow();
+
+                info!(
+                    correlation_id = %correlation_id,
+                    "AuxPoW queued for next block production"
+                );
+
+                // TODO: Step 3: Broadcast to network (NetworkActor integration pending)
+                // This will be implemented once NetworkActor is fully integrated
+
+                Ok(auxpow_header)
+            }
+            .into_actor(self),
+        )
     }
 }
 

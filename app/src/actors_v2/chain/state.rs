@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
 use ethereum_types::{Address, H256};
 
 use crate::auxpow_miner::BitcoinConsensusParams;
@@ -15,6 +15,28 @@ use crate::block_hash_cache::BlockHashCache;
 use crate::store::BlockRef;
 use bridge::{Bridge, PegInInfo, BitcoinSignatureCollector, BitcoinSigner};
 use crate::aura::Aura;
+
+/// Mining context for tracking issued AuxPoW work (Priority 3)
+///
+/// Stores context for work issued to miners via `createauxblock`.
+/// Used to validate submissions in `submitauxblock`.
+#[derive(Debug, Clone)]
+pub struct MiningContext {
+    /// When this work was issued
+    pub issued_at: SystemTime,
+    /// Last finalized block hash at time of issuance
+    pub last_hash: H256,
+    /// First block in range
+    pub start_hash: BlockHash,
+    /// Last block in range
+    pub end_hash: BlockHash,
+    /// Miner's reward address
+    pub miner_address: Address,
+    /// Difficulty target (compact form)
+    pub bits: u32,
+    /// Target height after mining
+    pub height: u64,
+}
 
 pub(crate) type BitcoinWallet = bridge::UtxoManager<bridge::Tree>;
 
@@ -42,6 +64,9 @@ pub struct ChainState {
     pub queued_pow: Option<AuxPowHeader>,
     pub max_blocks_without_pow: u64,
 
+    /// Mining context state (Priority 3: tracks issued work for validation)
+    pub mining_contexts: Arc<RwLock<BTreeMap<BlockHash, MiningContext>>>,
+
     /// Peg operations (Arc<RwLock<T>> for mutable bridge processing)
     pub bridge: Arc<RwLock<Bridge>>,
     pub queued_pegins: Arc<RwLock<BTreeMap<Txid, PegInInfo>>>,
@@ -66,6 +91,7 @@ impl std::fmt::Debug for ChainState {
             .field("sync_status", &self.sync_status)
             .field("queued_pow", &self.queued_pow)
             .field("max_blocks_without_pow", &self.max_blocks_without_pow)
+            .field("mining_contexts", &"<BTreeMap<BlockHash, MiningContext>>")
             .field("federation", &self.federation)
             .field("queued_pegins", &self.queued_pegins)
             .field("is_validator", &self.is_validator)
@@ -102,6 +128,7 @@ impl ChainState {
             sync_status: SyncStatus::Synced,
             queued_pow: None,
             max_blocks_without_pow,
+            mining_contexts: Arc::new(RwLock::new(BTreeMap::new())),
             federation,
             bridge: Arc::new(RwLock::new(bridge)),
             queued_pegins: Arc::new(RwLock::new(BTreeMap::new())),
@@ -175,5 +202,35 @@ impl ChainState {
     /// Get queued AuxPoW
     pub fn get_queued_pow(&self) -> &Option<AuxPowHeader> {
         &self.queued_pow
+    }
+
+    /// Store mining context for submitted work validation (Priority 3)
+    pub async fn store_mining_context(&self, aggregate_hash: BlockHash, context: MiningContext) {
+        self.mining_contexts.write().await.insert(aggregate_hash, context);
+    }
+
+    /// Retrieve and remove mining context (Priority 3)
+    pub async fn take_mining_context(&self, aggregate_hash: &BlockHash) -> Option<MiningContext> {
+        self.mining_contexts.write().await.remove(aggregate_hash)
+    }
+
+    /// Cleanup stale mining contexts (Priority 3)
+    ///
+    /// Removes contexts older than the specified timeout duration.
+    /// Returns count of removed contexts.
+    pub async fn cleanup_stale_mining_contexts(&self, timeout_secs: u64) -> usize {
+        let now = SystemTime::now();
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+
+        let mut contexts = self.mining_contexts.write().await;
+        let initial_count = contexts.len();
+
+        contexts.retain(|_hash, context| {
+            let elapsed = now.duration_since(context.issued_at).unwrap_or_default();
+            elapsed < timeout
+        });
+
+        let removed_count = initial_count - contexts.len();
+        removed_count
     }
 }
