@@ -170,6 +170,26 @@ impl PeerManager {
             .collect()
     }
 
+    /// Select best peers for block requests (Phase 4: Task 2.2)
+    /// Stricter criteria: reputation > 50.0, success_rate > 0.7
+    pub fn select_peers_for_blocks(&self, count: usize) -> Vec<PeerId> {
+        let mut suitable_peers: Vec<_> = self.connected_peers.values()
+            .filter(|peer| {
+                peer.reputation > 50.0 && peer.success_rate() > 0.7
+            })
+            .collect();
+
+        // Sort by reputation descending
+        suitable_peers.sort_by(|a, b|
+            b.reputation.partial_cmp(&a.reputation).unwrap_or(std::cmp::Ordering::Equal)
+        );
+
+        suitable_peers.into_iter()
+            .take(count)
+            .map(|p| p.peer_id.clone())
+            .collect()
+    }
+
     /// Get peers that should be disconnected
     pub fn get_peers_to_disconnect(&self) -> Vec<PeerId> {
         self.connected_peers.values()

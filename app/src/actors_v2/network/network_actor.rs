@@ -35,8 +35,12 @@ pub struct NetworkActor {
     active_subscriptions: HashMap<String, Instant>,
     /// Pending requests tracking
     pending_requests: HashMap<String, PendingRequest>,
+    /// Pending block requests tracking (Phase 4: Task 2.3)
+    pending_block_requests: HashMap<uuid::Uuid, BlockRequest>,
     /// SyncActor address for coordination
     sync_actor: Option<Addr<crate::actors_v2::network::SyncActor>>,
+    /// ChainActor address for AuxPoW forwarding (Phase 4: Integration Point 3b)
+    chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
     /// Network running state
     is_running: bool,
     /// Shutdown flag
@@ -48,6 +52,16 @@ struct PendingRequest {
     peer_id: String,
     request_time: Instant,
     request_type: String,
+}
+
+/// Block request tracking (Phase 4: Task 2.3)
+#[derive(Debug, Clone)]
+struct BlockRequest {
+    request_id: uuid::Uuid,
+    peer_ids: Vec<String>,
+    start_height: u64,
+    count: u32,
+    timestamp: Instant,
 }
 
 impl NetworkActor {
@@ -70,7 +84,9 @@ impl NetworkActor {
             peer_manager: PeerManager::new(),
             active_subscriptions: HashMap::new(),
             pending_requests: HashMap::new(),
+            pending_block_requests: HashMap::new(),
             sync_actor: None,
+            chain_actor: None,
             is_running: false,
             shutdown_requested: false,
         })
@@ -151,6 +167,41 @@ impl NetworkActor {
         tracing::info!("NetworkActor V2 stopped");
 
         Ok(())
+    }
+
+    /// Cleanup timed-out block requests (Phase 4: Task 7)
+    fn cleanup_timed_out_requests(&mut self) {
+        let now = Instant::now();
+        let timeout_threshold = Duration::from_secs(60);
+
+        self.pending_block_requests.retain(|request_id, request| {
+            let elapsed = now.duration_since(request.timestamp);
+
+            if elapsed > timeout_threshold {
+                tracing::warn!(
+                    request_id = %request_id,
+                    start_height = request.start_height,
+                    elapsed_secs = elapsed.as_secs(),
+                    "Removing timed-out block request"
+                );
+
+                // Penalize peers
+                for peer_id in &request.peer_ids {
+                    self.peer_manager.update_peer_reputation(peer_id, -5.0);
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Penalized peer for request timeout"
+                    );
+                }
+
+                // Record error metric
+                self.metrics.record_block_response_error();
+
+                false // Remove this request
+            } else {
+                true // Keep this request
+            }
+        });
     }
 
     /// Broadcast message to gossip network
@@ -418,6 +469,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                 ctx.spawn(network_start.into_actor(self));
 
                 self.is_running = true;
+
+                // Start periodic cleanup of timed-out requests
+                ctx.address().do_send(NetworkMessage::CleanupTimeouts);
+
                 Ok(NetworkResponse::Started)
             }
 
@@ -530,33 +585,354 @@ impl Handler<NetworkMessage> for NetworkActor {
 
             // Phase 4 messages
             NetworkMessage::BroadcastAuxPow { auxpow_data, correlation_id } => {
+                let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
+
                 tracing::debug!(
-                    correlation_id = ?correlation_id,
+                    correlation_id = %correlation_id,
                     data_len = auxpow_data.len(),
                     "Broadcasting AuxPoW to network"
                 );
 
-                let peer_count = self.peer_manager.get_connected_peers().len();
-                // TODO: Actual AuxPoW broadcast implementation
+                // Record metrics
+                self.metrics.record_auxpow_broadcast(auxpow_data.len());
 
-                Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
+                // Validate network is running
+                if !self.is_running {
+                    tracing::error!(correlation_id = %correlation_id, "Network not running");
+                    return Err(NetworkError::NotStarted);
+                }
+
+                // Check peer connectivity
+                let peer_count = self.peer_manager.get_connected_peers().len();
+                if peer_count == 0 {
+                    tracing::error!(correlation_id = %correlation_id, "No peers connected for AuxPoW broadcast");
+                    return Err(NetworkError::Connection("No peers connected".to_string()));
+                }
+
+                if peer_count < 3 {
+                    tracing::warn!(
+                        correlation_id = %correlation_id,
+                        peer_count = peer_count,
+                        "Low peer count for AuxPoW broadcast (recommended: >=3)"
+                    );
+                }
+
+                // Validate AuxPoW data format
+                if let Err(e) = serde_json::from_slice::<crate::block::AuxPowHeader>(&auxpow_data) {
+                    tracing::error!(
+                        correlation_id = %correlation_id,
+                        error = ?e,
+                        "Invalid AuxPoW data format"
+                    );
+                    return Err(NetworkError::Protocol(format!("Invalid AuxPoW format: {}", e)));
+                }
+
+                // Broadcast via gossipsub
+                match self.broadcast_message("alys-auxpow", auxpow_data, false) {
+                    Ok(_message_id) => {
+                        tracing::info!(
+                            correlation_id = %correlation_id,
+                            peer_count = peer_count,
+                            "Successfully broadcasted AuxPoW to network"
+                        );
+                        Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            correlation_id = %correlation_id,
+                            error = ?e,
+                            "Failed to broadcast AuxPoW"
+                        );
+                        Err(NetworkError::Protocol(format!("Broadcast failed: {}", e)))
+                    }
+                }
             }
 
             NetworkMessage::RequestBlocks { start_height, count, correlation_id } => {
+                let request_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
+
                 tracing::debug!(
-                    correlation_id = ?correlation_id,
+                    correlation_id = %request_id,
                     start_height = start_height,
                     count = count,
                     "Requesting blocks from network"
                 );
 
-                let peer_count = self.peer_manager.get_connected_peers().len();
-                let request_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
-                // TODO: Actual block request implementation
+                // Record metrics
+                self.metrics.record_block_request_sent();
 
-                Ok(NetworkResponse::BlocksRequested { peer_count, request_id })
+                // Validate network is running
+                if !self.is_running {
+                    tracing::error!(correlation_id = %request_id, "Network not running");
+                    return Err(NetworkError::NotStarted);
+                }
+
+                // Validate block range
+                if count == 0 || count > 100 {
+                    tracing::error!(
+                        correlation_id = %request_id,
+                        count = count,
+                        "Invalid block request count (must be 1-100)"
+                    );
+                    return Err(NetworkError::Protocol("Invalid block count: must be 1-100".to_string()));
+                }
+
+                // Check rate limiting (Phase 4: Task 2.9)
+                const MAX_CONCURRENT_REQUESTS: usize = 10;
+                if self.pending_block_requests.len() >= MAX_CONCURRENT_REQUESTS {
+                    tracing::warn!(
+                        correlation_id = %request_id,
+                        pending_count = self.pending_block_requests.len(),
+                        "Too many pending block requests"
+                    );
+                    return Err(NetworkError::Internal("Too many pending requests".to_string()));
+                }
+
+                // Select best peers for block requests (Phase 4: Task 2.2)
+                let selected_peers = self.peer_manager.select_peers_for_blocks(5);
+                if selected_peers.is_empty() {
+                    tracing::error!(
+                        correlation_id = %request_id,
+                        "No suitable peers available for block request"
+                    );
+                    return Err(NetworkError::Connection("No suitable peers available".to_string()));
+                }
+
+                tracing::info!(
+                    correlation_id = %request_id,
+                    peer_count = selected_peers.len(),
+                    start_height = start_height,
+                    count = count,
+                    "Selected peers for block request"
+                );
+
+                // Create and track request (Phase 4: Task 2.3)
+                let block_request = BlockRequest {
+                    request_id,
+                    peer_ids: selected_peers.clone(),
+                    start_height,
+                    count,
+                    timestamp: Instant::now(),
+                };
+                self.pending_block_requests.insert(request_id, block_request);
+
+                // Send requests to selected peers (Phase 4: Task 2.4)
+                // Note: Actual libp2p request-response implementation needed in AlysNetworkBehaviour
+                for peer_id in &selected_peers {
+                    tracing::debug!(
+                        correlation_id = %request_id,
+                        peer_id = %peer_id,
+                        "Sending block request to peer"
+                    );
+                    // TODO: Call behaviour.send_request() when implemented
+                }
+
+                Ok(NetworkResponse::BlocksRequested {
+                    peer_count: selected_peers.len(),
+                    request_id,
+                })
             }
 
+            NetworkMessage::HandleBlockResponse { blocks, request_id, peer_id, correlation_id } => {
+                let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
+
+                tracing::info!(
+                    correlation_id = %correlation_id,
+                    request_id = %request_id,
+                    peer_id = %peer_id,
+                    block_count = blocks.len(),
+                    "Received block response from peer"
+                );
+
+                // Look up pending request
+                let request = match self.pending_block_requests.remove(&request_id) {
+                    Some(req) => req,
+                    None => {
+                        tracing::warn!(
+                            correlation_id = %correlation_id,
+                            request_id = %request_id,
+                            "Received response for unknown or expired request"
+                        );
+                        self.metrics.record_block_response_error();
+                        return Err(NetworkError::Protocol("Unknown request ID".to_string()));
+                    }
+                };
+
+                // Validate response
+                if blocks.is_empty() {
+                    tracing::warn!(
+                        correlation_id = %correlation_id,
+                        request_id = %request_id,
+                        "Peer returned empty block response"
+                    );
+                    self.peer_manager.record_peer_failure(&peer_id);
+                    self.metrics.record_block_response_error();
+                    return Err(NetworkError::Protocol("Empty block response".to_string()));
+                }
+
+                if blocks.len() as u32 > request.count {
+                    tracing::error!(
+                        correlation_id = %correlation_id,
+                        request_id = %request_id,
+                        expected_count = request.count,
+                        actual_count = blocks.len(),
+                        "Peer returned more blocks than requested"
+                    );
+                    self.peer_manager.record_peer_failure(&peer_id);
+                    self.metrics.record_block_response_error();
+                    return Err(NetworkError::Protocol("Invalid block count".to_string()));
+                }
+
+                // Record metrics
+                let latency = request.timestamp.elapsed();
+                self.metrics.record_block_response(latency);
+                self.peer_manager.record_peer_success(&peer_id);
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    request_id = %request_id,
+                    latency_ms = latency.as_millis(),
+                    "Block response latency recorded"
+                );
+
+                // Forward to SyncActor
+                if let Some(sync_actor) = self.sync_actor.clone() {
+                    let msg = crate::actors_v2::network::SyncMessage::HandleBlockResponse {
+                        blocks,
+                        request_id: request_id.to_string(),
+                    };
+
+                    tokio::spawn(async move {
+                        match sync_actor.send(msg).await {
+                            Ok(Ok(_)) => {
+                                tracing::info!(
+                                    correlation_id = %correlation_id,
+                                    "Successfully forwarded blocks to SyncActor"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                tracing::error!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "SyncActor rejected blocks"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "Failed to communicate with SyncActor"
+                                );
+                            }
+                        }
+                    });
+
+                    Ok(NetworkResponse::Started)
+                } else {
+                    tracing::error!(
+                        correlation_id = %correlation_id,
+                        "SyncActor not available for block forwarding"
+                    );
+                    Err(NetworkError::Internal("SyncActor not available".to_string()))
+                }
+            }
+
+            NetworkMessage::SetChainActor { addr } => {
+                self.chain_actor = Some(addr);
+                tracing::info!("ChainActor address set for NetworkActor AuxPoW forwarding");
+                Ok(NetworkResponse::Started)
+            }
+            NetworkMessage::HandleCompletedAuxPow { auxpow_data, peer_id, correlation_id } => {
+                let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
+
+                tracing::info!(
+                    correlation_id = %correlation_id,
+                    peer_id = %peer_id,
+                    data_len = auxpow_data.len(),
+                    "Received completed AuxPoW from miner"
+                );
+
+                // Record metrics
+                self.metrics.record_auxpow_received();
+
+                // Validate and deserialize AuxPoW header
+                let auxpow_header = match serde_json::from_slice::<crate::block::AuxPowHeader>(&auxpow_data) {
+                    Ok(header) => header,
+                    Err(e) => {
+                        tracing::error!(
+                            correlation_id = %correlation_id,
+                            peer_id = %peer_id,
+                            error = ?e,
+                            "Invalid AuxPoW data from miner"
+                        );
+                        return Err(NetworkError::Protocol(format!("Invalid AuxPoW: {}", e)));
+                    }
+                };
+
+                // Validate that AuxPoW field is populated (miners must complete it)
+                if auxpow_header.auxpow.is_none() {
+                    tracing::error!(
+                        correlation_id = %correlation_id,
+                        peer_id = %peer_id,
+                        "AuxPoW header missing completed work"
+                    );
+                    return Err(NetworkError::Protocol("Incomplete AuxPoW".to_string()));
+                }
+
+                // Forward to ChainActor for queuing (spawn async task)
+                if let Some(chain_actor) = self.chain_actor.clone() {
+                    let peer_id_clone = peer_id.clone();
+
+                    // Spawn async task to forward to ChainActor
+                    tokio::spawn(async move {
+                        let msg = crate::actors_v2::chain::messages::ChainMessage::QueueAuxPow {
+                            auxpow_header,
+                            correlation_id: Some(correlation_id),
+                        };
+
+                        match chain_actor.send(msg).await {
+                            Ok(Ok(_)) => {
+                                tracing::info!(
+                                    correlation_id = %correlation_id,
+                                    peer_id = %peer_id_clone,
+                                    "Successfully queued completed AuxPoW"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                tracing::error!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "ChainActor rejected AuxPoW"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "Failed to communicate with ChainActor"
+                                );
+                            }
+                        }
+                    });
+
+                    // Update peer reputation immediately - they provided useful work
+                    self.peer_manager.record_peer_success(&peer_id);
+
+                    tracing::info!(
+                        correlation_id = %correlation_id,
+                        peer_id = %peer_id,
+                        "AuxPoW accepted and forwarding to ChainActor"
+                    );
+
+                    Ok(NetworkResponse::Started)
+                } else {
+                    tracing::error!(
+                        correlation_id = %correlation_id,
+                        "ChainActor not available for AuxPoW queueing"
+                    );
+                    Err(NetworkError::Internal("ChainActor not available".to_string()))
+                }
+            }
             NetworkMessage::HealthCheck { correlation_id } => {
                 tracing::debug!(
                     correlation_id = ?correlation_id,
@@ -578,6 +954,19 @@ impl Handler<NetworkMessage> for NetworkActor {
                 };
 
                 Ok(NetworkResponse::Healthy { is_healthy, connected_peers, issues })
+            }
+
+            NetworkMessage::CleanupTimeouts => {
+                tracing::debug!("Running periodic block request timeout cleanup");
+
+                self.cleanup_timed_out_requests();
+
+                // Schedule next cleanup in 30 seconds
+                ctx.run_later(Duration::from_secs(30), |_act, ctx| {
+                    ctx.address().do_send(NetworkMessage::CleanupTimeouts);
+                });
+
+                Ok(NetworkResponse::Started)
             }
         }
     }

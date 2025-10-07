@@ -12,6 +12,7 @@ pub enum GossipTopic {
     Blocks,
     Transactions,
     PeerAnnouncements,
+    AuxPow, // Phase 4: AuxPoW mining coordination
 }
 
 impl GossipTopic {
@@ -21,6 +22,7 @@ impl GossipTopic {
             GossipTopic::Blocks => IdentTopic::new("alys-blocks"),
             GossipTopic::Transactions => IdentTopic::new("alys-transactions"),
             GossipTopic::PeerAnnouncements => IdentTopic::new("alys-peers"),
+            GossipTopic::AuxPow => IdentTopic::new("alys-auxpow"),
         }
     }
 
@@ -30,6 +32,7 @@ impl GossipTopic {
             GossipTopic::Blocks => "alys-blocks",
             GossipTopic::Transactions => "alys-transactions",
             GossipTopic::PeerAnnouncements => "alys-peers",
+            GossipTopic::AuxPow => "alys-auxpow",
         }
     }
 
@@ -39,6 +42,7 @@ impl GossipTopic {
             "alys-blocks" => Some(GossipTopic::Blocks),
             "alys-transactions" => Some(GossipTopic::Transactions),
             "alys-peers" => Some(GossipTopic::PeerAnnouncements),
+            "alys-auxpow" => Some(GossipTopic::AuxPow),
             _ => None,
         }
     }
@@ -49,6 +53,7 @@ impl GossipTopic {
             GossipTopic::Blocks,
             GossipTopic::Transactions,
             GossipTopic::PeerAnnouncements,
+            GossipTopic::AuxPow,
         ]
     }
 }
