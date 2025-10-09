@@ -18,10 +18,10 @@ use super::{
     },
 };
 
-use crate::block::{SignedConsensusBlock};
+use crate::{block::SignedConsensusBlock, store::BlockRef};
 use crate::auxpow::AuxPow;
 use bridge::PegInInfo;
-use lighthouse_wrapper::types::MainnetEthSpec;
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 use ssz_types::VariableList;
 use crate::actors_v2::common::serialization::{serialize_block, calculate_block_hash};
 
@@ -80,6 +80,7 @@ impl Handler<ChainMessage> for ChainActor {
                         slot = slot,
                         timestamp_secs = timestamp.as_secs(),
                         correlation_id = %correlation_id,
+                        execution_parent_hash = ?state_head.clone().unwrap_or_else(|| BlockRef { hash: Hash256::zero(), height: 0 }).hash,
                         "Starting complete block production pipeline"
                     );
 
@@ -96,15 +97,15 @@ impl Handler<ChainMessage> for ChainActor {
                                         Ok(Some(head_ref)) => {
                                             info!(
                                                 correlation_id = %correlation_id,
-                                                parent_hash = %head_ref.hash,
+                                                parent_hash = ?head_ref.execution_hash,
                                                 parent_height = head_ref.number,
                                                 "Retrieved chain head for block production"
                                             );
-                                            // Convert Hash256 to ExecutionBlockHash
-                                            lighthouse_wrapper::types::ExecutionBlockHash::from_root(head_ref.hash)
+                                            // Use execution hash for Geth (CRITICAL FIX)
+                                            head_ref.execution_hash
                                         }
                                         Ok(None) => {
-                                            info!(correlation_id = %correlation_id, "No chain head found - producing genesis block");
+                                            info!(correlation_id = %correlation_id, "No chain head found - producing genesis block (parent_hash will be None for Engine)");
                                             lighthouse_wrapper::types::ExecutionBlockHash::zero()
                                         }
                                         Err(e) => {
@@ -163,10 +164,17 @@ impl Handler<ChainMessage> for ChainActor {
                             .collect();
 
                         // Step 5: Build execution payload via EngineActor
+                        // Convert zero hash to None for genesis (matches V0 behavior)
+                        let parent_hash_for_engine = if parent_hash.into_root().is_zero() {
+                            None
+                        } else {
+                            Some(parent_hash)
+                        };
+
                         let execution_payload = if let Some(ref engine_actor) = engine_actor {
                             let msg = crate::actors_v2::engine::EngineMessage::BuildPayload {
                                 timestamp,
-                                parent_hash: Some(parent_hash),
+                                parent_hash: parent_hash_for_engine,
                                 add_balances,
                                 correlation_id: Some(correlation_id),
                             };
@@ -306,7 +314,51 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                        // Step 10: Broadcast block via NetworkActor (if available)
+                        // Step 10: Commit block to execution engine (CRITICAL for block #2+)
+                        if let Some(ref engine_actor) = engine_actor {
+                            let commit_msg = crate::actors_v2::engine::EngineMessage::CommitBlock {
+                                execution_payload: lighthouse_wrapper::types::ExecutionPayload::Capella(signed_block.message.execution_payload.clone()),
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match engine_actor.send(commit_msg).await {
+                                Ok(engine_result) => {
+                                    match engine_result {
+                                        Ok(crate::actors_v2::engine::EngineResponse::BlockCommitted { block_hash, commit_time }) => {
+                                            info!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = ?block_hash,
+                                                commit_time_ms = commit_time.as_millis(),
+                                                "Successfully committed block to execution engine"
+                                            );
+                                        }
+                                        Ok(other_response) => {
+                                            warn!(correlation_id = %correlation_id, response = ?other_response, "Unexpected response from EngineActor commit");
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                correlation_id = %correlation_id,
+                                                error = ?e,
+                                                "Failed to commit block to execution engine - block stored but Geth not updated"
+                                            );
+                                            // Non-fatal: block already stored in consensus layer
+                                            // But this will cause subsequent blocks to fail with PayloadIdUnavailable
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Communication error with EngineActor during commit"
+                                    );
+                                }
+                            }
+                        } else {
+                            warn!(correlation_id = %correlation_id, "EngineActor not available for block commitment - subsequent blocks may fail");
+                        }
+
+                        // Step 11: Broadcast block via NetworkActor (if available)
                         if let Some(ref network_actor) = network_actor {
                             let block_data = match crate::actors_v2::common::serialization::serialize_block_for_network(&signed_block) {
                                 Ok(data) => data,
@@ -582,6 +634,7 @@ impl Handler<ChainMessage> for ChainActor {
                                 let new_head = crate::actors_v2::storage::actor::BlockRef {
                                     hash: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
                                     number: block_height,
+                                    execution_hash: block.message.execution_payload.block_hash,
                                 };
 
                                 let update_head_msg = crate::actors_v2::storage::messages::UpdateChainHeadMessage {
