@@ -101,7 +101,7 @@ impl StorageIndexing {
 
     /// Index a block and its transactions
     pub async fn index_block(&mut self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
-        debug!("Indexing block: {} at height: {}", block.message.block_hash().to_block_hash(), block.message.slot);
+        debug!("Indexing block: {} at height: {}", block.message.block_hash().to_block_hash(), block.message.execution_payload.block_number);
 
         let mut batch = rocksdb::WriteBatch::default();
 
@@ -110,7 +110,7 @@ impl StorageIndexing {
 
         // For now, we'll simulate transaction indexing since we don't have actual transactions in ConsensusBlock
         // In a real implementation, you would iterate over block.body.transactions
-        self.simulate_transaction_indexing(&mut batch, block)?;
+        // self.simulate_transaction_indexing(&mut batch, block)?;
 
         // Write batch to database
         {
@@ -121,7 +121,7 @@ impl StorageIndexing {
 
         // Update statistics
         self.stats.blocks_indexed += 1;
-        self.stats.last_indexed_block = Some(block.message.slot);
+        self.stats.last_indexed_block = Some(block.message.execution_payload.block_number);
 
         debug!("Successfully indexed block: {} with {} simulated transactions", block.message.block_hash().to_block_hash(), 1);
         Ok(())
@@ -130,7 +130,7 @@ impl StorageIndexing {
     /// Index block height mapping
     fn index_block_height(&self, batch: &mut rocksdb::WriteBatch, block: &AlysConsensusBlock) -> Result<(), StorageError> {
         // Create height -> block_hash mapping for efficient height lookups
-        let height_key = format!("height:{}", block.message.slot);
+        let height_key = format!("height:{}", block.message.execution_payload.block_number);
         let block_hash = block.message.block_hash().to_block_hash();
         let block_hash_value = block_hash.as_bytes();
 
@@ -147,11 +147,11 @@ impl StorageIndexing {
         // 4. Index transaction logs and events
 
         // For now, create a placeholder transaction index entry
-        let placeholder_tx_hash = H256::from_low_u64_be(block.message.slot);
+        let placeholder_tx_hash = H256::from_low_u64_be(block.message.execution_payload.block_number);
         let tx_index = TransactionIndex {
             transaction_hash: placeholder_tx_hash,
             block_hash: block.message.block_hash().to_block_hash(),
-            block_number: block.message.slot,
+            block_number: block.message.execution_payload.block_number,
             transaction_index: 0,
             from_address: Address::zero(),
             to_address: Some(Address::zero()),

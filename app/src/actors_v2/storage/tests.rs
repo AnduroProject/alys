@@ -98,6 +98,7 @@ mod tests {
         let test_head = BlockRef {
             hash: Hash256::from_low_u64_be(42),
             number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
         };
 
         let put_result = storage.database.put_chain_head(&test_head).await;

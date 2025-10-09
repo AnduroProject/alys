@@ -37,8 +37,12 @@ pub enum StorageError {
 /// Block reference for chain head tracking
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockRef {
+    /// Consensus layer block hash (signed block root)
     pub hash: Hash256,
+    /// Block height
     pub number: u64,
+    /// Execution layer block hash (for Geth operations)
+    pub execution_hash: lighthouse_wrapper::types::ExecutionBlockHash,
 }
 
 /// Signed consensus block type alias for MainnetEthSpec - matches V0 storage pattern
@@ -208,7 +212,7 @@ impl StorageActor {
     /// Store a block with caching and persistence
     pub async fn store_block(&mut self, block: AlysConsensusBlock, canonical: bool) -> Result<(), StorageError> {
         let block_hash = block.message.block_hash().to_block_hash();
-        let height = block.message.slot;
+        let height = block.message.execution_payload.block_number;
 
         debug!("Storing block: {} at height: {} (canonical: {})", block_hash, height, canonical);
 
@@ -231,6 +235,7 @@ impl StorageActor {
             let block_ref = BlockRef {
                 hash: block_hash,
                 number: height,
+                execution_hash: block.message.execution_payload.block_hash,
             };
             self.database.put_chain_head(&block_ref).await?;
         }

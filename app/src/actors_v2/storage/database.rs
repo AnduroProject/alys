@@ -175,11 +175,11 @@ impl DatabaseManager {
         let height_cf = db.cf_handle(column_families::BLOCK_HEIGHTS)
             .ok_or_else(|| StorageError::Database("BLOCK_HEIGHTS column family not found".to_string()))?;
 
-        let height_key = block.message.slot.to_be_bytes();
+        let height_key = block.message.execution_payload.block_number.to_be_bytes();
         db.put_cf(&height_cf, &height_key, key)
             .map_err(|e| StorageError::Database(format!("Failed to store block height index: {}", e)))?;
 
-        debug!("Stored block {} at height {}", block.message.block_hash().to_block_hash(), block.message.slot);
+        debug!("Stored block {} at height {}", block.message.block_hash().to_block_hash(), block.message.execution_payload.block_number);
         Ok(())
     }
 
