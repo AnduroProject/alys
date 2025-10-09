@@ -59,7 +59,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
         chain_id: 121212,
         max_blocks_without_pow: 50000,
         required_btc_txn_confirmations: 144,
-        bitcoin_start_height: 95800, // TODO: change when deploying new testnet4
+        bitcoin_start_height: 0, // 95800, // TODO: change when deploying new testnet4
         retarget_params: BitcoinConsensusParams {
             pow_no_retargeting: false,
             pow_limit: 553713663,

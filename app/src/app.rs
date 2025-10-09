@@ -24,6 +24,11 @@ use std::time::Duration;
 use std::{future::Future, sync::Arc};
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
+use tokio::task::LocalSet;
+
+// V2 RPC imports
+use actix::Actor;
+use crate::actors_v2::rpc::{RpcActor, RpcConfig, StartRpcServer};
 
 #[inline]
 pub fn run() -> Result<()> {
@@ -189,6 +194,15 @@ impl App {
     }
 
     async fn execute(self) -> Result<()> {
+        // Clone values needed for V2 actor system BEFORE V0 takes ownership
+        let v2_db_path = self.db_path.clone();
+        let v2_geth_url = self.geth_url.clone();
+        let v2_geth_execution_url = self.geth_execution_url.clone();
+        let v2_jwt_secret = self.jwt_secret;
+        let v2_p2p_listen_addr = self.p2p_listen_addr.clone();
+        let v2_p2p_port = self.p2p_port;
+        let v2_remote_bootnode = self.remote_bootnode.clone();
+
         let disk_store = Storage::new_disk(self.db_path);
 
         info!("Head: {:?}", disk_store.get_head());
@@ -236,6 +250,7 @@ impl App {
 
         let wallet_path = self
             .wallet_path
+            .clone()
             .unwrap_or(format!("{DEFAULT_ROOT_DIR}/wallet"));
         let bitcoin_wallet = BitcoinWallet::new(&wallet_path, bitcoin_federation.clone())?;
         let bitcoin_signature_collector =
@@ -274,6 +289,24 @@ impl App {
             maybe_aura_signer.clone(),
         );
 
+        // Clone values for V2 RPC before V0 Chain takes ownership
+        let v2_bitcoin_rpc_url = self.bitcoin_rpc_url.clone();
+        let v2_bitcoin_rpc_user = self.bitcoin_rpc_user.clone();
+        let v2_bitcoin_rpc_pass = self.bitcoin_rpc_pass.clone();
+        let v2_bitcoin_addresses = bitcoin_addresses.clone();
+        let v2_bitcoin_federation = bitcoin_federation.clone();
+        let v2_authorities = authorities.clone();
+        let v2_maybe_aura_signer = maybe_aura_signer.clone();
+        let v2_maybe_bitcoin_sk = self.bitcoin_secret_key;
+        let v2_retarget_params = chain_spec.retarget_params.clone();
+        let v2_not_validator = self.not_validator;
+        let v2_is_validator = chain_spec.is_validator;
+        let v2_federation = chain_spec.federation.clone();
+        let v2_max_blocks_without_pow = chain_spec.max_blocks_without_pow;
+        let v2_required_confirmations = chain_spec.required_btc_txn_confirmations;
+        let v2_slot_duration = slot_duration;
+        let v2_wallet_path = format!("{DEFAULT_ROOT_DIR}/wallet_v2"); // wallet_path.clone();
+
         // TODO: We probably just want to persist the chain_spec struct
         let chain = Arc::new(Chain::new(
             engine,
@@ -307,7 +340,7 @@ impl App {
         // Initialize the block hash cache
         chain.init_block_hash_cache().await?;
 
-        // start json-rpc v1 server
+        // start json-rpc v0 server
         crate::rpc::run_server(
             chain.clone(),
             bitcoin_federation.taproot_address,
@@ -315,6 +348,227 @@ impl App {
             self.rpc_port,
         )
         .await;
+
+        // Start V2 JSON-RPC server on port 3001
+        info!("Starting V2 RPC server on port 3001 (sharing state with V0 Chain)...");
+
+        // Spawn V2 RPC initialization in LocalSet context (required for Actix actors)
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async move {
+                let local = tokio::task::LocalSet::new();
+                local.run_until(async move {
+                    info!("🚀 Starting V2 Actor System initialization...");
+
+                    // Clone values for slot worker before Aura consumes them
+                    let v2_authorities_for_slot_worker = v2_authorities.clone();
+                    let v2_maybe_aura_signer_for_slot_worker = v2_maybe_aura_signer.clone();
+
+                    // Create V2 Aura (separate instance for V2 consensus)
+                    let v2_aura = Aura::new(v2_authorities, v2_slot_duration, v2_maybe_aura_signer);
+
+            // STATE SHARING STRATEGY:
+            // V0 Chain owns Bridge/Wallet directly (not Arc-wrapped)
+            // V2 ChainState expects Arc<RwLock<>> wrappers for async access
+            //
+            // Current approach: Create separate instances but share filesystem state
+            // - Bridge: Separate instances, synced via Bitcoin blockchain state
+            // - Wallet: SAME wallet file (disk-level sharing)
+            // - SignatureCollector: Separate instances (stateless, deterministic)
+            //
+            // TODO: Future optimization - wrap V0 Chain's components in Arc<RwLock<>>
+            // to enable true in-memory state sharing (requires V0 Chain refactor)
+
+            // Create V2 Bridge (separate instance, eventually consistent via Bitcoin)
+            let shared_bridge = Bridge::new(
+                BitcoinCore::new(&v2_bitcoin_rpc_url.expect("RPC URL"),
+                               v2_bitcoin_rpc_user.expect("RPC user"),
+                               v2_bitcoin_rpc_pass.expect("RPC pass")),
+                v2_bitcoin_addresses,
+                v2_required_confirmations,
+            );
+
+            // Create V2 Wallet using SAME filesystem path as V0 (disk-level sharing)
+            let shared_wallet = BitcoinWallet::new(
+                &v2_wallet_path,  // SAME path as V0 - disk-level state sharing
+                v2_bitcoin_federation.clone(),
+            )
+            .expect("V2 wallet creation");
+
+            let shared_sig_collector = BitcoinSignatureCollector::new(v2_bitcoin_federation);
+            let shared_signer = v2_maybe_bitcoin_sk.map(BitcoinSigner::new);
+
+            let v2_state = crate::actors_v2::chain::state::ChainState::new(
+                v2_aura,
+                v2_federation.clone(),
+                shared_bridge,
+                shared_wallet,
+                shared_sig_collector,
+                shared_signer,
+                v2_retarget_params,
+                v2_is_validator && !v2_not_validator,
+                v2_max_blocks_without_pow,
+                None,
+            );
+
+            let v2_config = crate::actors_v2::chain::ChainConfig {
+                is_validator: v2_is_validator && !v2_not_validator,
+                validator_address: None,
+                federation: v2_federation,
+                max_blocks_without_pow: v2_max_blocks_without_pow,
+                block_production_timeout: Duration::from_secs(30),
+                block_validation_timeout: Duration::from_secs(10),
+                enable_auxpow: true,
+                enable_peg_operations: true,
+                retarget_params: Some(crate::actors_v2::chain::config::BitcoinConsensusParams {
+                    target_spacing: Duration::from_secs(600),
+                    target_timespan: Duration::from_secs(1209600),
+                    retarget_interval: 2016,
+                    max_target: 0x1d00ffff,
+                }),
+                block_hash_cache_size: Some(1000),
+                chain_id: 1337,
+            };
+
+            // 1. Initialize StorageActor V2
+            info!("📦 Initializing StorageActor V2...");
+            let storage_config = crate::actors_v2::storage::StorageConfig {
+                database: crate::actors_v2::storage::database::DatabaseConfig {
+                    main_path: v2_db_path.unwrap_or_else(|| format!("{}/v2", crate::store::DEFAULT_ROOT_DIR)),
+                    archive_path: None,
+                    cache_size_mb: 256,
+                    write_buffer_size_mb: 64,
+                    max_open_files: 1000,
+                    compression_enabled: true,
+                },
+                cache: crate::actors_v2::storage::cache::CacheConfig {
+                    max_blocks: 1000,
+                    max_state_entries: 10000,
+                    max_receipts: 5000,
+                    state_ttl: Duration::from_secs(300),
+                    receipt_ttl: Duration::from_secs(300),
+                    enable_warming: false,
+                },
+                write_batch_size: 100,
+                sync_interval: Duration::from_millis(100),
+                maintenance_interval: Duration::from_secs(300),
+                enable_auto_compaction: true,
+                metrics_reporting_interval: Duration::from_secs(60),
+            };
+            let storage_actor = crate::actors_v2::storage::StorageActor::new(storage_config)
+                .await
+                .expect("Failed to create StorageActor V2")
+                .start();
+            info!("✓ StorageActor V2 started");
+
+            // 2. Initialize EngineActor V2
+            info!("⚙️  Initializing EngineActor V2...");
+            let v2_http_engine_json_rpc = new_http_engine_json_rpc(
+                v2_geth_url,
+                JwtKey::from_slice(&v2_jwt_secret).unwrap()
+            );
+            let v2_public_execution_json_rpc = new_http_public_execution_json_rpc(v2_geth_execution_url);
+            let v2_engine = Engine::new(v2_http_engine_json_rpc, v2_public_execution_json_rpc);
+            let engine_actor = crate::actors_v2::engine::EngineActor::new(v2_engine).start();
+            info!("✓ EngineActor V2 started");
+
+            // 3. Initialize NetworkActor V2
+            info!("🌐 Initializing NetworkActor V2...");
+            let network_config = crate::actors_v2::network::NetworkConfig {
+                listen_addresses: vec![
+                    format!("/ip4/{}/tcp/{}", v2_p2p_listen_addr, if v2_p2p_port == 0 { 0 } else { v2_p2p_port + 1000 })
+                ],
+                bootstrap_peers: v2_remote_bootnode.map(|b| vec![b]).unwrap_or_default(),
+                max_connections: 100,
+                connection_timeout: Duration::from_secs(30),
+                gossip_topics: vec![
+                    "alys-v2-blocks".to_string(),
+                    "alys-v2-transactions".to_string(),
+                    "alys-v2-auxpow".to_string(),
+                ],
+                message_size_limit: 4 * 1024 * 1024, // 4MB
+                discovery_interval: Duration::from_secs(60),
+            };
+            let network_actor = crate::actors_v2::network::NetworkActor::new(network_config)
+                .expect("Failed to create NetworkActor V2")
+                .start();
+            info!("✓ NetworkActor V2 started");
+
+            // 4. Initialize SyncActor V2
+            info!("🔄 Initializing SyncActor V2...");
+            let sync_config = crate::actors_v2::network::SyncConfig {
+                max_blocks_per_request: 128,
+                sync_timeout: Duration::from_secs(30),
+                max_concurrent_requests: 4,
+                block_validation_timeout: Duration::from_secs(10),
+                max_sync_peers: 8,
+            };
+            let sync_actor = crate::actors_v2::network::SyncActor::new(sync_config)
+                .expect("Failed to create SyncActor V2")
+                .start();
+            info!("✓ SyncActor V2 started");
+
+            // 5. Initialize ChainActor V2 and wire up dependencies
+            info!("⛓️  Initializing ChainActor V2...");
+            let mut chain_actor = crate::actors_v2::chain::ChainActor::new(v2_config, v2_state);
+
+            // Wire actor dependencies
+            chain_actor.set_storage_actor(storage_actor.clone());
+            chain_actor.set_network_actors(network_actor.clone(), sync_actor.clone());
+            chain_actor.set_engine_actor(engine_actor.clone());
+
+            let chain_actor_addr = chain_actor.start();
+            info!("✓ ChainActor V2 started with all dependencies wired");
+
+            // Clone chain_actor_addr for slot worker (before RPC consumes it)
+            let chain_actor_addr_for_slot_worker = chain_actor_addr.clone();
+
+            // 6. Initialize RPC server
+            info!("🔌 Starting V2 RPC server on port 3001...");
+            let rpc_config = RpcConfig {
+                bind_address: "127.0.0.1:3001".parse().expect("Valid address"),
+                request_timeout: Duration::from_secs(30),
+                enable_logging: true,
+                enable_metrics: true,
+            };
+
+            let rpc_actor = RpcActor::new(rpc_config, chain_actor_addr).start();
+
+            match rpc_actor.send(StartRpcServer).await {
+                Ok(Ok(())) => info!("✓ V2 RPC server started successfully on port 3001"),
+                Ok(Err(e)) => error!("✗ V2 RPC server failed to start: {:?}", e),
+                Err(e) => error!("✗ V2 RPC actor mailbox error: {:?}", e),
+            }
+
+            info!("🎉 V2 Actor System fully initialized and operational!");
+
+            // 7. Start V2 Aura slot worker (if validator)
+            if v2_is_validator && !v2_not_validator {
+                info!("⏰ Starting V2 Aura slot worker...");
+
+                tokio::spawn(async move {
+                    crate::actors_v2::slot_worker::AuraSlotWorkerV2::new(
+                        Duration::from_millis(v2_slot_duration),
+                        v2_authorities_for_slot_worker,
+                        v2_maybe_aura_signer_for_slot_worker,
+                        chain_actor_addr_for_slot_worker,
+                    )
+                    .start_slot_worker()
+                    .await;
+                });
+
+                info!("✓ V2 Aura slot worker started successfully");
+            } else {
+                info!("ℹ️  V2 Aura slot worker not started (not configured as validator)");
+            }
+
+                    // Keep actors alive - this task runs indefinitely
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    }
+                }).await;
+            });
+        });
 
         crate::metrics::start_server(self.metrics_port).await;
 
