@@ -116,7 +116,7 @@ impl ChainTestHarness {
         self,
         is_validator: bool,
         max_blocks_without_pow: u64,
-        head: Option<crate::store::BlockRef>,
+        head: Option<crate::actors_v2::storage::actor::BlockRef>,
     ) -> crate::actors_v2::chain::ChainState {
         use crate::actors_v2::chain::ChainState;
         ChainState::new(

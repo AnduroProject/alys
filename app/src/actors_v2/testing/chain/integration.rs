@@ -7,13 +7,14 @@ mod tests {
     use std::time::Duration;
     use ethereum_types::{H256, U256};
     use bitcoin::hashes::Hash;
+    use lighthouse_wrapper::types::ExecutionBlockHash;
     use std::str::FromStr;
 
     use crate::actors_v2::{
         chain::{ChainActor, messages::*},
         testing::chain::{fixtures::*, ChainTestHarness},
     };
-    use crate::store::BlockRef;
+    use crate::actors_v2::storage::actor::BlockRef;
 
     #[tokio::test]
     async fn test_chain_actor_basic_instantiation() {
@@ -603,7 +604,8 @@ mod tests {
     async fn test_chain_state_transitions() {
         // Test ChainState state transitions and persistence
         use crate::actors_v2::chain::state::SyncStatus;
-        use crate::store::BlockRef;
+        use crate::actors_v2::storage::actor::BlockRef;
+        use lighthouse_wrapper::types::ExecutionBlockHash;
 
         // Create test harness to get initial state components
         let harness = ChainTestHarness::validator().await
@@ -627,7 +629,8 @@ mod tests {
         // Test head update transition
         let block_ref = BlockRef {
             hash: H256::from_low_u64_be(42),
-            height: 100,
+            number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
         };
         state.update_head(block_ref.clone());
         assert_eq!(state.get_height(), 100);
@@ -737,7 +740,8 @@ mod tests {
         // Test state modification through actor
         let block_ref = BlockRef {
             hash: H256::from_low_u64_be(123),
-            height: 50,
+            number: 50,
+            execution_hash: ExecutionBlockHash::zero(),
         };
         actor.state.update_head(block_ref);
         assert_eq!(actor.state.get_height(), 50);
@@ -1038,7 +1042,8 @@ mod tests {
             let mut s = state2.lock().await;
             let block_ref = BlockRef {
                 hash: H256::from_low_u64_be(123),
-                height: 100,
+                number: 100,
+                execution_hash: ExecutionBlockHash::zero(),
             };
             s.update_head(block_ref);
         });
@@ -1122,7 +1127,8 @@ mod tests {
         // Update state and record activity again
         let block_ref = BlockRef {
             hash: H256::from_low_u64_be(42),
-            height: 100,
+            number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
         };
         actor.state.update_head(block_ref);
         actor.record_activity();
@@ -1301,7 +1307,8 @@ mod tests {
         // Update state through actor and verify consistency
         let block_ref = BlockRef {
             hash: H256::from_low_u64_be(100),
-            height: 500,
+            number: 500,
+            execution_hash: ExecutionBlockHash::zero(),
         };
         actor.state.update_head(block_ref.clone());
         actor.record_activity();

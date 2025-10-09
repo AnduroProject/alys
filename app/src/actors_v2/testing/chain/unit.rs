@@ -5,6 +5,7 @@
 #[cfg(test)]
 mod tests {
     use bitcoin::hashes::Hash;
+    use lighthouse_wrapper::types::ExecutionBlockHash;
     use crate::actors_v2::testing::chain::fixtures::*;
 
     #[tokio::test]
@@ -80,7 +81,8 @@ mod tests {
     async fn test_chain_state_height_methods() {
         // Test height-related methods
         use crate::actors_v2::testing::chain::ChainTestHarness;
-        use crate::store::BlockRef;
+        use crate::actors_v2::storage::actor::BlockRef;
+        use lighthouse_wrapper::types::ExecutionBlockHash;
         use ethereum_types::H256;
 
         let harness = ChainTestHarness::validator().await
@@ -94,13 +96,13 @@ mod tests {
         assert_eq!(state.get_height(), 0);
 
         // Test height updates
-        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), height: 100 };
+        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), number: 100, execution_hash: ExecutionBlockHash::zero() };
         state.update_head(block_ref_1.clone());
         assert_eq!(state.get_height(), 100);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(1)));
         assert!(state.last_block_time.is_some());
 
-        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), height: 200 };
+        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), number: 200, execution_hash: ExecutionBlockHash::zero() };
         state.update_head(block_ref_2.clone());
         assert_eq!(state.get_height(), 200);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
@@ -263,7 +265,7 @@ mod tests {
     async fn test_chain_state_edge_cases() {
         // Test edge cases and boundary conditions
         use crate::actors_v2::testing::chain::ChainTestHarness;
-        use crate::store::BlockRef;
+        use crate::actors_v2::storage::actor::BlockRef;
         use ethereum_types::H256;
 
         let harness = ChainTestHarness::validator().await
@@ -286,8 +288,8 @@ mod tests {
         assert!(!state.needs_auxpow());
 
         // Test head updates with same height
-        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), height: 100 };
-        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), height: 100 };
+        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), number: 100, execution_hash: ExecutionBlockHash::zero() };
+        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), number: 100, execution_hash: ExecutionBlockHash::zero() };
 
         state.update_head(block_ref_1.clone());
         assert_eq!(state.get_height(), 100);
@@ -298,7 +300,7 @@ mod tests {
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
 
         // Test decreasing height (reorg simulation)
-        let block_ref_3 = BlockRef { hash: H256::from_low_u64_be(3), height: 50 };
+        let block_ref_3 = BlockRef { hash: H256::from_low_u64_be(3), number: 50, execution_hash: ExecutionBlockHash::zero() };
         state.update_head(block_ref_3.clone());
         assert_eq!(state.get_height(), 50);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(3)));

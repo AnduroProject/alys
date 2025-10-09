@@ -12,7 +12,7 @@ use ethereum_types::{Address, H256};
 use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::block::{AuxPowHeader};
 use crate::block_hash_cache::BlockHashCache;
-use crate::store::BlockRef;
+use crate::actors_v2::storage::actor::BlockRef;
 use bridge::{Bridge, PegInInfo, BitcoinSignatureCollector, BitcoinSigner};
 use crate::aura::Aura;
 
@@ -171,11 +171,11 @@ impl ChainState {
 
     /// Get current height
     pub fn get_height(&self) -> u64 {
-        self.head.as_ref().map(|h| h.height).unwrap_or(0)
+        self.head.as_ref().map(|h| h.number).unwrap_or(0)
     }
 
     /// Get head hash
-    pub fn get_head_hash(&self) -> Option<H256> {
+    pub fn get_head_hash(&self) -> Option<lighthouse_wrapper::types::Hash256> {
         self.head.as_ref().map(|h| h.hash)
     }
 

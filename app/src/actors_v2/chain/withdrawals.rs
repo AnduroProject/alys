@@ -28,7 +28,7 @@ pub async fn collect_withdrawals_standalone(
     storage_actor: Option<&actix::Addr<crate::actors_v2::storage::StorageActor>>,
     validator_address: Option<ethereum_types::Address>,
     federation: &[ethereum_types::Address],
-    head: &Option<crate::store::BlockRef>,
+    head: &Option<crate::actors_v2::storage::actor::BlockRef>,
 ) -> Result<WithdrawalCollection, ChainError> {
     let mut withdrawals = Vec::new();
     let mut pegin_count = 0;
@@ -94,7 +94,7 @@ pub async fn collect_withdrawals_standalone(
 /// Standalone fee calculation function
 async fn calculate_accumulated_fees_standalone(
     storage_actor: Option<&actix::Addr<crate::actors_v2::storage::StorageActor>>,
-    head: &Option<crate::store::BlockRef>,
+    head: &Option<crate::actors_v2::storage::actor::BlockRef>,
 ) -> Result<crate::engine::ConsensusAmount, ChainError> {
     let parent_hash = match head {
         Some(head_ref) => head_ref.hash,

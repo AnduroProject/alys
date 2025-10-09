@@ -18,7 +18,7 @@ use super::{
     },
 };
 
-use crate::{block::SignedConsensusBlock, store::BlockRef};
+use crate::block::SignedConsensusBlock;
 use crate::auxpow::AuxPow;
 use bridge::PegInInfo;
 use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
@@ -71,7 +71,6 @@ impl Handler<ChainMessage> for ChainActor {
                     let network_actor = self.network_actor.clone();
 
                     // Capture simple state data and clone for async
-                    let state_head = self.state.head.clone();
                     let config_validator_address = self.config.validator_address;
                     let state_federation = self.state.federation.clone();
                     let mut self_clone = self.clone();
@@ -80,7 +79,6 @@ impl Handler<ChainMessage> for ChainActor {
                         slot = slot,
                         timestamp_secs = timestamp.as_secs(),
                         correlation_id = %correlation_id,
-                        execution_parent_hash = ?state_head.clone().unwrap_or_else(|| BlockRef { hash: Hash256::zero(), height: 0 }).hash,
                         "Starting complete block production pipeline"
                     );
 
@@ -131,12 +129,27 @@ impl Handler<ChainMessage> for ChainActor {
                             queued_pegins_guard.clone()
                         };
 
+                        // Get fresh chain head from StorageActor for fee calculation
+                        let fresh_head = if let Some(ref storage_actor) = storage_actor {
+                            match storage_actor.send(crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                correlation_id: Some(correlation_id),
+                            }).await {
+                                Ok(Ok(Some(v2_head))) => Some(v2_head),
+                                _ => {
+                                    debug!(correlation_id = %correlation_id, "No chain head available for withdrawal collection - using None for genesis");
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
                         let withdrawal_collection = match crate::actors_v2::chain::withdrawals::collect_withdrawals_standalone(
                             &state_queued_pegins,
                             storage_actor.as_ref(),
                             config_validator_address,
                             &state_federation,
-                            &state_head,
+                            &fresh_head,
                         ).await {
                             Ok(collection) => {
                                 info!(
@@ -386,6 +399,37 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                                 Err(e) => {
                                     warn!(correlation_id = %correlation_id, error = ?e, "Communication error with NetworkActor (non-fatal)");
+                                }
+                            }
+                        }
+
+                        // Step 12: Update ChainActor's local state with fresh chain head from StorageActor
+                        if let Some(ref storage_actor) = storage_actor {
+                            let get_head_msg = crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match storage_actor.send(get_head_msg).await {
+                                Ok(Ok(Some(v2_head_ref))) => {
+                                    // Update local state with V2 BlockRef directly
+                                    self_clone.state.update_head(v2_head_ref.clone());
+
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        consensus_hash = %v2_head_ref.hash,
+                                        execution_hash = ?v2_head_ref.execution_hash,
+                                        height = v2_head_ref.number,
+                                        "Updated ChainActor local state with fresh chain head"
+                                    );
+                                }
+                                Ok(Ok(None)) => {
+                                    warn!(correlation_id = %correlation_id, "StorageActor returned no chain head after block production");
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Failed to get chain head for state sync (non-fatal)");
+                                }
+                                Err(e) => {
+                                    warn!(correlation_id = %correlation_id, error = ?e, "Communication error getting chain head for state sync (non-fatal)");
                                 }
                             }
                         }
