@@ -1,5 +1,6 @@
 #![allow(clippy::manual_div_ceil)]
 
+use crate::actors_v2::network::NetworkMessage;
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
@@ -489,10 +490,17 @@ impl App {
                 message_size_limit: 4 * 1024 * 1024, // 4MB
                 discovery_interval: Duration::from_secs(60),
             };
-            let network_actor = crate::actors_v2::network::NetworkActor::new(network_config)
+            let network_actor = crate::actors_v2::network::NetworkActor::new(network_config.clone())
                 .expect("Failed to create NetworkActor V2")
                 .start();
             info!("✓ NetworkActor V2 started");
+
+            let network_start_msg = NetworkMessage::StartNetwork {
+                listen_addrs: network_config.clone().listen_addresses,
+                bootstrap_peers: network_config.clone().bootstrap_peers,
+            };
+            let _ = network_actor.send(network_start_msg).await.expect("Failed to start NetworkActor V2 Network");
+            info!("✓ NetworkActor V2 - network started");
 
             // 4. Initialize SyncActor V2
             info!("🔄 Initializing SyncActor V2...");

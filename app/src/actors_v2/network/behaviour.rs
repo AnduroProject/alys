@@ -71,7 +71,7 @@ impl AlysNetworkBehaviour {
     /// Broadcast message to gossip network
     pub fn broadcast_message(&mut self, topic: &str, data: Vec<u8>) -> Result<String> {
         if !self.is_initialized {
-            return Err(anyhow!("Network behaviour not initialized"));
+            return Err(anyhow!("Network behaviour not initialized for broadcasting"));
         }
 
         if !self.active_topics.contains(&topic.to_string()) {
@@ -95,7 +95,7 @@ impl AlysNetworkBehaviour {
     /// Send direct request to peer
     pub fn send_request(&mut self, peer_id: &str, request: &super::messages::NetworkRequest) -> Result<String> {
         if !self.is_initialized {
-            return Err(anyhow!("Network behaviour not initialized"));
+            return Err(anyhow!("Network behaviour not initialized for sending request"));
         }
 
         let request_id = uuid::Uuid::new_v4().to_string();

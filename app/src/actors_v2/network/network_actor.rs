@@ -33,8 +33,6 @@ pub struct NetworkActor {
     peer_manager: PeerManager,
     /// Active protocol subscriptions
     active_subscriptions: HashMap<String, Instant>,
-    /// Pending requests tracking
-    pending_requests: HashMap<String, PendingRequest>,
     /// Pending block requests tracking (Phase 4: Task 2.3)
     pending_block_requests: HashMap<uuid::Uuid, BlockRequest>,
     /// SyncActor address for coordination
@@ -45,13 +43,6 @@ pub struct NetworkActor {
     is_running: bool,
     /// Shutdown flag
     shutdown_requested: bool,
-}
-
-#[derive(Debug)]
-struct PendingRequest {
-    peer_id: String,
-    request_time: Instant,
-    request_type: String,
 }
 
 /// Block request tracking (Phase 4: Task 2.3)
@@ -83,7 +74,6 @@ impl NetworkActor {
             metrics: NetworkMetrics::new(),
             peer_manager: PeerManager::new(),
             active_subscriptions: HashMap::new(),
-            pending_requests: HashMap::new(),
             pending_block_requests: HashMap::new(),
             sync_actor: None,
             chain_actor: None,
@@ -268,11 +258,6 @@ impl NetworkActor {
                     request_id, peer_id, response.len());
 
                 self.metrics.record_message_received(response.len());
-
-                // Complete the pending request
-                if self.pending_requests.remove(&request_id).is_some() {
-                    tracing::debug!("Completed request {}", request_id);
-                }
             }
 
             AlysNetworkBehaviourEvent::PeerConnected { peer_id, address } => {
@@ -415,12 +400,6 @@ impl NetworkActor {
         self.active_subscriptions.retain(|_topic, &mut last_used| {
             now.duration_since(last_used) < Duration::from_secs(3600) // 1 hour
         });
-
-        // Clean up old pending requests
-        let timeout = Duration::from_secs(60);
-        self.pending_requests.retain(|_id, request| {
-            now.duration_since(request.request_time) < timeout
-        });
     }
 }
 
@@ -456,19 +435,45 @@ impl Handler<NetworkMessage> for NetworkActor {
     fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
         match msg {
             NetworkMessage::StartNetwork { listen_addrs, bootstrap_peers } => {
+                // Check if already running
+                if self.is_running {
+                    tracing::warn!("Network already running - ignoring StartNetwork");
+                    return Ok(NetworkResponse::Started);
+                }
+
+                tracing::info!("Starting NetworkActor V2");
+
                 // Update configuration
                 self.config.listen_addresses = listen_addrs;
                 self.config.bootstrap_peers = bootstrap_peers;
 
-                // Start network in background
-                let network_start = async {
-                    // TODO: Actual network initialization
-                    tracing::info!("NetworkActor V2 starting...");
-                };
+                // Initialize behaviour
+                if let Some(ref mut behaviour) = self.behaviour {
+                    if let Err(e) = behaviour.initialize() {
+                        tracing::error!("Failed to initialize network behaviour: {}", e);
+                        return Err(NetworkError::Protocol(format!("Behaviour initialization failed: {}", e)));
+                    }
+                }
 
-                ctx.spawn(network_start.into_actor(self));
+                // Set up peer manager with bootstrap peers
+                self.peer_manager.set_bootstrap_peers(self.config.bootstrap_peers.clone());
 
-                self.is_running = true;
+                // Connect to bootstrap peers asynchronously
+                let bootstrap_peers_clone = self.config.bootstrap_peers.clone();
+                let connect_future = async move {
+                    for peer_addr in bootstrap_peers_clone {
+                        tracing::info!("Connecting to bootstrap peer: {}", peer_addr);
+                        // Peer connection happens via behaviour events
+                    }
+                }
+                .into_actor(self)
+                .map(|_, act, _ctx| {
+                    // Mark as running after bootstrap connection attempt
+                    act.is_running = true;
+                    tracing::info!("NetworkActor V2 started successfully");
+                });
+
+                ctx.spawn(connect_future);
 
                 // Start periodic cleanup of timed-out requests
                 ctx.address().do_send(NetworkMessage::CleanupTimeouts);
@@ -477,20 +482,39 @@ impl Handler<NetworkMessage> for NetworkActor {
             }
 
             NetworkMessage::StopNetwork { graceful } => {
+                // Check if not running
+                if !self.is_running {
+                    tracing::warn!("Network not running - ignoring StopNetwork");
+                    return Ok(NetworkResponse::Stopped);
+                }
+
                 tracing::info!("Stopping NetworkActor V2 (graceful: {})", graceful);
 
-                // Stop network
-                self.is_running = false;
-
                 if graceful {
-                    // Disconnect peers gracefully
+                    // Graceful shutdown - disconnect from peers cleanly
                     let connected_peers: Vec<String> = self.peer_manager.get_connected_peers()
                         .keys().cloned().collect();
 
-                    for peer_id in connected_peers {
-                        self.peer_manager.remove_peer(&peer_id);
+                    for peer_id in &connected_peers {
+                        self.peer_manager.remove_peer(peer_id);
                         self.metrics.record_connection_closed();
                     }
+
+                    // Allow time for clean disconnections
+                    let disconnect_future = async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    .into_actor(self)
+                    .map(|_, act, _ctx| {
+                        act.is_running = false;
+                        tracing::info!("NetworkActor V2 stopped gracefully");
+                    });
+
+                    ctx.spawn(disconnect_future);
+                } else {
+                    // Immediate shutdown
+                    self.is_running = false;
+                    tracing::info!("NetworkActor V2 stopped");
                 }
 
                 Ok(NetworkResponse::Stopped)
