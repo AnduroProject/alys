@@ -2651,9 +2651,429 @@ async fn test_real_tcp_connection() {
 
 ### Phase 4: Production Readiness
 
-**Duration**: 6-8 days (was 5-8 days)
+**Goal**: Harden NetworkActor for production deployment with advanced peer management, comprehensive monitoring, and validated stability
 
-Tasks 4.1-4.3 as originally planned.
+**Duration**: 6-8 days
+
+#### Task 4.1: Advanced Peer Management & DOS Protection
+
+**Effort**: 3 days
+
+**Objective**: Implement peer scoring, connection limits, and reputation system to prevent abuse and ensure network health
+
+**Implementation Steps**:
+
+1. **Peer Reputation System** (1.5 days)
+
+```rust
+// Add to peer_manager.rs
+pub struct PeerReputation {
+    score: f64,              // -100.0 to +100.0
+    successful_messages: u64,
+    failed_messages: u64,
+    bytes_sent: u64,
+    bytes_received: u64,
+    connection_duration: Duration,
+    last_activity: Instant,
+    violations: Vec<Violation>,
+}
+
+pub enum Violation {
+    InvalidMessage { timestamp: Instant },
+    ExcessiveRate { messages_per_second: u64 },
+    MalformedProtocol { details: String },
+    UnresponsivePeer { timeout_count: u32 },
+}
+
+impl PeerManager {
+    /// Update peer reputation based on behavior
+    pub fn update_reputation(&mut self, peer_id: &str, delta: f64, reason: &str) {
+        // Apply decay: reputation naturally trends toward 0 over time
+        // Apply delta: reward good behavior, penalize bad
+        // Enforce bounds: -100.0 to +100.0
+        // Log significant changes
+    }
+
+    /// Get peers below reputation threshold (for disconnection)
+    pub fn get_low_reputation_peers(&self, threshold: f64) -> Vec<String> {
+        // Return peers with score < threshold
+    }
+
+    /// Check if peer should be banned
+    pub fn should_ban_peer(&self, peer_id: &str) -> bool {
+        // Ban if: score < -50.0 OR violations.len() > 10 in last hour
+    }
+}
+```
+
+2. **Connection Limits & Rate Limiting** (1 day)
+
+```rust
+// Add to config.rs
+pub struct NetworkConfig {
+    // Existing fields...
+
+    // Phase 4: Connection limits
+    pub max_connections: usize,           // Default: 100
+    pub max_connections_per_ip: usize,    // Default: 5
+    pub max_inbound_connections: usize,   // Default: 50
+    pub max_outbound_connections: usize,  // Default: 50
+
+    // Phase 4: Rate limits
+    pub max_messages_per_peer_per_second: u64,  // Default: 100
+    pub max_bytes_per_peer_per_second: u64,     // Default: 1MB
+    pub rate_limit_window: Duration,             // Default: 1 second
+}
+
+// Add to network_actor.rs
+struct RateLimiter {
+    peer_message_counts: HashMap<String, VecDeque<Instant>>,
+    peer_byte_counts: HashMap<String, VecDeque<(Instant, u64)>>,
+    window: Duration,
+}
+
+impl RateLimiter {
+    fn check_message_rate(&mut self, peer_id: &str) -> Result<(), NetworkError> {
+        // Check if peer exceeded message rate limit
+        // Return error if limit exceeded
+    }
+
+    fn check_byte_rate(&mut self, peer_id: &str, bytes: u64) -> Result<(), NetworkError> {
+        // Check if peer exceeded bandwidth limit
+    }
+}
+```
+
+3. **DOS Attack Prevention** (0.5 days)
+
+```rust
+// Add DOS protection to message handlers
+impl Handler<NetworkMessage> for NetworkActor {
+    fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
+        match msg {
+            NetworkMessage::HandleGossipMessage { message, peer_id } => {
+                // Rate limit check
+                if let Err(e) = self.rate_limiter.check_message_rate(&peer_id) {
+                    self.peer_manager.update_reputation(&peer_id, -10.0, "rate limit exceeded");
+                    return Err(e);
+                }
+
+                // Size limit check
+                if message.data.len() > self.config.message_size_limit {
+                    self.peer_manager.update_reputation(&peer_id, -20.0, "oversized message");
+                    return Err(NetworkError::Protocol("Message too large".into()));
+                }
+
+                // Process message...
+            }
+            // Other handlers...
+        }
+    }
+}
+```
+
+**Acceptance Criteria**:
+- [ ] Peer reputation system tracks behavior with score -100 to +100
+- [ ] Connection limits enforced: max_connections, per-IP limits
+- [ ] Rate limiting prevents message/bandwidth abuse
+- [ ] Low-reputation peers automatically disconnected
+- [ ] DOS test passes: Single peer sending 1000 msg/sec doesn't crash system
+- [ ] Metrics track reputation changes and violations
+
+---
+
+#### Task 4.2: Production Monitoring & Observability
+
+**Effort**: 2 days
+
+**Objective**: Comprehensive metrics, logging, and monitoring infrastructure for production operations
+
+**Implementation Steps**:
+
+1. **Enhanced Metrics** (1 day)
+
+```rust
+// Add to metrics.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkMetrics {
+    // Existing fields...
+
+    // Phase 4: Advanced metrics
+    pub peer_reputation_average: f64,
+    pub peer_reputation_min: f64,
+    pub peer_reputation_max: f64,
+    pub banned_peers_total: u64,
+    pub rate_limited_messages: u64,
+    pub rejected_connections: u64,
+    pub connection_duration_p50_ms: u64,
+    pub connection_duration_p95_ms: u64,
+    pub connection_duration_p99_ms: u64,
+    pub message_latency_p50_ms: u64,
+    pub message_latency_p95_ms: u64,
+    pub message_latency_p99_ms: u64,
+    pub gossipsub_mesh_size: u32,
+    pub gossipsub_topics_active: u32,
+    pub request_response_success_rate: f64,
+    pub uptime_seconds: u64,
+    pub last_peer_discovered: Option<SystemTime>,
+}
+
+impl NetworkMetrics {
+    pub fn calculate_percentiles(&mut self, latencies: &[u64]) {
+        // Calculate p50, p95, p99 latencies
+    }
+
+    pub fn update_reputation_stats(&mut self, peer_manager: &PeerManager) {
+        // Calculate min/max/avg reputation across all peers
+    }
+
+    pub fn export_prometheus(&self) -> String {
+        // Export metrics in Prometheus format for scraping
+    }
+}
+```
+
+2. **Structured Logging** (0.5 days)
+
+```rust
+// Add structured logging with correlation IDs
+use tracing::{info, warn, error, debug};
+
+// Example in network_actor.rs
+pub fn handle_network_event(&mut self, event: AlysNetworkBehaviourEvent) {
+    let correlation_id = uuid::Uuid::new_v4();
+
+    match event {
+        AlysNetworkBehaviourEvent::GossipMessage { topic, data, source_peer, message_id } => {
+            info!(
+                correlation_id = %correlation_id,
+                event = "gossip_received",
+                peer_id = %source_peer,
+                message_id = %message_id,
+                topic = %topic,
+                size_bytes = data.len(),
+                "Received gossip message"
+            );
+            // Process...
+        }
+        // Other events with structured logging...
+    }
+}
+```
+
+3. **Health Check Endpoint** (0.5 days)
+
+```rust
+// Add comprehensive health check
+impl Handler<NetworkMessage> for NetworkActor {
+    fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
+        match msg {
+            NetworkMessage::HealthCheck { correlation_id } => {
+                let connected_peers = self.peer_manager.get_connected_peers().len();
+                let avg_reputation = self.peer_manager.get_average_reputation();
+                let swarm_healthy = self.is_running && self.swarm_cmd_tx.is_some();
+
+                let is_healthy = swarm_healthy
+                    && connected_peers > 0
+                    && avg_reputation > 0.0;
+
+                let issues = if !is_healthy {
+                    vec![
+                        if !swarm_healthy { "Swarm not running".into() } else { String::new() },
+                        if connected_peers == 0 { "No peers connected".into() } else { String::new() },
+                        if avg_reputation <= 0.0 { "Low peer reputation".into() } else { String::new() },
+                    ].into_iter().filter(|s| !s.is_empty()).collect()
+                } else {
+                    vec![]
+                };
+
+                Ok(NetworkResponse::Healthy {
+                    is_healthy,
+                    connected_peers,
+                    issues
+                })
+            }
+            // Other handlers...
+        }
+    }
+}
+```
+
+**Acceptance Criteria**:
+- [ ] All key metrics exported (latencies, reputation, connections)
+- [ ] Prometheus format metrics available for scraping
+- [ ] Structured logging with correlation IDs throughout
+- [ ] Health check endpoint returns detailed status
+- [ ] Metrics can be graphed in Grafana/similar dashboard
+- [ ] Log levels configurable via RUST_LOG environment variable
+
+---
+
+#### Task 4.3: Performance Optimization & Stability Validation
+
+**Effort**: 1-3 days
+
+**Objective**: Optimize performance, validate long-running stability, and document operational procedures
+
+**Implementation Steps**:
+
+1. **Performance Tuning** (0.5 days)
+
+```rust
+// Optimize hot paths in network_actor.rs
+impl NetworkActor {
+    fn handle_gossip_message_optimized(&mut self, message: GossipMessage) {
+        // Fast path: Skip validation for trusted peers
+        if let Some(peer_rep) = self.peer_manager.get_reputation(&message.source_peer) {
+            if peer_rep > 80.0 {
+                // High-reputation peer - skip redundant checks
+                return self.process_gossip_fast_path(message);
+            }
+        }
+
+        // Standard path: Full validation
+        self.process_gossip_standard_path(message)
+    }
+}
+
+// Optimize channel sizes based on testing
+const SWARM_COMMAND_CHANNEL_SIZE: usize = 2000;  // Tuned from testing
+const EVENT_CHANNEL_SIZE: usize = 5000;          // Tuned from testing
+```
+
+2. **Long-Running Stability Test** (1 day)
+
+```rust
+#[ignore] // Run only in CI or manually
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_24_hour_stability() {
+    let test_duration = Duration::from_hours(24);
+    let start_time = Instant::now();
+
+    // Start 5 NetworkActor instances
+    let actors = start_test_network(5).await;
+
+    // Continuously send messages for 24 hours
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    let mut message_count = 0;
+
+    while start_time.elapsed() < test_duration {
+        interval.tick().await;
+
+        // Broadcast from random actor
+        let actor = actors.choose(&mut rand::thread_rng()).unwrap();
+        actor.send(NetworkMessage::BroadcastBlock {
+            block_data: vec![0; 1024],
+            priority: false,
+        }).await.ok();
+
+        message_count += 1;
+
+        // Check health every hour
+        if message_count % 360 == 0 {
+            let health_checks = check_all_actor_health(&actors).await;
+            assert!(health_checks.iter().all(|h| *h), "All actors must remain healthy");
+        }
+    }
+
+    // Verify final state
+    let final_metrics = get_all_metrics(&actors).await;
+    assert_connection_uptime(&final_metrics, 0.999); // 99.9% uptime
+
+    println!("✅ 24-HOUR STABILITY TEST PASSED");
+    println!("   Total messages: {}", message_count);
+    println!("   Average latency: {:?}", calculate_avg_latency(&final_metrics));
+}
+```
+
+3. **Operational Documentation** (0.5-1.5 days)
+
+Create `docs/v2_alpha/actors/network/OPERATIONS.md`:
+
+```markdown
+# NetworkActor V2 Operations Guide
+
+## Starting the Network
+```bash
+# Production configuration
+RUST_LOG=info cargo run -- --network-config production.toml
+```
+
+## Monitoring
+
+### Key Metrics to Watch
+- `connected_peers`: Should be > 10 for healthy network
+- `peer_reputation_average`: Should be > 50.0
+- `message_latency_p99_ms`: Should be < 500ms
+- `gossip_message_delivery_rate`: Should be > 95%
+
+### Health Check
+```bash
+curl http://localhost:9090/health
+```
+
+### Prometheus Metrics
+```bash
+curl http://localhost:9090/metrics
+```
+
+## Troubleshooting
+
+### No Peers Connecting
+1. Check firewall: `sudo ufw status`
+2. Verify bootstrap peers are reachable
+3. Check logs for connection errors
+
+### High Message Latency
+1. Check network bandwidth: `iftop`
+2. Review peer reputation scores
+3. Consider increasing connection limits
+
+### Memory Usage Growing
+1. Check for connection leaks in metrics
+2. Review pending_block_requests size
+3. Restart with fresh state if needed
+
+## Performance Tuning
+
+### For High-Throughput
+```toml
+max_connections = 200
+max_messages_per_peer_per_second = 500
+message_size_limit = 5242880  # 5MB
+```
+
+### For Low-Resource Environments
+```toml
+max_connections = 50
+max_messages_per_peer_per_second = 50
+message_size_limit = 1048576  # 1MB
+```
+```
+
+**Acceptance Criteria**:
+- [ ] Hot paths optimized (profiling shows <5% CPU on message handling)
+- [ ] 24-hour stability test passes with >99.9% uptime
+- [ ] Operations documentation complete and accurate
+- [ ] Performance benchmarks documented (messages/sec, latency percentiles)
+- [ ] Rollback procedures documented
+- [ ] Grafana dashboard template provided
+
+---
+
+**Phase 4 Summary**:
+- **Duration**: 6-8 days
+- **Task Breakdown**: Task 4.1 (3d) + Task 4.2 (2d) + Task 4.3 (1-3d)
+- **Deliverables**:
+  - ✅ Peer reputation system with DOS protection
+  - ✅ Connection and rate limiting
+  - ✅ Comprehensive metrics and monitoring
+  - ✅ Structured logging with correlation IDs
+  - ✅ Health check endpoints
+  - ✅ 24-hour stability validation
+  - ✅ Operations documentation and runbooks
+- **Production Readiness**: System ready for testnet deployment with full observability
+- **Changes from Original**: Expanded Task 4.1 with detailed peer reputation system, added Task 4.2 for monitoring (was implicit), enhanced Task 4.3 with 24-hour stability test and operational documentation
 
 ---
 
