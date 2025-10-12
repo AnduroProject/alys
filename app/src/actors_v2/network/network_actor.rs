@@ -830,15 +830,179 @@ impl Handler<NetworkMessage> for NetworkActor {
             }
 
             NetworkMessage::BroadcastBlock { block_data, priority } => {
-                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
-                tracing::warn!("BroadcastBlock not yet implemented with SwarmCommand - Phase 2 Task 2.1");
-                Ok(NetworkResponse::Broadcasted { message_id: "stub".to_string() })
+                // Phase 2 Task 2.1: Real gossipsub broadcasting via SwarmCommand channel
+
+                // Validate network is running
+                if !self.is_running {
+                    tracing::error!("Network not running, cannot broadcast block");
+                    return Err(NetworkError::NotStarted);
+                }
+
+                // Get command channel
+                let cmd_tx = match self.swarm_cmd_tx.as_ref() {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        tracing::error!("Swarm command channel not available");
+                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                    }
+                };
+
+                let topic = if priority {
+                    "alys/blocks/priority".to_string()
+                } else {
+                    "alys/blocks".to_string()
+                };
+
+                let data_len = block_data.len();
+
+                tracing::debug!(
+                    topic = %topic,
+                    size = data_len,
+                    priority = priority,
+                    "Broadcasting block via gossipsub"
+                );
+
+                // Create oneshot channel for response
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                // Send publish command (non-blocking)
+                let cmd = SwarmCommand::PublishGossip {
+                    topic: topic.clone(),
+                    data: block_data,
+                    response_tx,
+                };
+
+                match cmd_tx.try_send(cmd) {
+                    Ok(_) => {
+                        // Update metrics immediately
+                        self.metrics.record_message_sent(data_len);
+                        self.metrics.record_gossip_published();
+                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+
+                        // Spawn task to handle async response
+                        tokio::spawn(async move {
+                            match response_rx.await {
+                                Ok(Ok(message_id)) => {
+                                    tracing::info!(
+                                        message_id = %message_id,
+                                        topic = %topic,
+                                        "Block broadcast successful"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!(
+                                        topic = %topic,
+                                        error = %e,
+                                        "Block broadcast failed"
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        topic = %topic,
+                                        "Block broadcast response channel closed"
+                                    );
+                                }
+                            }
+                        });
+
+                        // Return immediately with pending status
+                        Ok(NetworkResponse::Broadcasted {
+                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4())
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            "Failed to send broadcast command"
+                        );
+                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                    }
+                }
             }
 
             NetworkMessage::BroadcastTransaction { tx_data } => {
-                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
-                tracing::warn!("BroadcastTransaction not yet implemented with SwarmCommand - Phase 2 Task 2.1");
-                Ok(NetworkResponse::Broadcasted { message_id: "stub".to_string() })
+                // Phase 2 Task 2.1: Real gossipsub broadcasting via SwarmCommand channel
+
+                // Validate network is running
+                if !self.is_running {
+                    tracing::error!("Network not running, cannot broadcast transaction");
+                    return Err(NetworkError::NotStarted);
+                }
+
+                // Get command channel
+                let cmd_tx = match self.swarm_cmd_tx.as_ref() {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        tracing::error!("Swarm command channel not available");
+                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                    }
+                };
+
+                let topic = "alys/transactions".to_string();
+                let data_len = tx_data.len();
+
+                tracing::debug!(
+                    topic = %topic,
+                    size = data_len,
+                    "Broadcasting transaction via gossipsub"
+                );
+
+                // Create oneshot channel for response
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                // Send publish command (non-blocking)
+                let cmd = SwarmCommand::PublishGossip {
+                    topic: topic.clone(),
+                    data: tx_data,
+                    response_tx,
+                };
+
+                match cmd_tx.try_send(cmd) {
+                    Ok(_) => {
+                        // Update metrics immediately
+                        self.metrics.record_message_sent(data_len);
+                        self.metrics.record_gossip_published();
+                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+
+                        // Spawn task to handle async response
+                        tokio::spawn(async move {
+                            match response_rx.await {
+                                Ok(Ok(message_id)) => {
+                                    tracing::info!(
+                                        message_id = %message_id,
+                                        topic = %topic,
+                                        "Transaction broadcast successful"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!(
+                                        topic = %topic,
+                                        error = %e,
+                                        "Transaction broadcast failed"
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        topic = %topic,
+                                        "Transaction broadcast response channel closed"
+                                    );
+                                }
+                            }
+                        });
+
+                        // Return immediately with pending status
+                        Ok(NetworkResponse::Broadcasted {
+                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4())
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            "Failed to send broadcast command"
+                        );
+                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                    }
+                }
             }
 
             NetworkMessage::ConnectToPeer { peer_addr } => {
@@ -952,9 +1116,82 @@ impl Handler<NetworkMessage> for NetworkActor {
                     return Err(NetworkError::Protocol(format!("Invalid AuxPoW format: {}", e)));
                 }
 
-                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
-                tracing::warn!("AuxPoW broadcast not yet implemented with SwarmCommand - Phase 2 Task 2.1");
-                Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
+                // Phase 2 Task 2.1: Real gossipsub broadcasting via SwarmCommand channel
+
+                // Get command channel
+                let cmd_tx = match self.swarm_cmd_tx.as_ref() {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        tracing::error!(correlation_id = %correlation_id, "Swarm command channel not available");
+                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                    }
+                };
+
+                let topic = "alys/auxpow".to_string();
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    topic = %topic,
+                    peer_count = peer_count,
+                    "Broadcasting AuxPoW via gossipsub"
+                );
+
+                // Create oneshot channel for response
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                // Send publish command (non-blocking)
+                let cmd = SwarmCommand::PublishGossip {
+                    topic: topic.clone(),
+                    data: auxpow_data,
+                    response_tx,
+                };
+
+                match cmd_tx.try_send(cmd) {
+                    Ok(_) => {
+                        // Update active subscriptions
+                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+
+                        // Spawn task to handle async response
+                        tokio::spawn(async move {
+                            match response_rx.await {
+                                Ok(Ok(message_id)) => {
+                                    tracing::info!(
+                                        correlation_id = %correlation_id,
+                                        message_id = %message_id,
+                                        topic = %topic,
+                                        "AuxPoW broadcast successful"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!(
+                                        correlation_id = %correlation_id,
+                                        topic = %topic,
+                                        error = %e,
+                                        "AuxPoW broadcast failed"
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        correlation_id = %correlation_id,
+                                        topic = %topic,
+                                        "AuxPoW broadcast response channel closed"
+                                    );
+                                }
+                            }
+                        });
+
+                        // Return immediately with success
+                        Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            correlation_id = %correlation_id,
+                            error = ?e,
+                            "Failed to send AuxPoW broadcast command"
+                        );
+                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                    }
+                }
             }
 
             NetworkMessage::RequestBlocks { start_height, count, correlation_id } => {
