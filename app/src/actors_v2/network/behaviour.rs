@@ -1,12 +1,13 @@
 //! NetworkActor V2 libp2p Behaviour (Real Implementation)
 //!
 //! Complete network behaviour with libp2p NetworkBehaviour derive macro.
-//! Includes: Gossipsub, Identify, and mDNS protocols.
+//! Includes: Gossipsub, Identify, mDNS, and Request-Response protocols.
 
 use anyhow::{Result, Context as AnyhowContext};
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::PeerId;
 use super::NetworkConfig;
+use super::protocols::{BlockProtocol, BlockCodec, BlockRequest, BlockResponse};
 
 /// Complete V2 network behaviour with real libp2p protocols
 #[derive(NetworkBehaviour)]
@@ -15,6 +16,7 @@ pub struct AlysNetworkBehaviour {
     pub gossipsub: libp2p::gossipsub::Behaviour,
     pub identify: libp2p::identify::Behaviour,
     pub mdns: libp2p::mdns::tokio::Behaviour,
+    pub request_response: libp2p::request_response::Behaviour<BlockCodec>,
 }
 
 /// Network behaviour events
@@ -27,17 +29,32 @@ pub enum AlysNetworkBehaviourEvent {
         source_peer: String,
         message_id: String,
     },
-    /// Request received from peer
-    RequestReceived {
-        request: crate::actors_v2::network::messages::NetworkRequest,
-        source_peer: String,
-        request_id: String,
-    },
-    /// Response received from peer
-    ResponseReceived {
-        response: Vec<u8>,
+    /// Block request received from peer
+    BlockRequestReceived {
         peer_id: String,
-        request_id: String,
+        request_id: libp2p::request_response::RequestId,
+        request: BlockRequest,
+        channel: libp2p::request_response::ResponseChannel<BlockResponse>,
+    },
+    /// Block response received from peer
+    BlockResponseReceived {
+        peer_id: String,
+        request_id: libp2p::request_response::RequestId,
+        response: BlockResponse,
+    },
+    /// Request sent successfully
+    RequestSent {
+        peer_id: String,
+        request_id: libp2p::request_response::RequestId,
+    },
+    /// Response sent successfully
+    ResponseSent {
+        peer_id: String,
+    },
+    /// Request failed
+    RequestFailed {
+        peer_id: String,
+        error: String,
     },
     /// Peer connected
     PeerConnected {
@@ -118,10 +135,22 @@ impl AlysNetworkBehaviour {
         )
         .context("Failed to create mDNS behaviour")?;
 
+        // Configure Request-Response with BlockCodec
+        let request_response = {
+            let protocols = std::iter::once(("/alys/block/1.0.0", libp2p::request_response::ProtocolSupport::Full));
+            let cfg = libp2p::request_response::Config::default();
+            libp2p::request_response::Behaviour::with_codec(
+                BlockCodec::new(),
+                protocols,
+                cfg,
+            )
+        };
+
         Ok(Self {
             gossipsub,
             identify,
             mdns,
+            request_response,
         })
     }
 
@@ -238,6 +267,52 @@ impl From<libp2p::mdns::Event> for AlysNetworkBehaviourEvent {
                         protocols: vec![],
                         addresses: vec![],
                     }
+                }
+            }
+        }
+    }
+}
+
+impl From<libp2p::request_response::Event<BlockRequest, BlockResponse>> for AlysNetworkBehaviourEvent {
+    fn from(event: libp2p::request_response::Event<BlockRequest, BlockResponse>) -> Self {
+        use libp2p::request_response::Event;
+
+        match event {
+            Event::Message { peer, message } => {
+                use libp2p::request_response::Message;
+                match message {
+                    Message::Request { request_id, request, channel } => {
+                        AlysNetworkBehaviourEvent::BlockRequestReceived {
+                            peer_id: peer.to_string(),
+                            request_id,
+                            request,
+                            channel,
+                        }
+                    }
+                    Message::Response { request_id, response } => {
+                        AlysNetworkBehaviourEvent::BlockResponseReceived {
+                            peer_id: peer.to_string(),
+                            request_id,
+                            response,
+                        }
+                    }
+                }
+            }
+            Event::OutboundFailure { peer, request_id, error } => {
+                AlysNetworkBehaviourEvent::RequestFailed {
+                    peer_id: peer.to_string(),
+                    error: format!("{:?}", error),
+                }
+            }
+            Event::InboundFailure { peer, request_id, error } => {
+                AlysNetworkBehaviourEvent::RequestFailed {
+                    peer_id: peer.to_string(),
+                    error: format!("{:?}", error),
+                }
+            }
+            Event::ResponseSent { peer, request_id } => {
+                AlysNetworkBehaviourEvent::ResponseSent {
+                    peer_id: peer.to_string(),
                 }
             }
         }

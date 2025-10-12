@@ -10,6 +10,9 @@ use anyhow::Result;
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode as DecodeDeriv, Encode as EncodeDeriv};
 use libp2p::StreamProtocol;
+use libp2p::request_response::Codec;
+use futures::prelude::*;
+use std::io;
 
 /// Block request-response protocol identifier
 #[derive(Debug, Clone)]
@@ -149,12 +152,141 @@ impl Default for BlockCodec {
     }
 }
 
-// Full RequestResponseCodec trait implementation deferred to Phase 2 Task 2.2
-// This will include:
-// - read_request/write_request
-// - read_response/write_response
-// - Protocol stream handling
-// - SSZ encoding/decoding integration
+/// Implement libp2p RequestResponseCodec for BlockCodec
+#[async_trait::async_trait]
+impl Codec for BlockCodec {
+    type Protocol = &'static str;
+    type Request = BlockRequest;
+    type Response = BlockResponse;
+
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        // Read length prefix (4 bytes, big-endian)
+        let mut len_bytes = [0u8; 4];
+        io.read_exact(&mut len_bytes).await?;
+        let len = u32::from_be_bytes(len_bytes) as usize;
+
+        // Validate size
+        if len > self.max_request_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Request too large: {} bytes (max: {})", len, self.max_request_size),
+            ));
+        }
+
+        // Read SSZ-encoded request
+        let mut buf = vec![0u8; len];
+        io.read_exact(&mut buf).await?;
+
+        // Decode SSZ
+        BlockRequest::from_ssz_bytes(&buf).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("SSZ decode error: {:?}", e))
+        })
+    }
+
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        // Read length prefix (4 bytes, big-endian)
+        let mut len_bytes = [0u8; 4];
+        io.read_exact(&mut len_bytes).await?;
+        let len = u32::from_be_bytes(len_bytes) as usize;
+
+        // Validate size
+        if len > self.max_response_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Response too large: {} bytes (max: {})", len, self.max_response_size),
+            ));
+        }
+
+        // Read SSZ-encoded response
+        let mut buf = vec![0u8; len];
+        io.read_exact(&mut buf).await?;
+
+        // Decode SSZ
+        BlockResponse::from_ssz_bytes(&buf).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("SSZ decode error: {:?}", e))
+        })
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        // Encode to SSZ
+        let encoded = req.as_ssz_bytes();
+
+        // Validate size
+        if encoded.len() > self.max_request_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Request too large: {} bytes", encoded.len()),
+            ));
+        }
+
+        // Write length prefix (4 bytes, big-endian)
+        let len = (encoded.len() as u32).to_be_bytes();
+        io.write_all(&len).await?;
+
+        // Write SSZ-encoded request
+        io.write_all(&encoded).await?;
+
+        // Flush to ensure data is sent
+        io.flush().await?;
+
+        Ok(())
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        // Encode to SSZ
+        let encoded = res.as_ssz_bytes();
+
+        // Validate size
+        if encoded.len() > self.max_response_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Response too large: {} bytes", encoded.len()),
+            ));
+        }
+
+        // Write length prefix (4 bytes, big-endian)
+        let len = (encoded.len() as u32).to_be_bytes();
+        io.write_all(&len).await?;
+
+        // Write SSZ-encoded response
+        io.write_all(&encoded).await?;
+
+        // Flush to ensure data is sent
+        io.flush().await?;
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

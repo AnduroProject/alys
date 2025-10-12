@@ -181,14 +181,14 @@ pub fn create_test_behaviour_events() -> Vec<AlysNetworkBehaviourEvent> {
             source_peer: "test-peer-1".to_string(),
             message_id: Uuid::new_v4().to_string(),
         },
-        AlysNetworkBehaviourEvent::RequestReceived {
-            request: NetworkRequest::GetBlocks { start_height: 100, count: 10 },
-            source_peer: "test-peer-2".to_string(),
-            request_id: Uuid::new_v4().to_string(),
-        },
         AlysNetworkBehaviourEvent::PeerConnected {
-            peer_id: "test-peer-3".to_string(),
+            peer_id: "test-peer-2".to_string(),
             address: "/ip4/127.0.0.1/tcp/8000".to_string(),
+        },
+        AlysNetworkBehaviourEvent::PeerIdentified {
+            peer_id: "test-peer-3".to_string(),
+            protocols: vec!["/alys/block/1.0.0".to_string()],
+            addresses: vec!["/ip4/127.0.0.1/tcp/8001".to_string()],
         },
         AlysNetworkBehaviourEvent::MdnsPeerDiscovered {
             peer_id: "mdns-test-peer".to_string(),

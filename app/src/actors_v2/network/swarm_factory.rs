@@ -127,10 +127,23 @@ fn create_behaviour(
     )
     .context("Failed to create mDNS behaviour")?;
 
+    // Configure Request-Response with BlockCodec
+    let request_response = {
+        use super::protocols::BlockCodec;
+        let protocols = std::iter::once(("/alys/block/1.0.0", libp2p::request_response::ProtocolSupport::Full));
+        let cfg = libp2p::request_response::Config::default();
+        libp2p::request_response::Behaviour::with_codec(
+            BlockCodec::new(),
+            protocols,
+            cfg,
+        )
+    };
+
     Ok(AlysNetworkBehaviour {
         gossipsub,
         identify,
         mdns,
+        request_response,
     })
 }
 

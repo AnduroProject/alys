@@ -332,21 +332,102 @@ impl NetworkActor {
                 }
             }
 
-            AlysNetworkBehaviourEvent::RequestReceived { request, source_peer, request_id } => {
-                tracing::debug!("Received request {} from peer {}: {:?}",
-                    request_id, source_peer, request);
+            AlysNetworkBehaviourEvent::BlockRequestReceived { peer_id, request_id, request, channel } => {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    request_id = ?request_id,
+                    request = ?request,
+                    "Received block request from peer"
+                );
 
                 self.metrics.record_message_received(0); // Size would be calculated
 
-                // Handle the request
-                self.handle_peer_request(request, source_peer, request_id)?;
+                // Handle the block request - forward to ChainActor/SyncActor for data retrieval
+                // For now, send an error response (Phase 3 will integrate with ChainActor)
+                if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                    let error_response = BlockResponse::Error(
+                        crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                            message: b"Block requests not yet implemented".to_vec(),
+                        }
+                    );
+
+                    let cmd = SwarmCommand::SendResponse {
+                        channel,
+                        response: error_response,
+                    };
+
+                    if let Err(e) = cmd_tx.try_send(cmd) {
+                        tracing::error!(error = ?e, "Failed to send response command");
+                    }
+                } else {
+                    tracing::warn!("Cannot send response: command channel not available");
+                }
             }
 
-            AlysNetworkBehaviourEvent::ResponseReceived { response, peer_id, request_id } => {
-                tracing::debug!("Received response {} from peer {} ({} bytes)",
-                    request_id, peer_id, response.len());
+            AlysNetworkBehaviourEvent::BlockResponseReceived { peer_id, request_id, response } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    request_id = ?request_id,
+                    response = ?response,
+                    "Received block response from peer"
+                );
 
-                self.metrics.record_message_received(response.len());
+                self.metrics.record_message_received(0); // Size would be calculated
+
+                // Forward to SyncActor or handle internally based on response type
+                match response {
+                    BlockResponse::Blocks(blocks_response) => {
+                        tracing::info!(
+                            block_count = blocks_response.blocks.len(),
+                            "Received blocks from peer"
+                        );
+                        // TODO: Forward to SyncActor in Phase 3
+                    }
+                    BlockResponse::ChainStatus(status) => {
+                        tracing::info!(
+                            height = status.height,
+                            head_hash = ?status.head_hash,
+                            "Received chain status from peer"
+                        );
+                        // TODO: Forward to SyncActor in Phase 3
+                    }
+                    BlockResponse::Error(error) => {
+                        let error_msg = String::from_utf8_lossy(&error.message);
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = %error_msg,
+                            "Peer returned error response"
+                        );
+                        self.peer_manager.update_peer_reputation(&peer_id, -1.0);
+                    }
+                }
+            }
+
+            AlysNetworkBehaviourEvent::RequestSent { peer_id, request_id } => {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    request_id = ?request_id,
+                    "Request sent successfully"
+                );
+                self.metrics.record_message_sent(0); // Size would be calculated
+            }
+
+            AlysNetworkBehaviourEvent::ResponseSent { peer_id } => {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    "Response sent successfully"
+                );
+                self.metrics.record_message_sent(0); // Size would be calculated
+            }
+
+            AlysNetworkBehaviourEvent::RequestFailed { peer_id, error } => {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = %error,
+                    "Request-response operation failed"
+                );
+                self.peer_manager.update_peer_reputation(&peer_id, -2.0);
+                self.metrics.record_block_response_error();
             }
 
             AlysNetworkBehaviourEvent::PeerConnected { peer_id, address } => {
@@ -700,15 +781,30 @@ impl Handler<NetworkMessage> for NetworkActor {
                                         let _ = response_tx.send(result);
                                     }
 
-                                    Some(SwarmCommand::SendRequest { peer_id: _, request: _, response_tx }) => {
-                                        // TODO: Phase 2 Task 2.2 - Implement when request_response behavior is added
-                                        tracing::warn!("SendRequest not yet implemented - Phase 2 Task 2.2");
-                                        let _ = response_tx.send(Err("Request-response protocol not yet implemented".to_string()));
+                                    Some(SwarmCommand::SendRequest { peer_id, request, response_tx }) => {
+                                        // Phase 2 Task 2.2: Send request-response request via request_response behavior
+                                        let request_id = swarm.behaviour_mut().request_response
+                                            .send_request(&peer_id, request);
+
+                                        tracing::debug!(
+                                            peer_id = %peer_id,
+                                            request_id = ?request_id,
+                                            "Sent request-response request"
+                                        );
+
+                                        let _ = response_tx.send(Ok(request_id));
                                     }
 
-                                    Some(SwarmCommand::SendResponse { channel: _, response: _ }) => {
-                                        // TODO: Phase 2 Task 2.2 - Implement when request_response behavior is added
-                                        tracing::warn!("SendResponse not yet implemented - Phase 2 Task 2.2");
+                                    Some(SwarmCommand::SendResponse { channel, response }) => {
+                                        // Phase 2 Task 2.2: Send request-response response via request_response behavior
+                                        match swarm.behaviour_mut().request_response.send_response(channel, response) {
+                                            Ok(_) => {
+                                                tracing::debug!("Sent request-response response");
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(error = ?e, "Failed to send request-response response");
+                                            }
+                                        }
                                     }
 
                                     None => {
