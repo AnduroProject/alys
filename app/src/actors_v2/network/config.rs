@@ -23,6 +23,8 @@ pub struct NetworkConfig {
     pub message_size_limit: usize,
     /// Peer discovery interval
     pub discovery_interval: Duration,
+    /// Automatically dial mDNS discovered peers (Phase 2 Task 2.4)
+    pub auto_dial_mdns_peers: bool,
 }
 
 impl Default for NetworkConfig {
@@ -41,6 +43,7 @@ impl Default for NetworkConfig {
             ],
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),
+            auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable auto-dial for local network discovery
         }
     }
 }

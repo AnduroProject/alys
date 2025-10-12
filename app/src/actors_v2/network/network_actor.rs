@@ -456,10 +456,60 @@ impl NetworkActor {
                 tracing::info!("mDNS peer discovered: {} with {} addresses",
                     peer_id, addresses.len());
 
+                // Phase 2 Task 2.4: Record mDNS-specific discovery metric
+                self.metrics.record_mdns_discovery();
+
                 // Add discovered peer to peer manager
                 if let Some(address) = addresses.first() {
                     self.peer_manager.add_peer(peer_id.clone(), address.clone());
-                    self.metrics.record_connection_established();
+
+                    // Phase 2 Task 2.4: Automatically dial discovered mDNS peer if enabled
+                    if self.config.auto_dial_mdns_peers {
+                        if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                            // Parse multiaddr for dialing
+                            match address.parse::<Multiaddr>() {
+                                Ok(multiaddr) => {
+                                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                                    let dial_cmd = SwarmCommand::Dial {
+                                        addr: multiaddr.clone(),
+                                        response_tx,
+                                    };
+
+                                    match cmd_tx.try_send(dial_cmd) {
+                                        Ok(_) => {
+                                            tracing::info!("Auto-dialing mDNS discovered peer: {}", peer_id);
+
+                                            // Spawn task to handle dial response
+                                            let peer_id_clone = peer_id.clone();
+                                            tokio::spawn(async move {
+                                                match response_rx.await {
+                                                    Ok(Ok(())) => {
+                                                        tracing::info!("Successfully connected to mDNS peer: {}", peer_id_clone);
+                                                    }
+                                                    Ok(Err(e)) => {
+                                                        tracing::warn!("Failed to dial mDNS peer {}: {}", peer_id_clone, e);
+                                                    }
+                                                    Err(_) => {
+                                                        tracing::error!("Dial response channel closed for mDNS peer: {}", peer_id_clone);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to send dial command for mDNS peer {}: {:?}", peer_id, e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Invalid multiaddr for mDNS peer {}: {}", peer_id, e);
+                                }
+                            }
+                        } else {
+                            tracing::warn!("Cannot auto-dial mDNS peer {}: command channel not available", peer_id);
+                        }
+                    } else {
+                        tracing::debug!("Auto-dial disabled for mDNS peer: {}", peer_id);
+                    }
 
                     // Notify SyncActor about new peer for potential sync
                     if let Some(ref sync_actor) = self.sync_actor {
@@ -487,7 +537,9 @@ impl NetworkActor {
 
                 // Remove expired peer
                 self.peer_manager.remove_peer(&peer_id);
-                self.metrics.record_connection_closed();
+
+                // Phase 2 Task 2.4: Record mDNS-specific expiry metric
+                self.metrics.record_mdns_expiry();
             }
         }
 

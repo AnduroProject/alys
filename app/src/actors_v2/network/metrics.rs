@@ -50,6 +50,10 @@ pub struct NetworkMetrics {
     pub block_request_latency_ms: Vec<u64>,
     pub block_responses_received: u64,
     pub block_response_errors: u64,
+
+    // Phase 2 Task 2.4: mDNS discovery metrics
+    pub mdns_discoveries: u64,
+    pub mdns_expiries: u64,
 }
 
 impl NetworkMetrics {
@@ -80,6 +84,8 @@ impl NetworkMetrics {
             block_request_latency_ms: Vec::new(),
             block_responses_received: 0,
             block_response_errors: 0,
+            mdns_discoveries: 0,
+            mdns_expiries: 0,
         }
     }
 
@@ -171,6 +177,22 @@ impl NetworkMetrics {
         }
         let sum: u64 = self.block_request_latency_ms.iter().sum();
         sum as f64 / self.block_request_latency_ms.len() as f64
+    }
+
+    // Phase 2 Task 2.4: mDNS discovery metrics
+    pub fn record_mdns_discovery(&mut self) {
+        self.mdns_discoveries += 1;
+        self.connected_peers += 1;
+        self.total_connections += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    pub fn record_mdns_expiry(&mut self) {
+        self.mdns_expiries += 1;
+        if self.connected_peers > 0 {
+            self.connected_peers -= 1;
+        }
+        self.last_updated = SystemTime::now();
     }
 }
 

@@ -489,6 +489,7 @@ impl App {
                 ],
                 message_size_limit: 4 * 1024 * 1024, // 4MB
                 discovery_interval: Duration::from_secs(60),
+                auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable mDNS auto-dial
             };
             let network_actor = crate::actors_v2::network::NetworkActor::new(network_config.clone())
                 .expect("Failed to create NetworkActor V2")
