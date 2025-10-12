@@ -386,12 +386,14 @@ async fn test_connection_recovery() {
 
     // Stop actor2 (simulate disconnect)
     actor2.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
-    sleep(Duration::from_secs(1)).await;
 
-    // Restart actor2 (simulate reconnect)
-    let actor2_new = create_test_actor(18013).start();
+    // Wait longer for port to be released by OS
+    sleep(Duration::from_secs(3)).await;
+
+    // Restart actor2 on a different port to avoid OS port release timing issues
+    let actor2_new = create_test_actor(18014).start();
     actor2_new.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/18013".to_string()],
+        listen_addrs: vec!["/ip4/127.0.0.1/tcp/18014".to_string()],
         bootstrap_peers: vec!["/ip4/127.0.0.1/tcp/18012".to_string()],
     }).await.expect("Failed to restart actor2").expect("Actor2 restart failed");
 
