@@ -62,20 +62,22 @@ async fn test_gossip_handler_message_processing() {
         "test-transactions".to_string(),
     ]);
 
-    // Test block message processing
+    // Test block message processing (needs >= 100 bytes for validation)
+    let block_data = vec![0u8; 150]; // 150 bytes - satisfies block validation requirement
     let block_message = GossipMessage {
         topic: "test-blocks".to_string(),
-        data: b"test block gossip data".to_vec(),
+        data: block_data,
         message_id: Uuid::new_v4().to_string(),
     };
 
     let result = gossip_handler.process_message(block_message, "peer-1".to_string());
     assert!(result.is_ok(), "Block message processing should succeed: {:?}", result);
 
-    // Test transaction message processing
+    // Test transaction message processing (needs >= 50 bytes for validation)
+    let tx_data = vec![0u8; 60]; // 60 bytes - satisfies transaction validation requirement
     let tx_message = GossipMessage {
         topic: "test-transactions".to_string(),
-        data: b"test transaction gossip data".to_vec(),
+        data: tx_data,
         message_id: Uuid::new_v4().to_string(),
     };
 
