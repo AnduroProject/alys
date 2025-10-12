@@ -10,8 +10,10 @@ use actix::prelude::*;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow, Context as AnyhowContext};
-use libp2p::{Multiaddr, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
+use libp2p::{Multiaddr, PeerId, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
+use libp2p::request_response::{RequestId, ResponseChannel};
 use tokio::sync::mpsc;
+use futures::{select, StreamExt, FutureExt};
 
 use super::{
     NetworkConfig, NetworkMessage, NetworkResponse, NetworkError,
@@ -19,6 +21,7 @@ use super::{
     NetworkMetrics,
     managers::PeerManager,
     messages::{PeerInfo, NetworkStatus},
+    protocols::{BlockRequest, BlockResponse},
 };
 
 /// Type alias for SwarmEvent with our behaviour's error type
@@ -26,6 +29,45 @@ type AlysSwarmEvent = SwarmEvent<
     AlysNetworkBehaviourEvent,
     <<AlysNetworkBehaviour as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::Error
 >;
+
+/// Commands that can be sent to the swarm polling task
+///
+/// Phase 2 Task 2.0: SwarmCommand channel foundation
+#[derive(Debug)]
+pub enum SwarmCommand {
+    /// Dial a peer at the given multiaddr
+    Dial {
+        addr: Multiaddr,
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Start listening on an address
+    ListenOn {
+        addr: Multiaddr,
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Publish a gossipsub message
+    PublishGossip {
+        topic: String,
+        data: Vec<u8>,
+        response_tx: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    /// Subscribe to a gossipsub topic
+    SubscribeTopic {
+        topic: String,
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Send a request-response request
+    SendRequest {
+        peer_id: PeerId,
+        request: BlockRequest,
+        response_tx: tokio::sync::oneshot::Sender<Result<RequestId, String>>,
+    },
+    /// Send a request-response response
+    SendResponse {
+        channel: ResponseChannel<BlockResponse>,
+        response: BlockResponse,
+    },
+}
 
 /// NetworkActor V2 - P2P protocols with working libp2p integration
 pub struct NetworkActor {
@@ -38,6 +80,9 @@ pub struct NetworkActor {
     /// Swarm polling task handle (for graceful shutdown)
     swarm_task_handle: Option<tokio::task::JoinHandle<()>>,
 
+    /// Send commands to swarm task (Phase 2 Task 2.0)
+    swarm_cmd_tx: Option<mpsc::Sender<SwarmCommand>>,
+
     /// Local peer ID (cached from config)
     local_peer_id: String,
 
@@ -48,7 +93,7 @@ pub struct NetworkActor {
     /// Active protocol subscriptions
     active_subscriptions: HashMap<String, Instant>,
     /// Pending block requests tracking (Phase 4: Task 2.3)
-    pending_block_requests: HashMap<uuid::Uuid, BlockRequest>,
+    pending_block_requests: HashMap<uuid::Uuid, PendingBlockRequest>,
     /// SyncActor address for coordination
     sync_actor: Option<Addr<crate::actors_v2::network::SyncActor>>,
     /// ChainActor address for AuxPoW forwarding (Phase 4: Integration Point 3b)
@@ -59,9 +104,9 @@ pub struct NetworkActor {
     shutdown_requested: bool,
 }
 
-/// Block request tracking (Phase 4: Task 2.3)
+/// Pending block request tracking (Phase 4: Task 2.3)
 #[derive(Debug, Clone)]
-struct BlockRequest {
+struct PendingBlockRequest {
     request_id: uuid::Uuid,
     peer_ids: Vec<String>,
     start_height: u64,
@@ -85,6 +130,7 @@ impl NetworkActor {
             config,
             event_rx: None,
             swarm_task_handle: None,
+            swarm_cmd_tx: None,
             local_peer_id,
             metrics: NetworkMetrics::new(),
             peer_manager: PeerManager::new(),
@@ -573,19 +619,102 @@ impl Handler<NetworkMessage> for NetworkActor {
                     tracing::info!("Listening on: {}", addr);
                 }
 
-                // Setup channels for event bridge
-                let (event_tx, event_rx) = mpsc::unbounded_channel();
+                // Setup channels - BOUNDED to prevent OOM (Phase 2 Task 2.0)
+                let (event_tx, event_rx) = mpsc::channel(1000); // Bounded: 1000 events
+                let (cmd_tx, mut cmd_rx) = mpsc::channel::<SwarmCommand>(1000); // Bounded: 1000 commands
 
-                // Spawn swarm polling task
+                // Spawn swarm polling task with command handling (Phase 2 Task 2.0)
                 let swarm_task = tokio::spawn(async move {
-                    use futures::StreamExt;
-
                     loop {
-                        match swarm.select_next_some().await {
-                            event => {
-                                if event_tx.send(event).is_err() {
-                                    tracing::info!("Event receiver dropped, stopping swarm poll");
-                                    break;
+                        select! {
+                            // Handle swarm events
+                            event = swarm.select_next_some().fuse() => {
+                                // Use try_send with backpressure handling
+                                match event_tx.try_send(event) {
+                                    Ok(_) => {},
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        tracing::warn!("Event channel full, dropping event (backpressure)");
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        tracing::info!("Event receiver dropped, stopping swarm poll");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Handle commands from NetworkActor
+                            cmd = cmd_rx.recv().fuse() => {
+                                match cmd {
+                                    Some(SwarmCommand::Dial { addr, response_tx }) => {
+                                        let result = swarm.dial(addr.clone())
+                                            .map(|_| ())
+                                            .map_err(|e| format!("Dial failed: {}", e));
+                                        let _ = response_tx.send(result);
+                                    }
+
+                                    Some(SwarmCommand::ListenOn { addr, response_tx }) => {
+                                        let result = swarm.listen_on(addr.clone())
+                                            .map(|_| ())
+                                            .map_err(|e| format!("Listen failed: {}", e));
+                                        let _ = response_tx.send(result);
+                                    }
+
+                                    Some(SwarmCommand::PublishGossip { topic, data, response_tx }) => {
+                                        use libp2p::gossipsub::IdentTopic;
+
+                                        let topic = IdentTopic::new(topic);
+
+                                        // Auto-subscribe if not already subscribed
+                                        let is_subscribed = swarm.behaviour().gossipsub
+                                            .mesh_peers(&topic.hash())
+                                            .next()
+                                            .is_some();
+
+                                        if !is_subscribed {
+                                            if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&topic) {
+                                                let _ = response_tx.send(Err(format!("Subscribe failed: {}", e)));
+                                                continue;
+                                            }
+                                        }
+
+                                        // Publish message
+                                        let publish_result = swarm.behaviour_mut().gossipsub
+                                            .publish(topic, data);
+
+                                        let result = match publish_result {
+                                            Ok(msg_id) => Ok(msg_id.to_string()),
+                                            Err(e) => Err(format!("Publish failed: {}", e)),
+                                        };
+
+                                        let _ = response_tx.send(result);
+                                    }
+
+                                    Some(SwarmCommand::SubscribeTopic { topic, response_tx }) => {
+                                        use libp2p::gossipsub::IdentTopic;
+
+                                        let topic = IdentTopic::new(topic);
+                                        let result = swarm.behaviour_mut().gossipsub
+                                            .subscribe(&topic)
+                                            .map(|_| ())
+                                            .map_err(|e| format!("Subscribe failed: {}", e));
+                                        let _ = response_tx.send(result);
+                                    }
+
+                                    Some(SwarmCommand::SendRequest { peer_id: _, request: _, response_tx }) => {
+                                        // TODO: Phase 2 Task 2.2 - Implement when request_response behavior is added
+                                        tracing::warn!("SendRequest not yet implemented - Phase 2 Task 2.2");
+                                        let _ = response_tx.send(Err("Request-response protocol not yet implemented".to_string()));
+                                    }
+
+                                    Some(SwarmCommand::SendResponse { channel: _, response: _ }) => {
+                                        // TODO: Phase 2 Task 2.2 - Implement when request_response behavior is added
+                                        tracing::warn!("SendResponse not yet implemented - Phase 2 Task 2.2");
+                                    }
+
+                                    None => {
+                                        tracing::info!("Command channel closed, stopping swarm poll");
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -593,15 +722,62 @@ impl Handler<NetworkMessage> for NetworkActor {
                 });
 
                 self.swarm_task_handle = Some(swarm_task);
+                self.swarm_cmd_tx = Some(cmd_tx.clone());
 
                 // Add event receiver as stream to actor context
-                ctx.add_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(event_rx));
+                ctx.add_stream(tokio_stream::wrappers::ReceiverStream::new(event_rx));
 
                 // Set up peer manager with bootstrap peers
                 self.peer_manager.set_bootstrap_peers(bootstrap_peers.clone());
 
+                // Connect to bootstrap peers using command channel (Phase 2 Task 2.0.4)
+                if !bootstrap_peers.is_empty() {
+                    tracing::info!("Connecting to {} bootstrap peers", bootstrap_peers.len());
+
+                    for peer_addr_str in &bootstrap_peers {
+                        // Parse multiaddr
+                        let multiaddr: Multiaddr = match peer_addr_str.parse() {
+                            Ok(addr) => addr,
+                            Err(e) => {
+                                tracing::error!("Invalid bootstrap peer address {}: {}", peer_addr_str, e);
+                                continue;
+                            }
+                        };
+
+                        // Send dial command via channel (non-blocking)
+                        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                        let dial_cmd = SwarmCommand::Dial {
+                            addr: multiaddr.clone(),
+                            response_tx,
+                        };
+
+                        match cmd_tx.try_send(dial_cmd) {
+                            Ok(_) => {
+                                // Spawn task to handle dial response (non-blocking)
+                                tokio::spawn(async move {
+                                    match response_rx.await {
+                                        Ok(Ok(())) => {
+                                            tracing::info!("Successfully initiated dial to {}", multiaddr);
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!("Failed to dial {}: {}", multiaddr, e);
+                                        }
+                                        Err(_) => {
+                                            tracing::error!("Dial response channel closed for {}", multiaddr);
+                                        }
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to send dial command for {}: {}", peer_addr_str, e);
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 self.is_running = true;
-                tracing::info!("NetworkActor V2 started successfully with event bridge");
+                tracing::info!("NetworkActor V2 started successfully with command channel");
 
                 // Start periodic cleanup
                 ctx.address().do_send(NetworkMessage::CleanupTimeouts);
@@ -840,7 +1016,7 @@ impl Handler<NetworkMessage> for NetworkActor {
                 );
 
                 // Create and track request (Phase 4: Task 2.3)
-                let block_request = BlockRequest {
+                let block_request = PendingBlockRequest {
                     request_id,
                     peer_ids: selected_peers.clone(),
                     start_height,
