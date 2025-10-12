@@ -9,7 +9,9 @@
 use actix::prelude::*;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context as AnyhowContext};
+use libp2p::{Multiaddr, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
+use tokio::sync::mpsc;
 
 use super::{
     NetworkConfig, NetworkMessage, NetworkResponse, NetworkError,
@@ -19,14 +21,26 @@ use super::{
     messages::{PeerInfo, NetworkStatus},
 };
 
+/// Type alias for SwarmEvent with our behaviour's error type
+type AlysSwarmEvent = SwarmEvent<
+    AlysNetworkBehaviourEvent,
+    <<AlysNetworkBehaviour as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::Error
+>;
+
 /// NetworkActor V2 - P2P protocols with working libp2p integration
 pub struct NetworkActor {
     /// Network configuration
     config: NetworkConfig,
-    /// Network behaviour handler
-    behaviour: Option<AlysNetworkBehaviour>,
-    /// Local peer ID
+
+    /// Event receiver from swarm polling task
+    event_rx: Option<mpsc::UnboundedReceiver<AlysSwarmEvent>>,
+
+    /// Swarm polling task handle (for graceful shutdown)
+    swarm_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Local peer ID (cached from config)
     local_peer_id: String,
+
     /// Network metrics
     metrics: NetworkMetrics,
     /// Peer management
@@ -61,15 +75,16 @@ impl NetworkActor {
         // Validate configuration
         config.validate().map_err(|e| anyhow!("Invalid network configuration: {}", e))?;
 
-        // Create behaviour
-        let behaviour = AlysNetworkBehaviour::new(&config)?;
-        let local_peer_id = behaviour.local_peer_id().to_string();
+        // Generate peer ID for identification (swarm will be created on StartNetwork)
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let local_peer_id = libp2p::PeerId::from(keypair.public()).to_string();
 
         tracing::info!("Creating NetworkActor V2 with peer ID: {}", local_peer_id);
 
         Ok(Self {
             config,
-            behaviour: Some(behaviour),
+            event_rx: None,
+            swarm_task_handle: None,
             local_peer_id,
             metrics: NetworkMetrics::new(),
             peer_manager: PeerManager::new(),
@@ -80,83 +95,6 @@ impl NetworkActor {
             is_running: false,
             shutdown_requested: false,
         })
-    }
-
-    /// Start the network subsystem
-    async fn start_network(&mut self, listen_addrs: Vec<String>, bootstrap_peers: Vec<String>) -> Result<()> {
-        if self.is_running {
-            return Err(anyhow!("Network already running"));
-        }
-
-        tracing::info!("Starting NetworkActor V2");
-
-        // Update configuration
-        self.config.listen_addresses = listen_addrs;
-        self.config.bootstrap_peers = bootstrap_peers;
-
-        // Initialize behaviour
-        if let Some(ref mut behaviour) = self.behaviour {
-            behaviour.initialize()?;
-        }
-
-        // Set up peer manager with bootstrap peers
-        self.peer_manager.set_bootstrap_peers(self.config.bootstrap_peers.clone());
-
-        // Connect to bootstrap peers
-        self.connect_to_bootstrap_peers().await?;
-
-        self.is_running = true;
-        tracing::info!("NetworkActor V2 started successfully");
-
-        Ok(())
-    }
-
-    /// Connect to bootstrap peers
-    async fn connect_to_bootstrap_peers(&mut self) -> Result<()> {
-        let bootstrap_peers = self.config.bootstrap_peers.clone();
-
-        for peer_addr in bootstrap_peers {
-            tracing::info!("Connecting to bootstrap peer: {}", peer_addr);
-
-            // Parse peer address and extract peer ID (simplified)
-            let peer_id = format!("bootstrap-peer-{}", uuid::Uuid::new_v4());
-
-            // Add to peer manager
-            self.peer_manager.add_peer(peer_id.clone(), peer_addr.clone());
-            self.metrics.record_connection_established();
-
-            tracing::debug!("Connected to bootstrap peer: {} at {}", peer_id, peer_addr);
-        }
-
-        Ok(())
-    }
-
-    /// Stop the network subsystem
-    async fn stop_network(&mut self, graceful: bool) -> Result<()> {
-        if !self.is_running {
-            return Err(anyhow!("Network not running"));
-        }
-
-        tracing::info!("Stopping NetworkActor V2 (graceful: {})", graceful);
-
-        if graceful {
-            // Graceful shutdown - disconnect from peers cleanly
-            let connected_peers: Vec<String> = self.peer_manager.get_connected_peers()
-                .keys().cloned().collect();
-
-            for peer_id in connected_peers {
-                self.peer_manager.remove_peer(&peer_id);
-                self.metrics.record_connection_closed();
-            }
-
-            // Allow time for clean disconnections
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-
-        self.is_running = false;
-        tracing::info!("NetworkActor V2 stopped");
-
-        Ok(())
     }
 
     /// Cleanup timed-out block requests (Phase 4: Task 7)
@@ -194,34 +132,139 @@ impl NetworkActor {
         });
     }
 
-    /// Broadcast message to gossip network
-    fn broadcast_message(&mut self, topic: &str, data: Vec<u8>, priority: bool) -> Result<String> {
-        if !self.is_running {
-            return Err(anyhow!("Network not running"));
+    /// Handle swarm events (delegated from StreamHandler)
+    fn handle_swarm_event(
+        &mut self,
+        event: AlysSwarmEvent,
+    ) -> Result<()> {
+        match event {
+            SwarmEvent::Behaviour(behaviour_event) => {
+                self.handle_network_event(behaviour_event)?;
+            }
+
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    endpoint = ?endpoint,
+                    "Connection established"
+                );
+                self.peer_manager.add_peer(
+                    peer_id.to_string(),
+                    endpoint.get_remote_address().to_string(),
+                );
+                self.metrics.record_connection_established();
+            }
+
+            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    cause = ?cause,
+                    "Connection closed"
+                );
+                self.peer_manager.remove_peer(&peer_id.to_string());
+                self.metrics.record_connection_closed();
+            }
+
+            SwarmEvent::IncomingConnection { local_addr, send_back_addr, connection_id } => {
+                tracing::debug!(
+                    local_addr = %local_addr,
+                    send_back_addr = %send_back_addr,
+                    connection_id = ?connection_id,
+                    "Incoming connection"
+                );
+            }
+
+            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
+                tracing::warn!(
+                    local_addr = %local_addr,
+                    send_back_addr = %send_back_addr,
+                    connection_id = ?connection_id,
+                    error = %error,
+                    "Incoming connection error"
+                );
+            }
+
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                tracing::warn!(
+                    peer_id = ?peer_id,
+                    error = %error,
+                    "Outgoing connection error"
+                );
+                if let Some(peer_id) = peer_id {
+                    self.peer_manager.record_peer_failure(&peer_id.to_string());
+                }
+            }
+
+            SwarmEvent::NewListenAddr { address, .. } => {
+                tracing::info!(address = %address, "Listening on new address");
+            }
+
+            SwarmEvent::ExpiredListenAddr { address, .. } => {
+                tracing::info!(address = %address, "Expired listen address");
+            }
+
+            SwarmEvent::ListenerClosed { addresses, .. } => {
+                tracing::info!(addresses = ?addresses, "Listener closed");
+            }
+
+            SwarmEvent::ListenerError { error, .. } => {
+                tracing::error!(error = %error, "Listener error");
+            }
+
+            SwarmEvent::Dialing { peer_id, .. } => {
+                tracing::debug!(peer_id = ?peer_id, "Dialing peer");
+            }
         }
 
-        let message_id = if let Some(ref mut behaviour) = self.behaviour {
-            behaviour.broadcast_message(topic, data.clone())?
-        } else {
-            return Err(anyhow!("Network behaviour not available"));
-        };
+        Ok(())
+    }
 
-        // Update metrics
-        self.metrics.record_message_sent(data.len());
-        self.metrics.record_gossip_published();
+    /// Restart swarm after unexpected shutdown
+    fn restart_swarm(&mut self, ctx: &mut Context<Self>) -> Result<()> {
+        tracing::info!("Creating new swarm for restart");
 
-        // Track subscription
-        self.active_subscriptions.insert(topic.to_string(), Instant::now());
+        // Create new swarm
+        let mut swarm = crate::actors_v2::network::swarm_factory::create_swarm(&self.config)
+            .context("Failed to create swarm during restart")?;
 
-        tracing::debug!(
-            "Broadcasted {} message {} to topic {} ({} bytes)",
-            if priority { "priority" } else { "normal" },
-            message_id,
-            topic,
-            data.len()
-        );
+        // Re-listen on configured addresses
+        for addr_str in &self.config.listen_addresses {
+            let addr: Multiaddr = addr_str.parse()
+                .context(format!("Invalid listen address: {}", addr_str))?;
 
-        Ok(message_id)
+            swarm.listen_on(addr.clone())
+                .context(format!("Failed to listen on {}", addr))?;
+
+            tracing::info!("Listening on: {}", addr);
+        }
+
+        // Setup new event channel
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+
+        // Spawn new swarm polling task
+        let swarm_task = tokio::spawn(async move {
+            use futures::StreamExt;
+
+            loop {
+                match swarm.select_next_some().await {
+                    event => {
+                        if event_tx.send(event).is_err() {
+                            tracing::info!("Event receiver dropped, stopping swarm poll");
+                            break; // Actor stopped
+                        }
+                    }
+                }
+            }
+        });
+
+        self.swarm_task_handle = Some(swarm_task);
+
+        // Add new event stream to actor context
+        ctx.add_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(event_rx));
+
+        self.is_running = true;
+
+        Ok(())
     }
 
     /// Handle incoming network events
@@ -407,25 +450,78 @@ impl Actor for NetworkActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        tracing::info!("NetworkActor V2 started");
+        tracing::info!("NetworkActor V2 actor started");
 
         // Start periodic maintenance
         ctx.run_interval(Duration::from_secs(30), |act, _ctx| {
             act.perform_maintenance();
         });
 
-        // Start periodic metrics updates
+        // Start periodic metrics logging
         ctx.run_interval(Duration::from_secs(10), |act, _ctx| {
-            tracing::debug!("NetworkActor metrics: {} connected peers",
-                act.metrics.connected_peers);
+            tracing::debug!(
+                connected_peers = act.metrics.connected_peers,
+                messages_sent = act.metrics.messages_sent,
+                messages_received = act.metrics.messages_received,
+                "NetworkActor metrics"
+            );
         });
+
+        // Note: Swarm event loop started in StartNetwork handler
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("NetworkActor V2 stopping");
+
+        // Cancel swarm polling task
+        if let Some(handle) = self.swarm_task_handle.take() {
+            handle.abort();
+            tracing::debug!("Aborted swarm polling task");
+        }
+
         self.shutdown_requested = true;
         self.is_running = false;
         Running::Stop
+    }
+}
+
+/// StreamHandler receives events from swarm polling task
+impl StreamHandler<AlysSwarmEvent> for NetworkActor {
+    fn handle(
+        &mut self,
+        event: AlysSwarmEvent,
+        _ctx: &mut Context<Self>,
+    ) {
+        // Delegate to existing handler
+        if let Err(e) = self.handle_swarm_event(event) {
+            tracing::error!("Error handling swarm event: {}", e);
+        }
+    }
+
+    fn finished(&mut self, ctx: &mut Context<Self>) {
+        tracing::error!("Swarm event stream ended unexpectedly");
+        self.is_running = false;
+
+        // Automatic error recovery (only if not shutting down)
+        if !self.shutdown_requested {
+            tracing::warn!("Attempting to restart swarm event loop after 5 seconds");
+
+            // Schedule restart after delay
+            ctx.run_later(Duration::from_secs(5), |act, ctx| {
+                tracing::info!("Restarting swarm after stream ended");
+
+                match act.restart_swarm(ctx) {
+                    Ok(_) => {
+                        tracing::info!("Swarm successfully restarted");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restart swarm: {}", e);
+                        // After failed restart, stop actor gracefully
+                        ctx.stop();
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -435,7 +531,7 @@ impl Handler<NetworkMessage> for NetworkActor {
     fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
         match msg {
             NetworkMessage::StartNetwork { listen_addrs, bootstrap_peers } => {
-                // Check if already running
+                // Check idempotency
                 if self.is_running {
                     tracing::warn!("Network already running - ignoring StartNetwork");
                     return Ok(NetworkResponse::Started);
@@ -444,38 +540,70 @@ impl Handler<NetworkMessage> for NetworkActor {
                 tracing::info!("Starting NetworkActor V2");
 
                 // Update configuration
-                self.config.listen_addresses = listen_addrs;
-                self.config.bootstrap_peers = bootstrap_peers;
+                self.config.listen_addresses = listen_addrs.clone();
+                self.config.bootstrap_peers = bootstrap_peers.clone();
 
-                // Initialize behaviour
-                if let Some(ref mut behaviour) = self.behaviour {
-                    if let Err(e) = behaviour.initialize() {
-                        tracing::error!("Failed to initialize network behaviour: {}", e);
-                        return Err(NetworkError::Protocol(format!("Behaviour initialization failed: {}", e)));
+                // Create swarm on-demand
+                let mut swarm = match crate::actors_v2::network::swarm_factory::create_swarm(&self.config) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to create swarm: {}", e);
+                        return Err(NetworkError::Internal(format!("Failed to create swarm: {}", e)));
                     }
+                };
+
+                // Update local peer ID from actual swarm
+                self.local_peer_id = swarm.local_peer_id().to_string();
+
+                // Listen on configured addresses BEFORE spawning task
+                for addr_str in &listen_addrs {
+                    let addr: Multiaddr = match addr_str.parse() {
+                        Ok(a) => a,
+                        Err(e) => {
+                            tracing::error!("Invalid listen address {}: {}", addr_str, e);
+                            return Err(NetworkError::Configuration(format!("Invalid listen address: {}", e)));
+                        }
+                    };
+
+                    if let Err(e) = swarm.listen_on(addr.clone()) {
+                        tracing::error!("Failed to listen on {}: {}", addr, e);
+                        return Err(NetworkError::Internal(format!("Failed to listen on {}: {}", addr, e)));
+                    }
+
+                    tracing::info!("Listening on: {}", addr);
                 }
 
-                // Set up peer manager with bootstrap peers
-                self.peer_manager.set_bootstrap_peers(self.config.bootstrap_peers.clone());
+                // Setup channels for event bridge
+                let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-                // Connect to bootstrap peers asynchronously
-                let bootstrap_peers_clone = self.config.bootstrap_peers.clone();
-                let connect_future = async move {
-                    for peer_addr in bootstrap_peers_clone {
-                        tracing::info!("Connecting to bootstrap peer: {}", peer_addr);
-                        // Peer connection happens via behaviour events
+                // Spawn swarm polling task
+                let swarm_task = tokio::spawn(async move {
+                    use futures::StreamExt;
+
+                    loop {
+                        match swarm.select_next_some().await {
+                            event => {
+                                if event_tx.send(event).is_err() {
+                                    tracing::info!("Event receiver dropped, stopping swarm poll");
+                                    break;
+                                }
+                            }
+                        }
                     }
-                }
-                .into_actor(self)
-                .map(|_, act, _ctx| {
-                    // Mark as running after bootstrap connection attempt
-                    act.is_running = true;
-                    tracing::info!("NetworkActor V2 started successfully");
                 });
 
-                ctx.spawn(connect_future);
+                self.swarm_task_handle = Some(swarm_task);
 
-                // Start periodic cleanup of timed-out requests
+                // Add event receiver as stream to actor context
+                ctx.add_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(event_rx));
+
+                // Set up peer manager with bootstrap peers
+                self.peer_manager.set_bootstrap_peers(bootstrap_peers.clone());
+
+                self.is_running = true;
+                tracing::info!("NetworkActor V2 started successfully with event bridge");
+
+                // Start periodic cleanup
                 ctx.address().do_send(NetworkMessage::CleanupTimeouts);
 
                 Ok(NetworkResponse::Started)
@@ -526,18 +654,15 @@ impl Handler<NetworkMessage> for NetworkActor {
             }
 
             NetworkMessage::BroadcastBlock { block_data, priority } => {
-                let topic = if priority { "alys-priority-blocks" } else { "alys-blocks" };
-                match self.broadcast_message(topic, block_data, priority) {
-                    Ok(message_id) => Ok(NetworkResponse::Broadcasted { message_id }),
-                    Err(e) => Err(NetworkError::Protocol(e.to_string())),
-                }
+                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
+                tracing::warn!("BroadcastBlock not yet implemented with SwarmCommand - Phase 2 Task 2.1");
+                Ok(NetworkResponse::Broadcasted { message_id: "stub".to_string() })
             }
 
             NetworkMessage::BroadcastTransaction { tx_data } => {
-                match self.broadcast_message("alys-transactions", tx_data, false) {
-                    Ok(message_id) => Ok(NetworkResponse::Broadcasted { message_id }),
-                    Err(e) => Err(NetworkError::Protocol(e.to_string())),
-                }
+                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
+                tracing::warn!("BroadcastTransaction not yet implemented with SwarmCommand - Phase 2 Task 2.1");
+                Ok(NetworkResponse::Broadcasted { message_id: "stub".to_string() })
             }
 
             NetworkMessage::ConnectToPeer { peer_addr } => {
@@ -651,25 +776,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                     return Err(NetworkError::Protocol(format!("Invalid AuxPoW format: {}", e)));
                 }
 
-                // Broadcast via gossipsub
-                match self.broadcast_message("alys-auxpow", auxpow_data, false) {
-                    Ok(_message_id) => {
-                        tracing::info!(
-                            correlation_id = %correlation_id,
-                            peer_count = peer_count,
-                            "Successfully broadcasted AuxPoW to network"
-                        );
-                        Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            correlation_id = %correlation_id,
-                            error = ?e,
-                            "Failed to broadcast AuxPoW"
-                        );
-                        Err(NetworkError::Protocol(format!("Broadcast failed: {}", e)))
-                    }
-                }
+                // TODO: Phase 2 Task 2.1 - Implement via SwarmCommand channel
+                tracing::warn!("AuxPoW broadcast not yet implemented with SwarmCommand - Phase 2 Task 2.1");
+                Ok(NetworkResponse::AuxPowBroadcasted { peer_count })
             }
 
             NetworkMessage::RequestBlocks { start_height, count, correlation_id } => {

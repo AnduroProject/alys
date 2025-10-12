@@ -370,6 +370,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-io-timeout",
+ "tokio-stream",
  "tokio-test",
  "tokio-util 0.6.10",
  "tracing",
