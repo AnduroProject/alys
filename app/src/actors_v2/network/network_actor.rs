@@ -1896,19 +1896,64 @@ impl Handler<NetworkMessage> for NetworkActor {
                     "Performing network health check"
                 );
 
+                // Phase 4: Enhanced health check with reputation monitoring
                 let connected_peers = self.peer_manager.get_connected_peers().len();
-                let is_healthy = self.is_running && connected_peers > 0;
-                let issues = if !is_healthy {
-                    vec![
-                        if !self.is_running { "Network not running".to_string() } else { String::new() },
-                        if connected_peers == 0 { "No peers connected".to_string() } else { String::new() },
-                    ]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .collect()
+                let avg_reputation = self.peer_manager.get_average_reputation();
+                let swarm_healthy = self.is_running && self.swarm_cmd_tx.is_some();
+
+                // Health criteria
+                let is_healthy = swarm_healthy
+                    && connected_peers > 0
+                    && avg_reputation > 0.0;
+
+                // Detailed issues reporting
+                let mut issues = Vec::new();
+
+                if !swarm_healthy {
+                    if !self.is_running {
+                        issues.push("Network not running".to_string());
+                    }
+                    if self.swarm_cmd_tx.is_none() {
+                        issues.push("Swarm command channel not available".to_string());
+                    }
+                }
+
+                if connected_peers == 0 {
+                    issues.push("No peers connected".to_string());
+                } else if connected_peers < 3 {
+                    issues.push(format!("Low peer count: {} (recommended: >=3)", connected_peers));
+                }
+
+                if avg_reputation <= 0.0 {
+                    issues.push(format!("Critical: Average peer reputation is {:.1} (threshold: >0.0)", avg_reputation));
+                } else if avg_reputation < 30.0 {
+                    issues.push(format!("Warning: Low average peer reputation: {:.1}", avg_reputation));
+                }
+
+                // Check for high rate limiting
+                if self.metrics.rate_limited_messages > 100 {
+                    issues.push(format!("High rate limiting: {} messages dropped", self.metrics.rate_limited_messages));
+                }
+
+                // Check for high connection failure rate
+                let connection_failure_rate = if self.metrics.total_connections > 0 {
+                    self.metrics.failed_connections as f64 / self.metrics.total_connections as f64
                 } else {
-                    vec![]
+                    0.0
                 };
+
+                if connection_failure_rate > 0.5 {
+                    issues.push(format!("High connection failure rate: {:.1}%", connection_failure_rate * 100.0));
+                }
+
+                tracing::info!(
+                    correlation_id = ?correlation_id,
+                    is_healthy = is_healthy,
+                    connected_peers = connected_peers,
+                    avg_reputation = avg_reputation,
+                    issues_count = issues.len(),
+                    "Health check completed"
+                );
 
                 Ok(NetworkResponse::Healthy { is_healthy, connected_peers, issues })
             }
