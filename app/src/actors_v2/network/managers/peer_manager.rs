@@ -7,17 +7,21 @@
 
 use std::collections::HashMap;
 use std::time::{SystemTime, Duration, Instant};
-use anyhow::{Result, anyhow};
 use serde::{Serialize, Deserialize};
 
 use super::super::messages::PeerId;
+
+/// Default Instant value for deserialization
+fn default_instant() -> Instant {
+    Instant::now()
+}
 
 /// Phase 4: Peer violation types for reputation tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Violation {
     /// Peer sent invalid or malformed message
     InvalidMessage {
-        #[serde(skip)]
+        #[serde(skip, default = "default_instant")]
         timestamp: Instant
     },
     /// Peer exceeded message rate limit
@@ -45,7 +49,7 @@ pub struct PeerInfo {
     pub bytes_sent: u64,
     pub bytes_received: u64,
     pub violations: Vec<Violation>,
-    #[serde(skip)]
+    #[serde(skip, default = "default_instant")]
     pub last_activity: Instant,
 }
 

@@ -111,7 +111,6 @@ impl RateLimiter {
 
         // Check rate limit
         if messages.len() as u64 >= self.max_messages {
-            let messages_per_second = messages.len() as u64 / self.window.as_secs().max(1);
             return Err(NetworkError::Protocol(format!(
                 "Rate limit exceeded: {} messages in {} seconds",
                 messages.len(),
