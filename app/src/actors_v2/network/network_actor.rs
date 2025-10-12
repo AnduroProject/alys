@@ -1410,15 +1410,110 @@ impl Handler<NetworkMessage> for NetworkActor {
                 };
                 self.pending_block_requests.insert(request_id, block_request);
 
-                // Send requests to selected peers (Phase 4: Task 2.4)
-                // Note: Actual libp2p request-response implementation needed in AlysNetworkBehaviour
-                for peer_id in &selected_peers {
+                // Get command channel (Phase 3 Task 3.1)
+                let cmd_tx = match self.swarm_cmd_tx.as_ref() {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        tracing::error!(correlation_id = %request_id, "Swarm command channel not available");
+                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                    }
+                };
+
+                // Create BlockRequest
+                let block_req = BlockRequest::GetBlocks(
+                    crate::actors_v2::network::protocols::request_response::BlockRangeRequest {
+                        start_height,
+                        count,
+                    }
+                );
+
+                // Send requests to selected peers via SwarmCommand (Phase 3 Task 3.1)
+                let mut send_failures = 0;
+                for peer_id_str in &selected_peers {
+                    // Parse peer ID string to libp2p PeerId
+                    let peer_id = match peer_id_str.parse::<PeerId>() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::error!(
+                                correlation_id = %request_id,
+                                peer_id = %peer_id_str,
+                                error = ?e,
+                                "Invalid peer ID format"
+                            );
+                            send_failures += 1;
+                            continue;
+                        }
+                    };
+
                     tracing::debug!(
                         correlation_id = %request_id,
                         peer_id = %peer_id,
-                        "Sending block request to peer"
+                        "Sending block request to peer via SwarmCommand"
                     );
-                    // TODO: Call behaviour.send_request() when implemented
+
+                    // Create oneshot channel for response
+                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                    // Send request command (non-blocking)
+                    let cmd = SwarmCommand::SendRequest {
+                        peer_id,
+                        request: block_req.clone(),
+                        response_tx,
+                    };
+
+                    match cmd_tx.try_send(cmd) {
+                        Ok(_) => {
+                            // Spawn task to handle async response
+                            let correlation_id_clone = request_id;
+                            let peer_id_str_clone = peer_id_str.clone();
+                            tokio::spawn(async move {
+                                match response_rx.await {
+                                    Ok(Ok(request_id)) => {
+                                        tracing::info!(
+                                            correlation_id = %correlation_id_clone,
+                                            peer_id = %peer_id_str_clone,
+                                            request_id = ?request_id,
+                                            "Block request sent successfully"
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::error!(
+                                            correlation_id = %correlation_id_clone,
+                                            peer_id = %peer_id_str_clone,
+                                            error = %e,
+                                            "Block request failed"
+                                        );
+                                    }
+                                    Err(_) => {
+                                        tracing::error!(
+                                            correlation_id = %correlation_id_clone,
+                                            peer_id = %peer_id_str_clone,
+                                            "Block request response channel closed"
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                correlation_id = %request_id,
+                                peer_id = %peer_id_str,
+                                error = ?e,
+                                "Failed to send block request command"
+                            );
+                            send_failures += 1;
+                        }
+                    }
+                }
+
+                // Check if all requests failed
+                if send_failures == selected_peers.len() {
+                    tracing::error!(
+                        correlation_id = %request_id,
+                        "All block requests failed to send"
+                    );
+                    self.pending_block_requests.remove(&request_id);
+                    return Err(NetworkError::Internal("Failed to send any block requests".to_string()));
                 }
 
                 Ok(NetworkResponse::BlocksRequested {

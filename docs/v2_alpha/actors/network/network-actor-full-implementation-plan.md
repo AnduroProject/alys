@@ -2653,19 +2653,7 @@ async fn test_real_tcp_connection() {
 
 **Duration**: 6-8 days (was 5-8 days)
 
-Tasks 4.1-4.3 as originally planned, plus:
-
-#### Task 4.4: Rollback Procedures (NEW)
-
-**Effort**: 1 day
-
-Document and test rollback scenarios.
-
-#### Task 4.5: Canary Deployment Testing (NEW)
-
-**Effort**: 2 days
-
-Run V2 in shadow mode, compare metrics with V0.
+Tasks 4.1-4.3 as originally planned.
 
 ---
 
