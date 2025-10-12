@@ -431,6 +431,54 @@ impl NetworkActor {
                 tracing::debug!("Received gossip message {} from {} on topic {}",
                     message_id, source_peer, topic);
 
+                // Phase 4: DOS Protection - Rate limit check
+                if let Err(e) = self.rate_limiter.check_message_rate(&source_peer) {
+                    tracing::warn!(
+                        peer_id = %source_peer,
+                        error = %e,
+                        "Rate limit exceeded for gossip message"
+                    );
+                    self.peer_manager.add_peer_violation(
+                        &source_peer,
+                        Violation::ExcessiveRate {
+                            messages_per_second: self.config.max_messages_per_peer_per_second
+                        }
+                    );
+                    return Ok(()); // Drop message
+                }
+
+                // Phase 4: DOS Protection - Size limit check
+                if data.len() > self.config.message_size_limit {
+                    tracing::warn!(
+                        peer_id = %source_peer,
+                        message_size = data.len(),
+                        limit = self.config.message_size_limit,
+                        "Oversized gossip message from peer"
+                    );
+                    self.peer_manager.add_peer_violation(
+                        &source_peer,
+                        Violation::OversizedMessage { size_bytes: data.len() }
+                    );
+                    return Ok(()); // Drop message
+                }
+
+                // Phase 4: DOS Protection - Bandwidth limit check
+                if let Err(e) = self.rate_limiter.check_byte_rate(&source_peer, data.len() as u64) {
+                    tracing::warn!(
+                        peer_id = %source_peer,
+                        bytes = data.len(),
+                        error = %e,
+                        "Bandwidth limit exceeded for gossip message"
+                    );
+                    self.peer_manager.add_peer_violation(
+                        &source_peer,
+                        Violation::ExcessiveRate {
+                            messages_per_second: self.config.max_messages_per_peer_per_second
+                        }
+                    );
+                    return Ok(()); // Drop message
+                }
+
                 self.metrics.record_message_received(data.len());
                 self.metrics.record_gossip_received();
 
@@ -733,6 +781,13 @@ impl NetworkActor {
         self.active_subscriptions.retain(|_topic, &mut last_used| {
             now.duration_since(last_used) < Duration::from_secs(3600) // 1 hour
         });
+
+        // Phase 4: Clean up rate limiter data for disconnected peers
+        let active_peers: Vec<String> = self.peer_manager.get_connected_peers()
+            .keys()
+            .cloned()
+            .collect();
+        self.rate_limiter.cleanup(&active_peers);
     }
 }
 
