@@ -1,161 +1,344 @@
-//! Request-Response Protocol V2
+//! Request-Response protocol for block synchronization
 //!
-//! Simplified request-response implementation for NetworkActor V2.
-//! TCP transport only, essential requests for block sync coordination.
+//! Protocol: /alys/block/1.0.0
+//! Encoding: SSZ (Simple Serialize)
+//!
+//! Phase 1 Task 1.5: Protocol type definitions with SSZ serialization
+//! Phase 2 Task 2.2: Full codec implementation (deferred)
 
-use serde::{Serialize, Deserialize};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use ssz::{Decode, Encode};
+use ssz_derive::{Decode as DecodeDeriv, Encode as EncodeDeriv};
+use libp2p::StreamProtocol;
 
-/// Request types for V2 system
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RequestV2 {
-    /// Request blocks by height range
-    GetBlocks {
-        start_height: u64,
-        count: u32,
-    },
+/// Block request-response protocol identifier
+#[derive(Debug, Clone)]
+pub struct BlockProtocol();
+
+impl BlockProtocol {
+    /// Get the protocol name as a stream protocol
+    pub fn protocol() -> StreamProtocol {
+        StreamProtocol::new("/alys/block/1.0.0")
+    }
+
+    /// Get the protocol name as bytes
+    pub fn protocol_name(&self) -> &[u8] {
+        b"/alys/block/1.0.0"
+    }
+}
+
+/// Block request message types
+///
+/// SSZ serialization enables efficient encoding for network transmission.
+#[derive(Debug, Clone, PartialEq, Eq, EncodeDeriv, DecodeDeriv)]
+#[ssz(enum_behaviour = "union")]
+pub enum BlockRequest {
+    /// Request blocks by height range (start_height, count)
+    GetBlocks(BlockRangeRequest),
     /// Request current chain status
-    GetChainStatus,
-    /// Request peer information
-    GetPeers,
+    GetChainStatus(EmptyRequest),
 }
 
-/// Response types for V2 system
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ResponseV2 {
+/// Request for a range of blocks
+#[derive(Debug, Clone, PartialEq, Eq, EncodeDeriv, DecodeDeriv)]
+pub struct BlockRangeRequest {
+    pub start_height: u64,
+    pub count: u32,
+}
+
+/// Empty request marker
+#[derive(Debug, Clone, PartialEq, Eq, EncodeDeriv, DecodeDeriv)]
+pub struct EmptyRequest;
+
+
+/// Block response message types
+///
+/// SSZ serialization for consistent encoding across the network.
+#[derive(Debug, Clone, EncodeDeriv, DecodeDeriv)]
+#[ssz(enum_behaviour = "union")]
+pub enum BlockResponse {
     /// Block data response
-    Blocks {
-        blocks: Vec<BlockData>,
-        start_height: u64,
-    },
+    Blocks(BlocksResponse),
     /// Chain status response
-    ChainStatus {
-        current_height: u64,
-        best_hash: String,
-    },
-    /// Peer information response
-    Peers {
-        peers: Vec<PeerData>,
-    },
+    ChainStatus(ChainStatusResponse),
     /// Error response
-    Error {
-        message: String,
-    },
+    Error(ErrorResponse),
 }
 
-/// Simplified block data for network transfer
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlockData {
+/// Response containing multiple blocks
+#[derive(Debug, Clone, EncodeDeriv, DecodeDeriv)]
+pub struct BlocksResponse {
+    pub blocks: Vec<BlockData>,
+}
+
+/// Response with chain status information
+#[derive(Debug, Clone, EncodeDeriv, DecodeDeriv)]
+pub struct ChainStatusResponse {
     pub height: u64,
-    pub hash: String,
-    pub parent_hash: String,
-    pub data: Vec<u8>,
+    pub head_hash: [u8; 32],
+}
+
+/// Error response with message
+#[derive(Debug, Clone, EncodeDeriv, DecodeDeriv)]
+pub struct ErrorResponse {
+    /// Error message as UTF-8 bytes (SSZ-compatible)
+    pub message: Vec<u8>,
+}
+
+/// Simplified block data for network transmission
+///
+/// Contains essential block metadata and transaction data.
+/// Full block reconstruction happens after receiving this data.
+#[derive(Debug, Clone, PartialEq, Eq, EncodeDeriv, DecodeDeriv)]
+pub struct BlockData {
+    /// Block height in the chain
+    pub height: u64,
+    /// Block hash (32 bytes)
+    pub hash: [u8; 32],
+    /// Parent block hash (32 bytes)
+    pub parent_hash: [u8; 32],
+    /// Unix timestamp (seconds since epoch)
     pub timestamp: u64,
+    /// Raw transaction data (SSZ-encoded transactions)
+    pub transactions: Vec<Vec<u8>>,
 }
 
-/// Peer data for network transfer
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeerData {
-    pub peer_id: String,
-    pub address: String,
-    pub reputation: f64,
-    pub last_seen: u64,
-}
-
-/// Request-response protocol handler
-pub struct RequestResponseHandler {
-    /// Maximum request size in bytes
+/// Codec for BlockProtocol with size limits
+///
+/// Phase 1 Task 1.5: Structure definition
+/// Phase 2 Task 2.2: Full RequestResponseCodec trait implementation
+#[derive(Debug, Clone)]
+pub struct BlockCodec {
+    /// Maximum request message size (1 MB)
     max_request_size: usize,
-    /// Maximum response size in bytes
+    /// Maximum response message size (10 MB for multiple blocks)
     max_response_size: usize,
-    /// Request timeout in seconds
-    request_timeout_secs: u64,
 }
 
-impl RequestResponseHandler {
+impl BlockCodec {
+    /// Create new codec with default size limits
     pub fn new() -> Self {
         Self {
-            max_request_size: 1024 * 1024,     // 1MB
-            max_response_size: 50 * 1024 * 1024, // 50MB for block responses
-            request_timeout_secs: 30,
+            max_request_size: 1024 * 1024,      // 1 MB
+            max_response_size: 10 * 1024 * 1024, // 10 MB
         }
     }
 
-    /// Serialize request for network transmission
-    pub fn serialize_request(&self, request: &RequestV2) -> Result<Vec<u8>> {
-        let data = serde_json::to_vec(request)
-            .map_err(|e| anyhow!("Failed to serialize request: {}", e))?;
-
-        if data.len() > self.max_request_size {
-            return Err(anyhow!("Request too large: {} bytes", data.len()));
+    /// Create codec with custom size limits
+    pub fn with_limits(max_request_size: usize, max_response_size: usize) -> Self {
+        Self {
+            max_request_size,
+            max_response_size,
         }
-
-        Ok(data)
     }
 
-    /// Deserialize request from network data
-    pub fn deserialize_request(&self, data: &[u8]) -> Result<RequestV2> {
-        if data.len() > self.max_request_size {
-            return Err(anyhow!("Request too large: {} bytes", data.len()));
-        }
-
-        serde_json::from_slice(data)
-            .map_err(|e| anyhow!("Failed to deserialize request: {}", e))
+    /// Get maximum request size
+    pub fn max_request_size(&self) -> usize {
+        self.max_request_size
     }
 
-    /// Serialize response for network transmission
-    pub fn serialize_response(&self, response: &ResponseV2) -> Result<Vec<u8>> {
-        let data = serde_json::to_vec(response)
-            .map_err(|e| anyhow!("Failed to serialize response: {}", e))?;
-
-        if data.len() > self.max_response_size {
-            return Err(anyhow!("Response too large: {} bytes", data.len()));
-        }
-
-        Ok(data)
-    }
-
-    /// Deserialize response from network data
-    pub fn deserialize_response(&self, data: &[u8]) -> Result<ResponseV2> {
-        if data.len() > self.max_response_size {
-            return Err(anyhow!("Response too large: {} bytes", data.len()));
-        }
-
-        serde_json::from_slice(data)
-            .map_err(|e| anyhow!("Failed to deserialize response: {}", e))
-    }
-
-    /// Validate request
-    pub fn validate_request(&self, request: &RequestV2) -> Result<()> {
-        match request {
-            RequestV2::GetBlocks { start_height: _, count } => {
-                if *count == 0 {
-                    return Err(anyhow!("Block count must be greater than 0"));
-                }
-                if *count > 1000 {
-                    return Err(anyhow!("Block count too large: {}", count));
-                }
-            }
-            RequestV2::GetChainStatus | RequestV2::GetPeers => {
-                // Always valid
-            }
-        }
-        Ok(())
-    }
-
-    /// Create error response
-    pub fn error_response(message: String) -> ResponseV2 {
-        ResponseV2::Error { message }
-    }
-
-    /// Get request timeout
-    pub fn get_timeout_secs(&self) -> u64 {
-        self.request_timeout_secs
+    /// Get maximum response size
+    pub fn max_response_size(&self) -> usize {
+        self.max_response_size
     }
 }
 
-impl Default for RequestResponseHandler {
+impl Default for BlockCodec {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Full RequestResponseCodec trait implementation deferred to Phase 2 Task 2.2
+// This will include:
+// - read_request/write_request
+// - read_response/write_response
+// - Protocol stream handling
+// - SSZ encoding/decoding integration
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_block_protocol_name() {
+        let protocol = BlockProtocol();
+        assert_eq!(protocol.protocol_name(), b"/alys/block/1.0.0");
+    }
+
+    #[test]
+    fn test_block_request_get_blocks_ssz_roundtrip() {
+        let request = BlockRequest::GetBlocks(BlockRangeRequest {
+            start_height: 100,
+            count: 50,
+        });
+
+        let encoded = request.as_ssz_bytes();
+        let decoded = BlockRequest::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(request, decoded);
+    }
+
+    #[test]
+    fn test_block_request_get_chain_status_ssz_roundtrip() {
+        let request = BlockRequest::GetChainStatus(EmptyRequest);
+
+        let encoded = request.as_ssz_bytes();
+        let decoded = BlockRequest::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(request, decoded);
+    }
+
+    #[test]
+    fn test_block_response_blocks_ssz_roundtrip() {
+        let block_data = BlockData {
+            height: 42,
+            hash: [0u8; 32],
+            parent_hash: [1u8; 32],
+            timestamp: 1234567890,
+            transactions: vec![vec![0xaa, 0xbb], vec![0xcc, 0xdd]],
+        };
+
+        let response = BlockResponse::Blocks(BlocksResponse {
+            blocks: vec![block_data],
+        });
+
+        let encoded = response.as_ssz_bytes();
+        let decoded = BlockResponse::from_ssz_bytes(&encoded).unwrap();
+
+        // Compare the encoded/decoded values
+        match (response, decoded) {
+            (BlockResponse::Blocks(orig), BlockResponse::Blocks(dec)) => {
+                assert_eq!(orig.blocks.len(), dec.blocks.len());
+                assert_eq!(orig.blocks[0].height, dec.blocks[0].height);
+                assert_eq!(orig.blocks[0].hash, dec.blocks[0].hash);
+                assert_eq!(orig.blocks[0].parent_hash, dec.blocks[0].parent_hash);
+                assert_eq!(orig.blocks[0].timestamp, dec.blocks[0].timestamp);
+                assert_eq!(orig.blocks[0].transactions, dec.blocks[0].transactions);
+            }
+            _ => panic!("Decoded response type mismatch"),
+        }
+    }
+
+    #[test]
+    fn test_block_response_chain_status_ssz_roundtrip() {
+        let response = BlockResponse::ChainStatus(ChainStatusResponse {
+            height: 1000,
+            head_hash: [0x42; 32],
+        });
+
+        let encoded = response.as_ssz_bytes();
+        let decoded = BlockResponse::from_ssz_bytes(&encoded).unwrap();
+
+        match (response, decoded) {
+            (BlockResponse::ChainStatus(orig), BlockResponse::ChainStatus(dec)) => {
+                assert_eq!(orig.height, dec.height);
+                assert_eq!(orig.head_hash, dec.head_hash);
+            }
+            _ => panic!("Decoded response type mismatch"),
+        }
+    }
+
+    #[test]
+    fn test_block_response_error_ssz_roundtrip() {
+        let response = BlockResponse::Error(ErrorResponse {
+            message: b"Block not found".to_vec(),
+        });
+
+        let encoded = response.as_ssz_bytes();
+        let decoded = BlockResponse::from_ssz_bytes(&encoded).unwrap();
+
+        match (response, decoded) {
+            (BlockResponse::Error(orig), BlockResponse::Error(dec)) => {
+                assert_eq!(orig.message, dec.message);
+            }
+            _ => panic!("Decoded response type mismatch"),
+        }
+    }
+
+    #[test]
+    fn test_block_data_ssz_roundtrip() {
+        let block_data = BlockData {
+            height: 12345,
+            hash: [0xaa; 32],
+            parent_hash: [0xbb; 32],
+            timestamp: 9876543210,
+            transactions: vec![
+                vec![0x01, 0x02, 0x03],
+                vec![0x04, 0x05],
+                vec![],
+            ],
+        };
+
+        let encoded = block_data.as_ssz_bytes();
+        let decoded = BlockData::from_ssz_bytes(&encoded).unwrap();
+
+        assert_eq!(block_data, decoded);
+    }
+
+    #[test]
+    fn test_block_codec_defaults() {
+        let codec = BlockCodec::new();
+        assert_eq!(codec.max_request_size(), 1024 * 1024);
+        assert_eq!(codec.max_response_size(), 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_block_codec_custom_limits() {
+        let codec = BlockCodec::with_limits(512 * 1024, 5 * 1024 * 1024);
+        assert_eq!(codec.max_request_size(), 512 * 1024);
+        assert_eq!(codec.max_response_size(), 5 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_block_codec_default_trait() {
+        let codec = BlockCodec::default();
+        assert_eq!(codec.max_request_size(), 1024 * 1024);
+        assert_eq!(codec.max_response_size(), 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ssz_encoding_size_efficiency() {
+        // Verify SSZ encoding is reasonably compact
+        let request = BlockRequest::GetBlocks(BlockRangeRequest {
+            start_height: 100,
+            count: 50,
+        });
+
+        let encoded = request.as_ssz_bytes();
+
+        // SSZ should encode this efficiently (enum tag + two integers)
+        // Should be reasonably compact
+        assert!(encoded.len() < 100, "SSZ encoding should be compact");
+    }
+
+    #[test]
+    fn test_multiple_blocks_encoding() {
+        // Test encoding multiple blocks efficiently
+        let blocks: Vec<BlockData> = (0..10)
+            .map(|i| BlockData {
+                height: i,
+                hash: [i as u8; 32],
+                parent_hash: [(i.wrapping_sub(1)) as u8; 32],
+                timestamp: 1000000 + i,
+                transactions: vec![],
+            })
+            .collect();
+
+        let response = BlockResponse::Blocks(BlocksResponse { blocks });
+        let encoded = response.as_ssz_bytes();
+
+        // Decode and verify
+        let decoded = BlockResponse::from_ssz_bytes(&encoded).unwrap();
+
+        match decoded {
+            BlockResponse::Blocks(response) => {
+                assert_eq!(response.blocks.len(), 10);
+                for (i, block) in response.blocks.iter().enumerate() {
+                    assert_eq!(block.height, i as u64);
+                }
+            }
+            _ => panic!("Expected Blocks response"),
+        }
     }
 }
