@@ -16,7 +16,10 @@ use super::super::messages::PeerId;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Violation {
     /// Peer sent invalid or malformed message
-    InvalidMessage { timestamp: Instant },
+    InvalidMessage {
+        #[serde(skip)]
+        timestamp: Instant
+    },
     /// Peer exceeded message rate limit
     ExcessiveRate { messages_per_second: u64 },
     /// Peer sent malformed protocol data
@@ -42,6 +45,7 @@ pub struct PeerInfo {
     pub bytes_sent: u64,
     pub bytes_received: u64,
     pub violations: Vec<Violation>,
+    #[serde(skip)]
     pub last_activity: Instant,
 }
 

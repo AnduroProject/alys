@@ -9,6 +9,6 @@ pub mod peer_manager;
 pub mod gossip_handler;
 pub mod block_request_manager;
 
-pub use peer_manager::PeerManager;
+pub use peer_manager::{PeerManager, Violation};
 pub use gossip_handler::GossipHandler;
 pub use block_request_manager::BlockRequestManager;

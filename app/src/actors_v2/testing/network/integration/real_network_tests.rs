@@ -22,6 +22,7 @@ fn create_test_actor(port: u16) -> NetworkActor {
         message_size_limit: 1024 * 1024,
         discovery_interval: Duration::from_secs(30),
         auto_dial_mdns_peers: false, // Disable mDNS for controlled tests
+        ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
     };
 
     NetworkActor::new(config).expect("Failed to create NetworkActor")

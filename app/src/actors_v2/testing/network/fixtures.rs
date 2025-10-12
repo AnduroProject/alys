@@ -32,6 +32,7 @@ pub fn create_test_network_config() -> NetworkConfig {
         message_size_limit: 1024 * 1024,
         discovery_interval: Duration::from_secs(30),
         auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable for testing
+        ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
     }
 }
 
@@ -57,6 +58,7 @@ pub fn create_minimal_network_config() -> NetworkConfig {
         message_size_limit: 64 * 1024,
         discovery_interval: Duration::from_secs(60),
         auto_dial_mdns_peers: false, // Phase 2 Task 2.4: Disable for minimal config
+        ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
     }
 }
 
@@ -83,6 +85,7 @@ pub fn create_performance_network_config() -> NetworkConfig {
         message_size_limit: 50 * 1024 * 1024, // 50MB for performance tests
         discovery_interval: Duration::from_secs(15),
         auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable for performance testing
+        ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
     }
 }
 

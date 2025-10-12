@@ -25,6 +25,7 @@ fn create_test_actor(port: u16) -> NetworkActor {
         message_size_limit: 10 * 1024 * 1024, // 10MB for stress tests
         discovery_interval: Duration::from_secs(30),
         auto_dial_mdns_peers: false,
+        ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
     };
 
     NetworkActor::new(config).expect("Failed to create NetworkActor")
