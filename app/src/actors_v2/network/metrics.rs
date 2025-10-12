@@ -54,6 +54,25 @@ pub struct NetworkMetrics {
     // Phase 2 Task 2.4: mDNS discovery metrics
     pub mdns_discoveries: u64,
     pub mdns_expiries: u64,
+
+    // Phase 4: Advanced metrics
+    pub peer_reputation_average: f64,
+    pub peer_reputation_min: f64,
+    pub peer_reputation_max: f64,
+    pub banned_peers_total: u64,
+    pub rate_limited_messages: u64,
+    pub rejected_connections: u64,
+    pub connection_duration_p50_ms: u64,
+    pub connection_duration_p95_ms: u64,
+    pub connection_duration_p99_ms: u64,
+    pub message_latency_p50_ms: u64,
+    pub message_latency_p95_ms: u64,
+    pub message_latency_p99_ms: u64,
+    pub gossipsub_mesh_size: u32,
+    pub gossipsub_topics_active: u32,
+    pub request_response_success_rate: f64,
+    pub uptime_seconds: u64,
+    pub last_peer_discovered: Option<SystemTime>,
 }
 
 impl NetworkMetrics {
@@ -86,6 +105,24 @@ impl NetworkMetrics {
             block_response_errors: 0,
             mdns_discoveries: 0,
             mdns_expiries: 0,
+            // Phase 4: Initialize advanced metrics
+            peer_reputation_average: 50.0,
+            peer_reputation_min: 50.0,
+            peer_reputation_max: 50.0,
+            banned_peers_total: 0,
+            rate_limited_messages: 0,
+            rejected_connections: 0,
+            connection_duration_p50_ms: 0,
+            connection_duration_p95_ms: 0,
+            connection_duration_p99_ms: 0,
+            message_latency_p50_ms: 0,
+            message_latency_p95_ms: 0,
+            message_latency_p99_ms: 0,
+            gossipsub_mesh_size: 0,
+            gossipsub_topics_active: 0,
+            request_response_success_rate: 0.0,
+            uptime_seconds: 0,
+            last_peer_discovered: None,
         }
     }
 
@@ -193,6 +230,149 @@ impl NetworkMetrics {
             self.connected_peers -= 1;
         }
         self.last_updated = SystemTime::now();
+    }
+
+    // Phase 4: Advanced metric methods
+
+    /// Calculate percentiles from a sorted list of values
+    pub fn calculate_percentiles(&self, values: &[u64]) -> (u64, u64, u64) {
+        if values.is_empty() {
+            return (0, 0, 0);
+        }
+
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+
+        let p50_idx = (sorted.len() as f64 * 0.50) as usize;
+        let p95_idx = (sorted.len() as f64 * 0.95) as usize;
+        let p99_idx = (sorted.len() as f64 * 0.99) as usize;
+
+        let p50 = sorted[p50_idx.min(sorted.len() - 1)];
+        let p95 = sorted[p95_idx.min(sorted.len() - 1)];
+        let p99 = sorted[p99_idx.min(sorted.len() - 1)];
+
+        (p50, p95, p99)
+    }
+
+    /// Update reputation statistics from peer manager
+    pub fn update_reputation_stats(&mut self, peer_reputations: Vec<f64>) {
+        if peer_reputations.is_empty() {
+            self.peer_reputation_average = 50.0;
+            self.peer_reputation_min = 50.0;
+            self.peer_reputation_max = 50.0;
+            return;
+        }
+
+        let sum: f64 = peer_reputations.iter().sum();
+        self.peer_reputation_average = sum / peer_reputations.len() as f64;
+
+        self.peer_reputation_min = peer_reputations.iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+
+        self.peer_reputation_max = peer_reputations.iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+    }
+
+    /// Record rate limited message
+    pub fn record_rate_limited(&mut self) {
+        self.rate_limited_messages += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    /// Record rejected connection
+    pub fn record_rejected_connection(&mut self) {
+        self.rejected_connections += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    /// Record peer ban
+    pub fn record_peer_banned(&mut self) {
+        self.banned_peers_total += 1;
+        self.last_updated = SystemTime::now();
+    }
+
+    /// Update latency percentiles from current data
+    pub fn update_latency_percentiles(&mut self) {
+        if !self.block_request_latency_ms.is_empty() {
+            let (p50, p95, p99) = self.calculate_percentiles(&self.block_request_latency_ms);
+            self.message_latency_p50_ms = p50;
+            self.message_latency_p95_ms = p95;
+            self.message_latency_p99_ms = p99;
+        }
+    }
+
+    /// Calculate request-response success rate
+    pub fn calculate_success_rate(&mut self) {
+        let total_responses = self.block_responses_received + self.block_response_errors;
+        if total_responses > 0 {
+            self.request_response_success_rate =
+                self.block_responses_received as f64 / total_responses as f64;
+        }
+    }
+
+    /// Export metrics in Prometheus format
+    pub fn export_prometheus(&self) -> String {
+        let mut output = String::new();
+
+        // Connection metrics
+        output.push_str(&format!("# TYPE network_connected_peers gauge\n"));
+        output.push_str(&format!("network_connected_peers {}\n", self.connected_peers));
+        output.push_str(&format!("# TYPE network_total_connections counter\n"));
+        output.push_str(&format!("network_total_connections {}\n", self.total_connections));
+        output.push_str(&format!("# TYPE network_failed_connections counter\n"));
+        output.push_str(&format!("network_failed_connections {}\n", self.failed_connections));
+
+        // Message metrics
+        output.push_str(&format!("# TYPE network_messages_sent counter\n"));
+        output.push_str(&format!("network_messages_sent {}\n", self.messages_sent));
+        output.push_str(&format!("# TYPE network_messages_received counter\n"));
+        output.push_str(&format!("network_messages_received {}\n", self.messages_received));
+        output.push_str(&format!("# TYPE network_bytes_sent counter\n"));
+        output.push_str(&format!("network_bytes_sent {}\n", self.bytes_sent));
+        output.push_str(&format!("# TYPE network_bytes_received counter\n"));
+        output.push_str(&format!("network_bytes_received {}\n", self.bytes_received));
+
+        // Gossip metrics
+        output.push_str(&format!("# TYPE network_gossip_messages_published counter\n"));
+        output.push_str(&format!("network_gossip_messages_published {}\n", self.gossip_messages_published));
+        output.push_str(&format!("# TYPE network_gossip_messages_received counter\n"));
+        output.push_str(&format!("network_gossip_messages_received {}\n", self.gossip_messages_received));
+
+        // Reputation metrics
+        output.push_str(&format!("# TYPE network_peer_reputation_average gauge\n"));
+        output.push_str(&format!("network_peer_reputation_average {}\n", self.peer_reputation_average));
+        output.push_str(&format!("# TYPE network_peer_reputation_min gauge\n"));
+        output.push_str(&format!("network_peer_reputation_min {}\n", self.peer_reputation_min));
+        output.push_str(&format!("# TYPE network_peer_reputation_max gauge\n"));
+        output.push_str(&format!("network_peer_reputation_max {}\n", self.peer_reputation_max));
+        output.push_str(&format!("# TYPE network_banned_peers_total counter\n"));
+        output.push_str(&format!("network_banned_peers_total {}\n", self.banned_peers_total));
+
+        // Rate limiting metrics
+        output.push_str(&format!("# TYPE network_rate_limited_messages counter\n"));
+        output.push_str(&format!("network_rate_limited_messages {}\n", self.rate_limited_messages));
+        output.push_str(&format!("# TYPE network_rejected_connections counter\n"));
+        output.push_str(&format!("network_rejected_connections {}\n", self.rejected_connections));
+
+        // Latency percentiles
+        output.push_str(&format!("# TYPE network_message_latency_p50_ms gauge\n"));
+        output.push_str(&format!("network_message_latency_p50_ms {}\n", self.message_latency_p50_ms));
+        output.push_str(&format!("# TYPE network_message_latency_p95_ms gauge\n"));
+        output.push_str(&format!("network_message_latency_p95_ms {}\n", self.message_latency_p95_ms));
+        output.push_str(&format!("# TYPE network_message_latency_p99_ms gauge\n"));
+        output.push_str(&format!("network_message_latency_p99_ms {}\n", self.message_latency_p99_ms));
+
+        // Success rate
+        output.push_str(&format!("# TYPE network_request_response_success_rate gauge\n"));
+        output.push_str(&format!("network_request_response_success_rate {}\n", self.request_response_success_rate));
+
+        // Uptime
+        output.push_str(&format!("# TYPE network_uptime_seconds counter\n"));
+        output.push_str(&format!("network_uptime_seconds {}\n", self.uptime_seconds));
+
+        output
     }
 }
 

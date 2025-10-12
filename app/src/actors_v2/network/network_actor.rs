@@ -444,6 +444,7 @@ impl NetworkActor {
                             messages_per_second: self.config.max_messages_per_peer_per_second
                         }
                     );
+                    self.metrics.record_rate_limited();
                     return Ok(()); // Drop message
                 }
 
@@ -476,6 +477,7 @@ impl NetworkActor {
                             messages_per_second: self.config.max_messages_per_peer_per_second
                         }
                     );
+                    self.metrics.record_rate_limited();
                     return Ok(()); // Drop message
                 }
 
