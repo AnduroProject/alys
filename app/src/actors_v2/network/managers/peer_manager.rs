@@ -3,15 +3,31 @@
 //! Simplified peer management replacing V1 PeerActor (2,655 lines -> ~500-800 lines).
 //! Removed: Kademlia DHT, complex supervision, actor_system dependencies
 //! Added: Bootstrap-based discovery, basic reputation system
+//! Phase 4: Advanced reputation tracking, violation management, DOS protection
 
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration, Instant};
 use anyhow::{Result, anyhow};
 use serde::{Serialize, Deserialize};
 
 use super::super::messages::PeerId;
 
-/// Simplified peer information
+/// Phase 4: Peer violation types for reputation tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Violation {
+    /// Peer sent invalid or malformed message
+    InvalidMessage { timestamp: Instant },
+    /// Peer exceeded message rate limit
+    ExcessiveRate { messages_per_second: u64 },
+    /// Peer sent malformed protocol data
+    MalformedProtocol { details: String },
+    /// Peer was unresponsive or timed out
+    UnresponsivePeer { timeout_count: u32 },
+    /// Peer sent oversized message
+    OversizedMessage { size_bytes: usize },
+}
+
+/// Simplified peer information with Phase 4 enhancements
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub peer_id: PeerId,
@@ -22,6 +38,11 @@ pub struct PeerInfo {
     pub successful_requests: u32,
     pub failed_requests: u32,
     pub last_seen: SystemTime,
+    // Phase 4: Advanced reputation tracking
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub violations: Vec<Violation>,
+    pub last_activity: Instant,
 }
 
 impl PeerInfo {
@@ -36,13 +57,53 @@ impl PeerInfo {
             successful_requests: 0,
             failed_requests: 0,
             last_seen: now,
+            // Phase 4: Initialize new fields
+            bytes_sent: 0,
+            bytes_received: 0,
+            violations: Vec::new(),
+            last_activity: Instant::now(),
         }
+    }
+
+    /// Phase 4: Get connection duration
+    pub fn connection_duration(&self) -> Duration {
+        self.connected_since
+            .elapsed()
+            .unwrap_or(Duration::from_secs(0))
+    }
+
+    /// Phase 4: Record violation
+    pub fn add_violation(&mut self, violation: Violation) {
+        self.violations.push(violation);
+        self.last_activity = Instant::now();
+    }
+
+    /// Phase 4: Get recent violations (last hour)
+    pub fn recent_violations_count(&self) -> usize {
+        let one_hour_ago = Instant::now() - Duration::from_secs(3600);
+        self.violations.iter()
+            .filter(|v| match v {
+                Violation::InvalidMessage { timestamp } => *timestamp > one_hour_ago,
+                Violation::ExcessiveRate { .. } => true, // Always count rate violations
+                Violation::MalformedProtocol { .. } => true,
+                Violation::UnresponsivePeer { .. } => true,
+                Violation::OversizedMessage { .. } => true,
+            })
+            .count()
+    }
+
+    /// Phase 4: Record bytes sent/received
+    pub fn record_bytes(&mut self, sent: u64, received: u64) {
+        self.bytes_sent += sent;
+        self.bytes_received += received;
+        self.last_activity = Instant::now();
     }
 
     /// Update reputation based on interaction
     pub fn update_reputation(&mut self, delta: f64) {
         self.reputation = (self.reputation + delta).max(0.0).min(100.0);
         self.last_seen = SystemTime::now();
+        self.last_activity = Instant::now();
     }
 
     /// Record successful interaction
@@ -66,9 +127,16 @@ impl PeerInfo {
         self.successful_requests as f64 / total as f64
     }
 
-    /// Check if peer should be disconnected based on reputation
+    /// Phase 4: Check if peer should be disconnected based on reputation and violations
     pub fn should_disconnect(&self) -> bool {
-        self.reputation < 10.0 || self.success_rate() < 0.3
+        self.reputation < 10.0
+            || self.success_rate() < 0.3
+            || self.recent_violations_count() > 10
+    }
+
+    /// Phase 4: Check if peer should be banned (stricter than disconnect)
+    pub fn should_be_banned(&self) -> bool {
+        self.reputation < -50.0 || self.recent_violations_count() > 20
     }
 }
 
@@ -129,15 +197,98 @@ impl PeerManager {
         self.connected_peers.get(peer_id)
     }
 
-    /// Update peer reputation
+    /// Update peer reputation (legacy method - kept for compatibility)
     pub fn update_peer_reputation(&mut self, peer_id: &PeerId, delta: f64) {
+        self.update_reputation(peer_id, delta, "legacy_update");
+    }
+
+    /// Phase 4: Update peer reputation with decay, delta, reason and logging
+    pub fn update_reputation(&mut self, peer_id: &PeerId, delta: f64, reason: &str) {
         if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
-            peer_info.update_reputation(delta);
+            let old_reputation = peer_info.reputation;
+
+            // Apply decay: reputation naturally trends toward neutral (50.0) over time
+            let decay_factor = 0.01; // 1% decay toward neutral per update
+            let decayed = peer_info.reputation + (50.0 - peer_info.reputation) * decay_factor;
+
+            // Apply delta
+            peer_info.reputation = (decayed + delta).max(-100.0).min(100.0);
+            peer_info.last_seen = SystemTime::now();
+            peer_info.last_activity = Instant::now();
+
+            // Log significant changes
+            if (old_reputation - peer_info.reputation).abs() > 5.0 || delta.abs() > 10.0 {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    old_reputation = old_reputation,
+                    new_reputation = peer_info.reputation,
+                    delta = delta,
+                    reason = reason,
+                    "Significant reputation change"
+                );
+            } else {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    reputation = peer_info.reputation,
+                    delta = delta,
+                    reason = reason,
+                    "Updated peer reputation"
+                );
+            }
 
             // Also update in known_peers
             if let Some(known_peer) = self.known_peers.get_mut(peer_id) {
-                known_peer.update_reputation(delta);
+                known_peer.reputation = peer_info.reputation;
             }
+        }
+    }
+
+    /// Phase 4: Get peers below reputation threshold (for disconnection)
+    pub fn get_low_reputation_peers(&self, threshold: f64) -> Vec<String> {
+        self.connected_peers.values()
+            .filter(|peer| peer.reputation < threshold)
+            .map(|peer| peer.peer_id.clone())
+            .collect()
+    }
+
+    /// Phase 4: Check if peer should be banned
+    pub fn should_ban_peer(&self, peer_id: &str) -> bool {
+        if let Some(peer_info) = self.connected_peers.get(peer_id) {
+            peer_info.should_be_banned()
+        } else {
+            false
+        }
+    }
+
+    /// Phase 4: Get average reputation across all connected peers
+    pub fn get_average_reputation(&self) -> f64 {
+        if self.connected_peers.is_empty() {
+            return 50.0; // Neutral if no peers
+        }
+
+        let sum: f64 = self.connected_peers.values()
+            .map(|p| p.reputation)
+            .sum();
+
+        sum / self.connected_peers.len() as f64
+    }
+
+    /// Phase 4: Add violation to peer
+    pub fn add_peer_violation(&mut self, peer_id: &PeerId, violation: Violation) {
+        if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
+            // Determine reputation penalty based on violation type
+            let penalty = match &violation {
+                Violation::InvalidMessage { .. } => -5.0,
+                Violation::ExcessiveRate { .. } => -10.0,
+                Violation::MalformedProtocol { .. } => -8.0,
+                Violation::UnresponsivePeer { .. } => -3.0,
+                Violation::OversizedMessage { .. } => -7.0,
+            };
+
+            peer_info.add_violation(violation.clone());
+
+            let reason = format!("violation: {:?}", violation);
+            self.update_reputation(peer_id, penalty, &reason);
         }
     }
 

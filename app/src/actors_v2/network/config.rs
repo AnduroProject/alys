@@ -25,6 +25,22 @@ pub struct NetworkConfig {
     pub discovery_interval: Duration,
     /// Automatically dial mDNS discovered peers (Phase 2 Task 2.4)
     pub auto_dial_mdns_peers: bool,
+
+    // Phase 4: Connection limits
+    /// Maximum connections from a single IP address
+    pub max_connections_per_ip: usize,
+    /// Maximum inbound connections
+    pub max_inbound_connections: usize,
+    /// Maximum outbound connections
+    pub max_outbound_connections: usize,
+
+    // Phase 4: Rate limits
+    /// Maximum messages per peer per second
+    pub max_messages_per_peer_per_second: u64,
+    /// Maximum bytes per peer per second
+    pub max_bytes_per_peer_per_second: u64,
+    /// Rate limit window duration
+    pub rate_limit_window: Duration,
 }
 
 impl Default for NetworkConfig {
@@ -44,6 +60,16 @@ impl Default for NetworkConfig {
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),
             auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable auto-dial for local network discovery
+
+            // Phase 4: Connection limits (defaults)
+            max_connections_per_ip: 5,
+            max_inbound_connections: 500,
+            max_outbound_connections: 500,
+
+            // Phase 4: Rate limits (defaults)
+            max_messages_per_peer_per_second: 100,
+            max_bytes_per_peer_per_second: 1024 * 1024, // 1MB/s
+            rate_limit_window: Duration::from_secs(1),
         }
     }
 }
@@ -61,6 +87,24 @@ impl NetworkConfig {
 
         if self.message_size_limit == 0 {
             return Err("Message size limit must be greater than 0".to_string());
+        }
+
+        // Phase 4: Validate connection limits
+        if self.max_connections_per_ip == 0 {
+            return Err("Max connections per IP must be greater than 0".to_string());
+        }
+
+        if self.max_inbound_connections + self.max_outbound_connections > self.max_connections {
+            return Err("Sum of max_inbound_connections and max_outbound_connections cannot exceed max_connections".to_string());
+        }
+
+        // Phase 4: Validate rate limits
+        if self.max_messages_per_peer_per_second == 0 {
+            return Err("Max messages per peer per second must be greater than 0".to_string());
+        }
+
+        if self.max_bytes_per_peer_per_second == 0 {
+            return Err("Max bytes per peer per second must be greater than 0".to_string());
         }
 
         Ok(())

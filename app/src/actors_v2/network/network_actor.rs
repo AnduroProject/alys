@@ -7,7 +7,7 @@
 //! - Removed: NetworkSupervisor, actor_system dependencies
 
 use actix::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow, Context as AnyhowContext};
 use libp2p::{Multiaddr, PeerId, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
@@ -19,7 +19,7 @@ use super::{
     NetworkConfig, NetworkMessage, NetworkResponse, NetworkError,
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
     NetworkMetrics,
-    managers::PeerManager,
+    managers::{PeerManager, Violation},
     messages::{PeerInfo, NetworkStatus},
     protocols::{BlockRequest, BlockResponse},
 };
@@ -69,6 +69,107 @@ pub enum SwarmCommand {
     },
 }
 
+/// Phase 4: Rate limiter for DOS protection
+#[derive(Debug)]
+struct RateLimiter {
+    /// Per-peer message timestamps (sliding window)
+    peer_message_counts: HashMap<String, VecDeque<Instant>>,
+    /// Per-peer byte counts (timestamp, byte_count)
+    peer_byte_counts: HashMap<String, VecDeque<(Instant, u64)>>,
+    /// Rate limit window duration
+    window: Duration,
+    /// Max messages per peer per window
+    max_messages: u64,
+    /// Max bytes per peer per window
+    max_bytes: u64,
+}
+
+impl RateLimiter {
+    fn new(window: Duration, max_messages: u64, max_bytes: u64) -> Self {
+        Self {
+            peer_message_counts: HashMap::new(),
+            peer_byte_counts: HashMap::new(),
+            window,
+            max_messages,
+            max_bytes,
+        }
+    }
+
+    /// Check if peer has exceeded message rate limit
+    fn check_message_rate(&mut self, peer_id: &str) -> Result<(), NetworkError> {
+        let now = Instant::now();
+        let cutoff = now - self.window;
+
+        // Get or create peer's message queue
+        let messages = self.peer_message_counts.entry(peer_id.to_string())
+            .or_insert_with(VecDeque::new);
+
+        // Remove old messages outside the window
+        while messages.front().map_or(false, |&t| t < cutoff) {
+            messages.pop_front();
+        }
+
+        // Check rate limit
+        if messages.len() as u64 >= self.max_messages {
+            let messages_per_second = messages.len() as u64 / self.window.as_secs().max(1);
+            return Err(NetworkError::Protocol(format!(
+                "Rate limit exceeded: {} messages in {} seconds",
+                messages.len(),
+                self.window.as_secs()
+            )));
+        }
+
+        // Record this message
+        messages.push_back(now);
+
+        Ok(())
+    }
+
+    /// Check if peer has exceeded bandwidth rate limit
+    fn check_byte_rate(&mut self, peer_id: &str, bytes: u64) -> Result<(), NetworkError> {
+        let now = Instant::now();
+        let cutoff = now - self.window;
+
+        // Get or create peer's byte queue
+        let byte_records = self.peer_byte_counts.entry(peer_id.to_string())
+            .or_insert_with(VecDeque::new);
+
+        // Remove old records outside the window
+        while byte_records.front().map_or(false, |(t, _)| *t < cutoff) {
+            byte_records.pop_front();
+        }
+
+        // Calculate total bytes in window
+        let total_bytes: u64 = byte_records.iter().map(|(_, b)| b).sum();
+
+        // Check bandwidth limit
+        if total_bytes + bytes > self.max_bytes {
+            return Err(NetworkError::Protocol(format!(
+                "Bandwidth limit exceeded: {} bytes in {} seconds (limit: {} bytes)",
+                total_bytes + bytes,
+                self.window.as_secs(),
+                self.max_bytes
+            )));
+        }
+
+        // Record these bytes
+        byte_records.push_back((now, bytes));
+
+        Ok(())
+    }
+
+    /// Clean up old rate limit data for peers
+    fn cleanup(&mut self, active_peers: &[String]) {
+        // Remove data for disconnected peers
+        self.peer_message_counts.retain(|peer_id, _| {
+            active_peers.contains(peer_id)
+        });
+        self.peer_byte_counts.retain(|peer_id, _| {
+            active_peers.contains(peer_id)
+        });
+    }
+}
+
 /// NetworkActor V2 - P2P protocols with working libp2p integration
 pub struct NetworkActor {
     /// Network configuration
@@ -90,6 +191,8 @@ pub struct NetworkActor {
     metrics: NetworkMetrics,
     /// Peer management
     peer_manager: PeerManager,
+    /// Phase 4: Rate limiter for DOS protection
+    rate_limiter: RateLimiter,
     /// Active protocol subscriptions
     active_subscriptions: HashMap<String, Instant>,
     /// Pending block requests tracking (Phase 4: Task 2.3)
@@ -126,6 +229,13 @@ impl NetworkActor {
 
         tracing::info!("Creating NetworkActor V2 with peer ID: {}", local_peer_id);
 
+        // Phase 4: Initialize rate limiter from config
+        let rate_limiter = RateLimiter::new(
+            config.rate_limit_window,
+            config.max_messages_per_peer_per_second,
+            config.max_bytes_per_peer_per_second,
+        );
+
         Ok(Self {
             config,
             event_rx: None,
@@ -134,6 +244,7 @@ impl NetworkActor {
             local_peer_id,
             metrics: NetworkMetrics::new(),
             peer_manager: PeerManager::new(),
+            rate_limiter,
             active_subscriptions: HashMap::new(),
             pending_block_requests: HashMap::new(),
             sync_actor: None,
