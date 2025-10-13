@@ -67,62 +67,6 @@ impl RpcActor {
         }
     }
 
-    /// Start HTTP server
-    async fn start_server(&mut self) -> Result<(), RpcError> {
-        if self.server_handle.is_some() {
-            return Err(RpcError::Internal("Server already running".to_string()));
-        }
-
-        self.config.validate().map_err(RpcError::Internal)?;
-
-        let addr = self.config.bind_address;
-        let state = RpcServerState {
-            chain_actor: self.chain_actor.clone(),
-            config: self.config.clone(),
-            metrics: self.metrics.clone(),
-        };
-
-        // Create Hyper service
-        let make_svc = make_service_fn(move |_conn| {
-            let state = state.clone();
-            async move {
-                Ok::<_, Infallible>(service_fn(move |req| {
-                    Self::handle_http_request(req, state.clone())
-                }))
-            }
-        });
-
-        // Spawn server task
-        let server = Server::bind(&addr).serve(make_svc);
-        let handle = tokio::spawn(async move {
-            if let Err(e) = server.await {
-                tracing::error!(error = ?e, "RPC server error");
-            }
-        });
-
-        self.server_handle = Some(handle);
-        self.start_time = Some(SystemTime::now());
-
-        // Initialize metrics start time
-        self.metrics.write().await.start_time = Some(SystemTime::now());
-
-        tracing::info!(address = %addr, "RPC server started");
-
-        Ok(())
-    }
-
-    /// Stop HTTP server
-    async fn stop_server(&mut self) -> Result<(), RpcError> {
-        if let Some(handle) = self.server_handle.take() {
-            handle.abort();
-            self.start_time = None;
-            tracing::info!("RPC server stopped");
-            Ok(())
-        } else {
-            Err(RpcError::ServerNotRunning)
-        }
-    }
-
     /// Handle HTTP request
     async fn handle_http_request(
         req: Request<Body>,
