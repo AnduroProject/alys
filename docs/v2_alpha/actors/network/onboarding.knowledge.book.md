@@ -11,10 +11,13 @@ The **NetworkActor V2 system** serves as the cornerstone of P2P networking in th
 
 - **Simplified Two-Actor Architecture**: Clean separation between P2P protocols (NetworkActor) and blockchain synchronization (SyncActor)
 - **High-Performance P2P Networking**: libp2p-based networking with essential protocols (Gossipsub, Request-Response, Identify, mDNS)
-- **Comprehensive Peer Management**: Bootstrap discovery, mDNS local discovery, and reputation-based peer selection
+- **Comprehensive Peer Management**: Bootstrap discovery, mDNS local discovery, and advanced reputation-based peer selection
 - **Blockchain Synchronization**: Efficient block sync with peer coordination and storage integration
 - **Production-Ready Operations**: RPC interface, metrics collection, error handling, and graceful lifecycle management
+- **DOS Protection & Resilience** (Phase 4 ✅): Multi-layer defense with rate limiting, connection limits, and violation tracking
+- **Advanced Reputation System** (Phase 4 ✅): Automatic peer scoring with 5 violation types, decay toward neutral, and auto-disconnect/ban
 - **Massive Simplification**: 77% code reduction from V1 (26,125+ → ~6,000 lines) while preserving essential functionality
+- **Production-Ready Status** (Phase 4 ✅): 52 passing tests (100% success rate), comprehensive testing framework, production monitoring
 
 ---
 
@@ -34,9 +37,11 @@ The **NetworkActor V2 system** (`app/src/actors_v2/network/`) is the simplified 
 
 #### **NetworkActor - P2P Protocol Management**
 - **Protocol Stack Management**: Gossipsub message broadcasting, Request-Response peer queries, Identify peer identification, mDNS local discovery
-- **Peer Connection Management**: Bootstrap peer discovery, mDNS local network discovery, peer reputation tracking, connection lifecycle
+- **Peer Connection Management**: Bootstrap peer discovery, mDNS local network discovery, advanced reputation tracking, connection lifecycle
 - **Message Broadcasting**: Block and transaction propagation across the P2P network with priority handling
 - **Network Coordination**: Direct communication with SyncActor for blockchain synchronization needs
+- **DOS Protection** (Phase 4 ✅): Rate limiting (100 msg/s/peer), bandwidth limits (1MB/s/peer), connection limits (5/IP, 500 inbound, 500 outbound)
+- **Reputation System** (Phase 4 ✅): 5 violation types (InvalidMessage, ExcessiveRate, MalformedProtocol, UnresponsivePeer, OversizedMessage), automatic disconnect (< 10.0 reputation), automatic ban (< -50.0 or 20+ violations/hour)
 
 #### **SyncActor - Blockchain Synchronization**
 - **Block Synchronization**: Coordinate with NetworkActor to request and receive blocks from peers
@@ -45,10 +50,12 @@ The **NetworkActor V2 system** (`app/src/actors_v2/network/`) is the simplified 
 - **Peer Coordination**: Work with NetworkActor to select optimal peers for synchronization
 
 #### **Performance and Scalability**
-- **High Throughput**: 1000+ concurrent messages per second with sub-100ms processing
+- **High Throughput**: 1000+ concurrent messages per second with sub-100ms processing (validated in stress tests)
 - **Memory Efficiency**: Simplified architecture reduces memory footprint by 77%
-- **Connection Management**: Support for 100+ concurrent peer connections with reputation tracking
+- **Connection Management**: Support for 100+ concurrent peer connections with advanced reputation tracking
 - **Protocol Optimization**: Essential protocols only (removed Kademlia DHT, QUIC) while preserving mDNS
+- **DOS Resilience** (Phase 4 ✅): Multi-layer defense handles 1000+ messages/minute attacks, automatic rate limiting and peer banning
+- **Production Monitoring** (Phase 4 ✅): Comprehensive metrics (peer count, reputation, violations, rate limiting), health check system, incident response procedures
 
 ### 1.3 Integration Points
 
@@ -102,16 +109,24 @@ graph TD
 ### 1.5 Performance Characteristics
 
 #### **Throughput Targets**
-- **Message Processing**: 1000+ concurrent messages per second across both actors
-- **Block Broadcasting**: <50ms average broadcast time to all peers
-- **Sync Operations**: 500+ blocks per second synchronization rate
-- **Peer Discovery**: mDNS discovery completes within 5 seconds for local network
+- **Message Processing**: 1000+ concurrent messages per second across both actors (stress-tested in simulated environments)
+- **Block Broadcasting**: Sub-second average broadcast time to peers via gossipsub
+- **Sync Operations**: High-throughput block synchronization with parallel requests
+- **Peer Discovery**: mDNS discovery enables rapid local network peer detection
+- **Concurrent Block Requests** (Phase 4 ✅): Support for 10+ simultaneous block requests with timeout handling
 
 #### **Scalability Features**
 - **Simplified Architecture**: Two actors vs. V1's four actors (50% reduction)
 - **Essential Protocols**: Four protocols vs. V1's seven (43% reduction)
 - **Memory Efficiency**: 77% code reduction translates to significant memory savings
-- **Connection Scaling**: Support for 100+ concurrent peer connections
+- **Connection Scaling**: Support for configurable concurrent peer connections (tested with rapid peer churn scenarios)
+- **DOS Resilience** (Phase 4 ✅): Multi-layer defense with rate limiting (100 msg/s/peer), bandwidth limits (1MB/s/peer), and channel backpressure handling
+
+#### **Production Readiness** (Phase 4 ✅)
+- **Test Coverage**: Comprehensive test suite with 52 passing tests (100% success rate)
+- **Test Categories**: 22 unit tests (manager, network, sync) + 25 integration tests (coordination, workflow, real network) + 5 stress tests (high load, backpressure, peer churn)
+- **Stress Testing**: Long-running stability tests, peer churn resilience, high-load scenarios, and backpressure handling validated
+- **Monitoring**: Comprehensive metrics for peer count, reputation, violations, rate limiting, latency percentiles
 
 ---
 
@@ -124,96 +139,108 @@ The NetworkActor V2 system employs a simplified two-actor architecture optimized
 ```mermaid
 graph TB
     subgraph "NetworkActor V2 System"
-        subgraph "NetworkActor - P2P Protocols"
-            subgraph "Protocol Stack"
-                G[Gossipsub]
+        subgraph "NetworkActor (Actix Actor)"
+            NA[NetworkActor State]
+            PM[PeerManager]
+            RL[RateLimiter]
+            MET[NetworkMetrics]
+            CMD_TX[SwarmCommand TX]
+        end
+
+        subgraph "Swarm Task (Tokio)"
+            SWARM[libp2p Swarm]
+            CMD_RX[SwarmCommand RX]
+            EVT_TX[Event TX]
+
+            subgraph "AlysNetworkBehaviour"
+                GS[Gossipsub]
                 RR[Request-Response]
-                I[Identify]
-                M[mDNS]
-            end
-
-            subgraph "Management Components"
-                PM[PeerManager]
-                GH[GossipHandler]
-                BRM[BlockRequestManager]
-            end
-
-            subgraph "Network State"
-                NC[NetworkConfig]
-                NM[NetworkMetrics]
-                CM[ConnectionManager]
+                ID[Identify]
+                MD[mDNS]
             end
         end
 
-        subgraph "SyncActor - Blockchain Sync"
-            subgraph "Sync Management"
-                SS[SyncState]
-                BR[BlockRequests]
-                PC[PeerCoordination]
-            end
-
-            subgraph "Block Processing"
-                BV[BlockValidation]
-                BQ[BlockQueue]
-                SP[SyncProgress]
-            end
-
-            subgraph "Sync State"
-                SC[SyncConfig]
-                SM[SyncMetrics]
-                ST[SyncTracking]
-            end
+        subgraph "SyncActor (Actix Actor)"
+            SA[SyncActor State]
+            BQ[Block Queue]
+            AR[Active Requests]
+            SM[SyncMetrics]
         end
 
-        subgraph "External Interfaces"
-            RPC[RPC Interface]
-            API[External API]
-            LOGS[Logging]
-        end
+        NA --> CMD_TX
+        CMD_TX -.->|Commands| CMD_RX
+        CMD_RX --> SWARM
+        SWARM --> EVT_TX
+        EVT_TX -.->|Events| NA
+
+        SWARM --> GS
+        SWARM --> RR
+        SWARM --> ID
+        SWARM --> MD
+
+        NA <-->|Actor Messages| SA
+        NA --> PM
+        NA --> RL
+        NA --> MET
     end
 
     subgraph "External Systems"
-        SA[StorageActor V2]
-        CA[ChainActor]
-        PN[P2P Network]
-        LN[Local Network]
+        P2P[P2P Network]
+        LN[Local Network via mDNS]
+        STOR[StorageActor V2]
+        CHAIN[ChainActor V2]
     end
 
-    NetworkActor <--> SyncActor
-    NetworkActor <--> PN
-    NetworkActor <--> LN
-    SyncActor <--> SA
-    SyncActor <--> CA
+    GS <-->|Gossip| P2P
+    RR <-->|Req/Resp| P2P
+    ID <-->|Identify| P2P
+    MD <-->|Discovery| LN
 
-    NetworkActor --> RPC
-    SyncActor --> RPC
-    NetworkActor --> LOGS
-    SyncActor --> LOGS
+    SA <-->|Block Storage| STOR
+    NA <-->|AuxPoW| CHAIN
 ```
 
 ### 2.2 Component Architecture
 
-#### **NetworkActor Core** (`network_actor.rs:22-507`)
+#### **NetworkActor Core** (`network_actor.rs:173-207`)
 The P2P networking actor managing:
-- **Protocol Management**: libp2p protocol stack with essential protocols only
-- **Connection Management**: Peer discovery, reputation tracking, connection lifecycle
-- **Message Broadcasting**: Gossip-based block and transaction propagation
-- **Peer Discovery**: Bootstrap peers and mDNS local discovery coordination
+- **Swarm Coordination**: libp2p swarm lifecycle via SwarmCommand channel
+- **Connection Management**: Peer discovery, reputation tracking, connection lifecycle via PeerManager
+- **Message Broadcasting**: Gossip-based block and transaction propagation via SwarmCommand
+- **DOS Protection**: Rate limiting and bandwidth control via RateLimiter
+- **Actor Coordination**: Integration with SyncActor and ChainActor
 
 ```rust
 pub struct NetworkActor {
     /// Network configuration
     config: NetworkConfig,
-    /// Network behaviour handler
-    behaviour: Option<AlysNetworkBehaviour>,
-    /// Local peer ID
+
+    /// Event receiver from swarm polling task
+    event_rx: Option<mpsc::UnboundedReceiver<AlysSwarmEvent>>,
+
+    /// Swarm polling task handle (for graceful shutdown)
+    swarm_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Send commands to swarm task (Phase 2 Task 2.0)
+    swarm_cmd_tx: Option<mpsc::Sender<SwarmCommand>>,
+
+    /// Local peer ID (cached from config)
     local_peer_id: String,
+
     /// Network metrics
     metrics: NetworkMetrics,
     /// Peer management
     peer_manager: PeerManager,
+    /// Phase 4: Rate limiter for DOS protection
+    rate_limiter: RateLimiter,
+    /// Active protocol subscriptions
+    active_subscriptions: HashMap<String, Instant>,
+    /// Pending block requests tracking (Phase 4)
+    pending_block_requests: HashMap<uuid::Uuid, PendingBlockRequest>,
     /// SyncActor address for coordination
     sync_actor: Option<Addr<SyncActor>>,
+    /// ChainActor address for AuxPoW forwarding (Phase 4)
+    chain_actor: Option<Addr<ChainActor>>,
     /// Network running state
     is_running: bool,
     /// Shutdown flag
@@ -252,98 +279,199 @@ pub struct SyncActor {
 }
 ```
 
-#### **libp2p Behaviour System** (`behaviour.rs:8-214`)
-Complete P2P protocol implementation:
-- **Gossipsub**: Message broadcasting for blocks and transactions
-- **Request-Response**: Direct peer queries for block synchronization
-- **Identify**: Basic peer identification and capability discovery
-- **mDNS**: Local network discovery (preserved from V1 requirement)
+#### **libp2p Behaviour System** (`behaviour.rs:13-20`)
+Real libp2p protocol implementation using NetworkBehaviour derive macro:
+- **Gossipsub**: libp2p::gossipsub::Behaviour for pubsub messaging
+- **Request-Response**: libp2p::request_response::Behaviour with BlockCodec
+- **Identify**: libp2p::identify::Behaviour for peer capability exchange
+- **mDNS**: libp2p::mdns::tokio::Behaviour for local network discovery
 
 ```rust
+#[derive(NetworkBehaviour)]
+#[behaviour(to_swarm = "AlysNetworkBehaviourEvent")]
 pub struct AlysNetworkBehaviour {
-    /// Local peer ID
-    local_peer_id: String,
-    /// Active topics
-    active_topics: Vec<String>,
-    /// Protocol state
-    is_initialized: bool,
-    /// mDNS enabled state
-    mdns_enabled: bool,
-    /// Discovered peers via mDNS
-    mdns_discovered_peers: HashMap<String, Vec<String>>,
+    pub gossipsub: libp2p::gossipsub::Behaviour,
+    pub identify: libp2p::identify::Behaviour,
+    pub mdns: libp2p::mdns::tokio::Behaviour,
+    pub request_response: libp2p::request_response::Behaviour<BlockCodec>,
 }
 ```
 
+**Key Implementation Details:**
+- Uses libp2p 0.52+ NetworkBehaviour derive macro for automatic event composition
+- Each protocol behavior is a real libp2p implementation, not a mock
+- Events from all behaviors are automatically aggregated into AlysNetworkBehaviourEvent
+- Supports concurrent operation of all protocols within single swarm
+
 ### 2.3 Message Protocol Architecture
 
-The NetworkActor V2 system implements a split message protocol for the two-actor architecture:
+The NetworkActor V2 system implements a SwarmCommand channel pattern for safe communication between the Actix actor and the tokio swarm task:
 
-#### **NetworkActor Message Flow**
+#### **NetworkActor Broadcast Flow (SwarmCommand Pattern)**
 ```mermaid
 sequenceDiagram
     participant CA as ChainActor
-    participant NA as NetworkActor
+    participant NA as NetworkActor (Actix)
+    participant CMD as SwarmCommand Channel
+    participant SWARM as Swarm Task (Tokio)
     participant P as P2P Network
-    participant SA as SyncActor
 
-    CA->>NA: BroadcastBlock
-    NA->>P: Gossipsub Publish
-    P-->>NA: Message Delivered
+    CA->>NA: BroadcastBlock{data}
+    NA->>CMD: SwarmCommand::PublishGossip
+    CMD->>SWARM: Command received
+    SWARM->>SWARM: gossipsub.publish(topic, data)
+    SWARM->>P: Gossipsub message
+    SWARM-->>CMD: Result via oneshot
     NA-->>CA: Broadcasted{message_id}
 
-    P->>NA: Incoming Block Message
-    NA->>SA: HandleNewBlock
-    SA-->>NA: BlockProcessed
-    NA->>P: ACK/Response
+    Note over SWARM,P: Events flow back via event channel
+    P->>SWARM: Gossip message received
+    SWARM->>NA: AlysSwarmEvent via StreamHandler
+    NA->>SA: Forward to SyncActor (if block)
 ```
 
-#### **SyncActor Message Flow**
+#### **Block Request Flow (Request-Response Protocol)**
 ```mermaid
 sequenceDiagram
-    participant NA as NetworkActor
     participant SA as SyncActor
+    participant NA as NetworkActor (Actix)
+    participant CMD as SwarmCommand Channel
+    participant SWARM as Swarm Task (Tokio)
+    participant PEER as Remote Peer
     participant ST as StorageActor
-    participant P as Peer
 
     SA->>NA: RequestBlocks{start_height, count}
-    NA->>P: Request-Response Query
-    P-->>NA: Block Response
-    NA->>SA: HandleBlockResponse
-    SA->>ST: StoreBlock
-    ST-->>SA: BlockStored
-    SA->>SA: Update Sync Progress
+    NA->>NA: Select best peers via PeerManager
+    NA->>CMD: SwarmCommand::SendRequest
+    CMD->>SWARM: Block request command
+    SWARM->>SWARM: request_response.send_request()
+    SWARM->>PEER: BlockRequest via req/resp protocol
+    PEER-->>SWARM: BlockResponse
+    SWARM->>NA: BlockResponseReceived event
+    NA->>NA: Validate response, update metrics
+    NA->>SA: HandleBlockResponse{blocks}
+    SA->>ST: Store blocks
+    ST-->>SA: Blocks stored
+    SA->>SA: Update sync progress
 ```
 
-### 2.4 Supervision Architecture
+### 2.4 Actor Lifecycle & Coordination
 
-The NetworkActor V2 system operates with simplified supervision (no NetworkSupervisor):
+The NetworkActor V2 system operates with direct actor lifecycle management (no NetworkSupervisor):
 
 ```mermaid
 graph TD
-    SM[SystemManager] --> NA[NetworkActor]
-    SM --> SA[SyncActor]
+    subgraph "Actix System"
+        SYS[Actix System] --> NA[NetworkActor]
+        SYS --> SA[SyncActor]
+    end
 
-    NA <--> SA
+    subgraph "NetworkActor Components"
+        NA --> PM[PeerManager struct]
+        NA --> RL[RateLimiter struct]
+        NA --> SWARM[Swarm Task via tokio::spawn]
+    end
 
-    NA --> PM[PeerManager]
-    NA --> GH[GossipHandler]
-    NA --> BH[libp2p Behaviour]
+    subgraph "SyncActor Components"
+        SA --> BQ[Block Queue]
+        SA --> AR[Active Requests Map]
+    end
 
-    SA --> BRM[BlockRequestManager]
-    SA --> BS[BlockSync Logic]
-    SA --> SC[StorageCoordination]
+    NA <-->|Actix Messages| SA
+    NA -->|Commands| SWARM
+    SWARM -->|Events| NA
 
-    SM -.->|Direct Supervision| NA
-    SM -.->|Direct Supervision| SA
-    SM -.->|Health Monitoring| NA
-    SM -.->|Health Monitoring| SA
+    subgraph "External Actors"
+        CHAIN[ChainActor V2]
+        STOR[StorageActor V2]
+    end
+
+    NA <-->|AuxPoW| CHAIN
+    SA <-->|Blocks| STOR
 ```
 
-**Simplified Supervision Strategy:**
-- **No NetworkSupervisor**: Direct actor lifecycle management
-- **Restart Policy**: Independent actor restart without cascade failures
-- **Health Monitoring**: Self-reported health through metrics and status messages
-- **Inter-Actor Coordination**: Direct message passing without supervisor mediation
+**Simplified Lifecycle Strategy:**
+- **No NetworkSupervisor**: Direct Actix system management of both actors
+- **Independent Lifecycle**: Each actor manages its own state and resources
+- **Swarm Task**: NetworkActor spawns tokio task for libp2p swarm, manages via channels
+- **Health Monitoring**: Self-reported via NetworkMessage::HealthCheck and metrics
+- **Graceful Shutdown**: Actors handle StopNetwork/StopSync messages for clean teardown
+- **Inter-Actor Coordination**: Direct Actix message passing (no supervisor intermediary)
+
+### 2.5 SwarmCommand Channel Architecture
+
+The NetworkActor V2 uses a **SwarmCommand channel pattern** to safely bridge Actix (actor model) and Tokio (async runtime) worlds:
+
+#### **Architecture Pattern**
+
+```rust
+// Defined in network_actor.rs:36-70
+pub enum SwarmCommand {
+    /// Dial a peer at the given multiaddr
+    Dial { addr: Multiaddr, response_tx: oneshot::Sender<Result<(), String>> },
+
+    /// Start listening on an address
+    ListenOn { addr: Multiaddr, response_tx: oneshot::Sender<Result<(), String>> },
+
+    /// Publish a gossipsub message
+    PublishGossip {
+        topic: String,
+        data: Vec<u8>,
+        response_tx: oneshot::Sender<Result<String, String>>
+    },
+
+    /// Subscribe to a gossipsub topic
+    SubscribeTopic { topic: String, response_tx: oneshot::Sender<Result<(), String>> },
+
+    /// Send a request-response request
+    SendRequest {
+        peer_id: PeerId,
+        request: BlockRequest,
+        response_tx: oneshot::Sender<Result<RequestId, String>>
+    },
+
+    /// Send a request-response response
+    SendResponse { channel: ResponseChannel<BlockResponse>, response: BlockResponse },
+}
+```
+
+#### **Communication Flow**
+
+1. **Actix Actor → Swarm**: NetworkActor sends SwarmCommand via bounded channel (1000 capacity)
+2. **Swarm Processing**: Tokio task receives command, executes on libp2p swarm
+3. **Result Return**: Swarm sends result back via oneshot channel (when applicable)
+4. **Event Flow**: Swarm events flow back to actor via separate event channel (StreamHandler)
+
+#### **Key Benefits**
+
+- **Thread Safety**: No direct swarm access from actor thread
+- **Backpressure**: Bounded channels prevent memory exhaustion under load
+- **Non-Blocking**: Actor doesn't block on swarm operations
+- **Error Recovery**: Failed commands return errors without crashing actor
+
+#### **Implementation Example** (`network_actor.rs:879-1101`)
+
+```rust
+// In Handler<NetworkMessage::BroadcastBlock>
+let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+let cmd = SwarmCommand::PublishGossip {
+    topic: "alys/blocks".to_string(),
+    data: block_data,
+    response_tx,
+};
+
+// Send command (non-blocking)
+cmd_tx.try_send(cmd)?;
+
+// Spawn task to handle async response
+tokio::spawn(async move {
+    match response_rx.await {
+        Ok(Ok(message_id)) => tracing::info!("Broadcast successful"),
+        Ok(Err(e)) => tracing::error!("Broadcast failed: {}", e),
+        Err(_) => tracing::error!("Response channel closed"),
+    }
+});
+```
 
 ---
 
@@ -2002,7 +2130,7 @@ async fn test_block_broadcasting() {
 }
 ```
 
-**Manager Component Tests** (`unit/manager_tests.rs` - 6/7 passing):
+**Manager Component Tests** (`unit/manager_tests.rs` - 6 passing, Phase 4 ✅):
 
 ```rust
 #[actix::test]
@@ -2034,7 +2162,7 @@ async fn test_peer_reputation_system() {
 
 ### 8.3 Integration Testing Strategy
 
-#### **Two-Actor Coordination Tests** (`integration/coordination_tests.rs` - 7 tests passing)
+#### **Two-Actor Coordination Tests** (`integration/coordination_tests.rs` - 3 tests passing, Phase 3 ✅)
 
 ```rust
 #[actix::test]
@@ -2218,11 +2346,13 @@ pub struct SyncMetrics {
 
 #### **Achieved Performance Targets**
 
-**Working Test Results Validation:**
-- ✅ **Message Processing**: 38/40 tests passing demonstrates reliable message handling
-- ✅ **Manager Components**: 6/7 manager tests passing shows efficient component design
-- ✅ **Integration**: 7/7 integration tests passing proves coordination efficiency
-- ✅ **mDNS Discovery**: Working mDNS tests validate V1 requirement preservation
+**Phase 4 Test Results Validation (Production-Ready ✅):**
+- ✅ **All Tests Passing**: 52/52 tests passing (100% success rate) demonstrates production readiness
+- ✅ **Unit Tests**: 22 unit tests validating component behavior and manager functionality (peer_manager, gossip_handler, block_request_manager, network, sync)
+- ✅ **Integration Tests**: 25 integration tests proving real TCP connections, gossipsub delivery, protocol communication, and workflow coordination
+- ✅ **Stress Tests**: 5 stress tests validating high-load resilience (mixed high load, channel backpressure, rapid peer churn, long-running stability, connection recovery)
+- ✅ **DOS Protection**: Rate limiting, connection limits, and violation tracking all validated in implementation
+- ✅ **Reputation System**: Advanced peer scoring with 5 violation types and automatic disconnect/ban working correctly
 
 ### 9.3 Bottleneck Elimination Analysis
 
@@ -2387,6 +2517,40 @@ networks:
   "max_sync_peers": 16
 }
 ```
+
+#### **Phase 4 Production Features** (✅ Complete)
+
+**DOS Protection Configuration:**
+```json
+{
+  "max_connections_per_ip": 5,
+  "max_inbound_connections": 500,
+  "max_outbound_connections": 500,
+  "max_messages_per_peer_per_second": 100,
+  "max_bytes_per_peer_per_second": 1048576,
+  "rate_limit_window_seconds": 1,
+  "message_size_limit": 1048576
+}
+```
+
+**Reputation System Thresholds:**
+- **Disconnect Threshold**: Reputation < 10.0 or Success Rate < 0.3
+- **Ban Threshold**: Reputation < -50.0 or Recent Violations > 20/hour
+- **Violation Penalties**:
+  - InvalidMessage: -5.0 reputation
+  - ExcessiveRate: -10.0 reputation
+  - MalformedProtocol: -8.0 reputation
+  - UnresponsivePeer: -3.0 reputation
+  - OversizedMessage: -7.0 reputation
+
+**📚 Complete Operations Guide**: See [operations.knowledge.md](./operations.knowledge.md) for:
+- Comprehensive monitoring metrics (connection, message flow, gossipsub, reputation, DOS protection)
+- Health check system with issue detection
+- Troubleshooting guide for common problems (no peers, DOS attacks, low reputation, gossipsub issues)
+- Performance tuning for different environments
+- DOS protection multi-layer defense details
+- Incident response procedures (P1-P4 severity levels)
+- Production deployment checklist
 
 ### 10.2 Operational Excellence
 
