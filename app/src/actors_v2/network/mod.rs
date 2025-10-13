@@ -1,10 +1,11 @@
 //! NetworkActor V2 Module
 //!
 //! Two-Actor P2P networking system with simplified protocols:
-//! - NetworkActor: P2P protocols (Gossipsub, Request-Response)
+//! - NetworkActor: P2P protocols (Gossipsub, Request-Response, Identify, mDNS)
 //! - SyncActor: Blockchain synchronization logic
 //!
-//! Removed from V1: NetworkSupervisor, Kademlia DHT, mDNS, QUIC, actor_system dependencies
+//! Removed from V1: NetworkSupervisor, Kademlia DHT, QUIC, actor_system dependencies
+//! Retained: mDNS for local network discovery (essential for local development)
 
 pub mod network_actor;
 pub mod sync_actor;
