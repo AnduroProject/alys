@@ -480,7 +480,9 @@ impl App {
                     format!("/ip4/{}/tcp/{}", v2_p2p_listen_addr, if v2_p2p_port == 0 { 0 } else { v2_p2p_port + 1000 })
                 ],
                 bootstrap_peers: v2_remote_bootnode.map(|b| vec![b]).unwrap_or_default(),
-                max_connections: 100,
+                max_connections: 1000,
+                max_inbound_connections: 500,
+                max_outbound_connections: 500,
                 connection_timeout: Duration::from_secs(30),
                 gossip_topics: vec![
                     "alys-v2-blocks".to_string(),
