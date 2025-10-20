@@ -16,6 +16,14 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends cmake ninja-build && \
         apt-get clean && \
         rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        clang \
+        libclang-dev \
+        llvm-dev \
+        && apt-get clean && \
+        rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
 
 FROM system-pkg-cache AS builder
