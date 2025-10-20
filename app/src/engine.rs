@@ -181,18 +181,35 @@ impl Engine {
             .inc();
 
         let finalized = self.finalized.read().await.unwrap_or_default();
+        let parent_hash = execution_payload.parent_hash();
+        let block_number = execution_payload.block_number();
 
+        debug!(
+            "Committing block: number={}, parent_hash={:?}, finalized={:?}",
+            block_number, parent_hash, finalized
+        );
+
+        // Update forkchoice to parent before submitting new payload
+        // This ensures the execution client knows about the parent block
         self.api
             .forkchoice_updated(
                 ForkchoiceState {
-                    head_block_hash: execution_payload.parent_hash(),
+                    head_block_hash: parent_hash,
                     safe_block_hash: finalized,
                     finalized_block_hash: finalized,
                 },
                 None,
             )
             .await
-            .unwrap();
+            .map_err(|err| {
+                ENGINE_COMMIT_BLOCK_CALLS
+                    .with_label_values(&["engine_api_forkchoice_parent_error"])
+                    .inc();
+                Error::EngineApiError(format!(
+                    "Failed to update forkchoice to parent (block={}, parent={:?}): {:?}",
+                    block_number, parent_hash, err
+                ))
+            })?;
 
         // we need to push the payload back to geth
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/eth/catalyst/api.go#L259
@@ -213,6 +230,8 @@ impl Engine {
             Error::InvalidBlockHash
         })?;
 
+        debug!("New payload accepted, head={:?}", head);
+
         // update now to the new head so we can fetch the txs and
         // receipts from the ethereum rpc
         self.api
@@ -225,7 +244,21 @@ impl Engine {
                 None,
             )
             .await
-            .unwrap();
+            .map_err(|err| {
+                ENGINE_COMMIT_BLOCK_CALLS
+                    .with_label_values(&["engine_api_forkchoice_head_error"])
+                    .inc();
+                Error::EngineApiError(format!(
+                    "Failed to update forkchoice to new head (head={:?}): {:?}",
+                    head, err
+                ))
+            })?;
+
+        debug!("Forkchoice updated to new head successfully");
+
+        ENGINE_COMMIT_BLOCK_CALLS
+            .with_label_values(&["success"])
+            .inc();
 
         Ok(head)
     }
