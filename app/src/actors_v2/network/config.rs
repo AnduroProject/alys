@@ -94,7 +94,7 @@ impl NetworkConfig {
             return Err("Max connections per IP must be greater than 0".to_string());
         }
 
-        if self.max_inbound_connections + self.max_outbound_connections <= self.max_connections {
+        if self.max_inbound_connections + self.max_outbound_connections > self.max_connections {
             return Err("Sum of max_inbound_connections and max_outbound_connections cannot exceed max_connections".to_string());
         }
 
