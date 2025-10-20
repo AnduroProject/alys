@@ -15,7 +15,7 @@ on:
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
-    branches: [ "main", "development" ]
+    branches: [ "main", "development", "feature/v2-network" ]
 
 env:
   # Use docker.io for Docker Hub if empty
