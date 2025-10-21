@@ -76,7 +76,7 @@ fn main() {
         // Store for summary
         all_bls_pubkeys.push(format!("0x{}", hex::encode(bls_public.serialize())));
         all_eth_addresses.push(format!("{:?}", eth_address));
-        all_btc_pubkeys.push(format!("0{}", hex::encode(btc_pubkey.serialize())));
+        all_btc_pubkeys.push(hex::encode(btc_pubkey.serialize()));
 
         // Print individual keys
         log!("1. BLS Secret Key (Aura Consensus):");
@@ -96,7 +96,7 @@ fn main() {
         log!("");
 
         log!("5. Bitcoin Public Key (for spec.rs federation_bitcoin_pubkeys):");
-        log!("   0{}", hex::encode(btc_pubkey.serialize()));
+        log!("   {}", hex::encode(btc_pubkey.serialize()));
         log!("");
 
         log!("─────────────────────────────────────────────────────────────────");
