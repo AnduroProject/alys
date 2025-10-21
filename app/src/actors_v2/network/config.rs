@@ -53,9 +53,10 @@ impl Default for NetworkConfig {
             max_connections: 1000,
             connection_timeout: Duration::from_secs(30),
             gossip_topics: vec![
-                "alys-blocks".to_string(),
-                "alys-transactions".to_string(),
-                "alys-auxpow".to_string(), // Phase 4: AuxPoW mining coordination
+                "alys/blocks".to_string(),              // Regular block gossip
+                "alys/blocks/priority".to_string(),     // Priority block gossip
+                "alys/transactions".to_string(),        // Transaction gossip
+                "alys/auxpow".to_string(),              // Phase 4: AuxPoW mining coordination
             ],
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),
