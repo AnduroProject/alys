@@ -320,6 +320,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bitcoin",
+ "blake2",
  "chrono",
  "clap 4.4.11",
  "criterion",

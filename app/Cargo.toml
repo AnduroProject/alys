@@ -82,6 +82,9 @@ serde_derive = { workspace = true }
 serde_json = "1.0.94"
 rmp-serde = "1.1.2"
 
+# crypto (for keygen utility)
+blake2 = "0.10"
+
 # ethereum
 superstruct = "0.6"
 tree_hash = "0.5"
@@ -137,4 +140,17 @@ path = "../examples/network_v2_mdns_demo.rs"
 [[example]]
 name = "network_debug_creation"
 path = "../examples/network_debug_creation.rs"
+
+# Binaries
+[[bin]]
+name = "keygen"
+path = "src/bin/keygen.rs"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"
+
+[[bin]]
+name = "miner"
+path = "src/miner.rs"
 
