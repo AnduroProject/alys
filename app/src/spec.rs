@@ -45,15 +45,21 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
         slot_duration:4000,
         authorities: vec![
-            PublicKey::from_str(
-                "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-            ).unwrap()
+            // PublicKey::from_str(
+            //     "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+            // ).unwrap()
+            PublicKey::from_str("0xb3c0fc40650f68a271c7c2c164d82c56e20ec371fedcc4576efaa3442f6461ee8b4b86100469eeacd4ea2b383bbaddf9").unwrap(),
+            PublicKey::from_str("0xb25acafd0128182e6f87fa46334c8239e7f265d75b8c82ed0fdb2ca531a3761ae1b3eacae74761592aff2ed58827d06f").unwrap()
         ],
         federation: vec![
-            "2e80ab37dfb510a64526296fd1f295c42ef19c29".parse().unwrap(),
+            // "2e80ab37dfb510a64526296fd1f295c42ef19c29".parse().unwrap(),
+            "083bf0043a3f5dfb90517bbee09ee1c9c15f29f0".parse().unwrap(),
+            "4d2e64af4ec6cb4a091849bc400d8bf85faef25a".parse().unwrap()
         ],
         federation_bitcoin_pubkeys: vec![
-            BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
+            // BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
+            BitcoinPublicKey::from_str("002cf74e0950ef067911150603b1a6633c4b850719cb381ae5e58b020aef94d5bac").unwrap(),
+            BitcoinPublicKey::from_str("003dc1bc27968947f06cb6dbb9c3107a3a349810f5d563b302acff6a8e3d423b4c5").unwrap()
         ],
         bits: 505794034,
         chain_id: 121212,
