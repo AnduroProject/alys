@@ -8,6 +8,8 @@ use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{
     genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
+    DEV_REGTEST_AURA_SECRET_KEY_NODE1, DEV_REGTEST_AURA_SECRET_KEY_NODE2,
+    DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1, DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2,
 };
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bridge::{
@@ -58,7 +60,8 @@ pub struct App {
         value_name = "CHAIN_OR_PATH",
         value_parser = genesis_value_parser,
         default_value_if("dev", ArgPredicate::IsPresent, Some("dev")),
-        required_unless_present = "dev"
+        default_value_if("dev_regtest", ArgPredicate::IsPresent, Some("dev-regtest")),
+        required_unless_present_any = ["dev", "dev_regtest"]
     )]
     chain_spec: Option<ChainSpec>,
 
@@ -66,13 +69,21 @@ pub struct App {
         long = "aura-secret-key",
         value_parser = parse_secret_key,
         default_value_if("dev", ArgPredicate::IsPresent, Some(DEV_SECRET_KEY)),
+        default_value_ifs([
+            ("dev_regtest", "true", Some(DEV_REGTEST_AURA_SECRET_KEY_NODE1)),
+            ("regtest_node_id", "2", Some(DEV_REGTEST_AURA_SECRET_KEY_NODE2))
+        ])
     )]
     pub aura_secret_key: Option<SecretKey>,
 
     #[arg(
         long = "bitcoin-secret-key",
         value_parser = parse_bitcoin_secret_key,
-        default_value_if("dev", ArgPredicate::IsPresent, Some(DEV_BITCOIN_SECRET_KEY))
+        default_value_if("dev", ArgPredicate::IsPresent, Some(DEV_BITCOIN_SECRET_KEY)),
+        default_value_ifs([
+            ("dev_regtest", "true", Some(DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1)),
+            ("regtest_node_id", "2", Some(DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2))
+        ])
     )]
     pub bitcoin_secret_key: Option<BitcoinSecretKey>,
 
@@ -121,10 +132,17 @@ pub struct App {
     #[arg(long)]
     pub dev: bool,
 
+    #[arg(long)]
+    pub dev_regtest: bool,
+
+    #[arg(long, default_value_t = 1)]
+    pub regtest_node_id: u8,
+
     #[clap(
         long,
         env = "BITCOIN_RPC_URL",
         default_value_if("dev", ArgPredicate::IsPresent, Some("http://0.0.0.0:18443")),
+        default_value_if("dev_regtest", ArgPredicate::IsPresent, Some("http://0.0.0.0:18443")),
         // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_url: Option<String>,
@@ -133,6 +151,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_USER",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcuser")),
+        default_value_if("dev_regtest", ArgPredicate::IsPresent, Some("rpcuser")),
         // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_user: Option<String>,
@@ -141,6 +160,7 @@ pub struct App {
         long,
         env = "BITCOIN_RPC_PASS",
         default_value_if("dev", ArgPredicate::IsPresent, Some("rpcpassword")),
+        default_value_if("dev_regtest", ArgPredicate::IsPresent, Some("rpcpassword")),
         // required_unless_present = "dev"
     )]
     pub bitcoin_rpc_pass: Option<String>,
@@ -157,6 +177,20 @@ pub struct App {
 
 impl App {
     pub fn run(self) -> Result<()> {
+        // Validate mutual exclusivity of dev and dev_regtest flags
+        if self.dev && self.dev_regtest {
+            return Err(eyre::Error::msg(
+                "Cannot use both --dev and --dev-regtest flags simultaneously"
+            ));
+        }
+
+        // Validate regtest node ID
+        if self.dev_regtest && (self.regtest_node_id < 1 || self.regtest_node_id > 2) {
+            return Err(eyre::Error::msg(
+                "Invalid --regtest-node-id: must be 1 or 2"
+            ));
+        }
+
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
         tokio_runtime.block_on(run_until_ctrl_c(self.execute()))?;
@@ -195,6 +229,11 @@ impl App {
     }
 
     async fn execute(self) -> Result<()> {
+        // Log dev-regtest node information
+        if self.dev_regtest {
+            info!("Running in dev-regtest mode as Node {}", self.regtest_node_id);
+        }
+
         // Clone values needed for V2 actor system BEFORE V0 takes ownership
         let v2_db_path = self.db_path.clone();
         let v2_geth_url = self.geth_url.clone();
@@ -289,6 +328,9 @@ impl App {
             slot_duration,
             maybe_aura_signer.clone(),
         );
+
+        // Log entire chain_spec
+        info!("****** Chain spec: {:?}", chain_spec);
 
         // Clone values for V2 RPC before V0 Chain takes ownership
         let v2_bitcoin_rpc_url = self.bitcoin_rpc_url.clone();
@@ -584,7 +626,7 @@ impl App {
 
         crate::metrics::start_server(self.metrics_port).await;
 
-        if (self.mine || self.dev) && !self.no_mine {
+        if (self.mine || self.dev || self.dev_regtest) && !self.no_mine {
             info!("Spawning miner");
             spawn_background_miner(chain.clone());
         }

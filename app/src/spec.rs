@@ -41,6 +41,12 @@ pub const DEV_SECRET_KEY: &str = "0000000000000000000000000000000000000000000000
 pub const DEV_BITCOIN_SECRET_KEY: &str =
     "0000000000000000000000000000000000000000000000000000000000000001";
 
+// Dev-Regtest keys for two-validator federation
+pub const DEV_REGTEST_AURA_SECRET_KEY_NODE1: &str = "1eb37c7780cae17cf6dfb2fd8b93595e4c2810d8632277f70336e14c8b9446e5";
+pub const DEV_REGTEST_AURA_SECRET_KEY_NODE2: &str = "5d4d847ef298b175f2f4c8df9d7e2581edc7529633b1851cc06f2c76af902ed8";
+pub const DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1: &str = "8e06f3b7bd261c8dba364b5bd03307d6d2f3dfe567f94f5b190f779dc85081f7";
+pub const DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2: &str = "0e84e14debf28b663c7f7a29c203649a846fcd57f2989dd429415496e5897b73";
+
 pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     ChainSpec {
         slot_duration:4000,
@@ -73,6 +79,39 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
     }
 });
 
+pub static DEV_REGTEST: Lazy<ChainSpec> = Lazy::new(|| {
+    ChainSpec {
+        slot_duration: 4000,
+        authorities: vec![
+            PublicKey::from_str("0xb3c0fc40650f68a271c7c2c164d82c56e20ec371fedcc4576efaa3442f6461ee8b4b86100469eeacd4ea2b383bbaddf9").unwrap(),
+            PublicKey::from_str("0xb25acafd0128182e6f87fa46334c8239e7f265d75b8c82ed0fdb2ca531a3761ae1b3eacae74761592aff2ed58827d06f").unwrap()
+        ],
+        federation: vec![
+            "083bf0043a3f5dfb90517bbee09ee1c9c15f29f0".parse().unwrap(),
+            "4d2e64af4ec6cb4a091849bc400d8bf85faef25a".parse().unwrap()
+        ],
+        federation_bitcoin_pubkeys: vec![
+            BitcoinPublicKey::from_str("02cf74e0950ef067911150603b1a6633c4b850719cb381ae5e58b020aef94d5bac").unwrap(),
+            BitcoinPublicKey::from_str("03dc1bc27968947f06cb6dbb9c3107a3a349810f5d563b302acff6a8e3d423b4c5").unwrap()
+        ],
+        bits: 505794034,
+        chain_id: 121212,
+        max_blocks_without_pow: 50000,
+        required_btc_txn_confirmations: 144,
+        bitcoin_start_height: 0,
+        retarget_params: BitcoinConsensusParams {
+            pow_no_retargeting: false,
+            pow_limit: 553713663,
+            pow_lower_limit: 439495319,
+            max_pow_adjustment: 20,
+            pow_target_timespan: 60,
+            pow_target_spacing: 5
+        },
+        is_validator: true,
+        execution_timeout_length: 3,
+    }
+});
+
 impl Default for ChainSpec {
     fn default() -> Self {
         DEV.clone()
@@ -82,6 +121,7 @@ impl Default for ChainSpec {
 pub fn genesis_value_parser(s: &str) -> eyre::Result<ChainSpec, eyre::Error> {
     Ok(match s {
         "dev" => DEV.clone(),
+        "dev-regtest" => DEV_REGTEST.clone(),
         _ => {
             let raw = std::fs::read_to_string(PathBuf::from(s))?;
             serde_json::from_str(&raw)?
