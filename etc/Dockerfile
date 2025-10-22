@@ -18,9 +18,10 @@ RUN apt-get update && \
         ninja-build \
         clang \
         libclang-dev \
-        llvm-dev && \
+        llvm-dev \
         git \
         ca-certificates \
+        && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
