@@ -483,11 +483,132 @@ impl NetworkActor {
                 self.metrics.record_message_received(data.len());
                 self.metrics.record_gossip_received();
 
-                // Forward to SyncActor if it's a block or sync-related message
-                if topic.contains("block") || topic.contains("sync") {
+                // Phase 1: Forward block gossip messages to ChainActor for import
+                if topic.contains("block") {
+                    if let Some(ref chain_actor) = self.chain_actor {
+                        // Deserialize block from MessagePack format
+                        match crate::actors_v2::common::serialization::deserialize_block_from_network(&data) {
+                            Ok(block) => {
+                                // Extract block info for logging
+                                let block_height = block.message.execution_payload.block_number;
+                                let block_hash = crate::actors_v2::common::serialization::calculate_block_hash(&block);
+
+                                tracing::info!(
+                                    peer_id = %source_peer,
+                                    block_height = block_height,
+                                    block_hash = %block_hash,
+                                    topic = %topic,
+                                    "Received block via gossipsub, forwarding to ChainActor"
+                                );
+
+                                // Perform basic structural validation before forwarding
+                                if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
+                                    tracing::warn!(
+                                        peer_id = %source_peer,
+                                        block_height = block_height,
+                                        error = %validation_error,
+                                        "Block failed basic structural validation, dropping"
+                                    );
+
+                                    // Penalize peer for sending invalid block
+                                    self.peer_manager.add_peer_violation(
+                                        &source_peer,
+                                        Violation::InvalidData {
+                                            reason: "Invalid block structure".to_string()
+                                        }
+                                    );
+
+                                    return Ok(());
+                                }
+
+                                // Forward to ChainActor (async, non-blocking)
+                                let chain_actor_clone = chain_actor.clone();
+                                let peer_id_clone = source_peer.clone();
+
+                                tokio::spawn(async move {
+                                    let msg = crate::actors_v2::chain::messages::ChainMessage::NetworkBlockReceived {
+                                        block,
+                                        peer_id: peer_id_clone.clone(),
+                                    };
+
+                                    match chain_actor_clone.send(msg).await {
+                                        Ok(Ok(response)) => {
+                                            match response {
+                                                crate::actors_v2::chain::messages::ChainResponse::NetworkBlockProcessed { accepted, reason } => {
+                                                    if accepted {
+                                                        tracing::info!(
+                                                            peer_id = %peer_id_clone,
+                                                            block_height = block_height,
+                                                            "Block successfully imported by ChainActor"
+                                                        );
+                                                    } else {
+                                                        tracing::warn!(
+                                                            peer_id = %peer_id_clone,
+                                                            block_height = block_height,
+                                                            reason = ?reason,
+                                                            "Block rejected by ChainActor"
+                                                        );
+                                                    }
+                                                }
+                                                _ => {
+                                                    tracing::warn!(
+                                                        peer_id = %peer_id_clone,
+                                                        "Unexpected response from ChainActor"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::error!(
+                                                peer_id = %peer_id_clone,
+                                                error = ?e,
+                                                "ChainActor rejected block with error"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                peer_id = %peer_id_clone,
+                                                error = ?e,
+                                                "Failed to communicate with ChainActor"
+                                            );
+                                        }
+                                    }
+                                });
+
+                                // Update peer reputation immediately (optimistic)
+                                self.peer_manager.record_peer_success(&source_peer);
+
+                            }
+                            Err(deserialization_error) => {
+                                tracing::warn!(
+                                    peer_id = %source_peer,
+                                    topic = %topic,
+                                    error = %deserialization_error,
+                                    data_len = data.len(),
+                                    "Failed to deserialize block from gossipsub message"
+                                );
+
+                                // Penalize peer for sending malformed data
+                                self.peer_manager.add_peer_violation(
+                                    &source_peer,
+                                    Violation::InvalidData {
+                                        reason: format!("Block deserialization failed: {}", deserialization_error)
+                                    }
+                                );
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            topic = %topic,
+                            "Received block gossip but ChainActor not available, dropping"
+                        );
+                    }
+                }
+                // Handle sync-related messages separately (not blocks)
+                else if topic.contains("sync") {
                     if let Some(ref _sync_actor) = self.sync_actor {
-                        // TODO: Send appropriate message to SyncActor
-                        tracing::debug!("Forwarding gossip message to SyncActor");
+                        // TODO: Forward sync messages to SyncActor (future phase)
+                        tracing::debug!("Received sync-related gossip message");
                     }
                 }
             }

@@ -574,6 +574,15 @@ impl App {
             let chain_actor_addr = chain_actor.start();
             info!("✓ ChainActor V2 started with all dependencies wired");
 
+            // Phase 1: Set ChainActor address in NetworkActor for block forwarding
+            match network_actor.send(NetworkMessage::SetChainActor {
+                addr: chain_actor_addr.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ ChainActor address configured in NetworkActor for block reception"),
+                Ok(Err(e)) => error!("✗ Failed to set ChainActor in NetworkActor: {:?}", e),
+                Err(e) => error!("✗ NetworkActor mailbox error during SetChainActor: {:?}", e),
+            }
+
             // Clone chain_actor_addr for slot worker (before RPC consumes it)
             let chain_actor_addr_for_slot_worker = chain_actor_addr.clone();
 

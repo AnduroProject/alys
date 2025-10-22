@@ -29,7 +29,7 @@ use crate::actors_v2::common::serialization::{serialize_block, calculate_block_h
 impl Handler<ChainMessage> for ChainActor {
     type Result = ResponseFuture<Result<ChainResponse, ChainError>>;
 
-    fn handle(&mut self, msg: ChainMessage, _: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: ChainMessage, ctx: &mut Context<Self>) -> Self::Result {
         self.record_activity();
 
         match msg {
@@ -1019,58 +1019,67 @@ impl Handler<ChainMessage> for ChainActor {
                 info!(
                     block_height = block_height,
                     block_hash = %block_hash,
-                    peer_id = ?peer_id,
-                    "Received block from network peer"
+                    peer_id = %peer_id,
+                    "Received block from network peer, delegating to ImportBlock handler"
                 );
 
-                // Basic validation before processing
-                if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
-                    warn!(
-                        block_hash = %block_hash,
-                        peer_id = ?peer_id,
-                        error = ?validation_error,
-                        "Received invalid block structure from peer"
-                    );
-                    return Box::pin(async move {
-                        Ok(ChainResponse::NetworkBlockProcessed {
-                            accepted: false,
-                            reason: Some(format!("Invalid block structure: {}", validation_error)),
+                // Phase 1: Delegate to ImportBlock handler with Network source
+                // This reuses all existing validation logic (structural, Aura, execution, peg operations)
+                let import_msg = ChainMessage::ImportBlock {
+                    block,
+                    source: BlockSource::Network(peer_id.clone()),
+                };
+
+                // Clone context reference for recursion
+                let peer_id_for_response = peer_id.clone();
+
+                // Recursively call ImportBlock handler
+                match self.handle(import_msg, ctx) {
+                    import_future => {
+                        Box::pin(async move {
+                            match import_future.await {
+                                Ok(ChainResponse::BlockImported { block_hash, height }) => {
+                                    info!(
+                                        peer_id = %peer_id_for_response,
+                                        block_height = height,
+                                        block_hash = %block_hash,
+                                        "Network block imported successfully via ImportBlock handler"
+                                    );
+
+                                    Ok(ChainResponse::NetworkBlockProcessed {
+                                        accepted: true,
+                                        reason: None,
+                                    })
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        peer_id = %peer_id_for_response,
+                                        block_height = block_height,
+                                        error = %e,
+                                        "Network block rejected by ImportBlock handler"
+                                    );
+
+                                    Ok(ChainResponse::NetworkBlockProcessed {
+                                        accepted: false,
+                                        reason: Some(format!("Import error: {}", e)),
+                                    })
+                                }
+                                Ok(other_response) => {
+                                    warn!(
+                                        peer_id = %peer_id_for_response,
+                                        response = ?other_response,
+                                        "Unexpected response from ImportBlock handler"
+                                    );
+
+                                    Ok(ChainResponse::NetworkBlockProcessed {
+                                        accepted: false,
+                                        reason: Some("Unexpected import response".to_string()),
+                                    })
+                                }
+                            }
                         })
-                    });
+                    }
                 }
-
-                // Check if block is too old or too far in the future
-                let current_height = self.state.get_height();
-                if block_height <= current_height && current_height > 0 {
-                    info!(
-                        block_height = block_height,
-                        current_height = current_height,
-                        peer_id = ?peer_id,
-                        "Received old block from peer - ignoring"
-                    );
-                    return Box::pin(async move {
-                        Ok(ChainResponse::NetworkBlockProcessed {
-                            accepted: false,
-                            reason: Some("Block height is too old".to_string()),
-                        })
-                    });
-                }
-
-                // For now, basic acceptance without full import pipeline
-                // TODO: Implement full block import integration
-                info!(
-                    block_hash = %block_hash,
-                    block_height = block_height,
-                    peer_id = ?peer_id,
-                    "Accepting block from network peer"
-                );
-
-                Box::pin(async move {
-                    Ok(ChainResponse::NetworkBlockProcessed {
-                        accepted: true,
-                        reason: None,
-                    })
-                })
             }
         }
     }

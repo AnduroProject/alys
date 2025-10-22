@@ -32,6 +32,8 @@ pub enum Violation {
     UnresponsivePeer { timeout_count: u32 },
     /// Peer sent oversized message
     OversizedMessage { size_bytes: usize },
+    /// Peer sent invalid or malformed data (Phase 1: Block reception)
+    InvalidData { reason: String },
 }
 
 /// Simplified peer information with Phase 4 enhancements
@@ -96,6 +98,7 @@ impl PeerInfo {
                 Violation::MalformedProtocol { .. } => true,
                 Violation::UnresponsivePeer { .. } => true,
                 Violation::OversizedMessage { .. } => true,
+                Violation::InvalidData { .. } => true, // Phase 1: Always count invalid data
             })
             .count()
     }
@@ -291,6 +294,7 @@ impl PeerManager {
                 Violation::MalformedProtocol { .. } => -8.0,
                 Violation::UnresponsivePeer { .. } => -3.0,
                 Violation::OversizedMessage { .. } => -7.0,
+                Violation::InvalidData { .. } => -5.0, // Phase 1: Penalty for invalid block data
             };
 
             peer_info.add_violation(violation.clone());
