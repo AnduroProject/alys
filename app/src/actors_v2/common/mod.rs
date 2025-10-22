@@ -2,6 +2,7 @@
 
 pub mod types;
 pub mod serialization;
+pub mod validation;
 
 pub use types::*;
 pub use serialization::*;

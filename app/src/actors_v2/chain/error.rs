@@ -72,6 +72,12 @@ pub enum ChainError {
     #[error("Import queue is full - cannot queue more blocks")]
     QueueFull,
 
+    #[error("Invalid block signature: {0}")]
+    InvalidSignature(String),
+
+    #[error("Invalid parent relationship: {0}")]
+    InvalidParent(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

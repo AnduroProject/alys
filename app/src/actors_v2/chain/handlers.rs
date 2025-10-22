@@ -561,6 +561,47 @@ impl Handler<ChainMessage> for ChainActor {
                             "Block passed structural validation"
                         );
 
+                        // Step 1.5: Signature verification (Phase 3)
+                        if let Err(signature_error) = crate::actors_v2::common::validation::verify_block_signature(&block, &self_clone.state.aura) {
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                error = ?signature_error,
+                                "Block failed signature verification"
+                            );
+                            return Err(signature_error);
+                        }
+
+                        debug!(
+                            correlation_id = %correlation_id,
+                            block_hash = %block_hash,
+                            "Block signature verified successfully"
+                        );
+
+                        // Step 1.7: Parent hash validation (Phase 3)
+                        if let Some(ref storage_actor) = storage_actor {
+                            if let Err(parent_error) = crate::actors_v2::common::validation::validate_parent_relationship(&block, storage_actor).await {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    error = ?parent_error,
+                                    "Block failed parent relationship validation"
+                                );
+                                return Err(parent_error);
+                            }
+
+                            debug!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                "Parent relationship validated successfully"
+                            );
+                        } else {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                "StorageActor not available for parent validation - skipping (unsafe!)"
+                            );
+                        }
+
                         // Step 2: Consensus validation via V0 Aura (Critical Blocker 2 solution)
                         if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
                             error!(
