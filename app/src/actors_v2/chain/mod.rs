@@ -30,6 +30,7 @@ pub mod recovery;
 pub mod monitoring;
 pub mod auxpow;
 pub mod fork_choice;
+pub mod reorganization;
 
 pub use actor::ChainActor;
 pub use config::ChainConfig;

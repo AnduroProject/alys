@@ -426,6 +426,45 @@ impl ChainActor {
             Err(ChainError::Storage("StorageActor not available".to_string()))
         }
     }
+
+    /// Phase 4C: Reorganize chain to new canonical tip when fork choice determines it's better
+    pub async fn reorganize_chain(
+        &self,
+        new_tip_block: &SignedConsensusBlock<MainnetEthSpec>,
+        correlation_id: Uuid,
+    ) -> Result<super::reorganization::ReorganizationResult, ChainError> {
+        warn!(
+            correlation_id = %correlation_id,
+            new_tip_height = new_tip_block.message.execution_payload.block_number,
+            "Starting chain reorganization"
+        );
+
+        if let Some(ref storage_actor) = self.storage_actor {
+            let current_height = self.state.get_height();
+
+            // Call the reorganization module
+            let result = super::reorganization::reorganize_to_new_tip(
+                new_tip_block,
+                current_height,
+                storage_actor,
+                correlation_id,
+            )
+            .await?;
+
+            info!(
+                correlation_id = %correlation_id,
+                reorg_height = result.reorg_height,
+                blocks_rolled_back = result.blocks_rolled_back,
+                blocks_applied = result.blocks_applied,
+                new_tip = %result.new_tip,
+                "Chain reorganization completed successfully"
+            );
+
+            Ok(result)
+        } else {
+            Err(ChainError::Storage("StorageActor not available for reorganization".to_string()))
+        }
+    }
 }
 
 impl Actor for ChainActor {

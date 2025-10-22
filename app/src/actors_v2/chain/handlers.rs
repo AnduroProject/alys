@@ -695,15 +695,36 @@ impl Handler<ChainMessage> for ChainActor {
                                                     correlation_id = %correlation_id,
                                                     new_tip = %new_tip,
                                                     rollback_to = rollback_to,
-                                                    "Fork choice: reorganization needed (not yet implemented)"
+                                                    "Fork choice: reorganization needed - executing chain reorganization"
                                                 );
 
-                                                // TODO: Implement full chain reorganization in Phase 4C
-                                                // For now, log the decision and continue with simple replacement
-                                                warn!(
-                                                    correlation_id = %correlation_id,
-                                                    "Chain reorganization not yet implemented - using simple block replacement"
-                                                );
+                                                // Phase 4C: Execute chain reorganization
+                                                match self_clone.reorganize_chain(&block, correlation_id).await {
+                                                    Ok(reorg_result) => {
+                                                        info!(
+                                                            correlation_id = %correlation_id,
+                                                            blocks_rolled_back = reorg_result.blocks_rolled_back,
+                                                            blocks_applied = reorg_result.blocks_applied,
+                                                            new_tip = %reorg_result.new_tip,
+                                                            "Chain reorganization completed successfully - new block is now canonical"
+                                                        );
+
+                                                        // Reorganization already handled storage and chain head updates
+                                                        // Skip the normal import flow and return success
+                                                        return Ok(ChainResponse::BlockImported {
+                                                            block_hash: reorg_result.new_tip,
+                                                            height: reorg_result.new_tip_height,
+                                                        });
+                                                    }
+                                                    Err(reorg_error) => {
+                                                        error!(
+                                                            correlation_id = %correlation_id,
+                                                            error = ?reorg_error,
+                                                            "Chain reorganization failed - keeping current block"
+                                                        );
+                                                        return Err(reorg_error);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
