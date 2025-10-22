@@ -4,6 +4,7 @@
 
 use actix::prelude::*;
 use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
@@ -464,37 +465,95 @@ impl Handler<ChainMessage> for ChainActor {
                         Err(ChainError::InvalidBlock("Block height is too old".to_string()))
                     })
                 } else {
-                    // Complete block import pipeline (Phase 3) with real V0 integration
-                    let block_hash = calculate_block_hash(&block);
-                    let correlation_id = Uuid::new_v4();
-                    let start_time = Instant::now();
+                    // Phase 2: Try to acquire import lock
+                    let lock_acquired = self.import_in_progress.compare_exchange(
+                        false,
+                        true,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst
+                    ).is_ok();
 
-                    info!(
-                        block_height = block_height,
-                        block_hash = %block_hash,
-                        source = ?source,
-                        correlation_id = %correlation_id,
-                        "Starting complete block import pipeline with V0 integration"
-                    );
+                    if !lock_acquired {
+                        // Another import is in progress - queue this block
+                        let block_hash = calculate_block_hash(&block);
+                        let pending_imports = self.pending_imports.clone();
+                        let max_pending = self.max_pending_imports;
 
-                    // Clone self to enable async method calls (Critical Blocker 1 solution)
-                    let self_clone = self.clone();
+                        info!(
+                            block_height = block_height,
+                            block_hash = %block_hash,
+                            source = ?source,
+                            "Import lock held - queueing block for later processing"
+                        );
 
-                    // Capture actor references for async block
-                    let engine_actor = self.engine_actor.clone();
-                    let storage_actor = self.storage_actor.clone();
+                        Box::pin(async move {
+                            let mut queue = pending_imports.write().await;
 
-                    Box::pin(async move {
-                        // Step 1: Structural validation
-                        if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
-                            error!(
-                                correlation_id = %correlation_id,
+                            // Check queue capacity
+                            if queue.len() >= max_pending {
+                                warn!(
+                                    block_height = block_height,
+                                    block_hash = %block_hash,
+                                    queue_size = queue.len(),
+                                    "Import queue full - rejecting block"
+                                );
+                                return Err(ChainError::QueueFull);
+                            }
+
+                            // Queue the import
+                            queue.push_back(super::actor::PendingImport {
+                                block,
+                                source,
+                                queued_at: Instant::now(),
+                            });
+
+                            let position = queue.len();
+                            info!(
+                                block_height = block_height,
                                 block_hash = %block_hash,
-                                error = ?validation_error,
-                                "Block failed structural validation"
+                                queue_position = position,
+                                "Block queued for import"
                             );
-                            return Err(ChainError::InvalidBlock(format!("Invalid block structure: {}", validation_error)));
-                        }
+
+                            Ok(ChainResponse::BlockQueued { position })
+                        })
+                    } else {
+                        // Lock acquired successfully - proceed with import
+                        let block_hash = calculate_block_hash(&block);
+                        let correlation_id = Uuid::new_v4();
+                        let start_time = Instant::now();
+
+                        info!(
+                            block_height = block_height,
+                            block_hash = %block_hash,
+                            source = ?source,
+                            correlation_id = %correlation_id,
+                            "Import lock acquired - starting complete block import pipeline with V0 integration"
+                        );
+
+                        // Clone self to enable async method calls (Critical Blocker 1 solution)
+                        let self_clone = self.clone();
+
+                        // Capture actor references for async block
+                        let engine_actor = self.engine_actor.clone();
+                        let storage_actor = self.storage_actor.clone();
+
+                        // Capture context address for queue processing
+                        let ctx_addr = ctx.address();
+
+                        Box::pin(async move {
+                        // Wrap entire import logic to ensure lock release on all paths
+                        let import_result: Result<ChainResponse, ChainError> = async {
+                            // Step 1: Structural validation
+                            if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    error = ?validation_error,
+                                    "Block failed structural validation"
+                                );
+                                return Err(ChainError::InvalidBlock(format!("Invalid block structure: {}", validation_error)));
+                            }
 
                         debug!(
                             correlation_id = %correlation_id,
@@ -757,22 +816,54 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                        let import_duration = start_time.elapsed();
+                            let import_duration = start_time.elapsed();
 
-                        info!(
-                            correlation_id = %correlation_id,
-                            block_hash = %block_hash,
-                            block_height = block_height,
-                            source = ?source,
-                            import_duration_ms = import_duration.as_millis(),
-                            "Block import completed successfully"
-                        );
+                            info!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                block_height = block_height,
+                                source = ?source,
+                                import_duration_ms = import_duration.as_millis(),
+                                "Block import completed successfully"
+                            );
 
-                        Ok(ChainResponse::BlockImported {
-                            block_hash,
-                            height: block_height,
+                            Ok(ChainResponse::BlockImported {
+                                block_hash,
+                                height: block_height,
+                            })
+                        }.await;
+
+                        // Phase 2: Release import lock and process queue (regardless of success/failure)
+                        match import_result {
+                            Ok(response) => {
+                                // Success: Release lock and process next queued import
+                                self_clone.import_in_progress.store(false, Ordering::SeqCst);
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    "Import lock released after successful import"
+                                );
+
+                                // Process next queued import if any
+                                self_clone.process_next_queued_import(ctx_addr).await;
+
+                                Ok(response)
+                            }
+                            Err(e) => {
+                                // Error: Force release lock (no queue processing on error)
+                                self_clone.force_release_import_lock();
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    error = %e,
+                                    "Import lock released after import error"
+                                );
+
+                                Err(e)
+                            }
+                        }
                         })
-                    })
+                    }
                 }
             }
             ChainMessage::ProcessAuxPow { auxpow, block_hash } => {
@@ -1182,6 +1273,10 @@ async fn create_aux_block_helper(
         engine_actor: None,
         metrics: super::metrics::ChainMetrics::default(),
         last_activity: std::time::Instant::now(),
+        // Phase 2 fields
+        import_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        max_pending_imports: 10,
     };
 
     actor.create_aux_block(miner_address).await
@@ -1203,6 +1298,10 @@ async fn submit_aux_block_helper(
         engine_actor: None,
         metrics: super::metrics::ChainMetrics::default(),
         last_activity: std::time::Instant::now(),
+        // Phase 2 fields
+        import_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        max_pending_imports: 10,
     };
 
     actor.validate_submitted_auxpow(aggregate_hash, auxpow).await

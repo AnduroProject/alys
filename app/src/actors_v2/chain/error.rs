@@ -69,6 +69,9 @@ pub enum ChainError {
     #[error("Serialization error: {0}")]
     Serialization(String),
 
+    #[error("Import queue is full - cannot queue more blocks")]
+    QueueFull,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

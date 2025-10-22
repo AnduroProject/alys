@@ -5,6 +5,10 @@
 
 use actix::prelude::*;
 use std::time::Instant;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use ethereum_types::H256;
@@ -12,6 +16,7 @@ use bitcoin::hashes::Hash;
 
 use super::{
     ChainConfig, ChainError, ChainMetrics, ChainState,
+    messages::BlockSource,
 };
 
 use crate::actors_v2::{
@@ -19,6 +24,16 @@ use crate::actors_v2::{
     network::{NetworkActor, SyncActor},
     engine::EngineActor,
 };
+use crate::block::SignedConsensusBlock;
+use lighthouse_wrapper::types::MainnetEthSpec;
+
+/// Pending import request queued when import lock is held (Phase 2)
+#[derive(Debug, Clone)]
+pub struct PendingImport {
+    pub block: SignedConsensusBlock<MainnetEthSpec>,
+    pub source: BlockSource,
+    pub queued_at: Instant,
+}
 
 /// Simplified ChainActor - core blockchain functionality (Clone-enabled for async handlers)
 #[derive(Clone)]
@@ -40,6 +55,15 @@ pub struct ChainActor {
 
     /// Last activity timestamp
     pub(crate) last_activity: Instant,
+
+    /// Phase 2: Import lock to serialize block imports and prevent race conditions
+    pub(crate) import_in_progress: Arc<AtomicBool>,
+
+    /// Phase 2: Queue for pending import requests when lock is held
+    pub(crate) pending_imports: Arc<RwLock<VecDeque<PendingImport>>>,
+
+    /// Phase 2: Maximum pending import queue size
+    pub(crate) max_pending_imports: usize,
 }
 
 impl ChainActor {
@@ -60,6 +84,10 @@ impl ChainActor {
             engine_actor: None,
             metrics,
             last_activity: Instant::now(),
+            // Phase 2: Initialize import serialization
+            import_in_progress: Arc::new(AtomicBool::new(false)),
+            pending_imports: Arc::new(RwLock::new(VecDeque::new())),
+            max_pending_imports: 10, // Configurable limit
         }
     }
 
@@ -314,6 +342,40 @@ impl ChainActor {
         );
 
         Ok(())
+    }
+
+    /// Phase 2: Force release import lock (for error recovery)
+    pub fn force_release_import_lock(&self) {
+        if self.import_in_progress.swap(false, Ordering::SeqCst) {
+            warn!("Forced import lock release (error recovery)");
+        }
+    }
+
+    /// Phase 2: Process next queued import after lock release
+    pub async fn process_next_queued_import(&self, ctx_addr: Addr<ChainActor>) {
+        // Check for queued imports
+        let next_import = {
+            let mut queue = self.pending_imports.write().await;
+            queue.pop_front()
+        };
+
+        if let Some(pending) = next_import {
+            let wait_time = pending.queued_at.elapsed();
+
+            info!(
+                queue_wait_ms = wait_time.as_millis(),
+                block_height = pending.block.message.execution_payload.block_number,
+                "Processing next queued block import"
+            );
+
+            // Send queued import to ChainActor
+            ctx_addr.do_send(super::messages::ChainMessage::ImportBlock {
+                block: pending.block,
+                source: pending.source,
+            });
+        } else {
+            debug!("Import queue empty after lock release");
+        }
     }
 
     /// Update chain head after successful block import (Phase 3 - Task 3.1.2)

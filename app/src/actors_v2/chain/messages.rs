@@ -152,6 +152,11 @@ pub enum ChainResponse {
         height: u64,
     },
 
+    /// Block queued for import (Phase 2: import lock held)
+    BlockQueued {
+        position: usize,
+    },
+
     /// AuxPoW processed
     AuxPowProcessed {
         success: bool,
