@@ -37,6 +37,11 @@ WORKDIR /opt/alys
 
 COPY . .
 
+# add just before `cargo build` in the Dockerfile
+RUN git --version && \
+    git ls-remote https://github.com/sigp/lighthouse 441fc1691b69f9edc4bbdc6665f3efab16265c9b || true && \
+    rm -rf /usr/local/cargo/git/db/lighthouse-* || true
+
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
 #RUN --mount=type=cache,target=/usr/local/cargo/registry \
