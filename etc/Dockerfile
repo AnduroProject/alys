@@ -19,6 +19,8 @@ RUN apt-get update && \
         clang \
         libclang-dev \
         llvm-dev && \
+        git \
+        ca-certificates \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
@@ -37,10 +39,15 @@ WORKDIR /opt/alys
 
 COPY . .
 
-# add just before `cargo build` in the Dockerfile
-RUN git --version && \
-    git ls-remote https://github.com/sigp/lighthouse 441fc1691b69f9edc4bbdc6665f3efab16265c9b || true && \
-    rm -rf /usr/local/cargo/git/db/lighthouse-* || true
+# --- Step 3: cleanup stale/partial cargo git clones and run a quick git reachability check ---
+# This removes only lighthouse-related partial clones and runs `git ls-remote` against the exact SHA.
+RUN set -eux; \
+    # ensure git available (installed in system-pkg-cache stage above)
+    git --version || (apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*); \
+    echo "Checking remote for lighthouse commit 441fc1691b69f9edc4bbdc6665f3efab16265c9b"; \
+    git ls-remote https://github.com/sigp/lighthouse 441fc1691b69f9edc4bbdc6665f3efab16265c9b || true; \
+    # targeted cleanup of possible corrupt/stale cargo git DB entries (safe)
+    rm -rf /usr/local/cargo/git/db/lighthouse-* /usr/local/cargo/git/checkouts/lighthouse-* || true
 
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
