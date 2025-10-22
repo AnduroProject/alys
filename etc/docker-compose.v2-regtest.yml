@@ -54,7 +54,7 @@ services:
     volumes:
       - ../data/execution/data:/opt/alys/execution/data
       - ../data/execution/logs:/opt/alys/execution/logs
-      - ./config:/opt/alys/execution/config:ro
+      - ./config:/opt/alys/execution/config
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
@@ -77,22 +77,13 @@ services:
       --ws.port 8456
       --ws.origins "*"
       --port 30303
-    # depends_on:
-    #   bitcoin-core:
-    #     condition: service_healthy
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8545"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 5
-    #   start_period: 30s
 
   # Alys Node 1 - Bootnode/Validator
   alys-node-1:
-    build:
-      context: ..
-      dockerfile: ./etc/Dockerfile
-    image: local/alys:latest
+    # build:
+    #   context: ..
+    #   dockerfile: ./etc/Dockerfile
+    image: ghcr.io/anduroproject/alys:feature-v2-network
     container_name: alys-node-1
     restart: unless-stopped
     networks:
@@ -111,44 +102,36 @@ services:
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - /bin/alys
-      - --dev
-      - --no-mine
-      - --p2p-listen-addr
-      - "0.0.0.0"
-      - --p2p-port
-      - "9000"
-      - --rpc-port
-      - "3000"
-      - --db-path
-      - /lib/alys/data/db
-      - --wallet-path
-      - /lib/alys/data/wallet
-      - --geth-url
-      - http://execution:8551
-      - --geth-execution-url
-      - http://execution:8545
-      - --bitcoin-rpc-url
-      - http://bitcoin-core:18443
-      - --bitcoin-rpc-user
-      - rpcuser
-      - --bitcoin-rpc-pass
-      - rpcpassword
-      - --jwt-secret
-      - /lib/alys/jwt.hex
+      - |
+        sleep 10
+        exec /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 1 \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 1eb37c7780cae17cf6dfb2fd8b93595e4c2810d8632277f70336e14c8b9446e5 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex
     depends_on:
-      execution:
-        condition: service_started
-      bitcoin-core:
-        condition: service_started
+      - execution
+      - bitcoin-core
 
   # Alys Node 2 - Peer node (mDNS auto-discovery, no explicit bootnode)
   alys-node-2:
-    build:
-      context: ..
-      dockerfile: ./etc/Dockerfile
-    image: local/alys:latest
+    # build:
+    #   context: ..
+    #   dockerfile: ./etc/Dockerfile
+    image: ghcr.io/anduroproject/alys:feature-v2-network
     container_name: alys-node-2
     restart: unless-stopped
     networks:
@@ -167,38 +150,30 @@ services:
     environment:
       RUST_LOG: info
       RUST_BACKTRACE: full
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - /bin/alys
-      - --dev
-      - --no-mine
-      - --p2p-listen-addr
-      - "0.0.0.0"
-      - --p2p-port
-      - "9000"
-      - --rpc-port
-      - "3000"
-      - --db-path
-      - /lib/alys/data/db
-      - --wallet-path
-      - /lib/alys/data/wallet
-      - --geth-url
-      - http://execution:8551
-      - --geth-execution-url
-      - http://execution:8545
-      - --bitcoin-rpc-url
-      - http://bitcoin-core:18443
-      - --bitcoin-rpc-user
-      - rpcuser
-      - --bitcoin-rpc-pass
-      - rpcpassword
-      - --jwt-secret
-      - /lib/alys/jwt.hex
+      - |
+        sleep 10
+        exec /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 2 \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 5d4d847ef298b175f2f4c8df9d7e2581edc7529633b1851cc06f2c76af902ed8 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex
       # Note: No --remote-bootnode flag - using mDNS auto-discovery
     depends_on:
-      execution:
-        condition: service_started
-      bitcoin-core:
-        condition: service_started
+      - execution
+      - bitcoin-core
 
 networks:
   alys-regtest:
