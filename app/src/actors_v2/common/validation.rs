@@ -3,8 +3,7 @@
 //! Provides cryptographic validation for block signatures and
 //! parent hash relationship verification.
 
-use ethereum_types::H256;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
+use lighthouse_wrapper::types::MainnetEthSpec;
 use crate::block::SignedConsensusBlock;
 use crate::actors_v2::chain::ChainError;
 use crate::aura::{slot_author, Aura};

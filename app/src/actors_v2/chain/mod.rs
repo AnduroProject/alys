@@ -29,6 +29,7 @@ pub mod withdrawals;
 pub mod recovery;
 pub mod monitoring;
 pub mod auxpow;
+pub mod fork_choice;
 
 pub use actor::ChainActor;
 pub use config::ChainConfig;

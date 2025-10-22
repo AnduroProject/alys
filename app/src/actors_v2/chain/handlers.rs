@@ -602,6 +602,144 @@ impl Handler<ChainMessage> for ChainActor {
                             );
                         }
 
+                        // Step 1.9: Fork detection (Phase 4)
+                        // Check if a block already exists at this height
+                        if let Some(ref storage_actor) = storage_actor {
+                            let get_by_height_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+                                height: block_height,
+                                correlation_id: Some(correlation_id),
+                            };
+
+                            match storage_actor.send(get_by_height_msg).await {
+                                Ok(Ok(Some(existing_block))) => {
+                                    let existing_hash = calculate_block_hash(&existing_block);
+
+                                    // Check if it's the same block (duplicate)
+                                    if existing_hash == block_hash {
+                                        info!(
+                                            correlation_id = %correlation_id,
+                                            block_hash = %block_hash,
+                                            block_height = block_height,
+                                            "Duplicate block received - already imported, ignoring gracefully"
+                                        );
+
+                                        // Return success without penalty - this is normal in distributed systems
+                                        return Ok(ChainResponse::BlockImported {
+                                            block_hash,
+                                            height: block_height,
+                                        });
+                                    } else {
+                                        // FORK DETECTED: Different block at same height
+                                        warn!(
+                                            correlation_id = %correlation_id,
+                                            existing_hash = %existing_hash,
+                                            new_hash = %block_hash,
+                                            height = block_height,
+                                            "FORK DETECTED: Competing blocks at same height"
+                                        );
+
+                                        // Apply fork choice rule (Phase 4)
+                                        let fork_choice = crate::actors_v2::chain::fork_choice::compare_blocks(
+                                            &existing_block,
+                                            &block,
+                                        );
+
+                                        match fork_choice {
+                                            crate::actors_v2::chain::fork_choice::ForkChoice::KeepCurrent => {
+                                                info!(
+                                                    correlation_id = %correlation_id,
+                                                    existing_hash = %existing_hash,
+                                                    new_hash = %block_hash,
+                                                    "Fork choice: keeping current block (better chain)"
+                                                );
+
+                                                // Current block is canonical - reject new block
+                                                return Ok(ChainResponse::BlockImported {
+                                                    block_hash: existing_hash,
+                                                    height: block_height,
+                                                });
+                                            }
+                                            crate::actors_v2::chain::fork_choice::ForkChoice::Tiebreak { winner } => {
+                                                if winner == block_hash {
+                                                    warn!(
+                                                        correlation_id = %correlation_id,
+                                                        new_hash = %block_hash,
+                                                        existing_hash = %existing_hash,
+                                                        "Fork choice: new block wins tiebreak - replacing current block"
+                                                    );
+
+                                                    // New block wins - continue with import
+                                                    // Note: In a full implementation, we would mark the existing block
+                                                    // as non-canonical in storage. For now, we'll overwrite it.
+                                                    info!(
+                                                        correlation_id = %correlation_id,
+                                                        "Proceeding with import of winning block"
+                                                    );
+                                                } else {
+                                                    info!(
+                                                        correlation_id = %correlation_id,
+                                                        existing_hash = %existing_hash,
+                                                        new_hash = %block_hash,
+                                                        "Fork choice: existing block wins tiebreak - keeping current"
+                                                    );
+
+                                                    // Existing block wins - reject new block
+                                                    return Ok(ChainResponse::BlockImported {
+                                                        block_hash: existing_hash,
+                                                        height: block_height,
+                                                    });
+                                                }
+                                            }
+                                            crate::actors_v2::chain::fork_choice::ForkChoice::Reorganize { new_tip, rollback_to } => {
+                                                warn!(
+                                                    correlation_id = %correlation_id,
+                                                    new_tip = %new_tip,
+                                                    rollback_to = rollback_to,
+                                                    "Fork choice: reorganization needed (not yet implemented)"
+                                                );
+
+                                                // TODO: Implement full chain reorganization in Phase 4C
+                                                // For now, log the decision and continue with simple replacement
+                                                warn!(
+                                                    correlation_id = %correlation_id,
+                                                    "Chain reorganization not yet implemented - using simple block replacement"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(Ok(None)) => {
+                                    // No existing block at this height - normal import path
+                                    debug!(
+                                        correlation_id = %correlation_id,
+                                        block_height = block_height,
+                                        "No existing block at this height - proceeding with normal import"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Failed to check for existing block at height - proceeding anyway (risky)"
+                                    );
+                                    // Continue - non-fatal but logged as warning
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        correlation_id = %correlation_id,
+                                        error = ?e,
+                                        "Communication error checking for existing block - proceeding anyway (risky)"
+                                    );
+                                    // Continue - non-fatal but logged as warning
+                                }
+                            }
+                        } else {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                "StorageActor not available for fork detection - skipping (unsafe!)"
+                            );
+                        }
+
                         // Step 2: Consensus validation via V0 Aura (Critical Blocker 2 solution)
                         if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
                             error!(
