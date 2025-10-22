@@ -84,10 +84,19 @@ fn create_behaviour(
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    // Configure Gossipsub
+    // Configure Gossipsub for small networks
+    // For 2-node networks, we need to relax mesh requirements
     let gossipsub_config = gossipsub::ConfigBuilder::default()
         .max_transmit_size(config.message_size_limit)
         .validation_mode(gossipsub::ValidationMode::Strict)
+        // Small network mesh parameters (minimum 1 peer)
+        .mesh_n_low(1)           // Minimum peers in mesh (default: 4)
+        .mesh_n(2)               // Target peers in mesh (default: 6)
+        .mesh_n_high(3)          // Max peers in mesh (default: 12)
+        .mesh_outbound_min(1)    // Minimum outbound peers (default: 2)
+        // Relax gossip parameters for small networks
+        .gossip_lazy(3)          // Gossip to this many peers (default: 6)
+        .gossip_factor(0.5)      // Gossip factor (default: 0.25)
         .message_id_fn(|msg: &gossipsub::Message| {
             // Use first 20 bytes of hash as message ID
             let mut hasher = DefaultHasher::new();
