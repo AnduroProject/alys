@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use serde::{Serialize, Deserialize};
 
 /// Simple chaos scenario enum for basic testing
 #[derive(Debug, Clone, Copy)]

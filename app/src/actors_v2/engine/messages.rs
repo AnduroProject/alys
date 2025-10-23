@@ -7,9 +7,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 // Re-export types from lighthouse_wrapper and crate
-use lighthouse_wrapper::types::{ExecutionBlockHash, ExecutionPayload, MainnetEthSpec, Withdrawal};
 use crate::engine::{AddBalance, ConsensusAmount};
 use ethereum_types::H256;
+use lighthouse_wrapper::types::{ExecutionBlockHash, ExecutionPayload, MainnetEthSpec, Withdrawal};
 
 use super::EngineError;
 
@@ -38,9 +38,7 @@ pub enum EngineMessage {
     },
 
     /// Get latest execution block info
-    GetLatestBlock {
-        correlation_id: Option<Uuid>,
-    },
+    GetLatestBlock { correlation_id: Option<Uuid> },
 
     /// Update finalized block hash
     SetFinalized {
@@ -69,9 +67,7 @@ pub enum EngineMessage {
     },
 
     /// Get engine status
-    GetStatus {
-        correlation_id: Option<Uuid>,
-    },
+    GetStatus { correlation_id: Option<Uuid> },
 
     /// Shutdown engine gracefully
     Shutdown {
@@ -83,68 +79,86 @@ pub enum EngineMessage {
 impl std::fmt::Debug for EngineMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BuildPayload { timestamp, parent_hash, add_balances, correlation_id } => {
-                f.debug_struct("BuildPayload")
-                    .field("timestamp", timestamp)
-                    .field("parent_hash", parent_hash)
-                    .field("add_balances_count", &add_balances.len())
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::ValidatePayload { payload, correlation_id } => {
-                f.debug_struct("ValidatePayload")
-                    .field("payload", payload)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::CommitBlock { execution_payload, correlation_id } => {
-                f.debug_struct("CommitBlock")
-                    .field("execution_payload", execution_payload)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::GetLatestBlock { correlation_id } => {
-                f.debug_struct("GetLatestBlock")
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::SetFinalized { block_hash, correlation_id } => {
-                f.debug_struct("SetFinalized")
-                    .field("block_hash", block_hash)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::UpdateForkChoice { head_hash, safe_hash, finalized_hash, correlation_id } => {
-                f.debug_struct("UpdateForkChoice")
-                    .field("head_hash", head_hash)
-                    .field("safe_hash", safe_hash)
-                    .field("finalized_hash", finalized_hash)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::GetBlockWithTransactions { block_hash, correlation_id } => {
-                f.debug_struct("GetBlockWithTransactions")
-                    .field("block_hash", block_hash)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::GetTransactionReceipt { transaction_hash, correlation_id } => {
-                f.debug_struct("GetTransactionReceipt")
-                    .field("transaction_hash", transaction_hash)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::GetStatus { correlation_id } => {
-                f.debug_struct("GetStatus")
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
-            Self::Shutdown { graceful, correlation_id } => {
-                f.debug_struct("Shutdown")
-                    .field("graceful", graceful)
-                    .field("correlation_id", correlation_id)
-                    .finish()
-            }
+            Self::BuildPayload {
+                timestamp,
+                parent_hash,
+                add_balances,
+                correlation_id,
+            } => f
+                .debug_struct("BuildPayload")
+                .field("timestamp", timestamp)
+                .field("parent_hash", parent_hash)
+                .field("add_balances_count", &add_balances.len())
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::ValidatePayload {
+                payload,
+                correlation_id,
+            } => f
+                .debug_struct("ValidatePayload")
+                .field("payload", payload)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::CommitBlock {
+                execution_payload,
+                correlation_id,
+            } => f
+                .debug_struct("CommitBlock")
+                .field("execution_payload", execution_payload)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::GetLatestBlock { correlation_id } => f
+                .debug_struct("GetLatestBlock")
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::SetFinalized {
+                block_hash,
+                correlation_id,
+            } => f
+                .debug_struct("SetFinalized")
+                .field("block_hash", block_hash)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::UpdateForkChoice {
+                head_hash,
+                safe_hash,
+                finalized_hash,
+                correlation_id,
+            } => f
+                .debug_struct("UpdateForkChoice")
+                .field("head_hash", head_hash)
+                .field("safe_hash", safe_hash)
+                .field("finalized_hash", finalized_hash)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::GetBlockWithTransactions {
+                block_hash,
+                correlation_id,
+            } => f
+                .debug_struct("GetBlockWithTransactions")
+                .field("block_hash", block_hash)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::GetTransactionReceipt {
+                transaction_hash,
+                correlation_id,
+            } => f
+                .debug_struct("GetTransactionReceipt")
+                .field("transaction_hash", transaction_hash)
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::GetStatus { correlation_id } => f
+                .debug_struct("GetStatus")
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::Shutdown {
+                graceful,
+                correlation_id,
+            } => f
+                .debug_struct("Shutdown")
+                .field("graceful", graceful)
+                .field("correlation_id", correlation_id)
+                .finish(),
         }
     }
 }

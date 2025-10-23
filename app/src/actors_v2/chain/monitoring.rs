@@ -31,9 +31,7 @@ impl PerformanceStatus {
     }
 
     pub fn is_healthy(&self) -> bool {
-        self.block_production_healthy &&
-        self.block_import_healthy &&
-        self.communication_healthy
+        self.block_production_healthy && self.block_import_healthy && self.communication_healthy
     }
 
     pub fn calculate_overall(&mut self) {
@@ -205,8 +203,18 @@ impl PerformanceMetrics {
 
     /// Get production success rate
     pub fn get_production_success_rate(&self) -> f64 {
-        let success = self.production_success_count.read().ok().map(|c| *c).unwrap_or(0);
-        let failure = self.production_failure_count.read().ok().map(|c| *c).unwrap_or(0);
+        let success = self
+            .production_success_count
+            .read()
+            .ok()
+            .map(|c| *c)
+            .unwrap_or(0);
+        let failure = self
+            .production_failure_count
+            .read()
+            .ok()
+            .map(|c| *c)
+            .unwrap_or(0);
         let total = success + failure;
 
         if total == 0 {
@@ -218,8 +226,18 @@ impl PerformanceMetrics {
 
     /// Get import success rate
     pub fn get_import_success_rate(&self) -> f64 {
-        let success = self.import_success_count.read().ok().map(|c| *c).unwrap_or(0);
-        let failure = self.import_failure_count.read().ok().map(|c| *c).unwrap_or(0);
+        let success = self
+            .import_success_count
+            .read()
+            .ok()
+            .map(|c| *c)
+            .unwrap_or(0);
+        let failure = self
+            .import_failure_count
+            .read()
+            .ok()
+            .map(|c| *c)
+            .unwrap_or(0);
         let total = success + failure;
 
         if total == 0 {
@@ -233,7 +251,9 @@ impl PerformanceMetrics {
 impl ChainActor {
     /// Monitor block production performance (Phase 4: Task 4.3.2)
     pub fn monitor_block_production(&self, duration: Duration, success: bool) {
-        self.metrics.performance.record_block_production(duration, success);
+        self.metrics
+            .performance
+            .record_block_production(duration, success);
 
         if success {
             info!(
@@ -250,7 +270,9 @@ impl ChainActor {
 
     /// Monitor block import performance (Phase 4: Task 4.3.2)
     pub fn monitor_block_import(&self, duration: Duration, success: bool) {
-        self.metrics.performance.record_block_import(duration, success);
+        self.metrics
+            .performance
+            .record_block_import(duration, success);
 
         if success {
             debug!(
@@ -258,10 +280,7 @@ impl ChainActor {
                 "Block import completed successfully"
             );
         } else {
-            warn!(
-                duration_ms = duration.as_millis(),
-                "Block import failed"
-            );
+            warn!(duration_ms = duration.as_millis(), "Block import failed");
         }
     }
 
@@ -328,7 +347,9 @@ impl ChainActor {
         }
 
         let latency = start.elapsed();
-        self.metrics.performance.record_communication_latency(latency);
+        self.metrics
+            .performance
+            .record_communication_latency(latency);
         latency
     }
 
@@ -367,7 +388,10 @@ mod tests {
     #[test]
     fn test_performance_metrics_creation() {
         let metrics = PerformanceMetrics::new();
-        assert_eq!(metrics.get_average_block_production_time(), Duration::from_secs(0));
+        assert_eq!(
+            metrics.get_average_block_production_time(),
+            Duration::from_secs(0)
+        );
         assert_eq!(metrics.get_production_success_rate(), 1.0);
     }
 

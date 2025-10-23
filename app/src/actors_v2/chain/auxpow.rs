@@ -3,17 +3,17 @@
 //! Production-ready AuxPoW (Auxiliary Proof of Work) integration for mining coordination.
 //! Validates and incorporates Bitcoin merge-mining proofs into block production.
 
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget};
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use super::{ChainActor, ChainError};
 use super::state::MiningContext;
-use crate::block::{ConsensusBlock, SignedConsensusBlock, AuxPowHeader, ConvertBlockHash};
-use crate::auxpow_miner::AuxBlock; // V0 Bitcoin-compatible type for RPC responses
-use crate::auxpow::AuxPow; // For aggregate_hash calculation
+use super::{ChainActor, ChainError};
 use crate::actors_v2::common::serialization::calculate_block_hash;
+use crate::auxpow::AuxPow; // For aggregate_hash calculation
+use crate::auxpow_miner::AuxBlock; // V0 Bitcoin-compatible type for RPC responses
+use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash, SignedConsensusBlock};
 use lighthouse_wrapper::types::MainnetEthSpec;
 use std::time::SystemTime;
 
@@ -21,7 +21,7 @@ impl ChainActor {
     /// Incorporate AuxPoW into block production pipeline (Phase 4: Task 4.2.1)
     pub async fn incorporate_auxpow(
         &mut self,
-        consensus_block: ConsensusBlock<MainnetEthSpec>
+        consensus_block: ConsensusBlock<MainnetEthSpec>,
     ) -> Result<SignedConsensusBlock<MainnetEthSpec>, ChainError> {
         let correlation_id = Uuid::new_v4();
 
@@ -42,14 +42,18 @@ impl ChainActor {
             );
 
             // Step 2: Validate AuxPoW against block
-            if self.validate_auxpow_for_block(&auxpow_header, &consensus_block).await? {
+            if self
+                .validate_auxpow_for_block(&auxpow_header, &consensus_block)
+                .await?
+            {
                 // Step 3: Create block with AuxPoW header
                 let mut block_with_auxpow = consensus_block;
                 block_with_auxpow.auxpow_header = Some(auxpow_header.clone());
 
                 // Step 4: Sign the block with V0 Aura authority
-                let authority = self.state.aura.authority.as_ref()
-                    .ok_or_else(|| ChainError::Configuration("No authority configured for signing".to_string()))?;
+                let authority = self.state.aura.authority.as_ref().ok_or_else(|| {
+                    ChainError::Configuration("No authority configured for signing".to_string())
+                })?;
                 let signed_block = block_with_auxpow.sign_block(authority);
 
                 let block_hash = calculate_block_hash(&signed_block);
@@ -89,15 +93,16 @@ impl ChainActor {
                 max_blocks_without_pow = max_blocks_without_pow,
                 "Too many blocks without proof of work"
             );
-            return Err(ChainError::Consensus(
-                format!("Too many blocks without proof of work: {} >= {}",
-                       blocks_without_pow, max_blocks_without_pow)
-            ));
+            return Err(ChainError::Consensus(format!(
+                "Too many blocks without proof of work: {} >= {}",
+                blocks_without_pow, max_blocks_without_pow
+            )));
         }
 
         // Step 8: Create regular signed block (no AuxPoW)
-        let authority = self.state.aura.authority.as_ref()
-            .ok_or_else(|| ChainError::Configuration("No authority configured for signing".to_string()))?;
+        let authority = self.state.aura.authority.as_ref().ok_or_else(|| {
+            ChainError::Configuration("No authority configured for signing".to_string())
+        })?;
         let signed_block = consensus_block.sign_block(authority);
 
         // Increment counter for blocks produced without AuxPoW
@@ -117,7 +122,7 @@ impl ChainActor {
     pub async fn validate_auxpow_for_block(
         &self,
         auxpow: &AuxPowHeader,
-        block: &ConsensusBlock<MainnetEthSpec>
+        block: &ConsensusBlock<MainnetEthSpec>,
     ) -> Result<bool, ChainError> {
         let correlation_id = Uuid::new_v4();
 
@@ -134,11 +139,10 @@ impl ChainActor {
         );
 
         // Step 2: Validate AuxPoW proof exists
-        let auxpow_proof = auxpow.auxpow.as_ref()
-            .ok_or_else(|| {
-                warn!(correlation_id = %correlation_id, "No AuxPoW proof present in header");
-                ChainError::AuxPowValidation("No AuxPoW proof present".to_string())
-            })?;
+        let auxpow_proof = auxpow.auxpow.as_ref().ok_or_else(|| {
+            warn!(correlation_id = %correlation_id, "No AuxPoW proof present in header");
+            ChainError::AuxPowValidation("No AuxPoW proof present".to_string())
+        })?;
 
         // Step 3: Validate proof of work difficulty (Priority 4: ADDED)
         let compact_target = bitcoin::CompactTarget::from_consensus(auxpow.bits);
@@ -210,7 +214,10 @@ impl ChainActor {
         );
 
         // Step 1: Retrieve stored mining context (Priority 3)
-        let context = self.state.take_mining_context(&aggregate_hash).await
+        let context = self
+            .state
+            .take_mining_context(&aggregate_hash)
+            .await
             .ok_or_else(|| {
                 warn!(
                     correlation_id = %correlation_id,
@@ -236,7 +243,9 @@ impl ChainActor {
                 bits = context.bits,
                 "Submitted AuxPoW does not meet difficulty target"
             );
-            return Err(ChainError::AuxPowValidation("Insufficient proof of work".to_string()));
+            return Err(ChainError::AuxPowValidation(
+                "Insufficient proof of work".to_string(),
+            ));
         }
 
         debug!(
@@ -253,7 +262,10 @@ impl ChainActor {
                 error = ?e,
                 "AuxPoW structure validation failed"
             );
-            return Err(ChainError::AuxPowValidation(format!("AuxPoW validation failed: {:?}", e)));
+            return Err(ChainError::AuxPowValidation(format!(
+                "AuxPoW validation failed: {:?}",
+                e
+            )));
         }
 
         debug!(
@@ -313,7 +325,9 @@ impl ChainActor {
                 current_height = current_height,
                 "AuxPoW height already expired"
             );
-            return Err(ChainError::InvalidBlock("AuxPoW height expired".to_string()));
+            return Err(ChainError::InvalidBlock(
+                "AuxPoW height expired".to_string(),
+            ));
         }
 
         // Queue the AuxPoW
@@ -348,7 +362,9 @@ impl ChainActor {
             };
 
             match network_actor.send(msg).await {
-                Ok(Ok(crate::actors_v2::network::NetworkResponse::AuxPowBroadcasted { peer_count })) => {
+                Ok(Ok(crate::actors_v2::network::NetworkResponse::AuxPowBroadcasted {
+                    peer_count,
+                })) => {
                     info!(
                         correlation_id = %correlation_id,
                         peer_count = peer_count,
@@ -371,11 +387,16 @@ impl ChainActor {
                         error = ?e,
                         "Communication error broadcasting AuxPoW"
                     );
-                    Err(ChainError::NetworkError(format!("Network communication failed: {}", e)))
+                    Err(ChainError::NetworkError(format!(
+                        "Network communication failed: {}",
+                        e
+                    )))
                 }
                 _ => {
                     error!(correlation_id = %correlation_id, "Unexpected network response");
-                    Err(ChainError::Internal("Unexpected network response".to_string()))
+                    Err(ChainError::Internal(
+                        "Unexpected network response".to_string(),
+                    ))
                 }
             }
         } else {
@@ -416,11 +437,15 @@ impl ChainActor {
         let correlation_id = Uuid::new_v4();
 
         // Check if block_hash_cache is initialized
-        let block_hash_cache = self.state.block_hash_cache.as_ref()
-            .ok_or_else(|| ChainError::Internal("Block hash cache not initialized".to_string()))?;
+        let block_hash_cache =
+            self.state.block_hash_cache.as_ref().ok_or_else(|| {
+                ChainError::Internal("Block hash cache not initialized".to_string())
+            })?;
 
         // Get current head to check for new work
-        let current_head = self.state.get_head_hash()
+        let current_head = self
+            .state
+            .get_head_hash()
             .ok_or_else(|| ChainError::Internal("No chain head available".to_string()))?;
 
         // Check if there's queued AuxPoW and if we have new work since then
@@ -498,7 +523,8 @@ impl ChainActor {
 
         // Get previous finalized block hash
         // TODO (Priority 4): Query StorageActor for last finalized (AuxPoW) block
-        let previous_block_hash = *hashes.first()
+        let previous_block_hash = *hashes
+            .first()
             .ok_or_else(|| ChainError::Internal("Empty hash list".to_string()))?;
 
         let target_height = current_height + hashes.len() as u64;
@@ -506,18 +532,24 @@ impl ChainActor {
         // Store mining context for submission validation (Priority 3: COMPLETE)
         let mining_context = MiningContext {
             issued_at: SystemTime::now(),
-            last_hash: self.state.get_head_hash()
+            last_hash: self
+                .state
+                .get_head_hash()
                 .ok_or_else(|| ChainError::Internal("No chain head".to_string()))?,
-            start_hash: *hashes.first()
+            start_hash: *hashes
+                .first()
                 .ok_or_else(|| ChainError::Internal("Empty hash list".to_string()))?,
-            end_hash: *hashes.last()
+            end_hash: *hashes
+                .last()
                 .ok_or_else(|| ChainError::Internal("Empty hash list".to_string()))?,
             miner_address,
             bits: bits_u32,
             height: target_height,
         };
 
-        self.state.store_mining_context(aggregate_hash, mining_context).await;
+        self.state
+            .store_mining_context(aggregate_hash, mining_context)
+            .await;
 
         debug!(
             correlation_id = %correlation_id,
@@ -527,12 +559,12 @@ impl ChainActor {
 
         // Create V0-compatible AuxBlock for RPC response using constructor
         let aux_block = AuxBlock::new(
-            aggregate_hash,        // Bitcoin BlockHash (aggregate of unfinalized blocks)
-            chain_id,              // Alys chain ID (1337)
-            previous_block_hash,   // First unfinalized block hash
-            0,                     // coinbase_value: Always 0 per Alys spec
-            bits,                  // Difficulty target (compact)
-            target_height,         // Height after finalizing all pending blocks
+            aggregate_hash,      // Bitcoin BlockHash (aggregate of unfinalized blocks)
+            chain_id,            // Alys chain ID (1337)
+            previous_block_hash, // First unfinalized block hash
+            0,                   // coinbase_value: Always 0 per Alys spec
+            bits,                // Difficulty target (compact)
+            target_height,       // Height after finalizing all pending blocks
         );
 
         info!(
@@ -570,10 +602,12 @@ impl ChainActor {
         let hashes = self.get_aggregate_hashes().await?;
 
         // Calculate block range from hashes
-        let range_start = hashes.first()
+        let range_start = hashes
+            .first()
             .ok_or_else(|| ChainError::Internal("Empty hash list".to_string()))?
             .to_block_hash();
-        let range_end = hashes.last()
+        let range_end = hashes
+            .last()
             .ok_or_else(|| ChainError::Internal("Empty hash list".to_string()))?
             .to_block_hash();
 

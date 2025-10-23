@@ -3,19 +3,19 @@
 //! Comprehensive testing infrastructure for ChainActor
 
 pub mod fixtures;
-pub mod unit;
 pub mod integration;
+pub mod unit;
 
 pub use fixtures::*;
 
-use tempfile::TempDir;
 use ethereum_types::Address;
+use tempfile::TempDir;
 
 use crate::actors_v2::chain::{ChainConfig, ChainError};
+use crate::aura::Aura;
 use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::engine::Engine;
-use crate::aura::Aura;
-use bridge::{Bridge, BitcoinSignatureCollector, BitcoinSigner};
+use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge};
 
 pub(crate) type BitcoinWallet = bridge::UtxoManager<bridge::Tree>;
 
@@ -105,7 +105,8 @@ impl ChainTestHarness {
 
     /// Verify configuration is valid
     pub async fn verify_config(&self) -> Result<(), ChainTestError> {
-        self.config.validate()
+        self.config
+            .validate()
             .map_err(|e| ChainTestError::Configuration(e.to_string()))?;
         Ok(())
     }
@@ -155,14 +156,15 @@ impl ChainTestHarness {
         // Create a valid mock PublicKey using a known test key
         // This corresponds to secret key: 0000000000000000000000000000000000000000000000000000000000000001
         let mock_pubkey_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
-        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to decode mock pubkey hex: {:?}", e)))?;
+        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex).map_err(|e| {
+            ChainTestError::Setup(format!("Failed to decode mock pubkey hex: {:?}", e))
+        })?;
         let mock_pubkey = PublicKey::deserialize(&mock_pubkey_bytes)
             .map_err(|e| ChainTestError::Setup(format!("Failed to create mock pubkey: {:?}", e)))?;
         Ok(Aura::new(
             vec![mock_pubkey], // Mock federation with valid PublicKey
-            12, // 12 second slot duration
-            None, // No keypair for testing
+            12,                // 12 second slot duration
+            None,              // No keypair for testing
         ))
     }
 
@@ -176,13 +178,16 @@ impl ChainTestHarness {
 
     fn create_mock_bridge() -> Result<Bridge, ChainTestError> {
         // Create a mock Bridge for testing
-        use bridge::BitcoinCore;
         use bitcoin::Address as BitcoinAddress;
+        use bridge::BitcoinCore;
         use std::str::FromStr;
 
-        let mock_bitcoin_addr = BitcoinAddress::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
-            .map_err(|e| ChainTestError::Setup(format!("Failed to parse mock bitcoin address: {}", e)))?
-            .assume_checked();
+        let mock_bitcoin_addr =
+            BitcoinAddress::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+                .map_err(|e| {
+                    ChainTestError::Setup(format!("Failed to parse mock bitcoin address: {}", e))
+                })?
+                .assume_checked();
 
         // Create a mock BitcoinCore for testing
         let mock_bitcoin_core = BitcoinCore::new("http://127.0.0.1:8332", "user", "pass");
@@ -196,22 +201,24 @@ impl ChainTestHarness {
 
     fn create_mock_bitcoin_wallet() -> Result<BitcoinWallet, ChainTestError> {
         // Create a mock Bitcoin wallet for testing
-        use bridge::Federation;
         use bitcoin::secp256k1::PublicKey;
         use bitcoin::Network;
+        use bridge::Federation;
         use tempfile::tempdir;
 
         // Create mock Bitcoin PublicKey (different from lighthouse PublicKey)
         // Using a known valid secp256k1 public key
         let mock_pubkey_hex = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to decode mock bitcoin pubkey hex: {:?}", e)))?;
-        let mock_pubkey = PublicKey::from_slice(&mock_pubkey_bytes)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to create mock bitcoin pubkey: {}", e)))?;
+        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex).map_err(|e| {
+            ChainTestError::Setup(format!("Failed to decode mock bitcoin pubkey hex: {:?}", e))
+        })?;
+        let mock_pubkey = PublicKey::from_slice(&mock_pubkey_bytes).map_err(|e| {
+            ChainTestError::Setup(format!("Failed to create mock bitcoin pubkey: {}", e))
+        })?;
 
         let federation = Federation::new(
             vec![mock_pubkey],
-            1, // threshold
+            1,                // threshold
             Network::Regtest, // Use regtest network for testing
         );
 
@@ -226,21 +233,23 @@ impl ChainTestHarness {
 
     fn create_mock_signature_collector() -> Result<BitcoinSignatureCollector, ChainTestError> {
         // Create a mock signature collector for testing
-        use bridge::Federation;
         use bitcoin::secp256k1::PublicKey;
         use bitcoin::Network;
+        use bridge::Federation;
 
         // Create mock Bitcoin PublicKey
         // Using the same known valid secp256k1 public key
         let mock_pubkey_hex = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to decode mock bitcoin pubkey hex: {:?}", e)))?;
-        let mock_pubkey = PublicKey::from_slice(&mock_pubkey_bytes)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to create mock bitcoin pubkey: {}", e)))?;
+        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex).map_err(|e| {
+            ChainTestError::Setup(format!("Failed to decode mock bitcoin pubkey hex: {:?}", e))
+        })?;
+        let mock_pubkey = PublicKey::from_slice(&mock_pubkey_bytes).map_err(|e| {
+            ChainTestError::Setup(format!("Failed to create mock bitcoin pubkey: {}", e))
+        })?;
 
         let federation = Federation::new(
             vec![mock_pubkey],
-            1, // threshold
+            1,                // threshold
             Network::Regtest, // Use regtest network for testing
         );
 

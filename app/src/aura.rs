@@ -18,7 +18,10 @@ pub fn slot_from_timestamp(timestamp: u64, slot_duration: u64) -> u64 {
 }
 
 // https://github.com/paritytech/substrate/blob/2704ab3d348f18f9db03e87a725e4807b91660d8/client/consensus/aura/src/lib.rs#L127
-pub fn slot_author<AuthorityId>(slot: u64, authorities: &[AuthorityId]) -> Option<(u8, &AuthorityId)> {
+pub fn slot_author<AuthorityId>(
+    slot: u64,
+    authorities: &[AuthorityId],
+) -> Option<(u8, &AuthorityId)> {
     if authorities.is_empty() {
         AURA_SLOT_AUTHOR_RETRIEVALS
             .with_label_values(&["failure", "empty"])

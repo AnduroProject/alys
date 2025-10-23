@@ -1,8 +1,8 @@
 pub mod base;
-pub mod property;
-pub mod chaos;
-pub mod storage;
-pub mod network;
 pub mod chain;
+pub mod chaos;
+pub mod network;
+pub mod property;
+pub mod storage;
 
 pub use base::*;

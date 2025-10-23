@@ -2,15 +2,15 @@
 //!
 //! Test data and utilities for ChainActor testing
 
-use ethereum_types::{Address, H256, U256};
-use std::time::Duration;
-use bitcoin::{Txid, BlockHash as BitcoinBlockHash};
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash as BitcoinBlockHash, Txid};
+use ethereum_types::{Address, H256, U256};
 use std::str::FromStr;
+use std::time::Duration;
 
 use crate::actors_v2::chain::{
+    messages::{AuxPowParams, ChainStatus, PegOutRequest},
     ChainConfig,
-    messages::{PegOutRequest, ChainStatus, AuxPowParams},
 };
 use bridge::PegInInfo;
 
@@ -85,8 +85,8 @@ pub fn mock_pegin_info() -> PegInInfo {
 /// Test fixture for mock peg-out request
 pub fn mock_pegout_request() -> PegOutRequest {
     // Create a simple mock address for testing - in practice this would use proper Bitcoin address parsing
-    let mock_address = bitcoin::Address::from_str("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")
-        .unwrap();
+    let mock_address =
+        bitcoin::Address::from_str("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq").unwrap();
 
     PegOutRequest {
         recipient: mock_address,
@@ -99,8 +99,10 @@ pub fn mock_pegout_request() -> PegOutRequest {
 /// Test fixture for AuxPoW parameters
 pub fn mock_auxpow_params() -> AuxPowParams {
     AuxPowParams {
-        target_difficulty: U256::from_dec_str("26959946667150639794667015087019630673637144422540572481103610249215")
-            .expect("Valid difficulty"),
+        target_difficulty: U256::from_dec_str(
+            "26959946667150639794667015087019630673637144422540572481103610249215",
+        )
+        .expect("Valid difficulty"),
         retarget_params: Some(crate::actors_v2::chain::config::BitcoinConsensusParams::default()),
     }
 }

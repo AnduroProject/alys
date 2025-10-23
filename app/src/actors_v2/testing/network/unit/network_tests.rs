@@ -1,6 +1,6 @@
-use crate::actors_v2::testing::network::{NetworkTestHarness, NetworkTestError};
+use crate::actors_v2::network::{NetworkConfig, NetworkMessage};
 use crate::actors_v2::testing::base::ActorTestHarness;
-use crate::actors_v2::network::{NetworkMessage, NetworkConfig};
+use crate::actors_v2::testing::network::{NetworkTestError, NetworkTestHarness};
 use uuid::Uuid;
 
 #[actix::test]
@@ -30,9 +30,7 @@ async fn test_network_start_stop_operations() {
     harness.send_message(start_message).await.unwrap();
 
     // Test network stop
-    let stop_message = NetworkMessage::StopNetwork {
-        graceful: true,
-    };
+    let stop_message = NetworkMessage::StopNetwork { graceful: true };
 
     harness.send_message(stop_message).await.unwrap();
 

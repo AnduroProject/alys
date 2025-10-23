@@ -4,9 +4,9 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::actors_v2::testing::chain::fixtures::*;
     use bitcoin::hashes::Hash;
     use lighthouse_wrapper::types::ExecutionBlockHash;
-    use crate::actors_v2::testing::chain::fixtures::*;
 
     #[tokio::test]
     async fn test_chain_config_validation() {
@@ -38,7 +38,10 @@ mod tests {
 
         let multiple_pegins = mock_multiple_pegins();
         assert_eq!(multiple_pegins.len(), 3);
-        assert_eq!(multiple_pegins.iter().map(|p| p.amount).sum::<u64>(), 350000000); // 3.5 BTC total
+        assert_eq!(
+            multiple_pegins.iter().map(|p| p.amount).sum::<u64>(),
+            350000000
+        ); // 3.5 BTC total
     }
 
     #[tokio::test]
@@ -49,7 +52,10 @@ mod tests {
 
         let multiple_pegouts = mock_multiple_pegouts();
         assert_eq!(multiple_pegouts.len(), 2);
-        assert_eq!(multiple_pegouts.iter().map(|p| p.amount).sum::<u64>(), 100000000); // 1 BTC total
+        assert_eq!(
+            multiple_pegouts.iter().map(|p| p.amount).sum::<u64>(),
+            100000000
+        ); // 1 BTC total
     }
 
     #[tokio::test]
@@ -57,7 +63,8 @@ mod tests {
         // Test ChainState creation and initial values
         use crate::actors_v2::testing::chain::ChainTestHarness;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let is_validator = harness.config.is_validator;
@@ -80,12 +87,13 @@ mod tests {
     #[tokio::test]
     async fn test_chain_state_height_methods() {
         // Test height-related methods
-        use crate::actors_v2::testing::chain::ChainTestHarness;
         use crate::actors_v2::storage::actor::BlockRef;
-        use lighthouse_wrapper::types::ExecutionBlockHash;
+        use crate::actors_v2::testing::chain::ChainTestHarness;
         use ethereum_types::H256;
+        use lighthouse_wrapper::types::ExecutionBlockHash;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let is_validator = harness.config.is_validator;
@@ -96,13 +104,21 @@ mod tests {
         assert_eq!(state.get_height(), 0);
 
         // Test height updates
-        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), number: 100, execution_hash: ExecutionBlockHash::zero() };
+        let block_ref_1 = BlockRef {
+            hash: H256::from_low_u64_be(1),
+            number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
+        };
         state.update_head(block_ref_1.clone());
         assert_eq!(state.get_height(), 100);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(1)));
         assert!(state.last_block_time.is_some());
 
-        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), number: 200, execution_hash: ExecutionBlockHash::zero() };
+        let block_ref_2 = BlockRef {
+            hash: H256::from_low_u64_be(2),
+            number: 200,
+            execution_hash: ExecutionBlockHash::zero(),
+        };
         state.update_head(block_ref_2.clone());
         assert_eq!(state.get_height(), 200);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
@@ -111,10 +127,11 @@ mod tests {
     #[tokio::test]
     async fn test_chain_state_sync_methods() {
         // Test sync status methods
-        use crate::actors_v2::testing::chain::ChainTestHarness;
         use crate::actors_v2::chain::state::SyncStatus;
+        use crate::actors_v2::testing::chain::ChainTestHarness;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let is_validator = harness.config.is_validator;
@@ -129,7 +146,10 @@ mod tests {
         state.set_sync_status(SyncStatus::NotSynced);
         assert!(!state.is_synced());
 
-        state.set_sync_status(SyncStatus::Syncing { progress: 0.5, target_height: 1000 });
+        state.set_sync_status(SyncStatus::Syncing {
+            progress: 0.5,
+            target_height: 1000,
+        });
         assert!(!state.is_synced());
 
         state.set_sync_status(SyncStatus::Error("Network timeout".to_string()));
@@ -144,12 +164,13 @@ mod tests {
         // Test AuxPoW-related methods
         use crate::actors_v2::testing::chain::ChainTestHarness;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let mut state = harness.into_chain_state(
-            true,  // is_validator
-            10,    // max_blocks_without_pow
+            true, // is_validator
+            10,   // max_blocks_without_pow
             None,
         );
 
@@ -182,7 +203,8 @@ mod tests {
         use crate::block::AuxPowHeader;
         use ethereum_types::H256;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let is_validator = harness.config.is_validator;
@@ -221,7 +243,8 @@ mod tests {
         use crate::actors_v2::testing::chain::ChainTestHarness;
         use bitcoin::Txid;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let is_validator = harness.config.is_validator;
@@ -251,7 +274,9 @@ mod tests {
         assert!(!state.queued_pegins.read().await.contains_key(&txid1));
 
         // Try to remove non-existent peg-in
-        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32])).await;
+        let non_existent = state
+            .remove_queued_pegin(&Txid::from_byte_array([99u8; 32]))
+            .await;
         assert!(non_existent.is_none());
         assert_eq!(state.queued_pegins.read().await.len(), 1);
 
@@ -264,16 +289,17 @@ mod tests {
     #[tokio::test]
     async fn test_chain_state_edge_cases() {
         // Test edge cases and boundary conditions
-        use crate::actors_v2::testing::chain::ChainTestHarness;
         use crate::actors_v2::storage::actor::BlockRef;
+        use crate::actors_v2::testing::chain::ChainTestHarness;
         use ethereum_types::H256;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create test harness");
 
         let mut state = harness.into_chain_state(
-            true,  // is_validator
-            1,     // max_blocks_without_pow = 1 for edge testing
+            true, // is_validator
+            1,    // max_blocks_without_pow = 1 for edge testing
             None,
         );
 
@@ -288,8 +314,16 @@ mod tests {
         assert!(!state.needs_auxpow());
 
         // Test head updates with same height
-        let block_ref_1 = BlockRef { hash: H256::from_low_u64_be(1), number: 100, execution_hash: ExecutionBlockHash::zero() };
-        let block_ref_2 = BlockRef { hash: H256::from_low_u64_be(2), number: 100, execution_hash: ExecutionBlockHash::zero() };
+        let block_ref_1 = BlockRef {
+            hash: H256::from_low_u64_be(1),
+            number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
+        };
+        let block_ref_2 = BlockRef {
+            hash: H256::from_low_u64_be(2),
+            number: 100,
+            execution_hash: ExecutionBlockHash::zero(),
+        };
 
         state.update_head(block_ref_1.clone());
         assert_eq!(state.get_height(), 100);
@@ -300,7 +334,11 @@ mod tests {
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
 
         // Test decreasing height (reorg simulation)
-        let block_ref_3 = BlockRef { hash: H256::from_low_u64_be(3), number: 50, execution_hash: ExecutionBlockHash::zero() };
+        let block_ref_3 = BlockRef {
+            hash: H256::from_low_u64_be(3),
+            number: 50,
+            execution_hash: ExecutionBlockHash::zero(),
+        };
         state.update_head(block_ref_3.clone());
         assert_eq!(state.get_height(), 50);
         assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(3)));

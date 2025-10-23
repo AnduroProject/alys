@@ -24,52 +24,64 @@ fn test_swarm_event_loop_processes_connection_events() {
             .expect("Failed to create NetworkActor")
             .start();
 
-    // Start network
-    let response = actor
-        .send(app::actors_v2::network::NetworkMessage::StartNetwork {
-            listen_addrs: vec!["/ip4/127.0.0.1/tcp/0".to_string()],
-            bootstrap_peers: vec![],
-        })
-        .await
-        .expect("Failed to send StartNetwork")
-        .expect("StartNetwork failed");
+        // Start network
+        let response = actor
+            .send(app::actors_v2::network::NetworkMessage::StartNetwork {
+                listen_addrs: vec!["/ip4/127.0.0.1/tcp/0".to_string()],
+                bootstrap_peers: vec![],
+            })
+            .await
+            .expect("Failed to send StartNetwork")
+            .expect("StartNetwork failed");
 
-    assert!(matches!(response, app::actors_v2::network::NetworkResponse::Started));
+        assert!(matches!(
+            response,
+            app::actors_v2::network::NetworkResponse::Started
+        ));
 
-    // Wait a moment for listener to bind
-    tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait a moment for listener to bind
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Get listening address
-    let status = actor
-        .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
-        .await
-        .expect("Failed to get status")
-        .expect("GetNetworkStatus failed");
+        // Get listening address
+        let status = actor
+            .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
+            .await
+            .expect("Failed to get status")
+            .expect("GetNetworkStatus failed");
 
-    let listen_addr = match status {
-        app::actors_v2::network::NetworkResponse::Status(s) => {
-            assert!(s.is_running, "Network should be running");
-            assert!(!s.listening_addresses.is_empty(), "Should have listening addresses");
+        let listen_addr = match status {
+            app::actors_v2::network::NetworkResponse::Status(s) => {
+                assert!(s.is_running, "Network should be running");
+                assert!(
+                    !s.listening_addresses.is_empty(),
+                    "Should have listening addresses"
+                );
 
-            // Extract the actual listening address from config since libp2p hasn't emitted NewListenAddr yet
-            // For now, just verify network is running
-            s.listening_addresses.first().cloned().unwrap_or_else(|| "/ip4/127.0.0.1/tcp/0".to_string())
-        }
-        _ => panic!("Wrong response type"),
-    };
+                // Extract the actual listening address from config since libp2p hasn't emitted NewListenAddr yet
+                // For now, just verify network is running
+                s.listening_addresses
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "/ip4/127.0.0.1/tcp/0".to_string())
+            }
+            _ => panic!("Wrong response type"),
+        };
 
-    println!("✅ PHASE 1 GATE TEST: NetworkActor started with event bridge");
-    println!("   Listening on: {}", listen_addr);
-    println!("   Event loop is processing libp2p events");
+        println!("✅ PHASE 1 GATE TEST: NetworkActor started with event bridge");
+        println!("   Listening on: {}", listen_addr);
+        println!("   Event loop is processing libp2p events");
 
-    // Test graceful shutdown
-    let stop_response = actor
-        .send(app::actors_v2::network::NetworkMessage::StopNetwork { graceful: true })
-        .await
-        .expect("Failed to send StopNetwork")
-        .expect("StopNetwork failed");
+        // Test graceful shutdown
+        let stop_response = actor
+            .send(app::actors_v2::network::NetworkMessage::StopNetwork { graceful: true })
+            .await
+            .expect("Failed to send StopNetwork")
+            .expect("StopNetwork failed");
 
-        assert!(matches!(stop_response, app::actors_v2::network::NetworkResponse::Stopped));
+        assert!(matches!(
+            stop_response,
+            app::actors_v2::network::NetworkResponse::Stopped
+        ));
 
         println!("✅ PHASE 1 GATE PASSED: Event loop processes real libp2p setup");
     });
@@ -87,39 +99,42 @@ fn test_swarm_graceful_shutdown() {
             .expect("Failed to create NetworkActor")
             .start();
 
-    // Start network
-    actor
-        .send(app::actors_v2::network::NetworkMessage::StartNetwork {
-            listen_addrs: vec!["/ip4/127.0.0.1/tcp/0".to_string()],
-            bootstrap_peers: vec![],
-        })
-        .await
-        .expect("Failed to send StartNetwork")
-        .expect("StartNetwork failed");
+        // Start network
+        actor
+            .send(app::actors_v2::network::NetworkMessage::StartNetwork {
+                listen_addrs: vec!["/ip4/127.0.0.1/tcp/0".to_string()],
+                bootstrap_peers: vec![],
+            })
+            .await
+            .expect("Failed to send StartNetwork")
+            .expect("StartNetwork failed");
 
-    // Stop network gracefully
-    let response = actor
-        .send(app::actors_v2::network::NetworkMessage::StopNetwork { graceful: true })
-        .await
-        .expect("Failed to send StopNetwork")
-        .expect("StopNetwork failed");
+        // Stop network gracefully
+        let response = actor
+            .send(app::actors_v2::network::NetworkMessage::StopNetwork { graceful: true })
+            .await
+            .expect("Failed to send StopNetwork")
+            .expect("StopNetwork failed");
 
-    assert!(matches!(response, app::actors_v2::network::NetworkResponse::Stopped));
+        assert!(matches!(
+            response,
+            app::actors_v2::network::NetworkResponse::Stopped
+        ));
 
-    // Wait for graceful shutdown to complete
-    tokio::time::sleep(Duration::from_millis(600)).await;
+        // Wait for graceful shutdown to complete
+        tokio::time::sleep(Duration::from_millis(600)).await;
 
-    // Verify stopped
-    let status = actor
-        .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
-        .await
-        .expect("Failed to get status")
-        .expect("GetNetworkStatus failed");
+        // Verify stopped
+        let status = actor
+            .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
+            .await
+            .expect("Failed to get status")
+            .expect("GetNetworkStatus failed");
 
-    match status {
-        app::actors_v2::network::NetworkResponse::Status(s) => {
-            assert!(!s.is_running, "Network should be stopped");
-        }
+        match status {
+            app::actors_v2::network::NetworkResponse::Status(s) => {
+                assert!(!s.is_running, "Network should be stopped");
+            }
             _ => panic!("Wrong response type"),
         }
 
@@ -139,11 +154,11 @@ fn test_network_status_query() {
             .expect("Failed to create NetworkActor")
             .start();
 
-    let status = actor
-        .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
-        .await
-        .expect("Failed to get status")
-        .expect("GetNetworkStatus failed");
+        let status = actor
+            .send(app::actors_v2::network::NetworkMessage::GetNetworkStatus)
+            .await
+            .expect("Failed to get status")
+            .expect("GetNetworkStatus failed");
 
         match status {
             app::actors_v2::network::NetworkResponse::Status(s) => {

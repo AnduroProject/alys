@@ -7,16 +7,19 @@ use crate::actors_v2::storage::{
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
 use actix::prelude::*;
-use tracing::*;
-use std::time::Instant;
 use ethereum_types::U256;
+use std::time::Instant;
+use tracing::*;
 
 impl Handler<UpdateStateMessage> for StorageActor {
     type Result = ResponseFuture<Result<(), StorageError>>;
 
     fn handle(&mut self, msg: UpdateStateMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        debug!("Handling UpdateStateMessage for key with {} bytes", msg.key.len());
+        debug!(
+            "Handling UpdateStateMessage for key with {} bytes",
+            msg.key.len()
+        );
 
         let key = msg.key;
         let value = msg.value;
@@ -47,7 +50,10 @@ impl Handler<GetStateMessage> for StorageActor {
 
     fn handle(&mut self, msg: GetStateMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        debug!("Handling GetStateMessage for key with {} bytes", msg.key.len());
+        debug!(
+            "Handling GetStateMessage for key with {} bytes",
+            msg.key.len()
+        );
 
         let key = msg.key;
         let cache = self.cache.clone();
@@ -86,7 +92,10 @@ impl Handler<BatchWriteMessage> for StorageActor {
 
     fn handle(&mut self, msg: BatchWriteMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        info!("Handling BatchWriteMessage with {} operations", msg.operations.len());
+        info!(
+            "Handling BatchWriteMessage with {} operations",
+            msg.operations.len()
+        );
 
         let operations = msg.operations;
         let database = self.database.clone();
@@ -107,12 +116,16 @@ impl Handler<BatchWriteMessage> for StorageActor {
                         cache.put_block(block_hash, block.clone()).await;
 
                         if *canonical {
-                            metrics.record_block_stored(block.message.slot, std::time::Duration::default(), true);
+                            metrics.record_block_stored(
+                                block.message.slot,
+                                std::time::Duration::default(),
+                                true,
+                            );
                         }
-                    },
+                    }
                     WriteOperation::Put { key, value } => {
                         cache.put_state(key.clone(), value.clone()).await;
-                    },
+                    }
                     _ => {} // Other operations don't affect cache
                 }
             }
@@ -121,7 +134,10 @@ impl Handler<BatchWriteMessage> for StorageActor {
             let operations_len = operations.len();
             metrics.record_batch_operation(operations_len, batch_time);
 
-            info!("Batch write completed with {} operations in {:?}", operations_len, batch_time);
+            info!(
+                "Batch write completed with {} operations in {:?}",
+                operations_len, batch_time
+            );
             Ok(())
         })
     }
@@ -168,7 +184,10 @@ impl Handler<GetAccumulatedFeesMessage> for StorageActor {
                                 error = ?e,
                                 "Failed to deserialize accumulated fees"
                             );
-                            Err(StorageError::Serialization(format!("Fee deserialization failed: {}", e)))
+                            Err(StorageError::Serialization(format!(
+                                "Fee deserialization failed: {}",
+                                e
+                            )))
                         }
                     }
                 }
@@ -186,7 +205,10 @@ impl Handler<GetAccumulatedFeesMessage> for StorageActor {
                         error = ?e,
                         "Failed to get accumulated fees from storage"
                     );
-                    Err(StorageError::Database(format!("Failed to get accumulated fees: {}", e)))
+                    Err(StorageError::Database(format!(
+                        "Failed to get accumulated fees: {}",
+                        e
+                    )))
                 }
             }
         })
@@ -219,7 +241,10 @@ impl Handler<SetAccumulatedFeesMessage> for StorageActor {
                         error = ?e,
                         "Failed to serialize accumulated fees"
                     );
-                    return Err(StorageError::Serialization(format!("Fee serialization failed: {}", e)));
+                    return Err(StorageError::Serialization(format!(
+                        "Fee serialization failed: {}",
+                        e
+                    )));
                 }
             };
 
@@ -242,7 +267,10 @@ impl Handler<SetAccumulatedFeesMessage> for StorageActor {
                         error = ?e,
                         "Failed to store accumulated fees"
                     );
-                    Err(StorageError::Database(format!("Failed to store accumulated fees: {}", e)))
+                    Err(StorageError::Database(format!(
+                        "Failed to store accumulated fees: {}",
+                        e
+                    )))
                 }
             }
         })

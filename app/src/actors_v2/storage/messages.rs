@@ -4,16 +4,16 @@
 //! all persistent storage operations for the Alys blockchain including blocks, state,
 //! receipts, and advanced indexing operations.
 
-use super::actor::{StorageError, AlysConsensusBlock, BlockRef};
-use super::cache::{TransactionReceipt, CacheStats};
-use super::indexing::{IndexType, IndexingStats, TransactionIndex, AddressIndex, BlockRange};
+use super::actor::{AlysConsensusBlock, BlockRef, StorageError};
+use super::cache::{CacheStats, TransactionReceipt};
 use super::database::DatabaseStats;
+use super::indexing::{AddressIndex, BlockRange, IndexType, IndexingStats, TransactionIndex};
 use actix::prelude::*;
+use ethereum_types::{Address, H256, U256};
+use lighthouse_wrapper::types::Hash256;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
-use lighthouse_wrapper::types::Hash256;
-use ethereum_types::{H256, U256, Address};
 
 // =============================================================================
 // BLOCK OPERATIONS
@@ -367,9 +367,15 @@ pub enum WriteOperation {
     /// Delete key
     Delete { key: Vec<u8> },
     /// Put block with canonical flag
-    PutBlock { block: AlysConsensusBlock, canonical: bool },
+    PutBlock {
+        block: AlysConsensusBlock,
+        canonical: bool,
+    },
     /// Put transaction receipt
-    PutReceipt { receipt: TransactionReceipt, block_hash: Hash256 },
+    PutReceipt {
+        receipt: TransactionReceipt,
+        block_hash: Hash256,
+    },
     /// Update chain head
     UpdateHead { head: BlockRef },
 }

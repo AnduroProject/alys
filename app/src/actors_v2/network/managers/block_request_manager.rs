@@ -3,10 +3,10 @@
 //! Manages block requests between NetworkActor and SyncActor.
 //! Coordinates peer selection and request tracking.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, Duration};
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
-use serde::{Serialize, Deserialize};
 
 use super::super::messages::PeerId;
 
@@ -142,7 +142,11 @@ impl BlockRequestManager {
     }
 
     /// Complete a block request successfully
-    pub fn complete_request(&mut self, request_id: &str, blocks_received: u32) -> Result<(), String> {
+    pub fn complete_request(
+        &mut self,
+        request_id: &str,
+        blocks_received: u32,
+    ) -> Result<(), String> {
         if let Some(request) = self.active_requests.remove(request_id) {
             let response_time = SystemTime::now()
                 .duration_since(request.requested_at)
@@ -170,7 +174,11 @@ impl BlockRequestManager {
     }
 
     /// Fail a block request
-    pub fn fail_request(&mut self, request_id: &str, reason: &str) -> Result<Option<BlockRequest>, String> {
+    pub fn fail_request(
+        &mut self,
+        request_id: &str,
+        reason: &str,
+    ) -> Result<Option<BlockRequest>, String> {
         if let Some(mut request) = self.active_requests.remove(request_id) {
             tracing::warn!("Block request {} failed: {}", request_id, reason);
 
@@ -284,7 +292,11 @@ impl BlockRequestManager {
         self.stats.active_requests = self.active_requests.len();
 
         if !cancelled.is_empty() {
-            tracing::info!("Cancelled {} requests from peer {}", cancelled.len(), peer_id);
+            tracing::info!(
+                "Cancelled {} requests from peer {}",
+                cancelled.len(),
+                peer_id
+            );
         }
 
         cancelled.len()
@@ -322,7 +334,8 @@ impl BlockRequestManager {
 
     /// Get available request capacity
     pub fn get_available_capacity(&self) -> usize {
-        self.max_concurrent_requests.saturating_sub(self.active_requests.len())
+        self.max_concurrent_requests
+            .saturating_sub(self.active_requests.len())
     }
 }
 

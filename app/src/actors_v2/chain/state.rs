@@ -2,19 +2,19 @@
 //!
 //! Simplified state management derived from chain.rs without complex RwLock patterns
 
-use std::collections::BTreeMap;
-use std::time::SystemTime;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use bitcoin::{BlockHash, Txid};
 use ethereum_types::{Address, H256};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::SystemTime;
+use tokio::sync::RwLock;
 
-use crate::auxpow_miner::BitcoinConsensusParams;
-use crate::block::{AuxPowHeader};
-use crate::block_hash_cache::BlockHashCache;
 use crate::actors_v2::storage::actor::BlockRef;
-use bridge::{Bridge, PegInInfo, BitcoinSignatureCollector, BitcoinSigner};
 use crate::aura::Aura;
+use crate::auxpow_miner::BitcoinConsensusParams;
+use crate::block::AuxPowHeader;
+use crate::block_hash_cache::BlockHashCache;
+use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo};
 
 /// Mining context for tracking issued AuxPoW work (Priority 3)
 ///
@@ -102,8 +102,14 @@ impl std::fmt::Debug for ChainState {
             .field("aura", &"<Aura>")
             .field("bridge", &"<Bridge>")
             .field("bitcoin_wallet", &"<BitcoinWallet>")
-            .field("bitcoin_signature_collector", &"<BitcoinSignatureCollector>")
-            .field("maybe_bitcoin_signer", &format_args!("<Option<BitcoinSigner>>"))
+            .field(
+                "bitcoin_signature_collector",
+                &"<BitcoinSignatureCollector>",
+            )
+            .field(
+                "maybe_bitcoin_signer",
+                &format_args!("<Option<BitcoinSigner>>"),
+            )
             .finish()
     }
 }
@@ -206,7 +212,10 @@ impl ChainState {
 
     /// Store mining context for submitted work validation (Priority 3)
     pub async fn store_mining_context(&self, aggregate_hash: BlockHash, context: MiningContext) {
-        self.mining_contexts.write().await.insert(aggregate_hash, context);
+        self.mining_contexts
+            .write()
+            .await
+            .insert(aggregate_hash, context);
     }
 
     /// Retrieve and remove mining context (Priority 3)

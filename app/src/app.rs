@@ -7,9 +7,9 @@ use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{
-    genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY, DEV_SECRET_KEY,
+    genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY,
     DEV_REGTEST_AURA_SECRET_KEY_NODE1, DEV_REGTEST_AURA_SECRET_KEY_NODE2,
-    DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1, DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2,
+    DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1, DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2, DEV_SECRET_KEY,
 };
 use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bridge::{
@@ -25,13 +25,13 @@ use lighthouse_wrapper::execution_layer::auth::JwtKey;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
+use tokio::task::LocalSet;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
-use tokio::task::LocalSet;
 
 // V2 RPC imports
-use actix::Actor;
 use crate::actors_v2::rpc::{RpcActor, RpcConfig, StartRpcServer};
+use actix::Actor;
 
 #[inline]
 pub fn run() -> Result<()> {
@@ -180,14 +180,14 @@ impl App {
         // Validate mutual exclusivity of dev and dev_regtest flags
         if self.dev && self.dev_regtest {
             return Err(eyre::Error::msg(
-                "Cannot use both --dev and --dev-regtest flags simultaneously"
+                "Cannot use both --dev and --dev-regtest flags simultaneously",
             ));
         }
 
         // Validate regtest node ID
         if self.dev_regtest && (self.regtest_node_id < 1 || self.regtest_node_id > 2) {
             return Err(eyre::Error::msg(
-                "Invalid --regtest-node-id: must be 1 or 2"
+                "Invalid --regtest-node-id: must be 1 or 2",
             ));
         }
 
@@ -231,7 +231,10 @@ impl App {
     async fn execute(self) -> Result<()> {
         // Log dev-regtest node information
         if self.dev_regtest {
-            info!("Running in dev-regtest mode as Node {}", self.regtest_node_id);
+            info!(
+                "Running in dev-regtest mode as Node {}",
+                self.regtest_node_id
+            );
         }
 
         // Clone values needed for V2 actor system BEFORE V0 takes ownership

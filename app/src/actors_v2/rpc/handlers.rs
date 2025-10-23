@@ -1,16 +1,16 @@
 use actix::Addr;
-use ethereum_types::Address;
-use serde_json::{json, Value};
-use uuid::Uuid;
+use bitcoin::consensus::Decodable;
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::BlockHash;
-use bitcoin::consensus::Decodable;
+use ethereum_types::Address;
+use serde_json::{json, Value};
 use std::str::FromStr;
+use uuid::Uuid;
 
-use crate::actors_v2::chain::ChainActor;
-use crate::actors_v2::chain::messages::{CreateAuxBlock, SubmitAuxBlock};
-use crate::auxpow::AuxPow;
 use super::error::RpcError;
+use crate::actors_v2::chain::messages::{CreateAuxBlock, SubmitAuxBlock};
+use crate::actors_v2::chain::ChainActor;
+use crate::auxpow::AuxPow;
 
 /// createauxblock RPC handler
 pub struct CreateAuxBlockHandler;

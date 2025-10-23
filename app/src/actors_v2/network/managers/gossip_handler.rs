@@ -4,10 +4,10 @@
 //! Removed: Complex topic management, supervision overhead
 //! Focus: Block/transaction broadcasting with basic filtering
 
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, Duration};
-use serde::{Serialize, Deserialize};
-use anyhow::{Result, anyhow};
+use std::time::{Duration, SystemTime};
 
 use super::super::messages::{GossipMessage, PeerId};
 
@@ -90,7 +90,11 @@ impl GossipHandler {
     }
 
     /// Process incoming gossip message
-    pub fn process_message(&mut self, message: GossipMessage, source_peer: PeerId) -> Result<Option<ProcessedMessage>> {
+    pub fn process_message(
+        &mut self,
+        message: GossipMessage,
+        source_peer: PeerId,
+    ) -> Result<Option<ProcessedMessage>> {
         self.stats.messages_received += 1;
 
         // Check if we've seen this message before
@@ -119,7 +123,11 @@ impl GossipHandler {
 
         // Update statistics
         self.stats.messages_processed += 1;
-        *self.stats.messages_by_type.entry(format!("{:?}", message_type)).or_insert(0) += 1;
+        *self
+            .stats
+            .messages_by_type
+            .entry(format!("{:?}", message_type))
+            .or_insert(0) += 1;
 
         // Determine if message should be forwarded
         let should_forward = self.should_forward_message(&message, &message_type);
@@ -158,16 +166,22 @@ impl GossipHandler {
     /// Clean up old seen messages
     fn cleanup_seen_messages(&mut self) {
         let cutoff = SystemTime::now() - self.max_message_age;
-        self.seen_messages.retain(|_, &mut timestamp| timestamp > cutoff);
+        self.seen_messages
+            .retain(|_, &mut timestamp| timestamp > cutoff);
 
-        tracing::debug!("Cleaned up seen messages, {} remaining", self.seen_messages.len());
+        tracing::debug!(
+            "Cleaned up seen messages, {} remaining",
+            self.seen_messages.len()
+        );
     }
 
     /// Classify message type based on topic and content
     fn classify_message(&self, message: &GossipMessage) -> MessageType {
         match message.topic.as_str() {
             topic if topic.contains("block") => MessageType::Block,
-            topic if topic.contains("transaction") || topic.contains("tx") => MessageType::Transaction,
+            topic if topic.contains("transaction") || topic.contains("tx") => {
+                MessageType::Transaction
+            }
             topic if topic.contains("peer") => MessageType::PeerAnnouncement,
             _ => {
                 // Try to classify based on content
@@ -189,7 +203,8 @@ impl GossipHandler {
             return false;
         }
 
-        if message.data.len() > 10 * 1024 * 1024 { // 10MB max
+        if message.data.len() > 10 * 1024 * 1024 {
+            // 10MB max
             return false;
         }
 

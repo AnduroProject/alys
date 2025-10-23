@@ -4,25 +4,22 @@
 //! Follows standard Actix patterns like StorageActor/NetworkActor V2.
 
 use actix::prelude::*;
-use std::time::Instant;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use bitcoin::hashes::Hash;
+use ethereum_types::H256;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use ethereum_types::H256;
-use bitcoin::hashes::Hash;
 
-use super::{
-    ChainConfig, ChainError, ChainMetrics, ChainState,
-    messages::BlockSource,
-};
+use super::{messages::BlockSource, ChainConfig, ChainError, ChainMetrics, ChainState};
 
 use crate::actors_v2::{
-    storage::StorageActor,
-    network::{NetworkActor, SyncActor},
     engine::EngineActor,
+    network::{NetworkActor, SyncActor},
+    storage::StorageActor,
 };
 use crate::block::SignedConsensusBlock;
 use lighthouse_wrapper::types::MainnetEthSpec;
@@ -97,7 +94,11 @@ impl ChainActor {
     }
 
     /// Set network actor addresses
-    pub fn set_network_actors(&mut self, network_addr: Addr<NetworkActor>, sync_addr: Addr<SyncActor>) {
+    pub fn set_network_actors(
+        &mut self,
+        network_addr: Addr<NetworkActor>,
+        sync_addr: Addr<SyncActor>,
+    ) {
         self.network_actor = Some(network_addr);
         self.sync_actor = Some(sync_addr);
     }
@@ -118,7 +119,10 @@ impl ChainActor {
     /// Check if network is ready for consensus decisions
     pub(crate) async fn is_network_ready(&self) -> bool {
         if let Some(ref network_actor) = self.network_actor {
-            if let Ok(response) = network_actor.send(crate::actors_v2::network::NetworkMessage::GetNetworkStatus).await {
+            if let Ok(response) = network_actor
+                .send(crate::actors_v2::network::NetworkMessage::GetNetworkStatus)
+                .await
+            {
                 if let Ok(crate::actors_v2::network::NetworkResponse::Status(status)) = response {
                     return status.is_running && status.connected_peers > 0;
                 }
@@ -132,9 +136,11 @@ impl ChainActor {
         if let Some(ref network_actor) = self.network_actor {
             let msg = crate::actors_v2::network::NetworkMessage::BroadcastBlock {
                 block_data,
-                priority: true
+                priority: true,
             };
-            network_actor.send(msg).await
+            network_actor
+                .send(msg)
+                .await
                 .map_err(|e| ChainError::NetworkError(e.to_string()))?
                 .map_err(ChainError::Network)?;
         }
@@ -142,14 +148,20 @@ impl ChainActor {
     }
 
     /// Request missing blocks for sync
-    pub(crate) async fn request_blocks(&self, start_height: u64, count: u32) -> Result<(), ChainError> {
+    pub(crate) async fn request_blocks(
+        &self,
+        start_height: u64,
+        count: u32,
+    ) -> Result<(), ChainError> {
         if let Some(ref sync_actor) = self.sync_actor {
             let msg = crate::actors_v2::network::SyncMessage::RequestBlocks {
                 start_height,
                 count,
-                peer_id: None
+                peer_id: None,
             };
-            sync_actor.send(msg).await
+            sync_actor
+                .send(msg)
+                .await
                 .map_err(|e| ChainError::NetworkError(e.to_string()))?
                 .map_err(ChainError::Sync)?;
         }
@@ -157,7 +169,11 @@ impl ChainActor {
     }
 
     /// Store block via StorageActor
-    pub(crate) async fn store_block(&self, block: crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>, canonical: bool) -> Result<(), ChainError> {
+    pub(crate) async fn store_block(
+        &self,
+        block: crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>,
+        canonical: bool,
+    ) -> Result<(), ChainError> {
         if let Some(ref storage_actor) = self.storage_actor {
             // Store the complete signed block (AlysConsensusBlock now expects SignedConsensusBlock)
             let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
@@ -166,15 +182,23 @@ impl ChainActor {
                 correlation_id: Some(Uuid::new_v4()), // Generate correlation ID for tracing
             };
 
-            storage_actor.send(store_msg).await
-                .map_err(|e| ChainError::NetworkError(format!("Failed to send store message: {}", e)))?
+            storage_actor
+                .send(store_msg)
+                .await
+                .map_err(|e| {
+                    ChainError::NetworkError(format!("Failed to send store message: {}", e))
+                })?
                 .map_err(|e| ChainError::Storage(e.to_string()))?;
         }
         Ok(())
     }
 
     /// Process peg-in from imported block (Phase 3 - Task 3.1.2) - Real implementation
-    pub async fn process_block_pegin(&self, pegin: &bridge::PegInInfo, block_hash: &H256) -> Result<(), ChainError> {
+    pub async fn process_block_pegin(
+        &self,
+        pegin: &bridge::PegInInfo,
+        block_hash: &H256,
+    ) -> Result<(), ChainError> {
         debug!(
             txid = %pegin.txid,
             amount = pegin.amount,
@@ -198,7 +222,9 @@ impl ChainActor {
                 txid = %pegin.txid,
                 "Peg-in has zero EVM account - invalid"
             );
-            return Err(ChainError::Bridge("Peg-in has zero EVM account".to_string()));
+            return Err(ChainError::Bridge(
+                "Peg-in has zero EVM account".to_string(),
+            ));
         }
 
         // 2. REAL IMPLEMENTATION: Remove from queued pegins (matches V0 line 1708)
@@ -232,7 +258,9 @@ impl ChainActor {
                         txid = %pegin.txid,
                         "Bitcoin transaction not found in block"
                     );
-                    return Err(ChainError::Bridge("Bitcoin transaction not found".to_string()));
+                    return Err(ChainError::Bridge(
+                        "Bitcoin transaction not found".to_string(),
+                    ));
                 }
             }
         };
@@ -246,7 +274,10 @@ impl ChainActor {
                     error = ?wallet_error,
                     "Failed to register peg-in with Bitcoin wallet"
                 );
-                return Err(ChainError::Bridge(format!("Wallet registration failed: {:?}", wallet_error)));
+                return Err(ChainError::Bridge(format!(
+                    "Wallet registration failed: {:?}",
+                    wallet_error
+                )));
             }
         }
 
@@ -262,7 +293,11 @@ impl ChainActor {
     }
 
     /// Process finalized peg-out from imported block (Phase 3 - Task 3.1.2) - Real implementation
-    pub async fn process_finalized_pegout(&self, pegout: &bitcoin::Transaction, block_hash: &H256) -> Result<(), ChainError> {
+    pub async fn process_finalized_pegout(
+        &self,
+        pegout: &bitcoin::Transaction,
+        block_hash: &H256,
+    ) -> Result<(), ChainError> {
         debug!(
             pegout_txid = %pegout.txid(),
             block_hash = %block_hash,
@@ -295,7 +330,9 @@ impl ChainActor {
                 pegout_txid = %pegout.txid(),
                 "Peg-out has zero output value - invalid"
             );
-            return Err(ChainError::Bridge("Peg-out has zero output value".to_string()));
+            return Err(ChainError::Bridge(
+                "Peg-out has zero output value".to_string(),
+            ));
         }
 
         let txid = pegout.txid();
@@ -379,7 +416,10 @@ impl ChainActor {
     }
 
     /// Update chain head after successful block import (Phase 3 - Task 3.1.2)
-    pub async fn update_chain_head(&self, new_head: crate::actors_v2::storage::actor::BlockRef) -> Result<(), ChainError> {
+    pub async fn update_chain_head(
+        &self,
+        new_head: crate::actors_v2::storage::actor::BlockRef,
+    ) -> Result<(), ChainError> {
         info!(
             new_head_hash = %new_head.hash,
             new_head_height = new_head.number,
@@ -393,37 +433,40 @@ impl ChainActor {
             };
 
             match storage_actor.send(msg).await {
-                Ok(storage_result) => {
-                    match storage_result {
-                        Ok(()) => {
-                            info!(
-                                head_hash = %new_head.hash,
-                                head_height = new_head.number,
-                                "Chain head updated successfully"
-                            );
-                            Ok(())
-                        }
-                        Err(e) => {
-                            error!(
-                                head_hash = %new_head.hash,
-                                error = ?e,
-                                "Failed to update chain head"
-                            );
-                            Err(ChainError::Storage(e.to_string()))
-                        }
+                Ok(storage_result) => match storage_result {
+                    Ok(()) => {
+                        info!(
+                            head_hash = %new_head.hash,
+                            head_height = new_head.number,
+                            "Chain head updated successfully"
+                        );
+                        Ok(())
                     }
-                }
+                    Err(e) => {
+                        error!(
+                            head_hash = %new_head.hash,
+                            error = ?e,
+                            "Failed to update chain head"
+                        );
+                        Err(ChainError::Storage(e.to_string()))
+                    }
+                },
                 Err(e) => {
                     error!(
                         head_hash = %new_head.hash,
                         error = ?e,
                         "Communication error updating chain head"
                     );
-                    Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)))
+                    Err(ChainError::NetworkError(format!(
+                        "Storage communication failed: {}",
+                        e
+                    )))
                 }
             }
         } else {
-            Err(ChainError::Storage("StorageActor not available".to_string()))
+            Err(ChainError::Storage(
+                "StorageActor not available".to_string(),
+            ))
         }
     }
 
@@ -462,7 +505,9 @@ impl ChainActor {
 
             Ok(result)
         } else {
-            Err(ChainError::Storage("StorageActor not available for reorganization".to_string()))
+            Err(ChainError::Storage(
+                "StorageActor not available for reorganization".to_string(),
+            ))
         }
     }
 }
@@ -471,7 +516,10 @@ impl Actor for ChainActor {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Context<Self>) {
-        info!("ChainActor V2 started - is_validator: {}", self.config.is_validator);
+        info!(
+            "ChainActor V2 started - is_validator: {}",
+            self.config.is_validator
+        );
         self.record_activity();
     }
 

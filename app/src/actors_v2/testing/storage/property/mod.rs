@@ -1,12 +1,12 @@
-use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::actors_v2::common::StorageMessage;
-use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::storage::messages::*;
+use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::testing::storage::fixtures::*;
+use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::auxpow_miner::BlockIndex;
 use proptest::prelude::*;
-use uuid::Uuid;
 use std::collections::HashSet;
+use uuid::Uuid;
 
 /// Property-based regression tests for edge cases
 #[cfg(test)]

@@ -3,16 +3,16 @@
 //! Test data generation for NetworkActor V2 testing.
 //! Following StorageActor fixture patterns.
 
-use uuid::Uuid;
-use std::time::{SystemTime, Duration};
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
+use uuid::Uuid;
 
 use crate::actors_v2::network::{
-    NetworkConfig, SyncConfig,
-    messages::{GossipMessage, NetworkRequest, PeerId, Block},
     behaviour::AlysNetworkBehaviourEvent,
+    messages::{Block, GossipMessage, NetworkRequest, PeerId},
+    NetworkConfig, SyncConfig,
 };
-use crate::actors_v2::testing::network::{TestPeer, TestBlock, NetworkTestError};
+use crate::actors_v2::testing::network::{NetworkTestError, TestBlock, TestPeer};
 
 /// Create test NetworkConfig for various scenarios
 pub fn create_test_network_config() -> NetworkConfig {
@@ -136,7 +136,10 @@ pub fn create_test_gossip_message(topic: &str, message_content: &str) -> GossipM
 
 /// Create test block gossip message
 pub fn create_test_block_gossip_message(block_height: u64) -> GossipMessage {
-    let block_data = format!("{{\"height\":{},\"data\":\"test-block-{}\"}}", block_height, block_height);
+    let block_data = format!(
+        "{{\"height\":{},\"data\":\"test-block-{}\"}}",
+        block_height, block_height
+    );
     create_test_gossip_message("test-blocks", &block_data)
 }
 
@@ -164,14 +167,23 @@ pub fn create_test_block_sequence(start_height: u64, count: u32) -> Vec<TestBloc
 
 /// Create test network request
 pub fn create_test_block_request(start_height: u64, count: u32) -> NetworkRequest {
-    NetworkRequest::GetBlocks { start_height, count }
+    NetworkRequest::GetBlocks {
+        start_height,
+        count,
+    }
 }
 
 /// Create test network requests for various scenarios
 pub fn create_test_network_requests() -> Vec<NetworkRequest> {
     vec![
-        NetworkRequest::GetBlocks { start_height: 100, count: 10 },
-        NetworkRequest::GetBlocks { start_height: 200, count: 50 },
+        NetworkRequest::GetBlocks {
+            start_height: 100,
+            count: 10,
+        },
+        NetworkRequest::GetBlocks {
+            start_height: 200,
+            count: 50,
+        },
         NetworkRequest::GetChainStatus,
         NetworkRequest::GetPeers,
         NetworkRequest::GetStatus,
@@ -270,21 +282,21 @@ pub fn create_invalid_network_configs() -> Vec<(NetworkConfig, &'static str)> {
                 listen_addresses: vec![], // Invalid: empty
                 ..create_test_network_config()
             },
-            "empty listen addresses"
+            "empty listen addresses",
         ),
         (
             NetworkConfig {
                 max_connections: 0, // Invalid: zero connections
                 ..create_test_network_config()
             },
-            "zero max connections"
+            "zero max connections",
         ),
         (
             NetworkConfig {
                 message_size_limit: 0, // Invalid: zero message size
                 ..create_test_network_config()
             },
-            "zero message size limit"
+            "zero message size limit",
         ),
     ]
 }
@@ -297,21 +309,21 @@ pub fn create_invalid_sync_configs() -> Vec<(SyncConfig, &'static str)> {
                 max_blocks_per_request: 0, // Invalid: zero blocks
                 ..create_test_sync_config()
             },
-            "zero max blocks per request"
+            "zero max blocks per request",
         ),
         (
             SyncConfig {
                 max_concurrent_requests: 0, // Invalid: zero requests
                 ..create_test_sync_config()
             },
-            "zero max concurrent requests"
+            "zero max concurrent requests",
         ),
         (
             SyncConfig {
                 max_sync_peers: 0, // Invalid: zero peers
                 ..create_test_sync_config()
             },
-            "zero max sync peers"
+            "zero max sync peers",
         ),
     ]
 }
@@ -398,10 +410,7 @@ impl NetworkPropertyTestData {
             },
             MessageScenario {
                 message_count: 500,
-                topics: vec![
-                    "test-blocks".to_string(),
-                    "test-transactions".to_string(),
-                ],
+                topics: vec!["test-blocks".to_string(), "test-transactions".to_string()],
                 message_sizes: vec![512, 1024, 8192, 16384],
                 failure_rate: 0.1,
             },
@@ -577,19 +586,23 @@ impl NetworkChaosTestData {
 /// Helper functions for test validation
 pub fn validate_test_peer(peer: &TestPeer) -> Result<(), NetworkTestError> {
     if peer.peer_id.is_empty() {
-        return Err(NetworkTestError::Validation("Peer ID cannot be empty".to_string()));
+        return Err(NetworkTestError::Validation(
+            "Peer ID cannot be empty".to_string(),
+        ));
     }
 
     if peer.address.is_empty() || !peer.address.starts_with('/') {
-        return Err(NetworkTestError::Validation(
-            format!("Invalid peer address: {}", peer.address)
-        ));
+        return Err(NetworkTestError::Validation(format!(
+            "Invalid peer address: {}",
+            peer.address
+        )));
     }
 
     if peer.reputation < 0.0 || peer.reputation > 100.0 {
-        return Err(NetworkTestError::Validation(
-            format!("Invalid peer reputation: {}", peer.reputation)
-        ));
+        return Err(NetworkTestError::Validation(format!(
+            "Invalid peer reputation: {}",
+            peer.reputation
+        )));
     }
 
     Ok(())
@@ -598,17 +611,23 @@ pub fn validate_test_peer(peer: &TestPeer) -> Result<(), NetworkTestError> {
 /// Validate test block data
 pub fn validate_test_block(block: &TestBlock) -> Result<(), NetworkTestError> {
     if block.data.is_empty() {
-        return Err(NetworkTestError::Validation("Block data cannot be empty".to_string()));
+        return Err(NetworkTestError::Validation(
+            "Block data cannot be empty".to_string(),
+        ));
     }
 
     if block.hash.is_empty() {
-        return Err(NetworkTestError::Validation("Block hash cannot be empty".to_string()));
+        return Err(NetworkTestError::Validation(
+            "Block hash cannot be empty".to_string(),
+        ));
     }
 
-    if block.data.len() > 100 * 1024 * 1024 { // 100MB max
-        return Err(NetworkTestError::Validation(
-            format!("Block too large: {} bytes", block.data.len())
-        ));
+    if block.data.len() > 100 * 1024 * 1024 {
+        // 100MB max
+        return Err(NetworkTestError::Validation(format!(
+            "Block too large: {} bytes",
+            block.data.len()
+        )));
     }
 
     Ok(())
@@ -622,28 +641,28 @@ pub fn create_edge_case_configs() -> Vec<(NetworkConfig, &'static str)> {
                 max_connections: 1, // Minimal connections
                 ..create_test_network_config()
             },
-            "minimal connections"
+            "minimal connections",
         ),
         (
             NetworkConfig {
                 connection_timeout: Duration::from_millis(100), // Very short timeout
                 ..create_test_network_config()
             },
-            "short timeout"
+            "short timeout",
         ),
         (
             NetworkConfig {
                 message_size_limit: 1024, // Small message limit
                 ..create_test_network_config()
             },
-            "small message limit"
+            "small message limit",
         ),
         (
             NetworkConfig {
                 discovery_interval: Duration::from_secs(1), // Very frequent discovery
                 ..create_test_network_config()
             },
-            "frequent discovery"
+            "frequent discovery",
         ),
     ]
 }

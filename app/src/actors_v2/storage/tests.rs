@@ -3,12 +3,14 @@
 #[cfg(test)]
 mod tests {
     use crate::actors_v2::storage::{
-        actor::{StorageActor, StorageConfig, AlysConsensusBlock, BlockRef},
-        messages::{StoreBlockMessage, GetBlockMessage},
+        actor::{AlysConsensusBlock, BlockRef, StorageActor, StorageConfig},
+        messages::{GetBlockMessage, StoreBlockMessage},
     };
     use crate::auxpow_miner::BlockIndex;
     use crate::block::ConvertBlockHash;
-    use lighthouse_wrapper::types::{Hash256, MainnetEthSpec, ExecutionPayloadCapella, Address, ExecutionBlockHash};
+    use lighthouse_wrapper::types::{
+        Address, ExecutionBlockHash, ExecutionPayloadCapella, Hash256, MainnetEthSpec,
+    };
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -16,7 +18,11 @@ mod tests {
     fn create_test_config() -> StorageConfig {
         let temp_dir = tempdir().unwrap();
         let mut config = StorageConfig::default();
-        config.database.main_path = temp_dir.path().join("test_storage").to_string_lossy().to_string();
+        config.database.main_path = temp_dir
+            .path()
+            .join("test_storage")
+            .to_string_lossy()
+            .to_string();
         config
     }
 
@@ -61,7 +67,11 @@ mod tests {
     async fn test_storage_actor_creation() {
         let config = create_test_config();
         let result = StorageActor::new(config).await;
-        assert!(result.is_ok(), "Failed to create storage actor: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create storage actor: {:?}",
+            result.err()
+        );
     }
 
     #[actix::test]
@@ -74,7 +84,11 @@ mod tests {
 
         // Test block storage
         let store_result = storage.store_block(test_block.clone(), true).await;
-        assert!(store_result.is_ok(), "Failed to store block: {:?}", store_result.err());
+        assert!(
+            store_result.is_ok(),
+            "Failed to store block: {:?}",
+            store_result.err()
+        );
 
         // Test block retrieval
         let retrieved_block = storage.get_block(&block_hash).await.unwrap();
@@ -82,7 +96,10 @@ mod tests {
 
         let retrieved = retrieved_block.unwrap();
         assert_eq!(retrieved.message.slot, test_block.message.slot);
-        assert_eq!(retrieved.message.execution_payload.state_root, test_block.message.execution_payload.state_root);
+        assert_eq!(
+            retrieved.message.execution_payload.state_root,
+            test_block.message.execution_payload.state_root
+        );
     }
 
     #[actix::test]
@@ -92,7 +109,10 @@ mod tests {
 
         // Test getting chain head (should be None initially)
         let initial_head = storage.database.get_chain_head().await.unwrap();
-        assert!(initial_head.is_none(), "Chain head should be None initially");
+        assert!(
+            initial_head.is_none(),
+            "Chain head should be None initially"
+        );
 
         // Test setting chain head
         let test_head = BlockRef {
@@ -102,7 +122,11 @@ mod tests {
         };
 
         let put_result = storage.database.put_chain_head(&test_head).await;
-        assert!(put_result.is_ok(), "Failed to set chain head: {:?}", put_result.err());
+        assert!(
+            put_result.is_ok(),
+            "Failed to set chain head: {:?}",
+            put_result.err()
+        );
 
         // Test getting updated chain head
         let updated_head = storage.database.get_chain_head().await.unwrap();
@@ -123,7 +147,11 @@ mod tests {
 
         // Test state storage
         let put_result = storage.database.put_state(&test_key, &test_value).await;
-        assert!(put_result.is_ok(), "Failed to store state: {:?}", put_result.err());
+        assert!(
+            put_result.is_ok(),
+            "Failed to store state: {:?}",
+            put_result.err()
+        );
 
         // Test state retrieval
         let retrieved_value = storage.database.get_state(&test_key).await.unwrap();
@@ -144,7 +172,10 @@ mod tests {
         let block_hash = test_block.message.block_hash().to_block_hash();
 
         // Test cache storage
-        storage.cache.put_block(block_hash, test_block.clone()).await;
+        storage
+            .cache
+            .put_block(block_hash, test_block.clone())
+            .await;
 
         // Test cache retrieval
         let cached_block = storage.cache.get_block(&block_hash).await;
@@ -154,8 +185,14 @@ mod tests {
         assert_eq!(cached.message.slot, test_block.message.slot);
 
         // Test cache miss
-        let missing_block = storage.cache.get_block(&Hash256::from_low_u64_be(999)).await;
-        assert!(missing_block.is_none(), "Non-existent block should not be in cache");
+        let missing_block = storage
+            .cache
+            .get_block(&Hash256::from_low_u64_be(999))
+            .await;
+        assert!(
+            missing_block.is_none(),
+            "Non-existent block should not be in cache"
+        );
     }
 
     #[actix::test]
@@ -170,7 +207,10 @@ mod tests {
         let _store_result = storage.store_block(test_block, true).await;
 
         // Check metrics updated
-        assert!(storage.metrics.blocks_stored > initial_blocks_stored, "Metrics should be updated");
+        assert!(
+            storage.metrics.blocks_stored > initial_blocks_stored,
+            "Metrics should be updated"
+        );
     }
 
     #[test]
@@ -203,6 +243,9 @@ mod tests {
             correlation_id: Some(correlation_id),
         };
 
-        assert_eq!(get_msg.block_hash, test_block.message.block_hash().to_block_hash());
+        assert_eq!(
+            get_msg.block_hash,
+            test_block.message.block_hash().to_block_hash()
+        );
     }
 }

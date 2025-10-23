@@ -8,9 +8,11 @@ use crate::actors_v2::storage::actor::AlysConsensusBlock;
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConsensusBlock;
 use crate::signatures::AggregateApproval;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec, ExecutionPayloadCapella, Address, ExecutionBlockHash};
-use tempfile::TempDir;
+use lighthouse_wrapper::types::{
+    Address, ExecutionBlockHash, ExecutionPayloadCapella, Hash256, MainnetEthSpec,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::TempDir;
 
 /// Generate a sequence of test blocks with proper chain relationships
 pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
@@ -21,7 +23,7 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
         let parent_hash = if i == 0 {
             Hash256::zero()
         } else {
-            blocks[i - 1].message.parent_hash  // Use parent_hash field directly to keep Hash256 type
+            blocks[i - 1].message.parent_hash // Use parent_hash field directly to keep Hash256 type
         };
 
         let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
@@ -64,7 +66,9 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
 /// Create a single test block with specified slot
 pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
     let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
-        parent_hash: ExecutionBlockHash::from_root(Hash256::from_low_u64_be(slot.saturating_sub(1))),
+        parent_hash: ExecutionBlockHash::from_root(Hash256::from_low_u64_be(
+            slot.saturating_sub(1),
+        )),
         fee_recipient: Address::zero(),
         state_root: Hash256::from_low_u64_be(slot + 1000),
         receipts_root: Hash256::from_low_u64_be(slot + 2000),
@@ -105,7 +109,9 @@ pub fn create_test_block_with_properties(
     extra_data: Vec<u8>,
 ) -> AlysConsensusBlock {
     let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
-        parent_hash: ExecutionBlockHash::from_root(Hash256::from_low_u64_be(slot.saturating_sub(1))),
+        parent_hash: ExecutionBlockHash::from_root(Hash256::from_low_u64_be(
+            slot.saturating_sub(1),
+        )),
         fee_recipient: Address::zero(),
         state_root: Hash256::from_low_u64_be(slot + 1000),
         receipts_root: Hash256::from_low_u64_be(slot + 2000),
@@ -139,7 +145,10 @@ pub fn create_test_block_with_properties(
 }
 
 /// Generate test blocks for fork testing
-pub fn create_fork_test_blocks(common_ancestor_slot: u64, fork_length: usize) -> (Vec<AlysConsensusBlock>, Vec<AlysConsensusBlock>) {
+pub fn create_fork_test_blocks(
+    common_ancestor_slot: u64,
+    fork_length: usize,
+) -> (Vec<AlysConsensusBlock>, Vec<AlysConsensusBlock>) {
     // Create common chain up to fork point
     let mut common_chain = create_test_block_sequence(common_ancestor_slot as usize);
 
@@ -176,7 +185,7 @@ pub fn create_fork_test_blocks(common_ancestor_slot: u64, fork_length: usize) ->
 
         let signed_block = create_test_block_with_properties(
             slot,
-            slot * 2000, // Different gas usage pattern
+            slot * 2000,                // Different gas usage pattern
             1600000000 + slot * 12 + 1, // Slightly different timestamp
             format!("fork_b_{}", slot).into_bytes(),
         );
@@ -194,22 +203,45 @@ pub fn create_edge_case_blocks() -> Vec<AlysConsensusBlock> {
     blocks.push(create_test_block_with_properties(1, 0, 1600000000, vec![]));
 
     // Block with maximum gas usage
-    blocks.push(create_test_block_with_properties(2, 30000000, 1600000012, vec![]));
+    blocks.push(create_test_block_with_properties(
+        2,
+        30000000,
+        1600000012,
+        vec![],
+    ));
 
     // Block with large extra data
-    blocks.push(create_test_block_with_properties(3, 1500000, 1600000024, vec![0xff; 1024]));
+    blocks.push(create_test_block_with_properties(
+        3,
+        1500000,
+        1600000024,
+        vec![0xff; 1024],
+    ));
 
     // Block with very old timestamp
-    blocks.push(create_test_block_with_properties(4, 1000000, 946684800, b"year_2000".to_vec())); // Year 2000
+    blocks.push(create_test_block_with_properties(
+        4,
+        1000000,
+        946684800,
+        b"year_2000".to_vec(),
+    )); // Year 2000
 
     // Block with far future timestamp
-    blocks.push(create_test_block_with_properties(5, 1000000, 4102444800, b"year_2100".to_vec())); // Year 2100
+    blocks.push(create_test_block_with_properties(
+        5,
+        1000000,
+        4102444800,
+        b"year_2100".to_vec(),
+    )); // Year 2100
 
     blocks
 }
 
 /// Generate test blocks for performance testing
-pub fn create_performance_test_blocks(count: usize, with_transactions: bool) -> Vec<AlysConsensusBlock> {
+pub fn create_performance_test_blocks(
+    count: usize,
+    with_transactions: bool,
+) -> Vec<AlysConsensusBlock> {
     let mut blocks: Vec<AlysConsensusBlock> = Vec::with_capacity(count);
 
     for i in 0..count {
@@ -270,7 +302,15 @@ pub fn create_test_state_data(count: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
 
     for i in 0..count {
         let key = format!("test_key_{}", i).into_bytes();
-        let value = format!("test_value_{}_{}", i, SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()).into_bytes();
+        let value = format!(
+            "test_value_{}_{}",
+            i,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        )
+        .into_bytes();
         data.push((key, value));
     }
 
@@ -293,7 +333,10 @@ pub fn create_edge_case_state_data() -> Vec<(Vec<u8>, Vec<u8>)> {
         // Binary data value
         (b"binary_value_key".to_vec(), (0..=255u8).collect()),
         // UTF-8 key and value
-        ("🚀test_key🚀".as_bytes().to_vec(), "🌟test_value🌟".as_bytes().to_vec()),
+        (
+            "🚀test_key🚀".as_bytes().to_vec(),
+            "🌟test_value🌟".as_bytes().to_vec(),
+        ),
     ]
 }
 

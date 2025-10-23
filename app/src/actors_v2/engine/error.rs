@@ -2,7 +2,6 @@
 //!
 //! Comprehensive error handling for execution layer operations
 
-
 /// EngineActor error types
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum EngineError {

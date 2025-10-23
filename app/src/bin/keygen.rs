@@ -47,7 +47,10 @@ fn main() {
 
     log!("╔════════════════════════════════════════════════════════════════╗");
     log!("║   Alys V2 Federation Key Generator                            ║");
-    log!("║   Generating {} validator key sets                             ║", num_validators);
+    log!(
+        "║   Generating {} validator key sets                             ║",
+        num_validators
+    );
     log!("╚════════════════════════════════════════════════════════════════╝");
     log!("");
 
@@ -102,7 +105,10 @@ fn main() {
         log!("─────────────────────────────────────────────────────────────────");
         log!("Docker Compose Environment Variables for Node {}:", i + 1);
         log!("─────────────────────────────────────────────────────────────────");
-        log!("  - AURA_SECRET_KEY={}", hex::encode(bls_secret.serialize()));
+        log!(
+            "  - AURA_SECRET_KEY={}",
+            hex::encode(bls_secret.serialize())
+        );
         log!("  - BITCOIN_SECRET_KEY={}", btc_secret.display_secret());
         log!("");
     }
@@ -115,7 +121,11 @@ fn main() {
 
     log!("authorities: vec![");
     for (i, pubkey) in all_bls_pubkeys.iter().enumerate() {
-        let comma = if i < all_bls_pubkeys.len() - 1 { "," } else { "" };
+        let comma = if i < all_bls_pubkeys.len() - 1 {
+            ","
+        } else {
+            ""
+        };
         log!("    PublicKey::from_str(\"{}\").unwrap(){}", pubkey, comma);
     }
     log!("],");
@@ -123,16 +133,32 @@ fn main() {
 
     log!("federation: vec![");
     for (i, addr) in all_eth_addresses.iter().enumerate() {
-        let comma = if i < all_eth_addresses.len() - 1 { "," } else { "" };
-        log!("    \"{}\".parse().unwrap(){}", addr.trim_start_matches("0x"), comma);
+        let comma = if i < all_eth_addresses.len() - 1 {
+            ","
+        } else {
+            ""
+        };
+        log!(
+            "    \"{}\".parse().unwrap(){}",
+            addr.trim_start_matches("0x"),
+            comma
+        );
     }
     log!("],");
     log!("");
 
     log!("federation_bitcoin_pubkeys: vec![");
     for (i, pubkey) in all_btc_pubkeys.iter().enumerate() {
-        let comma = if i < all_btc_pubkeys.len() - 1 { "," } else { "" };
-        log!("    BitcoinPublicKey::from_str(\"{}\").unwrap(){}", pubkey, comma);
+        let comma = if i < all_btc_pubkeys.len() - 1 {
+            ","
+        } else {
+            ""
+        };
+        log!(
+            "    BitcoinPublicKey::from_str(\"{}\").unwrap(){}",
+            pubkey,
+            comma
+        );
     }
     log!("],");
     log!("");
@@ -150,8 +176,7 @@ fn main() {
 
     // Write to file
     let output_path = "keys/validator-keys.txt";
-    if let Err(e) = File::create(output_path)
-        .and_then(|mut file| file.write_all(output.as_bytes()))
+    if let Err(e) = File::create(output_path).and_then(|mut file| file.write_all(output.as_bytes()))
     {
         eprintln!("Error writing to {}: {}", output_path, e);
     } else {

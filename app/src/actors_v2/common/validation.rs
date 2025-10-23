@@ -3,11 +3,11 @@
 //! Provides cryptographic validation for block signatures and
 //! parent hash relationship verification.
 
-use lighthouse_wrapper::types::MainnetEthSpec;
-use crate::block::SignedConsensusBlock;
 use crate::actors_v2::chain::ChainError;
 use crate::aura::{slot_author, Aura};
+use crate::block::SignedConsensusBlock;
 use actix::Addr;
+use lighthouse_wrapper::types::MainnetEthSpec;
 
 /// Verify block signature against expected authority (Phase 3)
 ///
@@ -33,8 +33,8 @@ pub fn verify_block_signature(
     let block_number = block.message.execution_payload.block_number;
 
     // Get expected authority for this slot
-    let (_authority_index, expected_authority) = slot_author(slot, &aura.authorities)
-        .ok_or_else(|| {
+    let (_authority_index, expected_authority) =
+        slot_author(slot, &aura.authorities).ok_or_else(|| {
             ChainError::Consensus(format!(
                 "Unable to determine authority for slot {} (block #{})",
                 slot, block_number
@@ -152,8 +152,7 @@ pub async fn validate_parent_relationship(
     if calculated_parent_hash != parent_hash {
         return Err(ChainError::InvalidBlock(format!(
             "Parent hash mismatch: block.parent_hash is {} but actual parent hash is {}",
-            parent_hash,
-            calculated_parent_hash
+            parent_hash, calculated_parent_hash
         )));
     }
 
@@ -181,8 +180,8 @@ pub fn verify_block_authority(
     let block_number = block.message.execution_payload.block_number;
 
     // Get expected authority for this slot
-    let (authority_index, _expected_authority) = slot_author(slot, &aura.authorities)
-        .ok_or_else(|| {
+    let (authority_index, _expected_authority) =
+        slot_author(slot, &aura.authorities).ok_or_else(|| {
             ChainError::Consensus(format!(
                 "Unable to determine authority for slot {} (block #{})",
                 slot, block_number
@@ -195,9 +194,9 @@ pub fn verify_block_authority(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lighthouse_wrapper::bls::Keypair;
-    use crate::block::ConsensusBlock;
     use crate::aura::Authority;
+    use crate::block::ConsensusBlock;
+    use lighthouse_wrapper::bls::Keypair;
 
     #[test]
     fn test_verify_block_signature_valid() {
@@ -239,10 +238,16 @@ mod tests {
 
         // Verify signature should fail
         let result = verify_block_signature(&signed_block, &aura);
-        assert!(result.is_err(), "Invalid signature should fail verification");
+        assert!(
+            result.is_err(),
+            "Invalid signature should fail verification"
+        );
 
         if let Err(ChainError::Consensus(msg)) = result {
-            assert!(msg.contains("signature verification failed"), "Error should mention signature failure");
+            assert!(
+                msg.contains("signature verification failed"),
+                "Error should mention signature failure"
+            );
         } else {
             panic!("Expected Consensus error");
         }

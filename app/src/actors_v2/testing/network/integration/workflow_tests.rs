@@ -1,6 +1,6 @@
-use crate::actors_v2::testing::network::{NetworkTestHarness, SyncTestHarness};
-use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::network::{NetworkMessage, SyncMessage};
+use crate::actors_v2::testing::base::ActorTestHarness;
+use crate::actors_v2::testing::network::{NetworkTestHarness, SyncTestHarness};
 use uuid::Uuid;
 
 #[actix::test]

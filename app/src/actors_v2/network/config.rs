@@ -46,17 +46,15 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            listen_addresses: vec![
-                "/ip4/0.0.0.0/tcp/0".to_string(),
-            ],
+            listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()],
             bootstrap_peers: vec![],
             max_connections: 1000,
             connection_timeout: Duration::from_secs(30),
             gossip_topics: vec![
-                "alys/blocks".to_string(),              // Regular block gossip
-                "alys/blocks/priority".to_string(),     // Priority block gossip
-                "alys/transactions".to_string(),        // Transaction gossip
-                "alys/auxpow".to_string(),              // Phase 4: AuxPoW mining coordination
+                "alys/blocks".to_string(),          // Regular block gossip
+                "alys/blocks/priority".to_string(), // Priority block gossip
+                "alys/transactions".to_string(),    // Transaction gossip
+                "alys/auxpow".to_string(),          // Phase 4: AuxPoW mining coordination
             ],
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),

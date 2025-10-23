@@ -5,9 +5,9 @@
 //! Added: Bootstrap-based discovery, basic reputation system
 //! Phase 4: Advanced reputation tracking, violation management, DOS protection
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, Duration, Instant};
-use serde::{Serialize, Deserialize};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::super::messages::PeerId;
 
@@ -22,7 +22,7 @@ pub enum Violation {
     /// Peer sent invalid or malformed message
     InvalidMessage {
         #[serde(skip, default = "default_instant")]
-        timestamp: Instant
+        timestamp: Instant,
     },
     /// Peer exceeded message rate limit
     ExcessiveRate { messages_per_second: u64 },
@@ -91,7 +91,8 @@ impl PeerInfo {
     /// Phase 4: Get recent violations (last hour)
     pub fn recent_violations_count(&self) -> usize {
         let one_hour_ago = Instant::now() - Duration::from_secs(3600);
-        self.violations.iter()
+        self.violations
+            .iter()
             .filter(|v| match v {
                 Violation::InvalidMessage { timestamp } => *timestamp > one_hour_ago,
                 Violation::ExcessiveRate { .. } => true, // Always count rate violations
@@ -140,9 +141,7 @@ impl PeerInfo {
 
     /// Phase 4: Check if peer should be disconnected based on reputation and violations
     pub fn should_disconnect(&self) -> bool {
-        self.reputation < 10.0
-            || self.success_rate() < 0.3
-            || self.recent_violations_count() > 10
+        self.reputation < 10.0 || self.success_rate() < 0.3 || self.recent_violations_count() > 10
     }
 
     /// Phase 4: Check if peer should be banned (stricter than disconnect)
@@ -184,7 +183,8 @@ impl PeerManager {
 
         tracing::info!("Added peer connection: {}", peer_id);
 
-        self.connected_peers.insert(peer_id.clone(), peer_info.clone());
+        self.connected_peers
+            .insert(peer_id.clone(), peer_info.clone());
         self.known_peers.insert(peer_id, peer_info);
     }
 
@@ -256,7 +256,8 @@ impl PeerManager {
 
     /// Phase 4: Get peers below reputation threshold (for disconnection)
     pub fn get_low_reputation_peers(&self, threshold: f64) -> Vec<String> {
-        self.connected_peers.values()
+        self.connected_peers
+            .values()
             .filter(|peer| peer.reputation < threshold)
             .map(|peer| peer.peer_id.clone())
             .collect()
@@ -277,9 +278,7 @@ impl PeerManager {
             return 50.0; // Neutral if no peers
         }
 
-        let sum: f64 = self.connected_peers.values()
-            .map(|p| p.reputation)
-            .sum();
+        let sum: f64 = self.connected_peers.values().map(|p| p.reputation).sum();
 
         sum / self.connected_peers.len() as f64
     }
@@ -308,8 +307,11 @@ impl PeerManager {
     pub fn record_peer_success(&mut self, peer_id: &PeerId) {
         if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
             peer_info.record_success();
-            tracing::debug!("Recorded success for peer {}: reputation = {:.1}",
-                peer_id, peer_info.reputation);
+            tracing::debug!(
+                "Recorded success for peer {}: reputation = {:.1}",
+                peer_id,
+                peer_info.reputation
+            );
         }
     }
 
@@ -317,17 +319,25 @@ impl PeerManager {
     pub fn record_peer_failure(&mut self, peer_id: &PeerId) {
         if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
             peer_info.record_failure();
-            tracing::debug!("Recorded failure for peer {}: reputation = {:.1}",
-                peer_id, peer_info.reputation);
+            tracing::debug!(
+                "Recorded failure for peer {}: reputation = {:.1}",
+                peer_id,
+                peer_info.reputation
+            );
         }
     }
 
     /// Get best peers for requests (by reputation)
     pub fn get_best_peers(&self, count: usize) -> Vec<PeerId> {
         let mut peers: Vec<_> = self.connected_peers.values().collect();
-        peers.sort_by(|a, b| b.reputation.partial_cmp(&a.reputation).unwrap_or(std::cmp::Ordering::Equal));
+        peers.sort_by(|a, b| {
+            b.reputation
+                .partial_cmp(&a.reputation)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        peers.into_iter()
+        peers
+            .into_iter()
             .take(count)
             .map(|p| p.peer_id.clone())
             .collect()
@@ -336,18 +346,21 @@ impl PeerManager {
     /// Select best peers for block requests (Phase 4: Task 2.2)
     /// Stricter criteria: reputation > 50.0, success_rate > 0.7
     pub fn select_peers_for_blocks(&self, count: usize) -> Vec<PeerId> {
-        let mut suitable_peers: Vec<_> = self.connected_peers.values()
-            .filter(|peer| {
-                peer.reputation > 50.0 && peer.success_rate() > 0.7
-            })
+        let mut suitable_peers: Vec<_> = self
+            .connected_peers
+            .values()
+            .filter(|peer| peer.reputation > 50.0 && peer.success_rate() > 0.7)
             .collect();
 
         // Sort by reputation descending
-        suitable_peers.sort_by(|a, b|
-            b.reputation.partial_cmp(&a.reputation).unwrap_or(std::cmp::Ordering::Equal)
-        );
+        suitable_peers.sort_by(|a, b| {
+            b.reputation
+                .partial_cmp(&a.reputation)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        suitable_peers.into_iter()
+        suitable_peers
+            .into_iter()
             .take(count)
             .map(|p| p.peer_id.clone())
             .collect()
@@ -355,7 +368,8 @@ impl PeerManager {
 
     /// Get peers that should be disconnected
     pub fn get_peers_to_disconnect(&self) -> Vec<PeerId> {
-        self.connected_peers.values()
+        self.connected_peers
+            .values()
             .filter(|peer| peer.should_disconnect())
             .map(|peer| peer.peer_id.clone())
             .collect()
@@ -391,7 +405,8 @@ impl PeerManager {
 
     /// Get discovery candidates (from known_peers not connected)
     pub fn get_discovery_candidates(&self) -> Vec<String> {
-        self.known_peers.values()
+        self.known_peers
+            .values()
             .filter(|peer| !self.connected_peers.contains_key(&peer.peer_id))
             .filter(|peer| peer.reputation > 20.0) // Only try peers with decent reputation
             .map(|peer| peer.address.clone())
@@ -402,14 +417,18 @@ impl PeerManager {
     pub fn get_connection_stats(&self) -> PeerConnectionStats {
         let total_connected = self.connected_peers.len();
         let avg_reputation = if total_connected > 0 {
-            self.connected_peers.values()
+            self.connected_peers
+                .values()
                 .map(|p| p.reputation)
-                .sum::<f64>() / total_connected as f64
+                .sum::<f64>()
+                / total_connected as f64
         } else {
             0.0
         };
 
-        let high_reputation_count = self.connected_peers.values()
+        let high_reputation_count = self
+            .connected_peers
+            .values()
             .filter(|p| p.reputation > 70.0)
             .count();
 

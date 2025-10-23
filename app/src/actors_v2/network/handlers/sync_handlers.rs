@@ -3,11 +3,11 @@
 //! Handles blockchain synchronization operations for SyncActor.
 //! Simplified from V1's complex state machine handling.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::super::{
-    SyncMessage, SyncResponse, SyncError,
-    messages::{SyncStatus, PeerId, Block},
+    messages::{Block, PeerId, SyncStatus},
+    SyncError, SyncMessage, SyncResponse,
 };
 
 /// SyncActor message handling utilities
@@ -53,7 +53,11 @@ impl SyncMessageHandlers {
     }
 
     /// Validate block request parameters
-    pub fn validate_block_request(start_height: u64, count: u32, peer_id: Option<&PeerId>) -> Result<()> {
+    pub fn validate_block_request(
+        start_height: u64,
+        count: u32,
+        peer_id: Option<&PeerId>,
+    ) -> Result<()> {
         if count == 0 {
             return Err(anyhow!("Block count must be greater than 0"));
         }
@@ -82,7 +86,8 @@ impl SyncMessageHandlers {
         }
 
         // Basic size validation
-        if block.len() > 50 * 1024 * 1024 { // 50MB max block size
+        if block.len() > 50 * 1024 * 1024 {
+            // 50MB max block size
             return Err(anyhow!("Block too large: {} bytes", block.len()));
         }
 
@@ -166,7 +171,10 @@ impl SyncMessageHandlers {
     pub fn handle_sync_error(error: &str, current_state: &str) -> SyncError {
         tracing::error!("Sync error in state '{}': {}", current_state, error);
 
-        SyncError::Internal(format!("Sync failed in state '{}': {}", current_state, error))
+        SyncError::Internal(format!(
+            "Sync failed in state '{}': {}",
+            current_state, error
+        ))
     }
 
     /// Validate peer list update

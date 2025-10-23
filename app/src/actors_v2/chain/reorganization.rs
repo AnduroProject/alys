@@ -3,14 +3,14 @@
 //! Handles rolling back the current chain and applying a new canonical chain
 //! when a better fork is discovered through the fork choice rule.
 
-use ethereum_types::H256;
-use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
-use actix::Addr;
-use uuid::Uuid;
-use crate::block::SignedConsensusBlock;
 use crate::actors_v2::chain::ChainError;
 use crate::actors_v2::common::serialization::calculate_block_hash;
 use crate::actors_v2::storage::StorageActor;
+use crate::block::SignedConsensusBlock;
+use actix::Addr;
+use ethereum_types::H256;
+use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
+use uuid::Uuid;
 
 /// Result of a chain reorganization operation
 #[derive(Debug, Clone)]

@@ -7,11 +7,11 @@
 //! Phase 2 Task 2.2: Full codec implementation (deferred)
 
 use anyhow::Result;
+use futures::prelude::*;
+use libp2p::request_response::Codec;
+use libp2p::StreamProtocol;
 use ssz::{Decode, Encode};
 use ssz_derive::{Decode as DecodeDeriv, Encode as EncodeDeriv};
-use libp2p::StreamProtocol;
-use libp2p::request_response::Codec;
-use futures::prelude::*;
 use std::io;
 
 /// Block request-response protocol identifier
@@ -52,7 +52,6 @@ pub struct BlockRangeRequest {
 /// Empty request marker
 #[derive(Debug, Clone, PartialEq, Eq, EncodeDeriv, DecodeDeriv)]
 pub struct EmptyRequest;
-
 
 /// Block response message types
 ///
@@ -122,7 +121,7 @@ impl BlockCodec {
     /// Create new codec with default size limits
     pub fn new() -> Self {
         Self {
-            max_request_size: 1024 * 1024,      // 1 MB
+            max_request_size: 1024 * 1024,       // 1 MB
             max_response_size: 10 * 1024 * 1024, // 10 MB
         }
     }
@@ -176,7 +175,10 @@ impl Codec for BlockCodec {
         if len > self.max_request_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Request too large: {} bytes (max: {})", len, self.max_request_size),
+                format!(
+                    "Request too large: {} bytes (max: {})",
+                    len, self.max_request_size
+                ),
             ));
         }
 
@@ -186,7 +188,10 @@ impl Codec for BlockCodec {
 
         // Decode SSZ
         BlockRequest::from_ssz_bytes(&buf).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("SSZ decode error: {:?}", e))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SSZ decode error: {:?}", e),
+            )
         })
     }
 
@@ -207,7 +212,10 @@ impl Codec for BlockCodec {
         if len > self.max_response_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Response too large: {} bytes (max: {})", len, self.max_response_size),
+                format!(
+                    "Response too large: {} bytes (max: {})",
+                    len, self.max_response_size
+                ),
             ));
         }
 
@@ -217,7 +225,10 @@ impl Codec for BlockCodec {
 
         // Decode SSZ
         BlockResponse::from_ssz_bytes(&buf).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("SSZ decode error: {:?}", e))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("SSZ decode error: {:?}", e),
+            )
         })
     }
 
@@ -395,11 +406,7 @@ mod tests {
             hash: [0xaa; 32],
             parent_hash: [0xbb; 32],
             timestamp: 9876543210,
-            transactions: vec![
-                vec![0x01, 0x02, 0x03],
-                vec![0x04, 0x05],
-                vec![],
-            ],
+            transactions: vec![vec![0x01, 0x02, 0x03], vec![0x04, 0x05], vec![]],
         };
 
         let encoded = block_data.as_ssz_bytes();

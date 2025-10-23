@@ -71,26 +71,77 @@ impl ChainMetrics {
     /// Create new metrics instance (Phase 4: Enhanced with performance metrics)
     pub fn new() -> Self {
         Self {
-            blocks_produced: IntCounter::new("chain_blocks_produced_total", "Total blocks produced").unwrap(),
-            blocks_imported: IntCounter::new("chain_blocks_imported_total", "Total blocks imported").unwrap(),
-            block_production_failures: IntCounter::new("chain_block_production_failures_total", "Block production failures").unwrap(),
-            block_import_failures: IntCounter::new("chain_block_import_failures_total", "Block import failures").unwrap(),
-            auxpow_processed: IntCounter::new("chain_auxpow_processed_total", "AuxPoW processed").unwrap(),
-            auxpow_failures: IntCounter::new("chain_auxpow_failures_total", "AuxPoW validation failures").unwrap(),
-            pegins_processed: IntCounter::new("chain_pegins_processed_total", "Peg-in operations processed").unwrap(),
-            pegouts_processed: IntCounter::new("chain_pegouts_processed_total", "Peg-out operations processed").unwrap(),
+            blocks_produced: IntCounter::new(
+                "chain_blocks_produced_total",
+                "Total blocks produced",
+            )
+            .unwrap(),
+            blocks_imported: IntCounter::new(
+                "chain_blocks_imported_total",
+                "Total blocks imported",
+            )
+            .unwrap(),
+            block_production_failures: IntCounter::new(
+                "chain_block_production_failures_total",
+                "Block production failures",
+            )
+            .unwrap(),
+            block_import_failures: IntCounter::new(
+                "chain_block_import_failures_total",
+                "Block import failures",
+            )
+            .unwrap(),
+            auxpow_processed: IntCounter::new("chain_auxpow_processed_total", "AuxPoW processed")
+                .unwrap(),
+            auxpow_failures: IntCounter::new(
+                "chain_auxpow_failures_total",
+                "AuxPoW validation failures",
+            )
+            .unwrap(),
+            pegins_processed: IntCounter::new(
+                "chain_pegins_processed_total",
+                "Peg-in operations processed",
+            )
+            .unwrap(),
+            pegouts_processed: IntCounter::new(
+                "chain_pegouts_processed_total",
+                "Peg-out operations processed",
+            )
+            .unwrap(),
             chain_height: IntGauge::new("chain_height", "Current chain height").unwrap(),
-            sync_status: IntGauge::new("chain_sync_status", "Sync status (1=synced, 0=not synced)").unwrap(),
+            sync_status: IntGauge::new("chain_sync_status", "Sync status (1=synced, 0=not synced)")
+                .unwrap(),
             network_peers: IntGauge::new("chain_network_peers", "Number of network peers").unwrap(),
-            block_production_duration: Histogram::with_opts(prometheus::histogram_opts!("chain_block_production_duration_seconds", "Block production duration")).unwrap(),
-            block_validation_duration: Histogram::with_opts(prometheus::histogram_opts!("chain_block_validation_duration_seconds", "Block validation duration")).unwrap(),
+            block_production_duration: Histogram::with_opts(prometheus::histogram_opts!(
+                "chain_block_production_duration_seconds",
+                "Block production duration"
+            ))
+            .unwrap(),
+            block_validation_duration: Histogram::with_opts(prometheus::histogram_opts!(
+                "chain_block_validation_duration_seconds",
+                "Block validation duration"
+            ))
+            .unwrap(),
             last_activity: Instant::now(),
             performance: PerformanceMetrics::new(), // Phase 4: Performance tracking
             // Phase 5: Fork and reorganization metrics
-            forks_detected: IntCounter::new("chain_forks_detected_total", "Total forks detected").unwrap(),
-            reorganizations: IntCounter::new("chain_reorganizations_total", "Total reorganizations performed").unwrap(),
-            reorganization_depth: Histogram::with_opts(prometheus::histogram_opts!("chain_reorganization_depth", "Depth of chain reorganizations (blocks rolled back)")).unwrap(),
-            import_queue_depth: IntGauge::new("chain_import_queue_depth", "Number of blocks in import queue").unwrap(),
+            forks_detected: IntCounter::new("chain_forks_detected_total", "Total forks detected")
+                .unwrap(),
+            reorganizations: IntCounter::new(
+                "chain_reorganizations_total",
+                "Total reorganizations performed",
+            )
+            .unwrap(),
+            reorganization_depth: Histogram::with_opts(prometheus::histogram_opts!(
+                "chain_reorganization_depth",
+                "Depth of chain reorganizations (blocks rolled back)"
+            ))
+            .unwrap(),
+            import_queue_depth: IntGauge::new(
+                "chain_import_queue_depth",
+                "Number of blocks in import queue",
+            )
+            .unwrap(),
         }
     }
 
@@ -102,7 +153,8 @@ impl ChainMetrics {
     /// Record block production success
     pub fn record_block_produced(&mut self, duration: std::time::Duration) {
         self.blocks_produced.inc();
-        self.block_production_duration.observe(duration.as_secs_f64());
+        self.block_production_duration
+            .observe(duration.as_secs_f64());
         self.record_activity();
     }
 
@@ -115,7 +167,8 @@ impl ChainMetrics {
     /// Record block import success
     pub fn record_block_imported(&mut self, duration: std::time::Duration) {
         self.blocks_imported.inc();
-        self.block_validation_duration.observe(duration.as_secs_f64());
+        self.block_validation_duration
+            .observe(duration.as_secs_f64());
         self.record_activity();
     }
 
@@ -148,9 +201,11 @@ impl ChainMetrics {
     /// Get activity count (total operations performed)
     pub fn get_activity_count(&self) -> u64 {
         // Sum of various operations as a proxy for activity count
-        (self.blocks_produced.get() + self.blocks_imported.get() +
-         self.auxpow_processed.get() + self.pegins_processed.get() +
-         self.pegouts_processed.get()) as u64
+        (self.blocks_produced.get()
+            + self.blocks_imported.get()
+            + self.auxpow_processed.get()
+            + self.pegins_processed.get()
+            + self.pegouts_processed.get()) as u64
     }
 
     /// Get current chain height

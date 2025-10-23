@@ -25,20 +25,13 @@ pub enum NetworkMessage {
         bootstrap_peers: Vec<String>,
     },
     /// Stop networking subsystem
-    StopNetwork {
-        graceful: bool,
-    },
+    StopNetwork { graceful: bool },
     /// Get current network status (Phase 4: Enhanced with readiness check)
     GetNetworkStatus,
     /// Broadcast block to network (Phase 1/4: Production-ready with correlation tracking)
-    BroadcastBlock {
-        block_data: Vec<u8>,
-        priority: bool,
-    },
+    BroadcastBlock { block_data: Vec<u8>, priority: bool },
     /// Broadcast transaction to network
-    BroadcastTransaction {
-        tx_data: Vec<u8>,
-    },
+    BroadcastTransaction { tx_data: Vec<u8> },
     /// Broadcast AuxPoW header for mining coordination (Phase 4: Task 4.2.1)
     BroadcastAuxPow {
         auxpow_data: Vec<u8>,
@@ -64,13 +57,9 @@ pub enum NetworkMessage {
         correlation_id: Option<Uuid>,
     },
     /// Connect to specific peer
-    ConnectToPeer {
-        peer_addr: String,
-    },
+    ConnectToPeer { peer_addr: String },
     /// Disconnect from peer
-    DisconnectPeer {
-        peer_id: PeerId,
-    },
+    DisconnectPeer { peer_id: PeerId },
     /// Get connected peers
     GetConnectedPeers,
     /// Handle incoming gossip message
@@ -94,9 +83,7 @@ pub enum NetworkMessage {
     /// Get network metrics
     GetMetrics,
     /// Health check for production monitoring (Phase 4: Task 4.3.1)
-    HealthCheck {
-        correlation_id: Option<Uuid>,
-    },
+    HealthCheck { correlation_id: Option<Uuid> },
     /// Cleanup timed-out requests (Phase 4: Task 7)
     CleanupTimeouts,
 }
@@ -118,10 +105,7 @@ pub enum SyncMessage {
         peer_id: Option<PeerId>,
     },
     /// Handle new block from network
-    HandleNewBlock {
-        block: Block,
-        peer_id: PeerId,
-    },
+    HandleNewBlock { block: Block, peer_id: PeerId },
     /// Handle block response
     HandleBlockResponse {
         blocks: Vec<Block>,
@@ -136,9 +120,7 @@ pub enum SyncMessage {
         addr: Addr<crate::actors_v2::storage::StorageActor>,
     },
     /// Update available peers for sync
-    UpdatePeers {
-        peers: Vec<PeerId>,
-    },
+    UpdatePeers { peers: Vec<PeerId> },
     /// Get sync metrics
     GetMetrics,
 }
@@ -156,7 +138,9 @@ pub enum NetworkResponse {
         broadcast_time: std::time::Duration,
     },
     /// Generic broadcast confirmation
-    Broadcasted { message_id: String },
+    Broadcasted {
+        message_id: String,
+    },
     /// AuxPoW broadcast confirmation (Phase 4: Task 4.2.1)
     AuxPowBroadcasted {
         peer_count: usize,
@@ -166,8 +150,12 @@ pub enum NetworkResponse {
         peer_count: usize,
         request_id: Uuid,
     },
-    Connected { peer_id: PeerId },
-    Disconnected { peer_id: PeerId },
+    Connected {
+        peer_id: PeerId,
+    },
+    Disconnected {
+        peer_id: PeerId,
+    },
     Peers(Vec<PeerInfo>),
     Metrics(crate::actors_v2::network::NetworkMetrics),
     /// Health check response (Phase 4: Task 4.3.1)
@@ -228,10 +216,7 @@ pub struct GossipMessage {
 /// Network request types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkRequest {
-    GetBlocks {
-        start_height: u64,
-        count: u32,
-    },
+    GetBlocks { start_height: u64, count: u32 },
     GetChainStatus,
     GetPeers,
     GetStatus,

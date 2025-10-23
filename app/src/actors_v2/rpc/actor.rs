@@ -1,4 +1,4 @@
-use actix::{Actor, Addr, ActorFutureExt, Context, Handler, WrapFuture};
+use actix::{Actor, ActorFutureExt, Addr, Context, Handler, WrapFuture};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use serde_json::Value;
@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
-use crate::actors_v2::chain::ChainActor;
 use super::config::RpcConfig;
 use super::error::{JsonRpcError, RpcError};
 use super::handlers::{CreateAuxBlockHandler, SubmitAuxBlockHandler};
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
+use crate::actors_v2::chain::ChainActor;
 
 /// JSON-RPC 1.0 request structure (Bitcoin-compatible)
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -150,17 +150,10 @@ impl RpcActor {
     }
 
     /// Route request to appropriate handler
-    async fn route_request(
-        req: JsonRpcRequest,
-        state: RpcServerState,
-    ) -> Result<Value, RpcError> {
+    async fn route_request(req: JsonRpcRequest, state: RpcServerState) -> Result<Value, RpcError> {
         match req.method.as_str() {
-            "createauxblock" => {
-                CreateAuxBlockHandler::handle(req.params, state.chain_actor).await
-            }
-            "submitauxblock" => {
-                SubmitAuxBlockHandler::handle(req.params, state.chain_actor).await
-            }
+            "createauxblock" => CreateAuxBlockHandler::handle(req.params, state.chain_actor).await,
+            "submitauxblock" => SubmitAuxBlockHandler::handle(req.params, state.chain_actor).await,
             _ => Err(RpcError::MethodNotFound(req.method)),
         }
     }
@@ -230,9 +223,7 @@ impl Handler<StartRpcServer> for RpcActor {
         }
 
         if let Err(e) = self.config.validate() {
-            return Box::pin(
-                async move { Err(RpcError::Internal(e)) }.into_actor(self),
-            );
+            return Box::pin(async move { Err(RpcError::Internal(e)) }.into_actor(self));
         }
 
         let addr = self.config.bind_address;

@@ -3,14 +3,14 @@
 //! Implements the data pipeline for collecting peg-in operations and fee distribution
 //! that are required for execution payload building.
 
+use bitcoin::Txid;
+use bridge::PegInInfo;
 use ethereum_types::{Address, U256};
 use lighthouse_wrapper::types::Withdrawal;
 use std::collections::BTreeMap;
-use bitcoin::Txid;
-use bridge::PegInInfo;
 use tracing::{debug, info, warn};
 
-use super::{ChainActor, ChainError, ChainConfig};
+use super::{ChainActor, ChainConfig, ChainError};
 use crate::engine::ConsensusAmount;
 
 /// Withdrawal collection result
@@ -70,7 +70,12 @@ pub async fn collect_withdrawals_standalone(
             "Processing fee distribution for block"
         );
 
-        add_fee_distribution_withdrawals_standalone(&mut withdrawals, accumulated_fees, validator_address, federation)?;
+        add_fee_distribution_withdrawals_standalone(
+            &mut withdrawals,
+            accumulated_fees,
+            validator_address,
+            federation,
+        )?;
     }
 
     let result = WithdrawalCollection {
@@ -111,26 +116,26 @@ async fn calculate_accumulated_fees_standalone(
         };
 
         match storage_actor.send(get_fees_msg).await {
-            Ok(storage_result) => {
-                match storage_result {
-                    Ok(Some(fees_u256)) => {
-                        debug!(
-                            parent_hash = %parent_hash,
-                            accumulated_fees = %fees_u256,
-                            "Retrieved accumulated fees from storage"
-                        );
-                        Ok(crate::engine::ConsensusAmount(fees_u256.low_u64() / 1_000_000_000))
-                    }
-                    Ok(None) => {
-                        debug!(parent_hash = %parent_hash, "No accumulated fees found");
-                        Ok(crate::engine::ConsensusAmount(0))
-                    }
-                    Err(e) => {
-                        warn!(error = ?e, "Failed to get accumulated fees - using zero");
-                        Ok(crate::engine::ConsensusAmount(0))
-                    }
+            Ok(storage_result) => match storage_result {
+                Ok(Some(fees_u256)) => {
+                    debug!(
+                        parent_hash = %parent_hash,
+                        accumulated_fees = %fees_u256,
+                        "Retrieved accumulated fees from storage"
+                    );
+                    Ok(crate::engine::ConsensusAmount(
+                        fees_u256.low_u64() / 1_000_000_000,
+                    ))
                 }
-            }
+                Ok(None) => {
+                    debug!(parent_hash = %parent_hash, "No accumulated fees found");
+                    Ok(crate::engine::ConsensusAmount(0))
+                }
+                Err(e) => {
+                    warn!(error = ?e, "Failed to get accumulated fees - using zero");
+                    Ok(crate::engine::ConsensusAmount(0))
+                }
+            },
             Err(e) => {
                 warn!(error = ?e, "Communication error getting fees - using zero");
                 Ok(crate::engine::ConsensusAmount(0))
@@ -156,9 +161,8 @@ fn add_fee_distribution_withdrawals_standalone(
     // Get miner address
     let miner_address = validator_address.unwrap_or_else(|| {
         ethereum_types::Address::from_slice(&[
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xde, 0xad
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xde, 0xad,
         ])
     });
 
@@ -172,7 +176,8 @@ fn add_fee_distribution_withdrawals_standalone(
 
     // Add federation fee withdrawals
     if !federation.is_empty() {
-        let per_member_fee = crate::engine::ConsensusAmount(federation_fee.0 / federation.len() as u64);
+        let per_member_fee =
+            crate::engine::ConsensusAmount(federation_fee.0 / federation.len() as u64);
 
         for (index, federation_member) in federation.iter().enumerate() {
             withdrawals.push(lighthouse_wrapper::types::Withdrawal {
@@ -220,7 +225,7 @@ impl ChainActor {
             if self.validate_pegin_for_withdrawal(pegin_info).await? {
                 let withdrawal = Withdrawal {
                     index: withdrawals.len() as u64, // Will be re-indexed by Engine
-                    validator_index: 0, // Not used in our consensus model
+                    validator_index: 0,              // Not used in our consensus model
                     address: pegin_info.evm_account,
                     amount: ConsensusAmount::from_satoshi(pegin_info.amount).0,
                 };
@@ -253,7 +258,8 @@ impl ChainActor {
                 "Processing fee distribution for block"
             );
 
-            self.add_fee_distribution_withdrawals(&mut withdrawals, accumulated_fees).await?;
+            self.add_fee_distribution_withdrawals(&mut withdrawals, accumulated_fees)
+                .await?;
         } else {
             debug!("No accumulated fees to distribute");
         }
@@ -305,7 +311,8 @@ impl ChainActor {
 
         // Add federation fee withdrawals (split among members)
         if !self.state.federation.is_empty() {
-            let per_member_fee = ConsensusAmount(federation_fee.0 / self.state.federation.len() as u64);
+            let per_member_fee =
+                ConsensusAmount(federation_fee.0 / self.state.federation.len() as u64);
 
             for (index, federation_member) in self.state.federation.iter().enumerate() {
                 withdrawals.push(Withdrawal {
@@ -330,7 +337,10 @@ impl ChainActor {
     }
 
     /// Validate peg-in for inclusion in withdrawal collection
-    async fn validate_pegin_for_withdrawal(&self, pegin_info: &PegInInfo) -> Result<bool, ChainError> {
+    async fn validate_pegin_for_withdrawal(
+        &self,
+        pegin_info: &PegInInfo,
+    ) -> Result<bool, ChainError> {
         // Basic validation for withdrawal inclusion
         // More comprehensive validation would be performed elsewhere
 
@@ -391,7 +401,8 @@ impl ChainActor {
                                 "Retrieved accumulated fees from storage"
                             );
                             // Convert U256 to ConsensusAmount (wei to gwei conversion)
-                            ConsensusAmount(fees_u256.low_u64() / 1_000_000_000) // Convert wei to gwei
+                            ConsensusAmount(fees_u256.low_u64() / 1_000_000_000)
+                            // Convert wei to gwei
                         }
                         Ok(None) => {
                             debug!(parent_hash = %parent_hash, "No accumulated fees found - first block");
@@ -440,9 +451,8 @@ impl ChainActor {
         } else {
             // Fallback to a burn address if no miner address configured
             Ok(Address::from_slice(&[
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0xde, 0xad
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0xde, 0xad,
             ]))
         }
     }

@@ -57,9 +57,12 @@ impl ChainActor {
 
         // Check StorageActor health
         if let Some(ref storage_actor) = self.storage_actor {
-            match storage_actor.send(HealthCheckMessage {
-                correlation_id: Some(correlation_id),
-            }).await {
+            match storage_actor
+                .send(HealthCheckMessage {
+                    correlation_id: Some(correlation_id),
+                })
+                .await
+            {
                 Ok(Ok(_)) => {
                     health.storage_healthy = true;
                     debug!(correlation_id = %correlation_id, "StorageActor health check passed");
@@ -87,14 +90,22 @@ impl ChainActor {
 
         // Check EngineActor health
         if let Some(ref engine_actor) = self.engine_actor {
-            match engine_actor.send(EngineMessage::GetStatus {
-                correlation_id: Some(correlation_id),
-            }).await {
-                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status { is_ready: true, .. })) => {
+            match engine_actor
+                .send(EngineMessage::GetStatus {
+                    correlation_id: Some(correlation_id),
+                })
+                .await
+            {
+                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status {
+                    is_ready: true, ..
+                })) => {
                     health.engine_healthy = true;
                     debug!(correlation_id = %correlation_id, "EngineActor health check passed");
                 }
-                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status { is_ready: false, .. })) => {
+                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status {
+                    is_ready: false,
+                    ..
+                })) => {
                     warn!(correlation_id = %correlation_id, "EngineActor is not ready");
                     health.engine_healthy = false;
                 }
@@ -125,14 +136,24 @@ impl ChainActor {
 
         // Check NetworkActor health
         if let Some(ref network_actor) = self.network_actor {
-            match network_actor.send(NetworkMessage::HealthCheck {
-                correlation_id: Some(correlation_id),
-            }).await {
-                Ok(Ok(crate::actors_v2::network::NetworkResponse::Healthy { is_healthy: true, .. })) => {
+            match network_actor
+                .send(NetworkMessage::HealthCheck {
+                    correlation_id: Some(correlation_id),
+                })
+                .await
+            {
+                Ok(Ok(crate::actors_v2::network::NetworkResponse::Healthy {
+                    is_healthy: true,
+                    ..
+                })) => {
                     health.network_healthy = true;
                     debug!(correlation_id = %correlation_id, "NetworkActor health check passed");
                 }
-                Ok(Ok(crate::actors_v2::network::NetworkResponse::Healthy { is_healthy: false, issues, .. })) => {
+                Ok(Ok(crate::actors_v2::network::NetworkResponse::Healthy {
+                    is_healthy: false,
+                    issues,
+                    ..
+                })) => {
                     warn!(
                         correlation_id = %correlation_id,
                         issues = ?issues,
@@ -212,7 +233,10 @@ impl ChainActor {
     }
 
     /// Recover from failed block production (Phase 4: Task 4.3.1)
-    pub async fn recover_from_block_production_failure(&self, error: &ChainError) -> Result<(), ChainError> {
+    pub async fn recover_from_block_production_failure(
+        &self,
+        error: &ChainError,
+    ) -> Result<(), ChainError> {
         error!(error = ?error, "Block production failed - initiating recovery");
 
         match error {
@@ -231,13 +255,17 @@ impl ChainActor {
             }
             ChainError::Configuration(_) => {
                 error!("Block production failed due to configuration error - manual intervention required");
-                return Err(ChainError::Internal("Configuration error requires manual fix".to_string()));
+                return Err(ChainError::Internal(
+                    "Configuration error requires manual fix".to_string(),
+                ));
             }
             _ => {
                 debug!("Generic error recovery - performing health check");
                 let health = self.perform_health_check().await?;
                 if !health.is_healthy() {
-                    return Err(ChainError::Internal("System unhealthy after error".to_string()));
+                    return Err(ChainError::Internal(
+                        "System unhealthy after error".to_string(),
+                    ));
                 }
             }
         }
@@ -250,19 +278,26 @@ impl ChainActor {
         warn!("Engine failure detected - checking engine status");
 
         if let Some(ref engine_actor) = self.engine_actor {
-            let status_check = engine_actor.send(EngineMessage::GetStatus {
-                correlation_id: Some(Uuid::new_v4())
-            }).await;
+            let status_check = engine_actor
+                .send(EngineMessage::GetStatus {
+                    correlation_id: Some(Uuid::new_v4()),
+                })
+                .await;
 
             match status_check {
-                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status { is_ready: false, .. })) => {
+                Ok(Ok(crate::actors_v2::engine::EngineResponse::Status {
+                    is_ready: false,
+                    ..
+                })) => {
                     warn!("Engine not ready - waiting for recovery");
                     // Could implement engine restart logic here
                     return Err(ChainError::Engine("Engine not ready".to_string()));
                 }
                 Err(_) => {
                     error!("Engine actor not responding - critical failure");
-                    return Err(ChainError::Internal("Engine actor unresponsive".to_string()));
+                    return Err(ChainError::Internal(
+                        "Engine actor unresponsive".to_string(),
+                    ));
                 }
                 Ok(Ok(_)) => {
                     debug!("Engine status check passed");
@@ -273,7 +308,9 @@ impl ChainActor {
                 }
             }
         } else {
-            return Err(ChainError::Internal("EngineActor not configured".to_string()));
+            return Err(ChainError::Internal(
+                "EngineActor not configured".to_string(),
+            ));
         }
 
         Ok(())
@@ -284,9 +321,11 @@ impl ChainActor {
         warn!("Storage failure detected - checking storage status");
 
         if let Some(ref storage_actor) = self.storage_actor {
-            let health_check = storage_actor.send(HealthCheckMessage {
-                correlation_id: Some(Uuid::new_v4()),
-            }).await;
+            let health_check = storage_actor
+                .send(HealthCheckMessage {
+                    correlation_id: Some(Uuid::new_v4()),
+                })
+                .await;
 
             match health_check {
                 Ok(Ok(_)) => {
@@ -298,11 +337,15 @@ impl ChainActor {
                 }
                 Err(_) => {
                     error!("Storage actor not responding - critical failure");
-                    return Err(ChainError::Internal("Storage actor unresponsive".to_string()));
+                    return Err(ChainError::Internal(
+                        "Storage actor unresponsive".to_string(),
+                    ));
                 }
             }
         } else {
-            return Err(ChainError::Internal("StorageActor not configured".to_string()));
+            return Err(ChainError::Internal(
+                "StorageActor not configured".to_string(),
+            ));
         }
 
         Ok(())
@@ -326,7 +369,7 @@ impl ChainActor {
     pub async fn recover_from_block_import_failure(
         &self,
         block_hash: &ethereum_types::H256,
-        error: &ChainError
+        error: &ChainError,
     ) -> Result<(), ChainError> {
         error!(
             block_hash = %block_hash,
@@ -357,7 +400,9 @@ impl ChainActor {
                 debug!("Generic import error - performing health check");
                 let health = self.perform_health_check().await?;
                 if !health.is_healthy() {
-                    return Err(ChainError::Internal("System unhealthy after import failure".to_string()));
+                    return Err(ChainError::Internal(
+                        "System unhealthy after import failure".to_string(),
+                    ));
                 }
             }
         }

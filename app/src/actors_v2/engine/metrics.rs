@@ -49,84 +49,102 @@ impl EngineActorMetrics {
             // Operation counters
             build_payload_calls: Counter::new(
                 "engine_actor_build_payload_calls_total",
-                "Total number of build payload requests"
-            ).unwrap(),
+                "Total number of build payload requests",
+            )
+            .unwrap(),
             build_payload_success: Counter::new(
                 "engine_actor_build_payload_success_total",
-                "Successful build payload operations"
-            ).unwrap(),
+                "Successful build payload operations",
+            )
+            .unwrap(),
             build_payload_failed: Counter::new(
                 "engine_actor_build_payload_failed_total",
-                "Failed build payload operations"
-            ).unwrap(),
+                "Failed build payload operations",
+            )
+            .unwrap(),
 
             validate_payload_calls: Counter::new(
                 "engine_actor_validate_payload_calls_total",
-                "Total number of payload validation requests"
-            ).unwrap(),
+                "Total number of payload validation requests",
+            )
+            .unwrap(),
             validate_payload_success: Counter::new(
                 "engine_actor_validate_payload_success_total",
-                "Successful payload validations"
-            ).unwrap(),
+                "Successful payload validations",
+            )
+            .unwrap(),
             validate_payload_failed: Counter::new(
                 "engine_actor_validate_payload_failed_total",
-                "Failed payload validations"
-            ).unwrap(),
+                "Failed payload validations",
+            )
+            .unwrap(),
 
             commit_block_calls: Counter::new(
                 "engine_actor_commit_block_calls_total",
-                "Total number of block commit requests"
-            ).unwrap(),
+                "Total number of block commit requests",
+            )
+            .unwrap(),
             commit_block_success: Counter::new(
                 "engine_actor_commit_block_success_total",
-                "Successful block commits"
-            ).unwrap(),
+                "Successful block commits",
+            )
+            .unwrap(),
             commit_block_failed: Counter::new(
                 "engine_actor_commit_block_failed_total",
-                "Failed block commits"
-            ).unwrap(),
+                "Failed block commits",
+            )
+            .unwrap(),
 
             // Performance metrics
             build_payload_duration: Histogram::with_opts(HistogramOpts::new(
                 "engine_actor_build_payload_duration_seconds",
-                "Time spent building execution payloads"
-            )).unwrap(),
+                "Time spent building execution payloads",
+            ))
+            .unwrap(),
             validate_payload_duration: Histogram::with_opts(HistogramOpts::new(
                 "engine_actor_validate_payload_duration_seconds",
-                "Time spent validating execution payloads"
-            )).unwrap(),
+                "Time spent validating execution payloads",
+            ))
+            .unwrap(),
             commit_block_duration: Histogram::with_opts(HistogramOpts::new(
                 "engine_actor_commit_block_duration_seconds",
-                "Time spent committing blocks"
-            )).unwrap(),
+                "Time spent committing blocks",
+            ))
+            .unwrap(),
 
             // State metrics
             active_operations: IntGauge::new(
                 "engine_actor_active_operations",
-                "Number of active engine operations"
-            ).unwrap(),
+                "Number of active engine operations",
+            )
+            .unwrap(),
             finalized_block_height: IntGauge::new(
                 "engine_actor_finalized_block_height",
-                "Height of last finalized block"
-            ).unwrap(),
+                "Height of last finalized block",
+            )
+            .unwrap(),
             head_block_height: IntGauge::new(
                 "engine_actor_head_block_height",
-                "Height of current head block"
-            ).unwrap(),
+                "Height of current head block",
+            )
+            .unwrap(),
 
             // Error tracking
             engine_api_errors: Counter::new(
                 "engine_actor_api_errors_total",
-                "Engine API errors encountered"
-            ).unwrap(),
+                "Engine API errors encountered",
+            )
+            .unwrap(),
             timeout_errors: Counter::new(
                 "engine_actor_timeout_errors_total",
-                "Engine operation timeouts"
-            ).unwrap(),
+                "Engine operation timeouts",
+            )
+            .unwrap(),
             validation_errors: Counter::new(
                 "engine_actor_validation_errors_total",
-                "Payload validation errors"
-            ).unwrap(),
+                "Payload validation errors",
+            )
+            .unwrap(),
         }
     }
 
@@ -148,14 +166,16 @@ impl EngineActorMetrics {
     pub fn record_validate_payload_success(&self, duration: std::time::Duration) {
         self.validate_payload_calls.inc();
         self.validate_payload_success.inc();
-        self.validate_payload_duration.observe(duration.as_secs_f64());
+        self.validate_payload_duration
+            .observe(duration.as_secs_f64());
     }
 
     /// Record failed payload validation
     pub fn record_validate_payload_failure(&self, duration: std::time::Duration) {
         self.validate_payload_calls.inc();
         self.validate_payload_failed.inc();
-        self.validate_payload_duration.observe(duration.as_secs_f64());
+        self.validate_payload_duration
+            .observe(duration.as_secs_f64());
     }
 
     /// Record successful block commit

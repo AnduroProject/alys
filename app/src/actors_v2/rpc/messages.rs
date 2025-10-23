@@ -1,6 +1,6 @@
+use super::error::RpcError;
 use actix::Message;
 use serde::{Deserialize, Serialize};
-use super::error::RpcError;
 
 /// Start RPC server
 #[derive(Debug, Clone)]

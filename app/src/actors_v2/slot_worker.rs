@@ -15,7 +15,7 @@ use std::time::Duration;
 use tracing::*;
 
 use crate::actors_v2::chain::{ChainActor, ChainMessage, ChainResponse};
-use crate::aura::{duration_now, time_until_next_slot, slot_from_timestamp, slot_author};
+use crate::aura::{duration_now, slot_author, slot_from_timestamp, time_until_next_slot};
 use crate::metrics::{AURA_CURRENT_SLOT, AURA_PRODUCED_BLOCKS, AURA_SLOT_CLAIM_TOTALS};
 
 /// Aura Slot Worker V2 - Timing loop for block production
@@ -64,9 +64,7 @@ impl AuraSlotWorkerV2 {
     /// Uses round-robin slot assignment: slot % num_authorities
     /// Returns true if we should produce a block for this slot.
     fn claim_slot(&self, slot: u64) -> bool {
-        AURA_SLOT_CLAIM_TOTALS
-            .with_label_values(&["called"])
-            .inc();
+        AURA_SLOT_CLAIM_TOTALS.with_label_values(&["called"]).inc();
 
         let expected_author = slot_author(slot, &self.authorities);
         let is_our_slot = expected_author
@@ -79,13 +77,9 @@ impl AuraSlotWorkerV2 {
             .unwrap_or(false);
 
         if is_our_slot {
-            AURA_SLOT_CLAIM_TOTALS
-                .with_label_values(&["success"])
-                .inc();
+            AURA_SLOT_CLAIM_TOTALS.with_label_values(&["success"]).inc();
         } else {
-            AURA_SLOT_CLAIM_TOTALS
-                .with_label_values(&["failure"])
-                .inc();
+            AURA_SLOT_CLAIM_TOTALS.with_label_values(&["failure"]).inc();
         }
 
         is_our_slot
@@ -119,21 +113,15 @@ impl AuraSlotWorkerV2 {
                     duration_ms = duration.as_millis(),
                     "Block produced successfully"
                 );
-                AURA_PRODUCED_BLOCKS
-                    .with_label_values(&["success"])
-                    .inc();
+                AURA_PRODUCED_BLOCKS.with_label_values(&["success"]).inc();
             }
             Ok(Err(e)) => {
                 error!(slot = slot, error = ?e, "Failed to produce block");
-                AURA_PRODUCED_BLOCKS
-                    .with_label_values(&["error"])
-                    .inc();
+                AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
             }
             Err(e) => {
                 error!(slot = slot, error = ?e, "ChainActor mailbox error - actor may be stopped");
-                AURA_PRODUCED_BLOCKS
-                    .with_label_values(&["error"])
-                    .inc();
+                AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
             }
             _ => {
                 warn!(slot = slot, "Unexpected response from ChainActor");

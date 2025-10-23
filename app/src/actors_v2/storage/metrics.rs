@@ -3,13 +3,13 @@
 //! This module provides comprehensive metrics collection and monitoring
 //! for the storage actor performance and health.
 
+use lazy_static::lazy_static;
 use prometheus::{
+    register_counter, register_gauge, register_histogram, register_int_counter, register_int_gauge,
     Counter, Gauge, Histogram, IntCounter, IntGauge,
-    register_counter, register_gauge, register_histogram, register_int_counter, register_int_gauge
 };
 use std::time::Duration;
 use tracing::*;
-use lazy_static::lazy_static;
 
 lazy_static! {
     // Block storage metrics
@@ -213,7 +213,10 @@ impl StorageActorMetrics {
             CURRENT_CHAIN_HEIGHT.set(height as i64);
         }
 
-        debug!("Block storage recorded: height={}, duration={:?}, canonical={}", height, duration, canonical);
+        debug!(
+            "Block storage recorded: height={}, duration={:?}, canonical={}",
+            height, duration, canonical
+        );
     }
 
     /// Record a block retrieval operation
@@ -230,7 +233,10 @@ impl StorageActorMetrics {
             CACHE_MISSES.inc();
         }
 
-        debug!("Block retrieval recorded: duration={:?}, from_cache={}", duration, from_cache);
+        debug!(
+            "Block retrieval recorded: duration={:?}, from_cache={}",
+            duration, from_cache
+        );
     }
 
     /// Record a block not found
@@ -263,7 +269,10 @@ impl StorageActorMetrics {
             CACHE_MISSES.inc();
         }
 
-        debug!("State query recorded: duration={:?}, from_cache={}", duration, from_cache);
+        debug!(
+            "State query recorded: duration={:?}, from_cache={}",
+            duration, from_cache
+        );
     }
 
     /// Record a state not found
@@ -280,7 +289,10 @@ impl StorageActorMetrics {
         BATCH_SIZE.observe(batch_size as f64);
         BATCH_DURATION.observe(duration.as_secs_f64());
 
-        info!("Batch operation recorded: size={}, duration={:?}", batch_size, duration);
+        info!(
+            "Batch operation recorded: size={}, duration={:?}",
+            batch_size, duration
+        );
     }
 
     /// Record a write completion
@@ -390,11 +402,11 @@ impl Default for StorageActorMetrics {
 impl Default for StorageAlertThresholds {
     fn default() -> Self {
         Self {
-            max_cache_miss_rate: 0.2,        // 20% cache miss rate
-            max_write_failure_rate: 0.01,    // 1% write failure rate
-            max_storage_duration_ms: 1000,   // 1 second storage duration
-            max_memory_usage_mb: 1024.0,     // 1GB memory usage
-            max_database_size_gb: 100.0,     // 100GB database size
+            max_cache_miss_rate: 0.2,      // 20% cache miss rate
+            max_write_failure_rate: 0.01,  // 1% write failure rate
+            max_storage_duration_ms: 1000, // 1 second storage duration
+            max_memory_usage_mb: 1024.0,   // 1GB memory usage
+            max_database_size_gb: 100.0,   // 100GB database size
         }
     }
 }

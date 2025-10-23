@@ -3,9 +3,9 @@
 //! Simplified metrics collection for two-actor system.
 //! Removed complex supervision metrics from V1.
 
-use serde::{Serialize, Deserialize};
-use std::time::{Duration, Instant, SystemTime};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime};
 
 /// NetworkActor metrics - P2P protocols only
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,11 +281,13 @@ impl NetworkMetrics {
         let sum: f64 = peer_reputations.iter().sum();
         self.peer_reputation_average = sum / peer_reputations.len() as f64;
 
-        self.peer_reputation_min = peer_reputations.iter()
+        self.peer_reputation_min = peer_reputations
+            .iter()
             .copied()
             .fold(f64::INFINITY, f64::min);
 
-        self.peer_reputation_max = peer_reputations.iter()
+        self.peer_reputation_max = peer_reputations
+            .iter()
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
     }
@@ -333,55 +335,109 @@ impl NetworkMetrics {
 
         // Connection metrics
         output.push_str(&format!("# TYPE network_connected_peers gauge\n"));
-        output.push_str(&format!("network_connected_peers {}\n", self.connected_peers));
+        output.push_str(&format!(
+            "network_connected_peers {}\n",
+            self.connected_peers
+        ));
         output.push_str(&format!("# TYPE network_total_connections counter\n"));
-        output.push_str(&format!("network_total_connections {}\n", self.total_connections));
+        output.push_str(&format!(
+            "network_total_connections {}\n",
+            self.total_connections
+        ));
         output.push_str(&format!("# TYPE network_failed_connections counter\n"));
-        output.push_str(&format!("network_failed_connections {}\n", self.failed_connections));
+        output.push_str(&format!(
+            "network_failed_connections {}\n",
+            self.failed_connections
+        ));
 
         // Message metrics
         output.push_str(&format!("# TYPE network_messages_sent counter\n"));
         output.push_str(&format!("network_messages_sent {}\n", self.messages_sent));
         output.push_str(&format!("# TYPE network_messages_received counter\n"));
-        output.push_str(&format!("network_messages_received {}\n", self.messages_received));
+        output.push_str(&format!(
+            "network_messages_received {}\n",
+            self.messages_received
+        ));
         output.push_str(&format!("# TYPE network_bytes_sent counter\n"));
         output.push_str(&format!("network_bytes_sent {}\n", self.bytes_sent));
         output.push_str(&format!("# TYPE network_bytes_received counter\n"));
         output.push_str(&format!("network_bytes_received {}\n", self.bytes_received));
 
         // Gossip metrics
-        output.push_str(&format!("# TYPE network_gossip_messages_published counter\n"));
-        output.push_str(&format!("network_gossip_messages_published {}\n", self.gossip_messages_published));
-        output.push_str(&format!("# TYPE network_gossip_messages_received counter\n"));
-        output.push_str(&format!("network_gossip_messages_received {}\n", self.gossip_messages_received));
+        output.push_str(&format!(
+            "# TYPE network_gossip_messages_published counter\n"
+        ));
+        output.push_str(&format!(
+            "network_gossip_messages_published {}\n",
+            self.gossip_messages_published
+        ));
+        output.push_str(&format!(
+            "# TYPE network_gossip_messages_received counter\n"
+        ));
+        output.push_str(&format!(
+            "network_gossip_messages_received {}\n",
+            self.gossip_messages_received
+        ));
 
         // Reputation metrics
         output.push_str(&format!("# TYPE network_peer_reputation_average gauge\n"));
-        output.push_str(&format!("network_peer_reputation_average {}\n", self.peer_reputation_average));
+        output.push_str(&format!(
+            "network_peer_reputation_average {}\n",
+            self.peer_reputation_average
+        ));
         output.push_str(&format!("# TYPE network_peer_reputation_min gauge\n"));
-        output.push_str(&format!("network_peer_reputation_min {}\n", self.peer_reputation_min));
+        output.push_str(&format!(
+            "network_peer_reputation_min {}\n",
+            self.peer_reputation_min
+        ));
         output.push_str(&format!("# TYPE network_peer_reputation_max gauge\n"));
-        output.push_str(&format!("network_peer_reputation_max {}\n", self.peer_reputation_max));
+        output.push_str(&format!(
+            "network_peer_reputation_max {}\n",
+            self.peer_reputation_max
+        ));
         output.push_str(&format!("# TYPE network_banned_peers_total counter\n"));
-        output.push_str(&format!("network_banned_peers_total {}\n", self.banned_peers_total));
+        output.push_str(&format!(
+            "network_banned_peers_total {}\n",
+            self.banned_peers_total
+        ));
 
         // Rate limiting metrics
         output.push_str(&format!("# TYPE network_rate_limited_messages counter\n"));
-        output.push_str(&format!("network_rate_limited_messages {}\n", self.rate_limited_messages));
+        output.push_str(&format!(
+            "network_rate_limited_messages {}\n",
+            self.rate_limited_messages
+        ));
         output.push_str(&format!("# TYPE network_rejected_connections counter\n"));
-        output.push_str(&format!("network_rejected_connections {}\n", self.rejected_connections));
+        output.push_str(&format!(
+            "network_rejected_connections {}\n",
+            self.rejected_connections
+        ));
 
         // Latency percentiles
         output.push_str(&format!("# TYPE network_message_latency_p50_ms gauge\n"));
-        output.push_str(&format!("network_message_latency_p50_ms {}\n", self.message_latency_p50_ms));
+        output.push_str(&format!(
+            "network_message_latency_p50_ms {}\n",
+            self.message_latency_p50_ms
+        ));
         output.push_str(&format!("# TYPE network_message_latency_p95_ms gauge\n"));
-        output.push_str(&format!("network_message_latency_p95_ms {}\n", self.message_latency_p95_ms));
+        output.push_str(&format!(
+            "network_message_latency_p95_ms {}\n",
+            self.message_latency_p95_ms
+        ));
         output.push_str(&format!("# TYPE network_message_latency_p99_ms gauge\n"));
-        output.push_str(&format!("network_message_latency_p99_ms {}\n", self.message_latency_p99_ms));
+        output.push_str(&format!(
+            "network_message_latency_p99_ms {}\n",
+            self.message_latency_p99_ms
+        ));
 
         // Success rate
-        output.push_str(&format!("# TYPE network_request_response_success_rate gauge\n"));
-        output.push_str(&format!("network_request_response_success_rate {}\n", self.request_response_success_rate));
+        output.push_str(&format!(
+            "# TYPE network_request_response_success_rate gauge\n"
+        ));
+        output.push_str(&format!(
+            "network_request_response_success_rate {}\n",
+            self.request_response_success_rate
+        ));
 
         // Uptime
         output.push_str(&format!("# TYPE network_uptime_seconds counter\n"));
@@ -474,7 +530,10 @@ impl SyncMetrics {
 
     pub fn record_block_request(&mut self, peer_id: &str) {
         self.block_requests_sent += 1;
-        *self.peer_request_counts.entry(peer_id.to_string()).or_insert(0) += 1;
+        *self
+            .peer_request_counts
+            .entry(peer_id.to_string())
+            .or_insert(0) += 1;
         self.last_updated = SystemTime::now();
     }
 
@@ -524,7 +583,9 @@ impl SyncMetrics {
 
     pub fn update_sync_rate(&mut self) {
         if let Some(start_time) = self.sync_start_time {
-            let elapsed = SystemTime::now().duration_since(start_time).unwrap_or_default();
+            let elapsed = SystemTime::now()
+                .duration_since(start_time)
+                .unwrap_or_default();
             let elapsed_seconds = elapsed.as_secs_f64();
             if elapsed_seconds > 0.0 {
                 self.sync_rate_blocks_per_second = self.blocks_synced as f64 / elapsed_seconds;

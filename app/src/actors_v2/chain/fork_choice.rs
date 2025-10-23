@@ -4,10 +4,10 @@
 //! This module provides the logic to decide which competing chain should become
 //! canonical when the network experiences a temporary fork.
 
+use crate::actors_v2::common::serialization::calculate_block_hash;
+use crate::block::SignedConsensusBlock;
 use ethereum_types::H256;
 use lighthouse_wrapper::types::MainnetEthSpec;
-use crate::block::SignedConsensusBlock;
-use crate::actors_v2::common::serialization::calculate_block_hash;
 
 /// Fork choice decision
 #[derive(Debug, Clone, PartialEq)]
@@ -16,15 +16,10 @@ pub enum ForkChoice {
     KeepCurrent,
 
     /// Reorganize to new block (new block wins)
-    Reorganize {
-        new_tip: H256,
-        rollback_to: u64,
-    },
+    Reorganize { new_tip: H256, rollback_to: u64 },
 
     /// Chains are equal, apply tiebreaker (returns winner hash)
-    Tiebreak {
-        winner: H256,
-    },
+    Tiebreak { winner: H256 },
 }
 
 /// Compare two competing blocks at the same height and determine canonical chain
@@ -170,9 +165,9 @@ pub fn find_common_ancestor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aura::Authority;
     use crate::block::ConsensusBlock;
     use lighthouse_wrapper::bls::Keypair;
-    use crate::aura::Authority;
 
     fn create_test_block(timestamp: u64, slot: u64) -> SignedConsensusBlock<MainnetEthSpec> {
         let mut block = ConsensusBlock::default();
@@ -219,7 +214,10 @@ mod tests {
 
                 // Winner should be the one with lower hash
                 let expected_winner = if hash_a < hash_b { hash_a } else { hash_b };
-                assert_eq!(winner, expected_winner, "Lower hash should win when timestamps equal");
+                assert_eq!(
+                    winner, expected_winner,
+                    "Lower hash should win when timestamps equal"
+                );
             }
             _ => panic!("Expected Tiebreak decision"),
         }
@@ -232,6 +230,9 @@ mod tests {
 
         // Both at height 0 (default), so common ancestor should be 0 (saturating_sub)
         let ancestor = find_common_ancestor(&block_a, &block_b);
-        assert_eq!(ancestor, 0, "Common ancestor for height 0 blocks should be 0");
+        assert_eq!(
+            ancestor, 0,
+            "Common ancestor for height 0 blocks should be 0"
+        );
     }
 }

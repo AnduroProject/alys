@@ -30,7 +30,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test manager components
     println!("\n3. Testing Manager Components...");
     let mut peer_manager = app::actors_v2::network_v2::managers::PeerManager::new();
-    peer_manager.add_peer("test-peer".to_string(), "/ip4/127.0.0.1/tcp/8000".to_string());
+    peer_manager.add_peer(
+        "test-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/8000".to_string(),
+    );
     assert!(peer_manager.get_peer(&"test-peer".to_string()).is_some());
     println!("✅ PeerManager working");
 
@@ -46,7 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test behaviour creation
     println!("\n4. Testing Behaviour...");
     let behaviour_config = app::actors_v2::network_v2::NetworkConfig::default();
-    let mut behaviour = app::actors_v2::network_v2::behaviour::AlysNetworkBehaviour::new(&behaviour_config)?;
+    let mut behaviour =
+        app::actors_v2::network_v2::behaviour::AlysNetworkBehaviour::new(&behaviour_config)?;
     behaviour.initialize()?;
     assert!(behaviour.is_initialized());
     println!("✅ AlysNetworkBehaviour working");

@@ -2,8 +2,8 @@
 //!
 //! Simplified configuration without complex supervision or actor_system dependencies
 
-use serde::{Deserialize, Serialize};
 use ethereum_types::Address;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// ChainActor configuration
@@ -76,7 +76,7 @@ impl Default for ChainConfig {
 impl Default for BitcoinConsensusParams {
     fn default() -> Self {
         Self {
-            target_spacing: Duration::from_secs(600), // 10 minutes
+            target_spacing: Duration::from_secs(600),      // 10 minutes
             target_timespan: Duration::from_secs(1209600), // 2 weeks
             retarget_interval: 2016,
             max_target: 0x1d00ffff,

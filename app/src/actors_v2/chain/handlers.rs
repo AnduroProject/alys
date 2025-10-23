@@ -3,28 +3,28 @@
 //! All message handlers consolidated, following StorageActor V2 patterns
 
 use actix::prelude::*;
-use std::time::{Duration, Instant};
-use std::sync::atomic::Ordering;
 use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::{
-    ChainActor, ChainError,
     messages::{
-        ChainMessage, ChainResponse, ChainManagerMessage, ChainManagerResponse,
-        BlockSource, PegOutRequest, AuxPowParams, CreateAuxBlock, SubmitAuxBlock,
+        AuxPowParams, BlockSource, ChainManagerMessage, ChainManagerResponse, ChainMessage,
+        ChainResponse, CreateAuxBlock, PegOutRequest, SubmitAuxBlock,
     },
+    ChainActor, ChainError,
 };
 
-use crate::block::SignedConsensusBlock;
+use crate::actors_v2::common::serialization::{calculate_block_hash, serialize_block};
 use crate::auxpow::AuxPow;
+use crate::block::SignedConsensusBlock;
 use bridge::PegInInfo;
 use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
 use ssz_types::VariableList;
-use crate::actors_v2::common::serialization::{serialize_block, calculate_block_hash};
 
 // Message handler implementations
 impl Handler<ChainMessage> for ChainActor {
@@ -41,28 +41,29 @@ impl Handler<ChainMessage> for ChainActor {
                     is_synced: self.state.is_synced(),
                     is_validator: self.config.is_validator,
                     network_connected: false, // Would check network status
-                    peer_count: 0, // Would be updated from NetworkActor
+                    peer_count: 0,            // Would be updated from NetworkActor
                     pending_pegins: 0, // TODO: Count async - self.state.queued_pegins.read().await.len(),
-                    last_block_time: self.state.last_block_time.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
+                    last_block_time: self
+                        .state
+                        .last_block_time
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
                     auxpow_enabled: self.config.enable_auxpow,
                     blocks_without_pow: self.state.blocks_without_pow,
                 };
-                Box::pin(async move {
-                    Ok(ChainResponse::ChainStatus(status))
-                })
+                Box::pin(async move { Ok(ChainResponse::ChainStatus(status)) })
             }
             ChainMessage::ProduceBlock { slot, timestamp } => {
                 // Validate preconditions before attempting block production
                 if !self.config.is_validator {
                     warn!("Block production requested but node is not configured as validator");
                     Box::pin(async move {
-                        Err(ChainError::Configuration("Node is not configured as validator".to_string()))
+                        Err(ChainError::Configuration(
+                            "Node is not configured as validator".to_string(),
+                        ))
                     })
                 } else if !self.state.is_synced() {
                     info!("Block production requested but node is not synced");
-                    Box::pin(async move {
-                        Err(ChainError::NotSynced)
-                    })
+                    Box::pin(async move { Err(ChainError::NotSynced) })
                 } else {
                     // Complete block production pipeline (Phase 2)
                     let start_time = Instant::now();
@@ -86,9 +87,10 @@ impl Handler<ChainMessage> for ChainActor {
                     Box::pin(async move {
                         // Step 2: Get parent block from storage
                         let parent_hash = if let Some(ref storage_actor) = storage_actor {
-                            let get_head_msg = crate::actors_v2::storage::messages::GetChainHeadMessage {
-                                correlation_id: Some(correlation_id),
-                            };
+                            let get_head_msg =
+                                crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                    correlation_id: Some(correlation_id),
+                                };
 
                             match storage_actor.send(get_head_msg).await {
                                 Ok(storage_result) => {
@@ -115,12 +117,17 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                                 Err(e) => {
                                     error!(correlation_id = %correlation_id, error = ?e, "Communication error with StorageActor");
-                                    return Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)));
+                                    return Err(ChainError::NetworkError(format!(
+                                        "Storage communication failed: {}",
+                                        e
+                                    )));
                                 }
                             }
                         } else {
                             error!(correlation_id = %correlation_id, "StorageActor not available for parent block retrieval");
-                            return Err(ChainError::Internal("StorageActor not available".to_string()));
+                            return Err(ChainError::Internal(
+                                "StorageActor not available".to_string(),
+                            ));
                         };
 
                         // Step 3: Collect withdrawals with real fee calculation (get state inside async)
@@ -132,9 +139,12 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Get fresh chain head from StorageActor for fee calculation
                         let fresh_head = if let Some(ref storage_actor) = storage_actor {
-                            match storage_actor.send(crate::actors_v2::storage::messages::GetChainHeadMessage {
-                                correlation_id: Some(correlation_id),
-                            }).await {
+                            match storage_actor
+                                .send(crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                    correlation_id: Some(correlation_id),
+                                })
+                                .await
+                            {
                                 Ok(Ok(Some(v2_head))) => Some(v2_head),
                                 _ => {
                                     debug!(correlation_id = %correlation_id, "No chain head available for withdrawal collection - using None for genesis");
@@ -170,11 +180,15 @@ impl Handler<ChainMessage> for ChainActor {
                         };
 
                         // Step 4: Convert withdrawals to AddBalance format for EngineActor
-                        let add_balances: Vec<crate::engine::AddBalance> = withdrawal_collection.withdrawals.into_iter()
-                            .map(|w| crate::engine::AddBalance::from((
-                                w.address,
-                                crate::engine::ConsensusAmount(w.amount)
-                            )))
+                        let add_balances: Vec<crate::engine::AddBalance> = withdrawal_collection
+                            .withdrawals
+                            .into_iter()
+                            .map(|w| {
+                                crate::engine::AddBalance::from((
+                                    w.address,
+                                    crate::engine::ConsensusAmount(w.amount),
+                                ))
+                            })
                             .collect();
 
                         // Step 5: Build execution payload via EngineActor
@@ -194,50 +208,69 @@ impl Handler<ChainMessage> for ChainActor {
                             };
 
                             match engine_actor.send(msg).await {
-                                Ok(engine_result) => {
-                                    match engine_result {
-                                        Ok(crate::actors_v2::engine::EngineResponse::PayloadBuilt { payload, build_time }) => {
-                                            info!(
-                                                correlation_id = %correlation_id,
-                                                block_number = payload.block_number(),
-                                                gas_used = payload.gas_used(),
-                                                build_time_ms = build_time.as_millis(),
-                                                "Successfully built execution payload via EngineActor"
-                                            );
-                                            payload
-                                        }
-                                        Ok(other_response) => {
-                                            error!(correlation_id = %correlation_id, response = ?other_response, "Unexpected response from EngineActor");
-                                            return Err(ChainError::Internal("Unexpected EngineActor response".to_string()));
-                                        }
-                                        Err(e) => {
-                                            error!(correlation_id = %correlation_id, error = ?e, "Failed to build execution payload");
-                                            return Err(ChainError::Engine(format!("Payload build failed: {}", e)));
-                                        }
+                                Ok(engine_result) => match engine_result {
+                                    Ok(
+                                        crate::actors_v2::engine::EngineResponse::PayloadBuilt {
+                                            payload,
+                                            build_time,
+                                        },
+                                    ) => {
+                                        info!(
+                                            correlation_id = %correlation_id,
+                                            block_number = payload.block_number(),
+                                            gas_used = payload.gas_used(),
+                                            build_time_ms = build_time.as_millis(),
+                                            "Successfully built execution payload via EngineActor"
+                                        );
+                                        payload
                                     }
-                                }
+                                    Ok(other_response) => {
+                                        error!(correlation_id = %correlation_id, response = ?other_response, "Unexpected response from EngineActor");
+                                        return Err(ChainError::Internal(
+                                            "Unexpected EngineActor response".to_string(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        error!(correlation_id = %correlation_id, error = ?e, "Failed to build execution payload");
+                                        return Err(ChainError::Engine(format!(
+                                            "Payload build failed: {}",
+                                            e
+                                        )));
+                                    }
+                                },
                                 Err(e) => {
                                     error!(correlation_id = %correlation_id, error = ?e, "Communication error with EngineActor");
-                                    return Err(ChainError::NetworkError(format!("Engine communication failed: {}", e)));
+                                    return Err(ChainError::NetworkError(format!(
+                                        "Engine communication failed: {}",
+                                        e
+                                    )));
                                 }
                             }
                         } else {
                             error!(correlation_id = %correlation_id, "EngineActor not available");
-                            return Err(ChainError::Internal("EngineActor not available".to_string()));
+                            return Err(ChainError::Internal(
+                                "EngineActor not available".to_string(),
+                            ));
                         };
 
                         // Step 6: Create consensus block
                         // Convert ExecutionPayload to ExecutionPayloadCapella if needed
                         let capella_payload = match execution_payload {
-                            lighthouse_wrapper::types::ExecutionPayload::Capella(capella) => capella,
+                            lighthouse_wrapper::types::ExecutionPayload::Capella(capella) => {
+                                capella
+                            }
                             _ => {
                                 error!(correlation_id = %correlation_id, "Unsupported execution payload type - expected Capella");
-                                return Err(ChainError::Engine("Unsupported execution payload type".to_string()));
+                                return Err(ChainError::Engine(
+                                    "Unsupported execution payload type".to_string(),
+                                ));
                             }
                         };
 
                         let consensus_block = crate::block::ConsensusBlock {
-                            parent_hash: lighthouse_wrapper::types::Hash256::from_low_u64_be(slot.saturating_sub(1)),
+                            parent_hash: lighthouse_wrapper::types::Hash256::from_low_u64_be(
+                                slot.saturating_sub(1),
+                            ),
                             slot,
                             auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
@@ -247,7 +280,10 @@ impl Handler<ChainMessage> for ChainActor {
                         };
 
                         // Step 7: Incorporate AuxPoW if available (Phase 4: Integration Point 1)
-                        let signed_block = match self_clone.incorporate_auxpow(consensus_block).await {
+                        let signed_block = match self_clone
+                            .incorporate_auxpow(consensus_block)
+                            .await
+                        {
                             Ok(signed_with_auxpow) => {
                                 info!(
                                     correlation_id = %correlation_id,
@@ -256,7 +292,9 @@ impl Handler<ChainMessage> for ChainActor {
                                 );
                                 signed_with_auxpow
                             }
-                            Err(ChainError::Consensus(msg)) if msg.contains("Too many blocks without PoW") => {
+                            Err(ChainError::Consensus(msg))
+                                if msg.contains("Too many blocks without PoW") =>
+                            {
                                 error!(
                                     correlation_id = %correlation_id,
                                     blocks_without_pow = self_clone.state.blocks_without_pow,
@@ -272,11 +310,12 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Step 8: Store block via StorageActor (if available)
                         if let Some(ref storage_actor) = storage_actor {
-                            let store_msg = crate::actors_v2::storage::messages::StoreBlockMessage {
-                                block: signed_block.clone(),
-                                canonical: true,
-                                correlation_id: Some(correlation_id),
-                            };
+                            let store_msg =
+                                crate::actors_v2::storage::messages::StoreBlockMessage {
+                                    block: signed_block.clone(),
+                                    canonical: true,
+                                    correlation_id: Some(correlation_id),
+                                };
 
                             match storage_actor.send(store_msg).await {
                                 Ok(Ok(())) => {
@@ -292,7 +331,10 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                                 Err(e) => {
                                     error!(correlation_id = %correlation_id, error = ?e, "Communication error with StorageActor");
-                                    return Err(ChainError::NetworkError(format!("Storage communication failed: {}", e)));
+                                    return Err(ChainError::NetworkError(format!(
+                                        "Storage communication failed: {}",
+                                        e
+                                    )));
                                 }
                             }
                         }
@@ -302,13 +344,18 @@ impl Handler<ChainMessage> for ChainActor {
                             let block_hash = calculate_block_hash(&signed_block);
 
                             // Use real fee calculation from withdrawal collection
-                            let total_fees_wei = withdrawal_collection.total_fee_amount.saturating_add(withdrawal_collection.total_pegin_amount);
+                            let total_fees_wei = withdrawal_collection
+                                .total_fee_amount
+                                .saturating_add(withdrawal_collection.total_pegin_amount);
 
-                            let set_fees_msg = crate::actors_v2::storage::messages::SetAccumulatedFeesMessage {
-                                block_root: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
-                                fees: total_fees_wei,
-                                correlation_id: Some(correlation_id),
-                            };
+                            let set_fees_msg =
+                                crate::actors_v2::storage::messages::SetAccumulatedFeesMessage {
+                                    block_root: lighthouse_wrapper::types::Hash256::from_slice(
+                                        block_hash.as_bytes(),
+                                    ),
+                                    fees: total_fees_wei,
+                                    correlation_id: Some(correlation_id),
+                                };
 
                             match storage_actor.send(set_fees_msg).await {
                                 Ok(Ok(())) => {
@@ -331,7 +378,10 @@ impl Handler<ChainMessage> for ChainActor {
                         // Step 10: Commit block to execution engine (CRITICAL for block #2+)
                         if let Some(ref engine_actor) = engine_actor {
                             let commit_msg = crate::actors_v2::engine::EngineMessage::CommitBlock {
-                                execution_payload: lighthouse_wrapper::types::ExecutionPayload::Capella(signed_block.message.execution_payload.clone()),
+                                execution_payload:
+                                    lighthouse_wrapper::types::ExecutionPayload::Capella(
+                                        signed_block.message.execution_payload.clone(),
+                                    ),
                                 correlation_id: Some(correlation_id),
                             };
 
@@ -382,10 +432,11 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                             };
 
-                            let broadcast_msg = crate::actors_v2::network::NetworkMessage::BroadcastBlock {
-                                block_data,
-                                priority: true,
-                            };
+                            let broadcast_msg =
+                                crate::actors_v2::network::NetworkMessage::BroadcastBlock {
+                                    block_data,
+                                    priority: true,
+                                };
 
                             match network_actor.send(broadcast_msg).await {
                                 Ok(Ok(_)) => {
@@ -406,9 +457,10 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Step 12: Update ChainActor's local state with fresh chain head from StorageActor
                         if let Some(ref storage_actor) = storage_actor {
-                            let get_head_msg = crate::actors_v2::storage::messages::GetChainHeadMessage {
-                                correlation_id: Some(correlation_id),
-                            };
+                            let get_head_msg =
+                                crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                    correlation_id: Some(correlation_id),
+                                };
 
                             match storage_actor.send(get_head_msg).await {
                                 Ok(Ok(Some(v2_head_ref))) => {
@@ -462,16 +514,16 @@ impl Handler<ChainMessage> for ChainActor {
                         "Rejecting old block"
                     );
                     Box::pin(async move {
-                        Err(ChainError::InvalidBlock("Block height is too old".to_string()))
+                        Err(ChainError::InvalidBlock(
+                            "Block height is too old".to_string(),
+                        ))
                     })
                 } else {
                     // Phase 2: Try to acquire import lock
-                    let lock_acquired = self.import_in_progress.compare_exchange(
-                        false,
-                        true,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst
-                    ).is_ok();
+                    let lock_acquired = self
+                        .import_in_progress
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok();
 
                     if !lock_acquired {
                         // Another import is in progress - queue this block
@@ -548,8 +600,8 @@ impl Handler<ChainMessage> for ChainActor {
                         let ctx_addr = ctx.address();
 
                         Box::pin(async move {
-                        // Wrap entire import logic to ensure lock release on all paths
-                        let import_result: Result<ChainResponse, ChainError> = async {
+                            // Wrap entire import logic to ensure lock release on all paths
+                            let import_result: Result<ChainResponse, ChainError> = async {
                             // Step 1: Structural validation
                             if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
                                 error!(
@@ -1046,35 +1098,35 @@ impl Handler<ChainMessage> for ChainActor {
                             })
                         }.await;
 
-                        // Phase 2: Release import lock and process queue (regardless of success/failure)
-                        match import_result {
-                            Ok(response) => {
-                                // Success: Release lock and process next queued import
-                                self_clone.import_in_progress.store(false, Ordering::SeqCst);
-                                info!(
-                                    correlation_id = %correlation_id,
-                                    block_hash = %block_hash,
-                                    "Import lock released after successful import"
-                                );
+                            // Phase 2: Release import lock and process queue (regardless of success/failure)
+                            match import_result {
+                                Ok(response) => {
+                                    // Success: Release lock and process next queued import
+                                    self_clone.import_in_progress.store(false, Ordering::SeqCst);
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        "Import lock released after successful import"
+                                    );
 
-                                // Process next queued import if any
-                                self_clone.process_next_queued_import(ctx_addr).await;
+                                    // Process next queued import if any
+                                    self_clone.process_next_queued_import(ctx_addr).await;
 
-                                Ok(response)
+                                    Ok(response)
+                                }
+                                Err(e) => {
+                                    // Error: Force release lock (no queue processing on error)
+                                    self_clone.force_release_import_lock();
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        error = %e,
+                                        "Import lock released after import error"
+                                    );
+
+                                    Err(e)
+                                }
                             }
-                            Err(e) => {
-                                // Error: Force release lock (no queue processing on error)
-                                self_clone.force_release_import_lock();
-                                error!(
-                                    correlation_id = %correlation_id,
-                                    block_hash = %block_hash,
-                                    error = %e,
-                                    "Import lock released after import error"
-                                );
-
-                                Err(e)
-                            }
-                        }
                         })
                     }
                 }
@@ -1084,7 +1136,9 @@ impl Handler<ChainMessage> for ChainActor {
                 if !self.config.enable_auxpow {
                     warn!("AuxPoW processing requested but AuxPoW is disabled");
                     Box::pin(async move {
-                        Err(ChainError::Configuration("AuxPoW is not enabled".to_string()))
+                        Err(ChainError::Configuration(
+                            "AuxPoW is not enabled".to_string(),
+                        ))
                     })
                 } else if self.state.needs_auxpow() {
                     // Process AuxPoW when needed
@@ -1099,9 +1153,13 @@ impl Handler<ChainMessage> for ChainActor {
 
                     // Create validation parameters
                     let validation_params = AuxPowParams {
-                        target_difficulty: U256::from_dec_str("26959946667150639794667015087019630673637144422540572481103610249215")
-                            .expect("Valid difficulty"),
-                        retarget_params: Some(crate::actors_v2::chain::config::BitcoinConsensusParams::default()),
+                        target_difficulty: U256::from_dec_str(
+                            "26959946667150639794667015087019630673637144422540572481103610249215",
+                        )
+                        .expect("Valid difficulty"),
+                        retarget_params: Some(
+                            crate::actors_v2::chain::config::BitcoinConsensusParams::default(),
+                        ),
                     };
 
                     // Use actual AuxPoW validation
@@ -1111,18 +1169,24 @@ impl Handler<ChainMessage> for ChainActor {
                         // For now, return success with proper structure
                         info!(block_hash = %block_hash_copy, "AuxPoW processing with real validation parameters");
                         Ok(ChainResponse::AuxPowProcessed {
-                            success: true, // Would be result of validation
-                            finalized: false // Would be true after storage and consensus
+                            success: true,    // Would be result of validation
+                            finalized: false, // Would be true after storage and consensus
                         })
                     })
                 } else {
                     info!("AuxPoW not currently needed");
                     Box::pin(async move {
-                        Ok(ChainResponse::AuxPowProcessed { success: false, finalized: false })
+                        Ok(ChainResponse::AuxPowProcessed {
+                            success: false,
+                            finalized: false,
+                        })
                     })
                 }
             }
-            ChainMessage::QueueAuxPow { auxpow_header, correlation_id } => {
+            ChainMessage::QueueAuxPow {
+                auxpow_header,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
                 let mut self_mut = self.clone();
 
@@ -1162,12 +1226,15 @@ impl Handler<ChainMessage> for ChainActor {
                 if !self.config.enable_peg_operations {
                     warn!("Peg-in processing requested but peg operations are disabled");
                     Box::pin(async move {
-                        Err(ChainError::Configuration("Peg operations are not enabled".to_string()))
+                        Err(ChainError::Configuration(
+                            "Peg operations are not enabled".to_string(),
+                        ))
                     })
                 } else {
                     // Calculate actual values from the peg-ins for proper response
                     let count = pegin_infos.len();
-                    let total_amount = pegin_infos.iter()
+                    let total_amount = pegin_infos
+                        .iter()
                         .map(|pegin| U256::from(pegin.amount))
                         .fold(U256::zero(), |acc, amount| acc + amount);
 
@@ -1184,7 +1251,7 @@ impl Handler<ChainMessage> for ChainActor {
                     Box::pin(async move {
                         Ok(ChainResponse::PeginsProcessed {
                             count,
-                            total_amount
+                            total_amount,
                         })
                     })
                 }
@@ -1194,7 +1261,9 @@ impl Handler<ChainMessage> for ChainActor {
                 if !self.config.enable_peg_operations {
                     warn!("Peg-out processing requested but peg operations are disabled");
                     Box::pin(async move {
-                        Err(ChainError::Configuration("Peg operations are not enabled".to_string()))
+                        Err(ChainError::Configuration(
+                            "Peg operations are not enabled".to_string(),
+                        ))
                     })
                 } else {
                     let count = pegout_requests.len();
@@ -1219,7 +1288,7 @@ impl Handler<ChainMessage> for ChainActor {
                     Box::pin(async move {
                         Ok(ChainResponse::PegoutsProcessed {
                             count,
-                            transaction_id: mock_transaction_id
+                            transaction_id: mock_transaction_id,
                         })
                     })
                 }
@@ -1229,10 +1298,13 @@ impl Handler<ChainMessage> for ChainActor {
                 Box::pin(async move {
                     match storage_actor {
                         Some(actor) => {
-                            let storage_msg = crate::actors_v2::storage::messages::GetBlockMessage {
-                                block_hash: lighthouse_wrapper::types::Hash256::from_slice(hash.as_bytes()),
-                                correlation_id: Some(Uuid::new_v4()),
-                            };
+                            let storage_msg =
+                                crate::actors_v2::storage::messages::GetBlockMessage {
+                                    block_hash: lighthouse_wrapper::types::Hash256::from_slice(
+                                        hash.as_bytes(),
+                                    ),
+                                    correlation_id: Some(Uuid::new_v4()),
+                                };
 
                             match actor.send(storage_msg).await {
                                 Ok(storage_result) => {
@@ -1240,15 +1312,20 @@ impl Handler<ChainMessage> for ChainActor {
                                         Ok(Some(signed_block)) => {
                                             // Storage now returns complete SignedConsensusBlock (matches V0 pattern)
                                             Ok(ChainResponse::Block(Some(signed_block)))
-                                        },
+                                        }
                                         Ok(None) => Ok(ChainResponse::Block(None)),
                                         Err(e) => Err(ChainError::Storage(e.to_string())),
                                     }
                                 }
-                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with storage actor: {}", e))),
+                                Err(e) => Err(ChainError::NetworkError(format!(
+                                    "Failed to communicate with storage actor: {}",
+                                    e
+                                ))),
                             }
                         }
-                        None => Err(ChainError::Internal("Storage actor not configured".to_string())),
+                        None => Err(ChainError::Internal(
+                            "Storage actor not configured".to_string(),
+                        )),
                     }
                 })
             }
@@ -1257,10 +1334,11 @@ impl Handler<ChainMessage> for ChainActor {
                 Box::pin(async move {
                     match storage_actor {
                         Some(actor) => {
-                            let storage_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
-                                height,
-                                correlation_id: Some(Uuid::new_v4()),
-                            };
+                            let storage_msg =
+                                crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+                                    height,
+                                    correlation_id: Some(Uuid::new_v4()),
+                                };
 
                             match actor.send(storage_msg).await {
                                 Ok(storage_result) => {
@@ -1268,15 +1346,20 @@ impl Handler<ChainMessage> for ChainActor {
                                         Ok(Some(signed_block)) => {
                                             // Storage now returns complete SignedConsensusBlock (matches V0 pattern)
                                             Ok(ChainResponse::Block(Some(signed_block)))
-                                        },
+                                        }
                                         Ok(None) => Ok(ChainResponse::Block(None)),
                                         Err(e) => Err(ChainError::Storage(e.to_string())),
                                     }
                                 }
-                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with storage actor: {}", e))),
+                                Err(e) => Err(ChainError::NetworkError(format!(
+                                    "Failed to communicate with storage actor: {}",
+                                    e
+                                ))),
                             }
                         }
-                        None => Err(ChainError::Internal("Storage actor not configured".to_string())),
+                        None => Err(ChainError::Internal(
+                            "Storage actor not configured".to_string(),
+                        )),
                     }
                 })
             }
@@ -1294,25 +1377,29 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                             };
 
-                            let network_msg = crate::actors_v2::network::NetworkMessage::BroadcastBlock {
-                                block_data,
-                                priority: true, // Broadcast blocks with high priority
-                            };
+                            let network_msg =
+                                crate::actors_v2::network::NetworkMessage::BroadcastBlock {
+                                    block_data,
+                                    priority: true, // Broadcast blocks with high priority
+                                };
 
                             match actor.send(network_msg).await {
-                                Ok(network_result) => {
-                                    match network_result {
-                                        Ok(_response) => {
-                                            let block_hash = calculate_block_hash(&block);
-                                            Ok(ChainResponse::BlockBroadcasted { block_hash })
-                                        },
-                                        Err(e) => Err(ChainError::Network(e)),
+                                Ok(network_result) => match network_result {
+                                    Ok(_response) => {
+                                        let block_hash = calculate_block_hash(&block);
+                                        Ok(ChainResponse::BlockBroadcasted { block_hash })
                                     }
-                                }
-                                Err(e) => Err(ChainError::NetworkError(format!("Failed to communicate with network actor: {}", e))),
+                                    Err(e) => Err(ChainError::Network(e)),
+                                },
+                                Err(e) => Err(ChainError::NetworkError(format!(
+                                    "Failed to communicate with network actor: {}",
+                                    e
+                                ))),
                             }
                         }
-                        None => Err(ChainError::Internal("Network actor not configured".to_string())),
+                        None => Err(ChainError::Internal(
+                            "Network actor not configured".to_string(),
+                        )),
                     }
                 })
             }
@@ -1339,50 +1426,48 @@ impl Handler<ChainMessage> for ChainActor {
 
                 // Recursively call ImportBlock handler
                 match self.handle(import_msg, ctx) {
-                    import_future => {
-                        Box::pin(async move {
-                            match import_future.await {
-                                Ok(ChainResponse::BlockImported { block_hash, height }) => {
-                                    info!(
-                                        peer_id = %peer_id_for_response,
-                                        block_height = height,
-                                        block_hash = %block_hash,
-                                        "Network block imported successfully via ImportBlock handler"
-                                    );
+                    import_future => Box::pin(async move {
+                        match import_future.await {
+                            Ok(ChainResponse::BlockImported { block_hash, height }) => {
+                                info!(
+                                    peer_id = %peer_id_for_response,
+                                    block_height = height,
+                                    block_hash = %block_hash,
+                                    "Network block imported successfully via ImportBlock handler"
+                                );
 
-                                    Ok(ChainResponse::NetworkBlockProcessed {
-                                        accepted: true,
-                                        reason: None,
-                                    })
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        peer_id = %peer_id_for_response,
-                                        block_height = block_height,
-                                        error = %e,
-                                        "Network block rejected by ImportBlock handler"
-                                    );
-
-                                    Ok(ChainResponse::NetworkBlockProcessed {
-                                        accepted: false,
-                                        reason: Some(format!("Import error: {}", e)),
-                                    })
-                                }
-                                Ok(other_response) => {
-                                    warn!(
-                                        peer_id = %peer_id_for_response,
-                                        response = ?other_response,
-                                        "Unexpected response from ImportBlock handler"
-                                    );
-
-                                    Ok(ChainResponse::NetworkBlockProcessed {
-                                        accepted: false,
-                                        reason: Some("Unexpected import response".to_string()),
-                                    })
-                                }
+                                Ok(ChainResponse::NetworkBlockProcessed {
+                                    accepted: true,
+                                    reason: None,
+                                })
                             }
-                        })
-                    }
+                            Err(e) => {
+                                warn!(
+                                    peer_id = %peer_id_for_response,
+                                    block_height = block_height,
+                                    error = %e,
+                                    "Network block rejected by ImportBlock handler"
+                                );
+
+                                Ok(ChainResponse::NetworkBlockProcessed {
+                                    accepted: false,
+                                    reason: Some(format!("Import error: {}", e)),
+                                })
+                            }
+                            Ok(other_response) => {
+                                warn!(
+                                    peer_id = %peer_id_for_response,
+                                    response = ?other_response,
+                                    "Unexpected response from ImportBlock handler"
+                                );
+
+                                Ok(ChainResponse::NetworkBlockProcessed {
+                                    accepted: false,
+                                    reason: Some("Unexpected import response".to_string()),
+                                })
+                            }
+                        }
+                    }),
                 }
             }
         }
@@ -1400,23 +1485,23 @@ impl Handler<ChainManagerMessage> for ChainActor {
             ChainManagerMessage::IsSynced => {
                 let is_synced = self.state.is_synced();
                 info!(is_synced = is_synced, "ChainManager: IsSynced query");
-                Box::pin(async move {
-                    Ok(ChainManagerResponse::Synced(is_synced))
-                })
+                Box::pin(async move { Ok(ChainManagerResponse::Synced(is_synced)) })
             }
             ChainManagerMessage::GetHead => {
                 let current_height = self.state.get_height();
-                info!(current_height = current_height, "ChainManager: GetHead request");
+                info!(
+                    current_height = current_height,
+                    "ChainManager: GetHead request"
+                );
                 Box::pin(async move {
                     // Would fetch actual head block from storage
-                    Err(ChainError::Internal("GetHead not yet fully implemented".to_string()))
+                    Err(ChainError::Internal(
+                        "GetHead not yet fully implemented".to_string(),
+                    ))
                 })
             }
             ChainManagerMessage::GetAggregateHashes { count } => {
-                info!(
-                    count = count,
-                    "ChainManager: GetAggregateHashes request"
-                );
+                info!(count = count, "ChainManager: GetAggregateHashes request");
                 Box::pin(async move {
                     // Would calculate aggregate hashes for mining
                     let hashes = Vec::new(); // Placeholder - would compute actual hashes
@@ -1428,7 +1513,9 @@ impl Handler<ChainManagerMessage> for ChainActor {
                 info!("ChainManager: GetLastFinalizedBlock request");
                 Box::pin(async move {
                     // Would fetch last finalized block
-                    Err(ChainError::Internal("GetLastFinalizedBlock not yet implemented".to_string()))
+                    Err(ChainError::Internal(
+                        "GetLastFinalizedBlock not yet implemented".to_string(),
+                    ))
                 })
             }
             ChainManagerMessage::PushAuxPow { auxpow, params } => {
@@ -1437,7 +1524,9 @@ impl Handler<ChainManagerMessage> for ChainActor {
                 // Validate AuxPoW is enabled
                 if !self.config.enable_auxpow {
                     Box::pin(async move {
-                        Err(ChainError::Configuration("AuxPoW is not enabled".to_string()))
+                        Err(ChainError::Configuration(
+                            "AuxPoW is not enabled".to_string(),
+                        ))
                     })
                 } else {
                     // Record AuxPoW metrics
@@ -1457,8 +1546,8 @@ impl Handler<ChainManagerMessage> for ChainActor {
 
                         // For now, return structured response indicating the validation approach
                         Ok(ChainManagerResponse::AuxPowPushed {
-                            accepted: true, // Would be result of validate_auxpow_with_params
-                            block_finalized: false // Would be true after consensus finalization
+                            accepted: true,         // Would be result of validate_auxpow_with_params
+                            block_finalized: false, // Would be true after consensus finalization
                         })
                     })
                 }
@@ -1488,7 +1577,9 @@ async fn create_aux_block_helper(
         last_activity: std::time::Instant::now(),
         // Phase 2 fields
         import_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::VecDeque::new(),
+        )),
         max_pending_imports: 10,
     };
 
@@ -1513,11 +1604,15 @@ async fn submit_aux_block_helper(
         last_activity: std::time::Instant::now(),
         // Phase 2 fields
         import_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::VecDeque::new())),
+        pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::VecDeque::new(),
+        )),
         max_pending_imports: 10,
     };
 
-    actor.validate_submitted_auxpow(aggregate_hash, auxpow).await
+    actor
+        .validate_submitted_auxpow(aggregate_hash, auxpow)
+        .await
 }
 
 impl Handler<CreateAuxBlock> for ChainActor {
@@ -1590,7 +1685,8 @@ impl Handler<SubmitAuxBlock> for ChainActor {
         Box::pin(
             async move {
                 // Step 1: Validate submitted AuxPoW
-                let auxpow_header = submit_aux_block_helper(&state, &config, aggregate_hash, auxpow).await?;
+                let auxpow_header =
+                    submit_aux_block_helper(&state, &config, aggregate_hash, auxpow).await?;
 
                 info!(
                     correlation_id = %correlation_id,
@@ -1617,4 +1713,3 @@ impl Handler<SubmitAuxBlock> for ChainActor {
         )
     }
 }
-

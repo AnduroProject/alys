@@ -7,22 +7,24 @@
 //! Removed from V1: NetworkSupervisor, Kademlia DHT, QUIC, actor_system dependencies
 //! Retained: mDNS for local network discovery (essential for local development)
 
-pub mod network_actor;
-pub mod sync_actor;
-pub mod config;
-pub mod messages;
 pub mod behaviour;
-pub mod swarm_factory;
-pub mod metrics;
-pub mod managers;
-pub mod protocols;
+pub mod config;
 pub mod handlers;
+pub mod managers;
+pub mod messages;
+pub mod metrics;
+pub mod network_actor;
+pub mod protocols;
 pub mod rpc;
+pub mod swarm_factory;
+pub mod sync_actor;
 
-pub use network_actor::NetworkActor;
-pub use sync_actor::SyncActor;
-pub use config::{NetworkConfig, SyncConfig};
-pub use messages::{NetworkMessage, SyncMessage, NetworkResponse, SyncResponse, NetworkError, SyncError};
 pub use behaviour::AlysNetworkBehaviour;
+pub use config::{NetworkConfig, SyncConfig};
+pub use messages::{
+    NetworkError, NetworkMessage, NetworkResponse, SyncError, SyncMessage, SyncResponse,
+};
 pub use metrics::{NetworkMetrics, SyncMetrics};
-pub use rpc::{NetworkRpcHandler, NetworkSubsystem, NetworkRpcRequest, NetworkRpcResponse};
+pub use network_actor::NetworkActor;
+pub use rpc::{NetworkRpcHandler, NetworkRpcRequest, NetworkRpcResponse, NetworkSubsystem};
+pub use sync_actor::SyncActor;

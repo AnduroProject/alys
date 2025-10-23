@@ -3,16 +3,16 @@
 //! Essential message types (10 core messages) - simplified from V1's 25+ messages
 
 use actix::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use bitcoin::{BlockHash as BitcoinBlockHash, Txid};
 use ethereum_types::{Address, H256, U256};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use uuid::Uuid;
 
 // Re-export types that would come from other modules
 pub use crate::auxpow::AuxPow;
 pub use crate::auxpow_miner::AuxBlock;
-pub use crate::block::{ConsensusBlock, SignedConsensusBlock, AuxPowHeader};
+pub use crate::block::{AuxPowHeader, ConsensusBlock, SignedConsensusBlock};
 pub use crate::store::BlockRef;
 pub use bridge::PegInInfo;
 pub use lighthouse_wrapper::types::MainnetEthSpec;
@@ -22,10 +22,7 @@ pub use lighthouse_wrapper::types::MainnetEthSpec;
 #[rtype(result = "Result<ChainResponse, crate::actors_v2::chain::ChainError>")]
 pub enum ChainMessage {
     /// Produce a new block (for validators)
-    ProduceBlock {
-        slot: u64,
-        timestamp: Duration,
-    },
+    ProduceBlock { slot: u64, timestamp: Duration },
 
     /// Import block from network/sync
     ImportBlock {
@@ -34,10 +31,7 @@ pub enum ChainMessage {
     },
 
     /// Process and validate AuxPoW
-    ProcessAuxPow {
-        auxpow: AuxPow,
-        block_hash: H256,
-    },
+    ProcessAuxPow { auxpow: AuxPow, block_hash: H256 },
 
     /// Queue completed AuxPoW for next block (Phase 4: Integration Point 3c)
     QueueAuxPow {
@@ -46,27 +40,19 @@ pub enum ChainMessage {
     },
 
     /// Process peg-in operations
-    ProcessPegins {
-        pegin_infos: Vec<PegInInfo>,
-    },
+    ProcessPegins { pegin_infos: Vec<PegInInfo> },
 
     /// Process peg-out operations
-    ProcessPegouts {
-        pegout_requests: Vec<PegOutRequest>,
-    },
+    ProcessPegouts { pegout_requests: Vec<PegOutRequest> },
 
     /// Get current chain status
     GetChainStatus,
 
     /// Get block by height
-    GetBlockByHeight {
-        height: u64,
-    },
+    GetBlockByHeight { height: u64 },
 
     /// Get block by hash
-    GetBlockByHash {
-        hash: H256,
-    },
+    GetBlockByHash { hash: H256 },
 
     /// Broadcast block to network
     BroadcastBlock {
@@ -91,9 +77,7 @@ pub enum ChainManagerMessage {
     GetHead,
 
     /// Get aggregate hashes for mining
-    GetAggregateHashes {
-        count: u32,
-    },
+    GetAggregateHashes { count: u32 },
 
     /// Get last finalized block
     GetLastFinalizedBlock,
@@ -147,32 +131,19 @@ pub enum ChainResponse {
     },
 
     /// Block imported successfully
-    BlockImported {
-        block_hash: H256,
-        height: u64,
-    },
+    BlockImported { block_hash: H256, height: u64 },
 
     /// Block queued for import (Phase 2: import lock held)
-    BlockQueued {
-        position: usize,
-    },
+    BlockQueued { position: usize },
 
     /// AuxPoW processed
-    AuxPowProcessed {
-        success: bool,
-        finalized: bool,
-    },
+    AuxPowProcessed { success: bool, finalized: bool },
 
     /// AuxPoW queued successfully (Phase 4: Integration Point 3c)
-    AuxPowQueued {
-        height: u64,
-    },
+    AuxPowQueued { height: u64 },
 
     /// Peg-ins processed
-    PeginsProcessed {
-        count: usize,
-        total_amount: U256,
-    },
+    PeginsProcessed { count: usize, total_amount: U256 },
 
     /// Peg-outs processed
     PegoutsProcessed {
@@ -187,9 +158,7 @@ pub enum ChainResponse {
     Block(Option<SignedConsensusBlock<MainnetEthSpec>>),
 
     /// Block broadcasted
-    BlockBroadcasted {
-        block_hash: H256,
-    },
+    BlockBroadcasted { block_hash: H256 },
 
     /// Network block processed
     NetworkBlockProcessed {

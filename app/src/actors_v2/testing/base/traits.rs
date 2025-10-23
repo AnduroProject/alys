@@ -1,8 +1,8 @@
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
-use serde::{Serialize, Deserialize};
 
 /// Core trait for all actor test harnesses
 #[async_trait]
@@ -62,10 +62,16 @@ pub trait ChaosTestable: Send + Sync {
     type ChaosConfig: Send + Sync;
 
     /// Run comprehensive chaos test with configuration
-    async fn run_chaos_test(&mut self, config: Self::ChaosConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn run_chaos_test(
+        &mut self,
+        config: Self::ChaosConfig,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     /// Inject a failure scenario
-    async fn inject_failure(&mut self, scenario: crate::actors_v2::testing::chaos::ChaosScenario) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn inject_failure(
+        &mut self,
+        scenario: crate::actors_v2::testing::chaos::ChaosScenario,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// System health monitoring for chaos testing

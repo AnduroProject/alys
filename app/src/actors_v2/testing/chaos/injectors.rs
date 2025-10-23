@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn, error, debug};
+use std::time::{Duration, Instant};
+use tracing::{debug, error, info, warn};
 
 /// Simplified failure injector for chaos testing
 #[derive(Debug)]

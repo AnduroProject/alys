@@ -4,22 +4,23 @@
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use ethereum_types::{H256, U256};
     use bitcoin::hashes::Hash;
+    use ethereum_types::{H256, U256};
     use lighthouse_wrapper::types::ExecutionBlockHash;
     use std::str::FromStr;
+    use std::time::Duration;
 
+    use crate::actors_v2::storage::actor::BlockRef;
     use crate::actors_v2::{
-        chain::{ChainActor, messages::*},
+        chain::{messages::*, ChainActor},
         testing::chain::{fixtures::*, ChainTestHarness},
     };
-    use crate::actors_v2::storage::actor::BlockRef;
 
     #[tokio::test]
     async fn test_chain_actor_basic_instantiation() {
         // Test ChainActor can be created using test harness
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         // Verify configuration is valid
@@ -56,10 +57,10 @@ mod tests {
         let pegouts = mock_multiple_pegouts();
 
         let pegin_msg = ChainMessage::ProcessPegins {
-            pegin_infos: pegins.clone()
+            pegin_infos: pegins.clone(),
         };
         let pegout_msg = ChainMessage::ProcessPegouts {
-            pegout_requests: pegouts.clone()
+            pegout_requests: pegouts.clone(),
         };
 
         // Verify messages can be constructed and match properly
@@ -117,7 +118,10 @@ mod tests {
         };
 
         match process_msg {
-            ChainMessage::ProcessAuxPow { auxpow: _, block_hash: hash } => {
+            ChainMessage::ProcessAuxPow {
+                auxpow: _,
+                block_hash: hash,
+            } => {
                 assert_eq!(hash, H256::from_low_u64_be(42));
             }
             _ => panic!("AuxPoW message matching failed"),
@@ -149,7 +153,9 @@ mod tests {
         }
 
         // Test BroadcastBlock message
-        let broadcast_msg = ChainMessage::BroadcastBlock { block: block.clone() };
+        let broadcast_msg = ChainMessage::BroadcastBlock {
+            block: block.clone(),
+        };
         match broadcast_msg {
             ChainMessage::BroadcastBlock { block: b } => {
                 assert_eq!(b.message.execution_payload.block_number, 100);
@@ -172,8 +178,11 @@ mod tests {
     }
 
     /// Helper to create a mock SignedConsensusBlock for testing
-    fn create_mock_signed_consensus_block() -> crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec> {
-        use lighthouse_wrapper::types::{MainnetEthSpec, ExecutionPayloadCapella, ExecutionBlockHash};
+    fn create_mock_signed_consensus_block(
+    ) -> crate::block::SignedConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec> {
+        use lighthouse_wrapper::types::{
+            ExecutionBlockHash, ExecutionPayloadCapella, MainnetEthSpec,
+        };
 
         // Create minimal execution payload
         let execution_payload = ExecutionPayloadCapella::<MainnetEthSpec> {
@@ -189,7 +198,9 @@ mod tests {
             timestamp: 1640995200,
             extra_data: lighthouse_wrapper::types::VariableList::default(),
             base_fee_per_gas: ethereum_types::U256::zero(),
-            block_hash: ExecutionBlockHash::from_root(lighthouse_wrapper::types::Hash256::from_low_u64_be(100)),
+            block_hash: ExecutionBlockHash::from_root(
+                lighthouse_wrapper::types::Hash256::from_low_u64_be(100),
+            ),
             transactions: lighthouse_wrapper::types::VariableList::default(),
             withdrawals: lighthouse_wrapper::types::VariableList::default(),
         };
@@ -373,8 +384,8 @@ mod tests {
     async fn test_chain_response_variants() {
         // Test ChainResponse message variants are correctly structured
         use crate::actors_v2::chain::messages::ChainResponse;
-        use std::time::Duration;
         use bitcoin::Txid;
+        use std::time::Duration;
 
         let block = create_mock_signed_consensus_block();
         let block_hash = H256::from_low_u64_be(42);
@@ -398,7 +409,10 @@ mod tests {
             height: 100,
         };
         match block_imported {
-            ChainResponse::BlockImported { block_hash: hash, height } => {
+            ChainResponse::BlockImported {
+                block_hash: hash,
+                height,
+            } => {
                 assert_eq!(hash, H256::from_low_u64_be(42));
                 assert_eq!(height, 100);
             }
@@ -424,7 +438,10 @@ mod tests {
             total_amount: U256::from(300000000u64), // 3 BTC
         };
         match pegins_processed {
-            ChainResponse::PeginsProcessed { count, total_amount } => {
+            ChainResponse::PeginsProcessed {
+                count,
+                total_amount,
+            } => {
                 assert_eq!(count, 3);
                 assert_eq!(total_amount, U256::from(300000000u64));
             }
@@ -437,7 +454,10 @@ mod tests {
             transaction_id: Some(Txid::from_byte_array([1u8; 32])),
         };
         match pegouts_processed {
-            ChainResponse::PegoutsProcessed { count, transaction_id } => {
+            ChainResponse::PegoutsProcessed {
+                count,
+                transaction_id,
+            } => {
                 assert_eq!(count, 2);
                 assert!(transaction_id.is_some());
             }
@@ -528,7 +548,10 @@ mod tests {
             block_finalized: true,
         };
         match auxpow_pushed {
-            ChainManagerResponse::AuxPowPushed { accepted, block_finalized } => {
+            ChainManagerResponse::AuxPowPushed {
+                accepted,
+                block_finalized,
+            } => {
                 assert!(accepted);
                 assert!(block_finalized);
             }
@@ -543,7 +566,7 @@ mod tests {
 
         // Test with invalid/empty data
         let empty_pegins = ChainMessage::ProcessPegins {
-            pegin_infos: vec![]
+            pegin_infos: vec![],
         };
         match empty_pegins {
             ChainMessage::ProcessPegins { pegin_infos } => {
@@ -608,7 +631,8 @@ mod tests {
         use lighthouse_wrapper::types::ExecutionBlockHash;
 
         // Create test harness to get initial state components
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         // Extract values before consuming harness
@@ -639,7 +663,10 @@ mod tests {
 
         // Test sync status transitions
         assert!(state.is_synced());
-        state.set_sync_status(SyncStatus::Syncing { progress: 0.5, target_height: 200 });
+        state.set_sync_status(SyncStatus::Syncing {
+            progress: 0.5,
+            target_height: 200,
+        });
         assert!(!state.is_synced());
         state.set_sync_status(SyncStatus::NotSynced);
         assert!(!state.is_synced());
@@ -672,12 +699,13 @@ mod tests {
         // Test peg-in/peg-out state management
         use bitcoin::Txid;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let max_blocks_without_pow = harness.config.max_blocks_without_pow;
         let mut state = harness.into_chain_state(
-            true,  // is_validator
+            true, // is_validator
             max_blocks_without_pow,
             None,
         );
@@ -701,7 +729,9 @@ mod tests {
         assert_eq!(state.queued_pegins.read().await.len(), 1);
 
         // Remove non-existent peg-in
-        let non_existent = state.remove_queued_pegin(&Txid::from_byte_array([99u8; 32])).await;
+        let non_existent = state
+            .remove_queued_pegin(&Txid::from_byte_array([99u8; 32]))
+            .await;
         assert!(non_existent.is_none());
         assert_eq!(state.queued_pegins.read().await.len(), 1);
 
@@ -715,7 +745,8 @@ mod tests {
         // Test actual ChainActor instantiation with state persistence
         use crate::actors_v2::chain::ChainActor;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -745,13 +776,17 @@ mod tests {
         };
         actor.state.update_head(block_ref);
         assert_eq!(actor.state.get_height(), 50);
-        assert_eq!(actor.state.get_head_hash(), Some(H256::from_low_u64_be(123)));
+        assert_eq!(
+            actor.state.get_head_hash(),
+            Some(H256::from_low_u64_be(123))
+        );
     }
 
     #[tokio::test]
     async fn test_actor_network_readiness_checks() {
         // Test network readiness logic
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -787,9 +822,10 @@ mod tests {
     #[tokio::test]
     async fn test_chain_actor_error_scenarios() {
         // Test error handling in ChainActor operations
-        use crate::actors_v2::chain::{ChainActor};
+        use crate::actors_v2::chain::ChainActor;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -866,14 +902,15 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_message_scenarios() {
         // Test handling of invalid or malformed messages
-        use crate::actors_v2::chain::messages::{ChainMessage, ChainManagerMessage, PegOutRequest};
+        use crate::actors_v2::chain::messages::{ChainManagerMessage, ChainMessage, PegOutRequest};
         use bitcoin::Address;
         use std::str::FromStr;
 
         // Test messages with invalid data
         let invalid_pegout = PegOutRequest {
-            recipient: Address::from_str("bc1qinvalid")
-                .unwrap_or_else(|_| Address::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap()),
+            recipient: Address::from_str("bc1qinvalid").unwrap_or_else(|_| {
+                Address::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap()
+            }),
             amount: u64::MAX, // Extremely large amount
             requester: ethereum_types::Address::zero(),
             nonce: ethereum_types::U256::MAX,
@@ -920,12 +957,13 @@ mod tests {
         // Test ChainState in error conditions
         use crate::actors_v2::chain::state::SyncStatus;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let mut state = harness.into_chain_state(
-            true,  // is_validator
-            0,     // max_blocks_without_pow = 0 (edge case)
+            true, // is_validator
+            0,    // max_blocks_without_pow = 0 (edge case)
             None,
         );
 
@@ -950,12 +988,18 @@ mod tests {
         let txid = bitcoin::Txid::from_byte_array([42u8; 32]);
         state.add_queued_pegin(txid, pegin1).await;
         assert_eq!(state.queued_pegins.read().await.len(), 1);
-        assert_eq!(state.queued_pegins.read().await.get(&txid).unwrap().amount, 100000000);
+        assert_eq!(
+            state.queued_pegins.read().await.get(&txid).unwrap().amount,
+            100000000
+        );
 
         // Adding same txid should overwrite
         state.add_queued_pegin(txid, pegin2).await;
         assert_eq!(state.queued_pegins.read().await.len(), 1);
-        assert_eq!(state.queued_pegins.read().await.get(&txid).unwrap().amount, 200000000);
+        assert_eq!(
+            state.queued_pegins.read().await.get(&txid).unwrap().amount,
+            200000000
+        );
     }
 
     #[tokio::test]
@@ -969,7 +1013,10 @@ mod tests {
         config.max_blocks_without_pow = 0;
         let validation_result = config.validate();
         assert!(validation_result.is_err());
-        assert!(validation_result.unwrap_err().to_string().contains("max_blocks_without_pow must be greater than 0"));
+        assert!(validation_result
+            .unwrap_err()
+            .to_string()
+            .contains("max_blocks_without_pow must be greater than 0"));
 
         // Test with very large max_blocks_without_pow (should be valid)
         config.max_blocks_without_pow = u64::MAX;
@@ -1018,12 +1065,13 @@ mod tests {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let state = Arc::new(Mutex::new(harness.into_chain_state(
-            true,  // is_validator
-            10,    // max_blocks_without_pow
+            true, // is_validator
+            10,   // max_blocks_without_pow
             None,
         )));
 
@@ -1054,7 +1102,10 @@ mod tests {
         let final_state = state.lock().await;
         assert_eq!(final_state.blocks_without_pow, 5);
         assert_eq!(final_state.get_height(), 100);
-        assert_eq!(final_state.get_head_hash(), Some(H256::from_low_u64_be(123)));
+        assert_eq!(
+            final_state.get_head_hash(),
+            Some(H256::from_low_u64_be(123))
+        );
     }
 
     #[tokio::test]
@@ -1062,7 +1113,8 @@ mod tests {
         // Test ChainActor actor address management
         use crate::actors_v2::chain::ChainActor;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -1101,7 +1153,8 @@ mod tests {
         // Test ChainActor metrics recording and integration
         use crate::actors_v2::chain::ChainActor;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -1137,7 +1190,9 @@ mod tests {
         assert_eq!(actor.metrics.get_chain_height(), 100);
 
         // Test sync status in metrics
-        actor.state.set_sync_status(crate::actors_v2::chain::state::SyncStatus::NotSynced);
+        actor
+            .state
+            .set_sync_status(crate::actors_v2::chain::state::SyncStatus::NotSynced);
         actor.record_activity();
         assert!(!actor.metrics.get_sync_status());
     }
@@ -1168,15 +1223,13 @@ mod tests {
 
         // Verify message/response compatibility
         match status_msg {
-            ChainMessage::GetChainStatus => {
-                match status_response {
-                    ChainResponse::ChainStatus(status) => {
-                        assert_eq!(status.height, 1000);
-                        assert!(status.is_synced);
-                    }
-                    _ => panic!("Unexpected response type"),
+            ChainMessage::GetChainStatus => match status_response {
+                ChainResponse::ChainStatus(status) => {
+                    assert_eq!(status.height, 1000);
+                    assert!(status.is_synced);
                 }
-            }
+                _ => panic!("Unexpected response type"),
+            },
             _ => panic!("Unexpected message type"),
         }
 
@@ -1218,7 +1271,8 @@ mod tests {
         use crate::actors_v2::chain::ChainActor;
         use actix::Actor;
 
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -1246,7 +1300,8 @@ mod tests {
         // Test ChainActor integration with different harness configurations
 
         // Test validator configuration
-        let validator_harness = ChainTestHarness::validator().await
+        let validator_harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator harness");
 
         assert!(validator_harness.config.is_validator);
@@ -1257,16 +1312,14 @@ mod tests {
         let validator_is_validator = validator_harness.config.is_validator;
         let validator_max_blocks = validator_harness.config.max_blocks_without_pow;
 
-        let validator_state = validator_harness.into_chain_state(
-            validator_is_validator,
-            validator_max_blocks,
-            None,
-        );
+        let validator_state =
+            validator_harness.into_chain_state(validator_is_validator, validator_max_blocks, None);
         let validator_actor = ChainActor::new(validator_config, validator_state);
         assert_eq!(validator_actor.config.is_validator, true);
 
         // Test follower configuration
-        let follower_harness = ChainTestHarness::follower().await
+        let follower_harness = ChainTestHarness::follower()
+            .await
             .expect("Should create follower harness");
 
         assert!(!follower_harness.config.is_validator);
@@ -1275,11 +1328,8 @@ mod tests {
         let follower_is_validator = follower_harness.config.is_validator;
         let follower_max_blocks = follower_harness.config.max_blocks_without_pow;
 
-        let follower_state = follower_harness.into_chain_state(
-            follower_is_validator,
-            follower_max_blocks,
-            None,
-        );
+        let follower_state =
+            follower_harness.into_chain_state(follower_is_validator, follower_max_blocks, None);
         let follower_actor = ChainActor::new(follower_config, follower_state);
         assert_eq!(follower_actor.config.is_validator, false);
 
@@ -1290,7 +1340,8 @@ mod tests {
     #[tokio::test]
     async fn test_cross_actor_data_consistency() {
         // Test data consistency patterns across ChainActor operations
-        let harness = ChainTestHarness::validator().await
+        let harness = ChainTestHarness::validator()
+            .await
             .expect("Should create validator test harness");
 
         let config = harness.config.clone();
@@ -1316,7 +1367,10 @@ mod tests {
         // Metrics should reflect state changes
         assert_eq!(actor.metrics.get_chain_height(), 500);
         assert_eq!(actor.state.get_height(), 500);
-        assert_eq!(actor.state.get_head_hash(), Some(H256::from_low_u64_be(100)));
+        assert_eq!(
+            actor.state.get_head_hash(),
+            Some(H256::from_low_u64_be(100))
+        );
 
         // Test AuxPoW state consistency
         for _ in 0..actor.config.max_blocks_without_pow {
@@ -1326,6 +1380,9 @@ mod tests {
 
         actor.record_activity();
         // Metrics should be updated but auxpow status is state-dependent
-        assert_eq!(actor.state.blocks_without_pow, actor.config.max_blocks_without_pow);
+        assert_eq!(
+            actor.state.blocks_without_pow,
+            actor.config.max_blocks_without_pow
+        );
     }
 }

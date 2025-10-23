@@ -60,14 +60,22 @@ mod tests {
     #[test]
     fn test_empty_transactions() {
         let root = calculate_transaction_root(&[]);
-        assert_eq!(root, H256::zero(), "Empty transaction list should return zero hash");
+        assert_eq!(
+            root,
+            H256::zero(),
+            "Empty transaction list should return zero hash"
+        );
     }
 
     #[test]
     fn test_single_transaction() {
         let txs = vec![vec![1, 2, 3, 4]];
         let root = calculate_transaction_root(&txs);
-        assert_ne!(root, H256::zero(), "Single transaction should produce non-zero root");
+        assert_ne!(
+            root,
+            H256::zero(),
+            "Single transaction should produce non-zero root"
+        );
 
         // Verify determinism
         let root2 = calculate_transaction_root(&txs);
@@ -76,13 +84,13 @@ mod tests {
 
     #[test]
     fn test_multiple_transactions() {
-        let txs = vec![
-            vec![1, 2, 3],
-            vec![4, 5, 6],
-            vec![7, 8, 9],
-        ];
+        let txs = vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
         let root = calculate_transaction_root(&txs);
-        assert_ne!(root, H256::zero(), "Multiple transactions should produce non-zero root");
+        assert_ne!(
+            root,
+            H256::zero(),
+            "Multiple transactions should produce non-zero root"
+        );
 
         // Verify determinism
         let root2 = calculate_transaction_root(&txs);
@@ -97,7 +105,10 @@ mod tests {
         let root1 = calculate_transaction_root(&txs1);
         let root2 = calculate_transaction_root(&txs2);
 
-        assert_ne!(root1, root2, "Different transactions should produce different roots");
+        assert_ne!(
+            root1, root2,
+            "Different transactions should produce different roots"
+        );
     }
 
     #[test]
@@ -114,11 +125,7 @@ mod tests {
     #[test]
     fn test_odd_number_transactions() {
         // Test with 3 transactions (odd number)
-        let txs = vec![
-            vec![1, 2, 3],
-            vec![4, 5, 6],
-            vec![7, 8, 9],
-        ];
+        let txs = vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
         let root = calculate_transaction_root(&txs);
         assert_ne!(root, H256::zero(), "Odd number of transactions should work");
     }
@@ -126,12 +133,7 @@ mod tests {
     #[test]
     fn test_power_of_two_transactions() {
         // Test with 4 transactions (power of 2)
-        let txs = vec![
-            vec![1],
-            vec![2],
-            vec![3],
-            vec![4],
-        ];
+        let txs = vec![vec![1], vec![2], vec![3], vec![4]];
         let root = calculate_transaction_root(&txs);
         assert_ne!(root, H256::zero(), "Power of 2 transactions should work");
     }
@@ -144,4 +146,3 @@ mod tests {
         assert_eq!(root1, root2, "Hash should be deterministic");
     }
 }
-

@@ -7,31 +7,33 @@
 //! - Removed: NetworkSupervisor, actor_system dependencies
 
 use actix::prelude::*;
-use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
-use std::sync::Arc;
-use anyhow::{Result, anyhow, Context as AnyhowContext};
+use anyhow::{anyhow, Context as AnyhowContext, Result};
 use ethereum_types::H256;
-use libp2p::{Multiaddr, PeerId, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
+use futures::{select, FutureExt, StreamExt};
 use libp2p::request_response::{RequestId, ResponseChannel};
+use libp2p::{
+    swarm::{ConnectionHandler, NetworkBehaviour, Swarm, SwarmEvent},
+    Multiaddr, PeerId,
+};
 use lru::LruCache;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
-use futures::{select, StreamExt, FutureExt};
 
 use super::{
-    NetworkConfig, NetworkMessage, NetworkResponse, NetworkError,
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
-    NetworkMetrics,
     managers::{PeerManager, Violation},
-    messages::{PeerInfo, NetworkStatus},
+    messages::{NetworkStatus, PeerInfo},
     protocols::{BlockRequest, BlockResponse},
+    NetworkConfig, NetworkError, NetworkMessage, NetworkMetrics, NetworkResponse,
 };
 
 /// Type alias for SwarmEvent with our behaviour's error type
 type AlysSwarmEvent = SwarmEvent<
     AlysNetworkBehaviourEvent,
-    <<AlysNetworkBehaviour as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::Error
+    <<AlysNetworkBehaviour as NetworkBehaviour>::ConnectionHandler as ConnectionHandler>::Error,
 >;
 
 /// Commands that can be sent to the swarm polling task
@@ -105,7 +107,9 @@ impl RateLimiter {
         let cutoff = now - self.window;
 
         // Get or create peer's message queue
-        let messages = self.peer_message_counts.entry(peer_id.to_string())
+        let messages = self
+            .peer_message_counts
+            .entry(peer_id.to_string())
             .or_insert_with(VecDeque::new);
 
         // Remove old messages outside the window
@@ -134,7 +138,9 @@ impl RateLimiter {
         let cutoff = now - self.window;
 
         // Get or create peer's byte queue
-        let byte_records = self.peer_byte_counts.entry(peer_id.to_string())
+        let byte_records = self
+            .peer_byte_counts
+            .entry(peer_id.to_string())
             .or_insert_with(VecDeque::new);
 
         // Remove old records outside the window
@@ -164,12 +170,10 @@ impl RateLimiter {
     /// Clean up old rate limit data for peers
     fn cleanup(&mut self, active_peers: &[String]) {
         // Remove data for disconnected peers
-        self.peer_message_counts.retain(|peer_id, _| {
-            active_peers.contains(peer_id)
-        });
-        self.peer_byte_counts.retain(|peer_id, _| {
-            active_peers.contains(peer_id)
-        });
+        self.peer_message_counts
+            .retain(|peer_id, _| active_peers.contains(peer_id));
+        self.peer_byte_counts
+            .retain(|peer_id, _| active_peers.contains(peer_id));
     }
 }
 
@@ -227,7 +231,9 @@ impl NetworkActor {
     /// Create a new NetworkActor with simplified configuration
     pub fn new(config: NetworkConfig) -> Result<Self> {
         // Validate configuration
-        config.validate().map_err(|e| anyhow!("Invalid network configuration: {}", e))?;
+        config
+            .validate()
+            .map_err(|e| anyhow!("Invalid network configuration: {}", e))?;
 
         // Generate peer ID for identification (swarm will be created on StartNetwork)
         let keypair = libp2p::identity::Keypair::generate_ed25519();
@@ -243,9 +249,7 @@ impl NetworkActor {
         );
 
         // Phase 5: Initialize block cache (LRU with capacity of 100 blocks)
-        let block_cache = Arc::new(RwLock::new(
-            LruCache::new(NonZeroUsize::new(100).unwrap())
-        ));
+        let block_cache = Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
 
         Ok(Self {
             config,
@@ -302,16 +306,15 @@ impl NetworkActor {
     }
 
     /// Handle swarm events (delegated from StreamHandler)
-    fn handle_swarm_event(
-        &mut self,
-        event: AlysSwarmEvent,
-    ) -> Result<()> {
+    fn handle_swarm_event(&mut self, event: AlysSwarmEvent) -> Result<()> {
         match event {
             SwarmEvent::Behaviour(behaviour_event) => {
                 self.handle_network_event(behaviour_event)?;
             }
 
-            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
                 tracing::info!(
                     peer_id = %peer_id,
                     endpoint = ?endpoint,
@@ -334,7 +337,11 @@ impl NetworkActor {
                 self.metrics.record_connection_closed();
             }
 
-            SwarmEvent::IncomingConnection { local_addr, send_back_addr, connection_id } => {
+            SwarmEvent::IncomingConnection {
+                local_addr,
+                send_back_addr,
+                connection_id,
+            } => {
                 tracing::debug!(
                     local_addr = %local_addr,
                     send_back_addr = %send_back_addr,
@@ -343,7 +350,12 @@ impl NetworkActor {
                 );
             }
 
-            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
+            SwarmEvent::IncomingConnectionError {
+                local_addr,
+                send_back_addr,
+                error,
+                connection_id,
+            } => {
                 tracing::warn!(
                     local_addr = %local_addr,
                     send_back_addr = %send_back_addr,
@@ -398,10 +410,12 @@ impl NetworkActor {
 
         // Re-listen on configured addresses
         for addr_str in &self.config.listen_addresses {
-            let addr: Multiaddr = addr_str.parse()
+            let addr: Multiaddr = addr_str
+                .parse()
                 .context(format!("Invalid listen address: {}", addr_str))?;
 
-            swarm.listen_on(addr.clone())
+            swarm
+                .listen_on(addr.clone())
                 .context(format!("Failed to listen on {}", addr))?;
 
             tracing::info!("Listening on: {}", addr);
@@ -429,7 +443,9 @@ impl NetworkActor {
         self.swarm_task_handle = Some(swarm_task);
 
         // Add new event stream to actor context
-        ctx.add_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(event_rx));
+        ctx.add_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(
+            event_rx,
+        ));
 
         self.is_running = true;
 
@@ -439,9 +455,18 @@ impl NetworkActor {
     /// Handle incoming network events
     fn handle_network_event(&mut self, event: AlysNetworkBehaviourEvent) -> Result<()> {
         match event {
-            AlysNetworkBehaviourEvent::GossipMessage { topic, data, source_peer, message_id } => {
-                tracing::debug!("Received gossip message {} from {} on topic {}",
-                    message_id, source_peer, topic);
+            AlysNetworkBehaviourEvent::GossipMessage {
+                topic,
+                data,
+                source_peer,
+                message_id,
+            } => {
+                tracing::debug!(
+                    "Received gossip message {} from {} on topic {}",
+                    message_id,
+                    source_peer,
+                    topic
+                );
 
                 // Phase 4: DOS Protection - Rate limit check
                 if let Err(e) = self.rate_limiter.check_message_rate(&source_peer) {
@@ -453,8 +478,8 @@ impl NetworkActor {
                     self.peer_manager.add_peer_violation(
                         &source_peer,
                         Violation::ExcessiveRate {
-                            messages_per_second: self.config.max_messages_per_peer_per_second
-                        }
+                            messages_per_second: self.config.max_messages_per_peer_per_second,
+                        },
                     );
                     self.metrics.record_rate_limited();
                     return Ok(()); // Drop message
@@ -470,13 +495,18 @@ impl NetworkActor {
                     );
                     self.peer_manager.add_peer_violation(
                         &source_peer,
-                        Violation::OversizedMessage { size_bytes: data.len() }
+                        Violation::OversizedMessage {
+                            size_bytes: data.len(),
+                        },
                     );
                     return Ok(()); // Drop message
                 }
 
                 // Phase 4: DOS Protection - Bandwidth limit check
-                if let Err(e) = self.rate_limiter.check_byte_rate(&source_peer, data.len() as u64) {
+                if let Err(e) = self
+                    .rate_limiter
+                    .check_byte_rate(&source_peer, data.len() as u64)
+                {
                     tracing::warn!(
                         peer_id = %source_peer,
                         bytes = data.len(),
@@ -486,8 +516,8 @@ impl NetworkActor {
                     self.peer_manager.add_peer_violation(
                         &source_peer,
                         Violation::ExcessiveRate {
-                            messages_per_second: self.config.max_messages_per_peer_per_second
-                        }
+                            messages_per_second: self.config.max_messages_per_peer_per_second,
+                        },
                     );
                     self.metrics.record_rate_limited();
                     return Ok(()); // Drop message
@@ -673,7 +703,12 @@ impl NetworkActor {
                 }
             }
 
-            AlysNetworkBehaviourEvent::BlockRequestReceived { peer_id, request_id, request, channel } => {
+            AlysNetworkBehaviourEvent::BlockRequestReceived {
+                peer_id,
+                request_id,
+                request,
+                channel,
+            } => {
                 tracing::debug!(
                     peer_id = %peer_id,
                     request_id = ?request_id,
@@ -689,7 +724,7 @@ impl NetworkActor {
                     let error_response = BlockResponse::Error(
                         crate::actors_v2::network::protocols::request_response::ErrorResponse {
                             message: b"Block requests not yet implemented".to_vec(),
-                        }
+                        },
                     );
 
                     let cmd = SwarmCommand::SendResponse {
@@ -705,7 +740,11 @@ impl NetworkActor {
                 }
             }
 
-            AlysNetworkBehaviourEvent::BlockResponseReceived { peer_id, request_id, response } => {
+            AlysNetworkBehaviourEvent::BlockResponseReceived {
+                peer_id,
+                request_id,
+                response,
+            } => {
                 tracing::info!(
                     peer_id = %peer_id,
                     request_id = ?request_id,
@@ -744,7 +783,10 @@ impl NetworkActor {
                 }
             }
 
-            AlysNetworkBehaviourEvent::RequestSent { peer_id, request_id } => {
+            AlysNetworkBehaviourEvent::RequestSent {
+                peer_id,
+                request_id,
+            } => {
                 tracing::debug!(
                     peer_id = %peer_id,
                     request_id = ?request_id,
@@ -783,9 +825,17 @@ impl NetworkActor {
                 self.metrics.record_connection_closed();
             }
 
-            AlysNetworkBehaviourEvent::PeerIdentified { peer_id, protocols, addresses } => {
-                tracing::debug!("Peer identified: {} with {} protocols and {} addresses",
-                    peer_id, protocols.len(), addresses.len());
+            AlysNetworkBehaviourEvent::PeerIdentified {
+                peer_id,
+                protocols,
+                addresses,
+            } => {
+                tracing::debug!(
+                    "Peer identified: {} with {} protocols and {} addresses",
+                    peer_id,
+                    protocols.len(),
+                    addresses.len()
+                );
 
                 // Update peer information
                 if let Some(address) = addresses.first() {
@@ -794,8 +844,11 @@ impl NetworkActor {
             }
 
             AlysNetworkBehaviourEvent::MdnsPeerDiscovered { peer_id, addresses } => {
-                tracing::info!("mDNS peer discovered: {} with {} addresses",
-                    peer_id, addresses.len());
+                tracing::info!(
+                    "mDNS peer discovered: {} with {} addresses",
+                    peer_id,
+                    addresses.len()
+                );
 
                 // Phase 2 Task 2.4: Record mDNS-specific discovery metric
                 self.metrics.record_mdns_discovery();
@@ -810,7 +863,8 @@ impl NetworkActor {
                             // Parse multiaddr for dialing
                             match address.parse::<Multiaddr>() {
                                 Ok(multiaddr) => {
-                                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                                    let (response_tx, response_rx) =
+                                        tokio::sync::oneshot::channel();
                                     let dial_cmd = SwarmCommand::Dial {
                                         addr: multiaddr.clone(),
                                         response_tx,
@@ -818,7 +872,10 @@ impl NetworkActor {
 
                                     match cmd_tx.try_send(dial_cmd) {
                                         Ok(_) => {
-                                            tracing::info!("Auto-dialing mDNS discovered peer: {}", peer_id);
+                                            tracing::info!(
+                                                "Auto-dialing mDNS discovered peer: {}",
+                                                peer_id
+                                            );
 
                                             // Spawn task to handle dial response
                                             let peer_id_clone = peer_id.clone();
@@ -828,7 +885,11 @@ impl NetworkActor {
                                                         tracing::info!("Successfully connected to mDNS peer: {}", peer_id_clone);
                                                     }
                                                     Ok(Err(e)) => {
-                                                        tracing::warn!("Failed to dial mDNS peer {}: {}", peer_id_clone, e);
+                                                        tracing::warn!(
+                                                            "Failed to dial mDNS peer {}: {}",
+                                                            peer_id_clone,
+                                                            e
+                                                        );
                                                     }
                                                     Err(_) => {
                                                         tracing::error!("Dial response channel closed for mDNS peer: {}", peer_id_clone);
@@ -842,11 +903,18 @@ impl NetworkActor {
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("Invalid multiaddr for mDNS peer {}: {}", peer_id, e);
+                                    tracing::error!(
+                                        "Invalid multiaddr for mDNS peer {}: {}",
+                                        peer_id,
+                                        e
+                                    );
                                 }
                             }
                         } else {
-                            tracing::warn!("Cannot auto-dial mDNS peer {}: command channel not available", peer_id);
+                            tracing::warn!(
+                                "Cannot auto-dial mDNS peer {}: command channel not available",
+                                peer_id
+                            );
                         }
                     } else {
                         tracing::debug!("Auto-dial disabled for mDNS peer: {}", peer_id);
@@ -854,8 +922,12 @@ impl NetworkActor {
 
                     // Notify SyncActor about new peer for potential sync
                     if let Some(ref sync_actor) = self.sync_actor {
-                        let current_peers = self.peer_manager.get_connected_peers()
-                            .keys().cloned().collect();
+                        let current_peers = self
+                            .peer_manager
+                            .get_connected_peers()
+                            .keys()
+                            .cloned()
+                            .collect();
 
                         let update_msg = crate::actors_v2::network::SyncMessage::UpdatePeers {
                             peers: current_peers,
@@ -866,7 +938,9 @@ impl NetworkActor {
                         tokio::spawn(async move {
                             match sync_actor_clone.send(update_msg).await {
                                 Ok(_) => tracing::debug!("Updated SyncActor with new peer list"),
-                                Err(e) => tracing::error!("Failed to update SyncActor peers: {}", e),
+                                Err(e) => {
+                                    tracing::error!("Failed to update SyncActor peers: {}", e)
+                                }
                             }
                         });
                     }
@@ -888,11 +962,23 @@ impl NetworkActor {
     }
 
     /// Handle request from peer
-    fn handle_peer_request(&mut self, request: crate::actors_v2::network::messages::NetworkRequest, source_peer: String, _request_id: String) -> Result<()> {
+    fn handle_peer_request(
+        &mut self,
+        request: crate::actors_v2::network::messages::NetworkRequest,
+        source_peer: String,
+        _request_id: String,
+    ) -> Result<()> {
         match request {
-            crate::actors_v2::network::messages::NetworkRequest::GetBlocks { start_height, count } => {
-                tracing::debug!("Peer {} requested {} blocks starting from height {}",
-                    source_peer, count, start_height);
+            crate::actors_v2::network::messages::NetworkRequest::GetBlocks {
+                start_height,
+                count,
+            } => {
+                tracing::debug!(
+                    "Peer {} requested {} blocks starting from height {}",
+                    source_peer,
+                    count,
+                    start_height
+                );
 
                 // Forward to SyncActor for handling
                 if let Some(ref _sync_actor) = self.sync_actor {
@@ -965,7 +1051,9 @@ impl NetworkActor {
         });
 
         // Phase 4: Clean up rate limiter data for disconnected peers
-        let active_peers: Vec<String> = self.peer_manager.get_connected_peers()
+        let active_peers: Vec<String> = self
+            .peer_manager
+            .get_connected_peers()
             .keys()
             .cloned()
             .collect();
@@ -1014,11 +1102,7 @@ impl Actor for NetworkActor {
 
 /// StreamHandler receives events from swarm polling task
 impl StreamHandler<AlysSwarmEvent> for NetworkActor {
-    fn handle(
-        &mut self,
-        event: AlysSwarmEvent,
-        _ctx: &mut Context<Self>,
-    ) {
+    fn handle(&mut self, event: AlysSwarmEvent, _ctx: &mut Context<Self>) {
         // Delegate to existing handler
         if let Err(e) = self.handle_swarm_event(event) {
             tracing::error!("Error handling swarm event: {}", e);
@@ -1057,7 +1141,10 @@ impl Handler<NetworkMessage> for NetworkActor {
 
     fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
         match msg {
-            NetworkMessage::StartNetwork { listen_addrs, bootstrap_peers } => {
+            NetworkMessage::StartNetwork {
+                listen_addrs,
+                bootstrap_peers,
+            } => {
                 // Check idempotency
                 if self.is_running {
                     tracing::warn!("Network already running - ignoring StartNetwork");
@@ -1071,13 +1158,17 @@ impl Handler<NetworkMessage> for NetworkActor {
                 self.config.bootstrap_peers = bootstrap_peers.clone();
 
                 // Create swarm on-demand
-                let mut swarm = match crate::actors_v2::network::swarm_factory::create_swarm(&self.config) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::error!("Failed to create swarm: {}", e);
-                        return Err(NetworkError::Internal(format!("Failed to create swarm: {}", e)));
-                    }
-                };
+                let mut swarm =
+                    match crate::actors_v2::network::swarm_factory::create_swarm(&self.config) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Failed to create swarm: {}", e);
+                            return Err(NetworkError::Internal(format!(
+                                "Failed to create swarm: {}",
+                                e
+                            )));
+                        }
+                    };
 
                 // Update local peer ID from actual swarm
                 self.local_peer_id = swarm.local_peer_id().to_string();
@@ -1088,13 +1179,19 @@ impl Handler<NetworkMessage> for NetworkActor {
                         Ok(a) => a,
                         Err(e) => {
                             tracing::error!("Invalid listen address {}: {}", addr_str, e);
-                            return Err(NetworkError::Configuration(format!("Invalid listen address: {}", e)));
+                            return Err(NetworkError::Configuration(format!(
+                                "Invalid listen address: {}",
+                                e
+                            )));
                         }
                     };
 
                     if let Err(e) = swarm.listen_on(addr.clone()) {
                         tracing::error!("Failed to listen on {}: {}", addr, e);
-                        return Err(NetworkError::Internal(format!("Failed to listen on {}: {}", addr, e)));
+                        return Err(NetworkError::Internal(format!(
+                            "Failed to listen on {}: {}",
+                            addr, e
+                        )));
                     }
 
                     tracing::info!("Listening on: {}", addr);
@@ -1224,7 +1321,8 @@ impl Handler<NetworkMessage> for NetworkActor {
                 ctx.add_stream(tokio_stream::wrappers::ReceiverStream::new(event_rx));
 
                 // Set up peer manager with bootstrap peers
-                self.peer_manager.set_bootstrap_peers(bootstrap_peers.clone());
+                self.peer_manager
+                    .set_bootstrap_peers(bootstrap_peers.clone());
 
                 // Connect to bootstrap peers using command channel (Phase 2 Task 2.0.4)
                 if !bootstrap_peers.is_empty() {
@@ -1235,7 +1333,11 @@ impl Handler<NetworkMessage> for NetworkActor {
                         let multiaddr: Multiaddr = match peer_addr_str.parse() {
                             Ok(addr) => addr,
                             Err(e) => {
-                                tracing::error!("Invalid bootstrap peer address {}: {}", peer_addr_str, e);
+                                tracing::error!(
+                                    "Invalid bootstrap peer address {}: {}",
+                                    peer_addr_str,
+                                    e
+                                );
                                 continue;
                             }
                         };
@@ -1253,19 +1355,29 @@ impl Handler<NetworkMessage> for NetworkActor {
                                 tokio::spawn(async move {
                                     match response_rx.await {
                                         Ok(Ok(())) => {
-                                            tracing::info!("Successfully initiated dial to {}", multiaddr);
+                                            tracing::info!(
+                                                "Successfully initiated dial to {}",
+                                                multiaddr
+                                            );
                                         }
                                         Ok(Err(e)) => {
                                             tracing::warn!("Failed to dial {}: {}", multiaddr, e);
                                         }
                                         Err(_) => {
-                                            tracing::error!("Dial response channel closed for {}", multiaddr);
+                                            tracing::error!(
+                                                "Dial response channel closed for {}",
+                                                multiaddr
+                                            );
                                         }
                                     }
                                 });
                             }
                             Err(e) => {
-                                tracing::error!("Failed to send dial command for {}: {}", peer_addr_str, e);
+                                tracing::error!(
+                                    "Failed to send dial command for {}: {}",
+                                    peer_addr_str,
+                                    e
+                                );
                                 continue;
                             }
                         }
@@ -1292,8 +1404,12 @@ impl Handler<NetworkMessage> for NetworkActor {
 
                 if graceful {
                     // Graceful shutdown - disconnect from peers cleanly
-                    let connected_peers: Vec<String> = self.peer_manager.get_connected_peers()
-                        .keys().cloned().collect();
+                    let connected_peers: Vec<String> = self
+                        .peer_manager
+                        .get_connected_peers()
+                        .keys()
+                        .cloned()
+                        .collect();
 
                     for peer_id in &connected_peers {
                         self.peer_manager.remove_peer(peer_id);
@@ -1325,7 +1441,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                 Ok(NetworkResponse::Status(status))
             }
 
-            NetworkMessage::BroadcastBlock { block_data, priority } => {
+            NetworkMessage::BroadcastBlock {
+                block_data,
+                priority,
+            } => {
                 // Phase 2 Task 2.1: Real gossipsub broadcasting via SwarmCommand channel
 
                 // Validate network is running
@@ -1339,7 +1458,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                     Some(tx) => tx.clone(),
                     None => {
                         tracing::error!("Swarm command channel not available");
-                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                        return Err(NetworkError::Internal(
+                            "Command channel not available".to_string(),
+                        ));
                     }
                 };
 
@@ -1373,7 +1494,8 @@ impl Handler<NetworkMessage> for NetworkActor {
                         // Update metrics immediately
                         self.metrics.record_message_sent(data_len);
                         self.metrics.record_gossip_published();
-                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+                        self.active_subscriptions
+                            .insert(topic.clone(), Instant::now());
 
                         // Spawn task to handle async response
                         tokio::spawn(async move {
@@ -1403,7 +1525,7 @@ impl Handler<NetworkMessage> for NetworkActor {
 
                         // Return immediately with pending status
                         Ok(NetworkResponse::Broadcasted {
-                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4())
+                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4()),
                         })
                     }
                     Err(e) => {
@@ -1411,7 +1533,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                             error = ?e,
                             "Failed to send broadcast command"
                         );
-                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                        Err(NetworkError::Internal(format!(
+                            "Failed to send command: {}",
+                            e
+                        )))
                     }
                 }
             }
@@ -1430,7 +1555,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                     Some(tx) => tx.clone(),
                     None => {
                         tracing::error!("Swarm command channel not available");
-                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                        return Err(NetworkError::Internal(
+                            "Command channel not available".to_string(),
+                        ));
                     }
                 };
 
@@ -1458,7 +1585,8 @@ impl Handler<NetworkMessage> for NetworkActor {
                         // Update metrics immediately
                         self.metrics.record_message_sent(data_len);
                         self.metrics.record_gossip_published();
-                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+                        self.active_subscriptions
+                            .insert(topic.clone(), Instant::now());
 
                         // Spawn task to handle async response
                         tokio::spawn(async move {
@@ -1488,7 +1616,7 @@ impl Handler<NetworkMessage> for NetworkActor {
 
                         // Return immediately with pending status
                         Ok(NetworkResponse::Broadcasted {
-                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4())
+                            message_id: format!("broadcast-{}", uuid::Uuid::new_v4()),
                         })
                     }
                     Err(e) => {
@@ -1496,7 +1624,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                             error = ?e,
                             "Failed to send broadcast command"
                         );
-                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                        Err(NetworkError::Internal(format!(
+                            "Failed to send command: {}",
+                            e
+                        )))
                     }
                 }
             }
@@ -1516,7 +1647,9 @@ impl Handler<NetworkMessage> for NetworkActor {
             }
 
             NetworkMessage::GetConnectedPeers => {
-                let peers = self.peer_manager.get_connected_peers()
+                let peers = self
+                    .peer_manager
+                    .get_connected_peers()
                     .into_iter()
                     .map(|(peer_id, info)| PeerInfo {
                         peer_id,
@@ -1569,7 +1702,10 @@ impl Handler<NetworkMessage> for NetworkActor {
             }
 
             // Phase 4 messages
-            NetworkMessage::BroadcastAuxPow { auxpow_data, correlation_id } => {
+            NetworkMessage::BroadcastAuxPow {
+                auxpow_data,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
 
                 tracing::debug!(
@@ -1609,7 +1745,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                         error = ?e,
                         "Invalid AuxPoW data format"
                     );
-                    return Err(NetworkError::Protocol(format!("Invalid AuxPoW format: {}", e)));
+                    return Err(NetworkError::Protocol(format!(
+                        "Invalid AuxPoW format: {}",
+                        e
+                    )));
                 }
 
                 // Phase 2 Task 2.1: Real gossipsub broadcasting via SwarmCommand channel
@@ -1619,7 +1758,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                     Some(tx) => tx.clone(),
                     None => {
                         tracing::error!(correlation_id = %correlation_id, "Swarm command channel not available");
-                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                        return Err(NetworkError::Internal(
+                            "Command channel not available".to_string(),
+                        ));
                     }
                 };
 
@@ -1645,7 +1786,8 @@ impl Handler<NetworkMessage> for NetworkActor {
                 match cmd_tx.try_send(cmd) {
                     Ok(_) => {
                         // Update active subscriptions
-                        self.active_subscriptions.insert(topic.clone(), Instant::now());
+                        self.active_subscriptions
+                            .insert(topic.clone(), Instant::now());
 
                         // Spawn task to handle async response
                         tokio::spawn(async move {
@@ -1685,12 +1827,19 @@ impl Handler<NetworkMessage> for NetworkActor {
                             error = ?e,
                             "Failed to send AuxPoW broadcast command"
                         );
-                        Err(NetworkError::Internal(format!("Failed to send command: {}", e)))
+                        Err(NetworkError::Internal(format!(
+                            "Failed to send command: {}",
+                            e
+                        )))
                     }
                 }
             }
 
-            NetworkMessage::RequestBlocks { start_height, count, correlation_id } => {
+            NetworkMessage::RequestBlocks {
+                start_height,
+                count,
+                correlation_id,
+            } => {
                 let request_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
 
                 tracing::debug!(
@@ -1716,7 +1865,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         count = count,
                         "Invalid block request count (must be 1-100)"
                     );
-                    return Err(NetworkError::Protocol("Invalid block count: must be 1-100".to_string()));
+                    return Err(NetworkError::Protocol(
+                        "Invalid block count: must be 1-100".to_string(),
+                    ));
                 }
 
                 // Check rate limiting (Phase 4: Task 2.9)
@@ -1727,7 +1878,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         pending_count = self.pending_block_requests.len(),
                         "Too many pending block requests"
                     );
-                    return Err(NetworkError::Internal("Too many pending requests".to_string()));
+                    return Err(NetworkError::Internal(
+                        "Too many pending requests".to_string(),
+                    ));
                 }
 
                 // Select best peers for block requests (Phase 4: Task 2.2)
@@ -1737,7 +1890,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         correlation_id = %request_id,
                         "No suitable peers available for block request"
                     );
-                    return Err(NetworkError::Connection("No suitable peers available".to_string()));
+                    return Err(NetworkError::Connection(
+                        "No suitable peers available".to_string(),
+                    ));
                 }
 
                 tracing::info!(
@@ -1756,14 +1911,17 @@ impl Handler<NetworkMessage> for NetworkActor {
                     count,
                     timestamp: Instant::now(),
                 };
-                self.pending_block_requests.insert(request_id, block_request);
+                self.pending_block_requests
+                    .insert(request_id, block_request);
 
                 // Get command channel (Phase 3 Task 3.1)
                 let cmd_tx = match self.swarm_cmd_tx.as_ref() {
                     Some(tx) => tx.clone(),
                     None => {
                         tracing::error!(correlation_id = %request_id, "Swarm command channel not available");
-                        return Err(NetworkError::Internal("Command channel not available".to_string()));
+                        return Err(NetworkError::Internal(
+                            "Command channel not available".to_string(),
+                        ));
                     }
                 };
 
@@ -1772,7 +1930,7 @@ impl Handler<NetworkMessage> for NetworkActor {
                     crate::actors_v2::network::protocols::request_response::BlockRangeRequest {
                         start_height,
                         count,
-                    }
+                    },
                 );
 
                 // Send requests to selected peers via SwarmCommand (Phase 3 Task 3.1)
@@ -1861,7 +2019,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         "All block requests failed to send"
                     );
                     self.pending_block_requests.remove(&request_id);
-                    return Err(NetworkError::Internal("Failed to send any block requests".to_string()));
+                    return Err(NetworkError::Internal(
+                        "Failed to send any block requests".to_string(),
+                    ));
                 }
 
                 Ok(NetworkResponse::BlocksRequested {
@@ -1870,7 +2030,12 @@ impl Handler<NetworkMessage> for NetworkActor {
                 })
             }
 
-            NetworkMessage::HandleBlockResponse { blocks, request_id, peer_id, correlation_id } => {
+            NetworkMessage::HandleBlockResponse {
+                blocks,
+                request_id,
+                peer_id,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
 
                 tracing::info!(
@@ -1970,7 +2135,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         correlation_id = %correlation_id,
                         "SyncActor not available for block forwarding"
                     );
-                    Err(NetworkError::Internal("SyncActor not available".to_string()))
+                    Err(NetworkError::Internal(
+                        "SyncActor not available".to_string(),
+                    ))
                 }
             }
 
@@ -1979,7 +2146,11 @@ impl Handler<NetworkMessage> for NetworkActor {
                 tracing::info!("ChainActor address set for NetworkActor AuxPoW forwarding");
                 Ok(NetworkResponse::Started)
             }
-            NetworkMessage::HandleCompletedAuxPow { auxpow_data, peer_id, correlation_id } => {
+            NetworkMessage::HandleCompletedAuxPow {
+                auxpow_data,
+                peer_id,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| uuid::Uuid::new_v4());
 
                 tracing::info!(
@@ -1993,18 +2164,19 @@ impl Handler<NetworkMessage> for NetworkActor {
                 self.metrics.record_auxpow_received();
 
                 // Validate and deserialize AuxPoW header
-                let auxpow_header = match serde_json::from_slice::<crate::block::AuxPowHeader>(&auxpow_data) {
-                    Ok(header) => header,
-                    Err(e) => {
-                        tracing::error!(
-                            correlation_id = %correlation_id,
-                            peer_id = %peer_id,
-                            error = ?e,
-                            "Invalid AuxPoW data from miner"
-                        );
-                        return Err(NetworkError::Protocol(format!("Invalid AuxPoW: {}", e)));
-                    }
-                };
+                let auxpow_header =
+                    match serde_json::from_slice::<crate::block::AuxPowHeader>(&auxpow_data) {
+                        Ok(header) => header,
+                        Err(e) => {
+                            tracing::error!(
+                                correlation_id = %correlation_id,
+                                peer_id = %peer_id,
+                                error = ?e,
+                                "Invalid AuxPoW data from miner"
+                            );
+                            return Err(NetworkError::Protocol(format!("Invalid AuxPoW: {}", e)));
+                        }
+                    };
 
                 // Validate that AuxPoW field is populated (miners must complete it)
                 if auxpow_header.auxpow.is_none() {
@@ -2067,7 +2239,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                         correlation_id = %correlation_id,
                         "ChainActor not available for AuxPoW queueing"
                     );
-                    Err(NetworkError::Internal("ChainActor not available".to_string()))
+                    Err(NetworkError::Internal(
+                        "ChainActor not available".to_string(),
+                    ))
                 }
             }
             NetworkMessage::HealthCheck { correlation_id } => {
@@ -2082,9 +2256,7 @@ impl Handler<NetworkMessage> for NetworkActor {
                 let swarm_healthy = self.is_running && self.swarm_cmd_tx.is_some();
 
                 // Health criteria
-                let is_healthy = swarm_healthy
-                    && connected_peers > 0
-                    && avg_reputation > 0.0;
+                let is_healthy = swarm_healthy && connected_peers > 0 && avg_reputation > 0.0;
 
                 // Detailed issues reporting
                 let mut issues = Vec::new();
@@ -2101,18 +2273,30 @@ impl Handler<NetworkMessage> for NetworkActor {
                 if connected_peers == 0 {
                     issues.push("No peers connected".to_string());
                 } else if connected_peers < 3 {
-                    issues.push(format!("Low peer count: {} (recommended: >=3)", connected_peers));
+                    issues.push(format!(
+                        "Low peer count: {} (recommended: >=3)",
+                        connected_peers
+                    ));
                 }
 
                 if avg_reputation <= 0.0 {
-                    issues.push(format!("Critical: Average peer reputation is {:.1} (threshold: >0.0)", avg_reputation));
+                    issues.push(format!(
+                        "Critical: Average peer reputation is {:.1} (threshold: >0.0)",
+                        avg_reputation
+                    ));
                 } else if avg_reputation < 30.0 {
-                    issues.push(format!("Warning: Low average peer reputation: {:.1}", avg_reputation));
+                    issues.push(format!(
+                        "Warning: Low average peer reputation: {:.1}",
+                        avg_reputation
+                    ));
                 }
 
                 // Check for high rate limiting
                 if self.metrics.rate_limited_messages > 100 {
-                    issues.push(format!("High rate limiting: {} messages dropped", self.metrics.rate_limited_messages));
+                    issues.push(format!(
+                        "High rate limiting: {} messages dropped",
+                        self.metrics.rate_limited_messages
+                    ));
                 }
 
                 // Check for high connection failure rate
@@ -2123,7 +2307,10 @@ impl Handler<NetworkMessage> for NetworkActor {
                 };
 
                 if connection_failure_rate > 0.5 {
-                    issues.push(format!("High connection failure rate: {:.1}%", connection_failure_rate * 100.0));
+                    issues.push(format!(
+                        "High connection failure rate: {:.1}%",
+                        connection_failure_rate * 100.0
+                    ));
                 }
 
                 tracing::info!(
@@ -2135,7 +2322,11 @@ impl Handler<NetworkMessage> for NetworkActor {
                     "Health check completed"
                 );
 
-                Ok(NetworkResponse::Healthy { is_healthy, connected_peers, issues })
+                Ok(NetworkResponse::Healthy {
+                    is_healthy,
+                    connected_peers,
+                    issues,
+                })
             }
 
             NetworkMessage::CleanupTimeouts => {

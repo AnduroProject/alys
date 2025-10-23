@@ -26,10 +26,10 @@ pub mod state;
 pub mod withdrawals;
 
 // Phase 4 production hardening modules
-pub mod recovery;
-pub mod monitoring;
 pub mod auxpow;
 pub mod fork_choice;
+pub mod monitoring;
+pub mod recovery;
 pub mod reorganization;
 
 pub use actor::ChainActor;
@@ -40,5 +40,5 @@ pub use metrics::ChainMetrics;
 pub use state::ChainState;
 
 // Phase 4 exports
+pub use monitoring::{PerformanceMetrics, PerformanceStatus, PerformanceSummary};
 pub use recovery::HealthStatus;
-pub use monitoring::{PerformanceStatus, PerformanceSummary, PerformanceMetrics};

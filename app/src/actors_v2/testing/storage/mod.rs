@@ -1,21 +1,23 @@
-pub mod unit;
-pub mod integration;
-pub mod property;
 pub mod chaos;
 pub mod fixtures;
+pub mod integration;
+pub mod property;
+pub mod unit;
 
 use super::base::*;
-use crate::actors_v2::storage::actor::{StorageActor, StorageConfig, AlysConsensusBlock, StorageError};
-use crate::actors_v2::storage::messages::*;
 use crate::actors_v2::common::StorageMessage;
+use crate::actors_v2::storage::actor::{
+    AlysConsensusBlock, StorageActor, StorageConfig, StorageError,
+};
+use crate::actors_v2::storage::messages::*;
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
 use async_trait::async_trait;
-use tempfile::TempDir;
-use uuid::Uuid;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::sync::RwLock;
-use tracing::{info, debug};
+use tracing::{debug, info};
+use uuid::Uuid;
 
 /// Storage Actor specific test harness
 pub struct StorageTestHarness {
@@ -35,9 +37,14 @@ impl ActorTestHarness for StorageTestHarness {
     async fn new() -> Result<Self, Self::Error> {
         let temp_dir = TempDir::new().map_err(StorageTestError::IoError)?;
         let mut config = StorageConfig::default();
-        config.database.main_path = temp_dir.path().join("test_storage").to_string_lossy().to_string();
+        config.database.main_path = temp_dir
+            .path()
+            .join("test_storage")
+            .to_string_lossy()
+            .to_string();
 
-        let actor = StorageActor::new(config.clone()).await
+        let actor = StorageActor::new(config.clone())
+            .await
             .map_err(|e| StorageTestError::ActorCreation(e.to_string()))?;
 
         Ok(Self {
@@ -51,9 +58,14 @@ impl ActorTestHarness for StorageTestHarness {
     async fn with_config(config: Self::Config) -> Result<Self, Self::Error> {
         let temp_dir = TempDir::new().map_err(StorageTestError::IoError)?;
         let mut test_config = config;
-        test_config.database.main_path = temp_dir.path().join("test_storage").to_string_lossy().to_string();
+        test_config.database.main_path = temp_dir
+            .path()
+            .join("test_storage")
+            .to_string_lossy()
+            .to_string();
 
-        let actor = StorageActor::new(test_config.clone()).await
+        let actor = StorageActor::new(test_config.clone())
+            .await
             .map_err(|e| StorageTestError::ActorCreation(e.to_string()))?;
 
         Ok(Self {
@@ -71,7 +83,9 @@ impl ActorTestHarness for StorageTestHarness {
     }
 
     async fn actor_mut(&mut self) -> &mut Self::Actor {
-        panic!("Direct mutable actor access not supported. Use base.get_actor_ref() for async access.")
+        panic!(
+            "Direct mutable actor access not supported. Use base.get_actor_ref() for async access."
+        )
     }
 
     async fn send_message(&mut self, message: Self::Message) -> Result<(), Self::Error> {
@@ -88,8 +102,11 @@ impl ActorTestHarness for StorageTestHarness {
                         let mut actor_guard = actor.write().await;
                         actor_guard.store_block(msg.block, msg.canonical).await
                     })
-                }).await.unwrap().map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::GetBlock(msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -98,8 +115,12 @@ impl ActorTestHarness for StorageTestHarness {
                         let mut actor_guard = actor.write().await;
                         actor_guard.get_block(&msg.block_hash).await
                     })
-                }).await.unwrap().map(|_| ()).map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map(|_| ())
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::GetBlockByHeight(msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -108,8 +129,12 @@ impl ActorTestHarness for StorageTestHarness {
                         let actor_guard = actor.read().await;
                         actor_guard.database.get_block_by_height(msg.height).await
                     })
-                }).await.unwrap().map(|_| ()).map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map(|_| ())
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::BlockExists(msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -118,8 +143,13 @@ impl ActorTestHarness for StorageTestHarness {
                         let actor_guard = actor.read().await;
                         actor_guard.database.get_block(&msg.block_hash).await
                     })
-                }).await.unwrap().map(|block| block.is_some()).map(|_| ()).map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map(|block| block.is_some())
+                .map(|_| ())
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::UpdateState(msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -128,8 +158,11 @@ impl ActorTestHarness for StorageTestHarness {
                         let mut actor_guard = actor.write().await;
                         actor_guard.database.put_state(&msg.key, &msg.value).await
                     })
-                }).await.unwrap().map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::GetState(msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -138,8 +171,12 @@ impl ActorTestHarness for StorageTestHarness {
                         let actor_guard = actor.read().await;
                         actor_guard.database.get_state(&msg.key).await
                     })
-                }).await.unwrap().map(|_| ()).map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map(|_| ())
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
             StorageMessage::GetChainHead(_msg) => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -148,15 +185,19 @@ impl ActorTestHarness for StorageTestHarness {
                         let actor_guard = actor.read().await;
                         actor_guard.database.get_chain_head().await
                     })
-                }).await.unwrap().map(|_| ()).map_err(|e| StorageTestError::StorageOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map(|_| ())
+                .map_err(|e| StorageTestError::StorageOperation(e.to_string()))
+            }
         };
 
         match result {
             Ok(()) => {
                 self.base.record_success().await;
                 Ok(())
-            },
+            }
             Err(e) => {
                 self.base.record_error(&e.to_string()).await;
                 Err(e)
@@ -186,8 +227,10 @@ impl ActorTestHarness for StorageTestHarness {
 
         // Metrics are automatically collected
         let metrics = self.base.get_metrics();
-        debug!("Test completed with {} messages sent, {} errors",
-               metrics.messages_sent, metrics.errors_encountered);
+        debug!(
+            "Test completed with {} messages sent, {} errors",
+            metrics.messages_sent, metrics.errors_encountered
+        );
 
         // Cleanup is automatic with TempDir drop
         Ok(())
@@ -200,15 +243,18 @@ impl ActorTestHarness for StorageTestHarness {
         let actor_guard = actor.read().await;
 
         // Verify database is accessible
-        let _health = actor_guard.database.get_chain_head().await
-            .map_err(|e| StorageTestError::StateVerification(format!("Database not accessible: {}", e)))?;
+        let _health = actor_guard.database.get_chain_head().await.map_err(|e| {
+            StorageTestError::StateVerification(format!("Database not accessible: {}", e))
+        })?;
 
         // Verify cache is functioning
         // Note: This would require actual cache verification methods
 
         // Verify metrics are being collected
         if actor_guard.metrics.blocks_stored == 0 && self.base.get_metrics().messages_sent > 0 {
-            return Err(StorageTestError::StateVerification("Metrics not being updated".to_string()));
+            return Err(StorageTestError::StateVerification(
+                "Metrics not being updated".to_string(),
+            ));
         }
 
         debug!("Storage actor state verification passed");
@@ -219,7 +265,8 @@ impl ActorTestHarness for StorageTestHarness {
         info!("Resetting storage test harness");
 
         // Create fresh actor instance with same config
-        let actor = StorageActor::new(self.config.clone()).await
+        let actor = StorageActor::new(self.config.clone())
+            .await
             .map_err(|e| StorageTestError::ActorCreation(e.to_string()))?;
 
         self.base.actor = Arc::new(RwLock::new(actor));
@@ -232,7 +279,6 @@ impl ActorTestHarness for StorageTestHarness {
         Ok(())
     }
 }
-
 
 /// Storage test error types
 #[derive(Debug, thiserror::Error)]
@@ -256,7 +302,9 @@ impl StorageTestHarness {
     }
 
     /// Convenience method to get storage actor metrics
-    pub async fn get_storage_metrics(&self) -> Result<crate::actors_v2::storage::metrics::StorageActorMetrics, StorageTestError> {
+    pub async fn get_storage_metrics(
+        &self,
+    ) -> Result<crate::actors_v2::storage::metrics::StorageActorMetrics, StorageTestError> {
         let actor = self.base.get_actor_ref().await;
         let actor_guard = actor.read().await;
         Ok(actor_guard.metrics.clone())
@@ -273,9 +321,16 @@ impl StorageTestHarness {
     }
 
     /// Create a message to store a specific test block
-    pub fn create_store_message(&self, index: usize, canonical: bool) -> Result<StorageMessage, StorageTestError> {
+    pub fn create_store_message(
+        &self,
+        index: usize,
+        canonical: bool,
+    ) -> Result<StorageMessage, StorageTestError> {
         if index >= self.test_blocks.len() {
-            return Err(StorageTestError::Configuration(format!("Block index {} out of range", index)));
+            return Err(StorageTestError::Configuration(format!(
+                "Block index {} out of range",
+                index
+            )));
         }
 
         Ok(StorageMessage::StoreBlock(StoreBlockMessage {
@@ -288,7 +343,10 @@ impl StorageTestHarness {
     /// Create a message to get a specific test block by hash
     pub fn create_get_message(&self, index: usize) -> Result<StorageMessage, StorageTestError> {
         if index >= self.test_blocks.len() {
-            return Err(StorageTestError::Configuration(format!("Block index {} out of range", index)));
+            return Err(StorageTestError::Configuration(format!(
+                "Block index {} out of range",
+                index
+            )));
         }
 
         use crate::block::ConvertBlockHash;

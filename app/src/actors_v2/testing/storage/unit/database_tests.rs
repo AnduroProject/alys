@@ -1,7 +1,7 @@
-use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::actors_v2::common::StorageMessage;
-use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::storage::messages::*;
+use crate::actors_v2::testing::base::ActorTestHarness;
+use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::auxpow_miner::BlockIndex;
 use uuid::Uuid;
 
@@ -141,7 +141,10 @@ async fn test_database_chain_head_operations() {
         correlation_id: Some(Uuid::new_v4()),
     });
 
-    harness.send_message(get_updated_head_message).await.unwrap();
+    harness
+        .send_message(get_updated_head_message)
+        .await
+        .unwrap();
 
     harness.teardown().await.unwrap();
 }
@@ -230,8 +233,10 @@ async fn test_database_metrics_tracking() {
 
     // Check metrics updated
     let updated_metrics = harness.get_storage_metrics().await.unwrap();
-    assert!(updated_metrics.blocks_stored > initial_blocks_stored,
-           "Metrics should be updated after storing block");
+    assert!(
+        updated_metrics.blocks_stored > initial_blocks_stored,
+        "Metrics should be updated after storing block"
+    );
 
     harness.teardown().await.unwrap();
 }

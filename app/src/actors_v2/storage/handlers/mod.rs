@@ -4,6 +4,6 @@
 //! organized by functional area for maintainability and clarity.
 
 pub mod block_handlers;
-pub mod state_handlers;
 pub mod maintenance_handlers;
 pub mod query_handlers;
+pub mod state_handlers;

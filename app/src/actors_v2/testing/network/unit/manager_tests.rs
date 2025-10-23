@@ -1,4 +1,4 @@
-use crate::actors_v2::network::managers::{PeerManager, GossipHandler, BlockRequestManager};
+use crate::actors_v2::network::managers::{BlockRequestManager, GossipHandler, PeerManager};
 use crate::actors_v2::network::messages::GossipMessage;
 use uuid::Uuid;
 
@@ -26,8 +26,14 @@ async fn test_peer_reputation_system() {
     let mut peer_manager = PeerManager::new();
 
     // Add test peers
-    peer_manager.add_peer("good-peer".to_string(), "/ip4/127.0.0.1/tcp/8000".to_string());
-    peer_manager.add_peer("bad-peer".to_string(), "/ip4/127.0.0.1/tcp/8001".to_string());
+    peer_manager.add_peer(
+        "good-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/8000".to_string(),
+    );
+    peer_manager.add_peer(
+        "bad-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/8001".to_string(),
+    );
 
     // Record successes for good peer
     peer_manager.record_peer_success(&"good-peer".to_string());
@@ -71,7 +77,11 @@ async fn test_gossip_handler_message_processing() {
     };
 
     let result = gossip_handler.process_message(block_message, "peer-1".to_string());
-    assert!(result.is_ok(), "Block message processing should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Block message processing should succeed: {:?}",
+        result
+    );
 
     // Test transaction message processing (needs >= 50 bytes for validation)
     let tx_data = vec![0u8; 60]; // 60 bytes - satisfies transaction validation requirement
@@ -82,7 +92,11 @@ async fn test_gossip_handler_message_processing() {
     };
 
     let result = gossip_handler.process_message(tx_message, "peer-2".to_string());
-    assert!(result.is_ok(), "Transaction message processing should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Transaction message processing should succeed: {:?}",
+        result
+    );
 
     // Test message statistics
     let stats = gossip_handler.get_stats();
@@ -159,9 +173,15 @@ async fn test_block_request_manager_timeout_handling() {
     let mut manager = BlockRequestManager::new(3);
 
     // Create multiple requests
-    let request1 = manager.create_request(100, 5, "peer-1".to_string()).unwrap();
-    let request2 = manager.create_request(200, 5, "peer-2".to_string()).unwrap();
-    let request3 = manager.create_request(300, 5, "peer-3".to_string()).unwrap();
+    let request1 = manager
+        .create_request(100, 5, "peer-1".to_string())
+        .unwrap();
+    let request2 = manager
+        .create_request(200, 5, "peer-2".to_string())
+        .unwrap();
+    let request3 = manager
+        .create_request(300, 5, "peer-3".to_string())
+        .unwrap();
 
     assert_eq!(manager.get_active_requests().len(), 3);
 
@@ -188,9 +208,15 @@ async fn test_block_request_manager_peer_coordination() {
     let mut manager = BlockRequestManager::new(10);
 
     // Create requests for different peers
-    let peer1_request = manager.create_request(100, 10, "peer-1".to_string()).unwrap();
-    let peer2_request = manager.create_request(200, 15, "peer-2".to_string()).unwrap();
-    let peer1_request2 = manager.create_request(300, 5, "peer-1".to_string()).unwrap();
+    let peer1_request = manager
+        .create_request(100, 10, "peer-1".to_string())
+        .unwrap();
+    let peer2_request = manager
+        .create_request(200, 15, "peer-2".to_string())
+        .unwrap();
+    let peer1_request2 = manager
+        .create_request(300, 5, "peer-1".to_string())
+        .unwrap();
 
     // Test peer-specific request tracking
     let peer1_requests = manager.get_peer_requests(&"peer-1".to_string());

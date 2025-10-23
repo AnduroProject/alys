@@ -1,15 +1,17 @@
-use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::actors_v2::common::StorageMessage;
-use crate::actors_v2::testing::base::{ActorTestHarness, ChaosTestable};
-use crate::actors_v2::testing::chaos::{FailureInjector, ChaosScenario, NetworkChaos, DiskChaos, MemoryChaos};
 use crate::actors_v2::storage::messages::*;
+use crate::actors_v2::testing::base::{ActorTestHarness, ChaosTestable};
+use crate::actors_v2::testing::chaos::{
+    ChaosScenario, DiskChaos, FailureInjector, MemoryChaos, NetworkChaos,
+};
 use crate::actors_v2::testing::storage::fixtures::*;
+use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::auxpow_miner::BlockIndex;
-use uuid::Uuid;
+use async_trait::async_trait;
+use rand::{thread_rng, Rng};
 use std::time::Duration;
 use tokio::time::sleep;
-use rand::{thread_rng, Rng};
-use async_trait::async_trait;
+use uuid::Uuid;
 
 /// Chaos test configuration for storage actor
 #[derive(Debug, Clone)]
@@ -47,7 +49,10 @@ impl Default for StorageChaosConfig {
 impl ChaosTestable for StorageTestHarness {
     type ChaosConfig = StorageChaosConfig;
 
-    async fn run_chaos_test(&mut self, config: Self::ChaosConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn run_chaos_test(
+        &mut self,
+        config: Self::ChaosConfig,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("Starting chaos test for Storage Actor");
         let start_time = std::time::Instant::now();
 
@@ -129,14 +134,24 @@ impl ChaosTestable for StorageTestHarness {
 
         // Verify system recovery
         println!("Chaos test completed. Verifying system recovery...");
-        self.verify_state().await.map_err(|e| format!("System failed to recover: {}", e))?;
+        self.verify_state()
+            .await
+            .map_err(|e| format!("System failed to recover: {}", e))?;
 
         // Report results
         let success_rate = successful_operations as f64 / operation_count as f64;
         println!("Chaos test results:");
         println!("  Total operations: {}", operation_count);
-        println!("  Successful: {} ({:.2}%)", successful_operations, success_rate * 100.0);
-        println!("  Failed: {} ({:.2}%)", failed_operations, (failed_operations as f64 / operation_count as f64) * 100.0);
+        println!(
+            "  Successful: {} ({:.2}%)",
+            successful_operations,
+            success_rate * 100.0
+        );
+        println!(
+            "  Failed: {} ({:.2}%)",
+            failed_operations,
+            (failed_operations as f64 / operation_count as f64) * 100.0
+        );
         println!("  Duration: {:?}", start_time.elapsed());
 
         // Ensure minimum success rate
@@ -148,7 +163,10 @@ impl ChaosTestable for StorageTestHarness {
         Ok(())
     }
 
-    async fn inject_failure(&mut self, scenario: crate::actors_v2::testing::chaos::ChaosScenario) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn inject_failure(
+        &mut self,
+        scenario: crate::actors_v2::testing::chaos::ChaosScenario,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match scenario {
             crate::actors_v2::testing::chaos::ChaosScenario::NetworkPartition => {
                 println!("Injecting network partition");
@@ -169,7 +187,9 @@ impl ChaosTestable for StorageTestHarness {
             crate::actors_v2::testing::chaos::ChaosScenario::ProcessCrash => {
                 println!("Simulating process crash recovery");
                 // Reset the harness to simulate crash recovery
-                self.reset().await.map_err(|e| format!("Failed to reset after crash: {}", e))?;
+                self.reset()
+                    .await
+                    .map_err(|e| format!("Failed to reset after crash: {}", e))?;
             }
             crate::actors_v2::testing::chaos::ChaosScenario::SlowOperation => {
                 println!("Injecting operation slowdown");
@@ -182,7 +202,11 @@ impl ChaosTestable for StorageTestHarness {
 
 impl StorageTestHarness {
     /// Generate a random storage operation for chaos testing
-    fn generate_random_operation(&self, blocks: &[crate::actors_v2::storage::actor::AlysConsensusBlock], state_data: &[(Vec<u8>, Vec<u8>)]) -> StorageMessage {
+    fn generate_random_operation(
+        &self,
+        blocks: &[crate::actors_v2::storage::actor::AlysConsensusBlock],
+        state_data: &[(Vec<u8>, Vec<u8>)],
+    ) -> StorageMessage {
         let mut rng = thread_rng();
         let operation_type = rng.gen_range(0..6);
 
@@ -241,7 +265,9 @@ impl StorageTestHarness {
     }
 
     /// Clone harness for concurrent testing
-    async fn clone_for_concurrent_test(&self) -> Result<StorageTestHarness, crate::actors_v2::testing::storage::StorageTestError> {
+    async fn clone_for_concurrent_test(
+        &self,
+    ) -> Result<StorageTestHarness, crate::actors_v2::testing::storage::StorageTestError> {
         // Create a new harness with the same configuration
         // This simulates multiple clients accessing the same storage system
         StorageTestHarness::with_config(self.config.clone()).await
@@ -258,7 +284,7 @@ mod chaos_tests {
 
         let chaos_config = StorageChaosConfig {
             test_duration: Duration::from_secs(5), // Short test
-            failure_rate: 0.2, // 20% failure rate
+            failure_rate: 0.2,                     // 20% failure rate
             max_concurrent_ops: 3,
             ..Default::default()
         };
@@ -273,7 +299,9 @@ mod chaos_tests {
         harness.setup().await.unwrap();
 
         // Inject network partition
-        let result = harness.inject_failure(ChaosScenario::NetworkPartition).await;
+        let result = harness
+            .inject_failure(ChaosScenario::NetworkPartition)
+            .await;
         assert!(result.is_ok());
 
         // Verify system can still operate after network issues
@@ -285,7 +313,10 @@ mod chaos_tests {
         });
 
         let store_result = harness.send_message(store_msg).await;
-        assert!(store_result.is_ok(), "Storage operation failed after network partition");
+        assert!(
+            store_result.is_ok(),
+            "Storage operation failed after network partition"
+        );
 
         harness.teardown().await.unwrap();
     }
@@ -308,7 +339,10 @@ mod chaos_tests {
 
         let state_result = harness.send_message(state_msg).await;
         // Operation might fail, but system should not crash
-        println!("State operation result after disk failure: {:?}", state_result);
+        println!(
+            "State operation result after disk failure: {:?}",
+            state_result
+        );
 
         harness.teardown().await.unwrap();
     }
@@ -385,7 +419,9 @@ mod chaos_tests {
             let handle = tokio::spawn(async move {
                 // Random chaos injection
                 if i % 3 == 0 {
-                    let _ = harness_clone.inject_failure(ChaosScenario::SlowOperation).await;
+                    let _ = harness_clone
+                        .inject_failure(ChaosScenario::SlowOperation)
+                        .await;
                 }
 
                 let store_msg = StorageMessage::StoreBlock(StoreBlockMessage {
@@ -412,7 +448,10 @@ mod chaos_tests {
             }
         }
 
-        println!("Concurrent chaos test: {} successes, {} failures", successes, failures);
+        println!(
+            "Concurrent chaos test: {} successes, {} failures",
+            successes, failures
+        );
 
         // At least some operations should succeed
         assert!(successes > 0, "No operations succeeded under chaos");

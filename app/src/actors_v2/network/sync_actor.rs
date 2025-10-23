@@ -7,13 +7,13 @@
 //! Simplified: Linear sync states, direct NetworkActor coordination
 
 use actix::prelude::*;
+use anyhow::{anyhow, Result};
 use std::collections::{HashMap, VecDeque};
-use std::time::{SystemTime, Duration};
-use anyhow::{Result, anyhow};
+use std::time::{Duration, SystemTime};
 
 use super::{
-    SyncConfig, SyncMessage, SyncResponse, SyncError, SyncMetrics,
-    messages::{PeerId, Block, NetworkMessage, SyncStatus},
+    messages::{Block, NetworkMessage, PeerId, SyncStatus},
+    SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
 
 /// Simplified sync states (linear progression)
@@ -75,7 +75,9 @@ impl SyncActor {
     pub fn new(config: SyncConfig) -> Result<Self> {
         tracing::info!("Creating SyncActor V2");
 
-        config.validate().map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
+        config
+            .validate()
+            .map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
 
         Ok(Self {
             config,
@@ -145,14 +147,13 @@ impl SyncActor {
             match network_actor.send(NetworkMessage::GetConnectedPeers).await {
                 Ok(Ok(response)) => {
                     if let crate::actors_v2::network::NetworkResponse::Peers(peers) = response {
-                        self.sync_peers = peers.into_iter()
-                            .map(|p| p.peer_id)
-                            .collect();
+                        self.sync_peers = peers.into_iter().map(|p| p.peer_id).collect();
 
                         tracing::info!("Found {} sync peers", self.sync_peers.len());
 
                         if self.sync_peers.is_empty() {
-                            self.sync_state = SyncState::Error("No peers available for sync".to_string());
+                            self.sync_state =
+                                SyncState::Error("No peers available for sync".to_string());
                             return Err(anyhow!("No peers available for sync"));
                         }
 
@@ -244,7 +245,8 @@ impl SyncActor {
 
                 match network_actor.send(request_msg).await {
                     Ok(_) => {
-                        self.active_requests.insert(request_id.clone(), request_info);
+                        self.active_requests
+                            .insert(request_id.clone(), request_info);
                         self.metrics.record_block_request(&peer_id);
 
                         tracing::debug!(
@@ -296,10 +298,14 @@ impl SyncActor {
             // Simulate successful storage processing
             let processing_time = processing_start.elapsed();
             self.current_height += 1;
-            self.metrics.record_block_processed(self.current_height, processing_time);
+            self.metrics
+                .record_block_processed(self.current_height, processing_time);
             self.metrics.record_block_validated();
 
-            tracing::debug!("Processed block at height {} (simulated storage)", self.current_height);
+            tracing::debug!(
+                "Processed block at height {} (simulated storage)",
+                self.current_height
+            );
 
             // Check if sync is complete
             if self.current_height >= self.target_height {
@@ -319,7 +325,10 @@ impl SyncActor {
     }
 
     /// Convert block format for StorageActor V2
-    fn convert_block_to_storage_format(&self, block: Block) -> crate::actors_v2::storage::actor::AlysConsensusBlock {
+    fn convert_block_to_storage_format(
+        &self,
+        block: Block,
+    ) -> crate::actors_v2::storage::actor::AlysConsensusBlock {
         // TODO: Implement proper block format conversion from network to storage format
         // For now, create a basic block structure
         let mut storage_block = crate::actors_v2::storage::actor::AlysConsensusBlock {
@@ -363,7 +372,9 @@ impl SyncActor {
         let mut timed_out_requests = Vec::new();
 
         for (request_id, request_info) in &self.active_requests {
-            if now.duration_since(request_info.requested_at).unwrap_or_default()
+            if now
+                .duration_since(request_info.requested_at)
+                .unwrap_or_default()
                 > self.config.sync_timeout
             {
                 timed_out_requests.push(request_id.clone());
@@ -387,7 +398,10 @@ impl SyncActor {
         SyncStatus {
             current_height: self.current_height,
             target_height: self.target_height,
-            is_syncing: matches!(self.sync_state, SyncState::RequestingBlocks | SyncState::ProcessingBlocks),
+            is_syncing: matches!(
+                self.sync_state,
+                SyncState::RequestingBlocks | SyncState::ProcessingBlocks
+            ),
             sync_peers: self.sync_peers.clone(),
             pending_requests: self.active_requests.len(),
         }
@@ -409,7 +423,11 @@ impl SyncActor {
     }
 
     /// Handle block response from network
-    async fn handle_block_response(&mut self, blocks: Vec<Block>, request_id: String) -> Result<()> {
+    async fn handle_block_response(
+        &mut self,
+        blocks: Vec<Block>,
+        request_id: String,
+    ) -> Result<()> {
         // Find and remove the corresponding request
         if let Some(request_info) = self.active_requests.remove(&request_id) {
             tracing::debug!(
@@ -423,7 +441,8 @@ impl SyncActor {
 
             // Process each block
             for block in blocks {
-                self.block_queue.push_back((block, request_info.peer_id.clone()));
+                self.block_queue
+                    .push_back((block, request_info.peer_id.clone()));
             }
 
             // Process blocks from queue
@@ -431,7 +450,6 @@ impl SyncActor {
 
             // Update peer reputation based on successful response
             // TODO: Inform NetworkActor about successful peer interaction
-
         } else {
             tracing::warn!("Received blocks for unknown request: {}", request_id);
         }
@@ -479,8 +497,12 @@ impl Actor for SyncActor {
         ctx.run_interval(Duration::from_secs(30), |act, _ctx| {
             if act.is_running {
                 let progress = act.metrics.get_sync_progress();
-                tracing::debug!("Sync progress: {:.1}% ({}/{})",
-                    progress * 100.0, act.current_height, act.target_height);
+                tracing::debug!(
+                    "Sync progress: {:.1}% ({}/{})",
+                    progress * 100.0,
+                    act.current_height,
+                    act.target_height
+                );
 
                 // Attempt to update sync progress
                 tokio::spawn(async move {
@@ -528,7 +550,11 @@ impl Handler<SyncMessage> for SyncActor {
                 Ok(SyncResponse::Status(status))
             }
 
-            SyncMessage::RequestBlocks { start_height, count, peer_id } => {
+            SyncMessage::RequestBlocks {
+                start_height,
+                count,
+                peer_id,
+            } => {
                 if !self.is_running {
                     return Err(SyncError::NotStarted);
                 }
@@ -544,11 +570,16 @@ impl Handler<SyncMessage> for SyncActor {
                     requested_at: SystemTime::now(),
                 };
 
-                self.active_requests.insert(request_id.clone(), request_info);
+                self.active_requests
+                    .insert(request_id.clone(), request_info);
                 self.metrics.record_block_request(&target_peer);
 
-                tracing::debug!("Created block request {} for {} blocks starting at height {}",
-                    request_id, count, start_height);
+                tracing::debug!(
+                    "Created block request {} for {} blocks starting at height {}",
+                    request_id,
+                    count,
+                    start_height
+                );
 
                 Ok(SyncResponse::BlocksRequested { request_id })
             }
@@ -557,8 +588,11 @@ impl Handler<SyncMessage> for SyncActor {
                 // Add block to processing queue
                 self.block_queue.push_back((block, peer_id.clone()));
 
-                tracing::debug!("Queued new block from peer {} (queue size: {})",
-                    peer_id, self.block_queue.len());
+                tracing::debug!(
+                    "Queued new block from peer {} (queue size: {})",
+                    peer_id,
+                    self.block_queue.len()
+                );
 
                 Ok(SyncResponse::BlockProcessed {
                     block_height: self.current_height,
@@ -567,7 +601,11 @@ impl Handler<SyncMessage> for SyncActor {
 
             SyncMessage::HandleBlockResponse { blocks, request_id } => {
                 // TODO: Process block response
-                tracing::debug!("Received {} blocks for request {}", blocks.len(), request_id);
+                tracing::debug!(
+                    "Received {} blocks for request {}",
+                    blocks.len(),
+                    request_id
+                );
 
                 // Find and complete the request
                 if let Some(request_info) = self.active_requests.remove(&request_id) {
@@ -575,11 +613,15 @@ impl Handler<SyncMessage> for SyncActor {
 
                     // Queue blocks for processing
                     for block in blocks {
-                        self.block_queue.push_back((block, request_info.peer_id.clone()));
+                        self.block_queue
+                            .push_back((block, request_info.peer_id.clone()));
                     }
 
-                    tracing::debug!("Queued {} blocks from request {}",
-                        self.block_queue.len(), request_id);
+                    tracing::debug!(
+                        "Queued {} blocks from request {}",
+                        self.block_queue.len(),
+                        request_id
+                    );
                 }
 
                 Ok(SyncResponse::BlockProcessed {
@@ -604,8 +646,11 @@ impl Handler<SyncMessage> for SyncActor {
                 self.sync_peers = peers;
                 self.peer_selection_index = 0;
 
-                tracing::info!("Updated sync peers: {} -> {} peers",
-                    previous_count, self.sync_peers.len());
+                tracing::info!(
+                    "Updated sync peers: {} -> {} peers",
+                    previous_count,
+                    self.sync_peers.len()
+                );
 
                 Ok(SyncResponse::Started)
             }

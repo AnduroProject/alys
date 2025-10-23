@@ -3,8 +3,8 @@
 //! Demonstrates the complete NetworkActor V2 system with mDNS support,
 //! StorageActor integration, and RPC interface.
 
-use std::time::Duration;
 use actix::Actor;
+use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -21,9 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/ip4/0.0.0.0/tcp/8000".to_string(),
             "/ip4/0.0.0.0/tcp/8001".to_string(),
         ],
-        bootstrap_peers: vec![
-            "/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWExample".to_string(),
-        ],
+        bootstrap_peers: vec!["/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWExample".to_string()],
         max_connections: 100,
         connection_timeout: Duration::from_secs(30),
         gossip_topics: vec![
@@ -59,7 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n3. Testing Complete Protocol Stack with mDNS...");
 
     let behaviour_config = app::actors_v2::network_v2::NetworkConfig::default();
-    let mut behaviour = app::actors_v2::network_v2::behaviour::AlysNetworkBehaviour::new(&behaviour_config)?;
+    let mut behaviour =
+        app::actors_v2::network_v2::behaviour::AlysNetworkBehaviour::new(&behaviour_config)?;
 
     // Verify mDNS is enabled
     assert!(behaviour.is_mdns_enabled());
@@ -72,7 +71,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test mDNS discovery
     let discovered_peers = behaviour.discover_mdns_peers();
-    println!("✅ mDNS discovery simulated: {} peers found", discovered_peers.len());
+    println!(
+        "✅ mDNS discovery simulated: {} peers found",
+        discovered_peers.len()
+    );
 
     for (peer_id, addresses) in &discovered_peers {
         println!("   📡 mDNS discovered: {} at {:?}", peer_id, addresses);
@@ -83,9 +85,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // PeerManager with mDNS peers
     let mut peer_manager = app::actors_v2::network_v2::managers::PeerManager::new();
-    peer_manager.add_peer("bootstrap-peer".to_string(), "/ip4/127.0.0.1/tcp/9000".to_string());
-    peer_manager.add_peer("mdns-peer-1".to_string(), "/ip4/192.168.1.100/tcp/8000".to_string());
-    peer_manager.add_peer("mdns-peer-2".to_string(), "/ip4/192.168.1.101/tcp/8000".to_string());
+    peer_manager.add_peer(
+        "bootstrap-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/9000".to_string(),
+    );
+    peer_manager.add_peer(
+        "mdns-peer-1".to_string(),
+        "/ip4/192.168.1.100/tcp/8000".to_string(),
+    );
+    peer_manager.add_peer(
+        "mdns-peer-2".to_string(),
+        "/ip4/192.168.1.101/tcp/8000".to_string(),
+    );
 
     // Test reputation system
     peer_manager.record_peer_success(&"mdns-peer-1".to_string());
@@ -93,8 +104,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     peer_manager.record_peer_failure(&"bootstrap-peer".to_string());
 
     let best_peers = peer_manager.get_best_peers(2);
-    println!("✅ PeerManager: {} connected, best peers: {:?}",
-        peer_manager.get_connected_peers().len(), best_peers);
+    println!(
+        "✅ PeerManager: {} connected, best peers: {:?}",
+        peer_manager.get_connected_peers().len(),
+        best_peers
+    );
 
     // GossipHandler with mDNS topics
     let mut gossip_handler = app::actors_v2::network_v2::managers::GossipHandler::new();
@@ -111,18 +125,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let processed = gossip_handler.process_message(mdns_message, "mdns-peer-1".to_string())?;
-    println!("✅ GossipHandler: Processed mDNS message: {:?}",
-        processed.map(|p| p.message_type));
+    println!(
+        "✅ GossipHandler: Processed mDNS message: {:?}",
+        processed.map(|p| p.message_type)
+    );
 
     // BlockRequestManager coordination
     let mut request_manager = app::actors_v2::network_v2::managers::BlockRequestManager::new(10);
     let request_id = request_manager.create_request(100, 50, "mdns-peer-1".to_string())?;
-    println!("✅ BlockRequestManager: Created request {} for mDNS peer", request_id);
+    println!(
+        "✅ BlockRequestManager: Created request {} for mDNS peer",
+        request_id
+    );
 
     // Test RPC system
     println!("\n5. Testing RPC Interface...");
 
-    use app::actors_v2::network_v2::rpc::{NetworkRpcRequest, NetworkRpcHandler};
+    use app::actors_v2::network_v2::rpc::{NetworkRpcHandler, NetworkRpcRequest};
 
     // Test RPC request validation
     let rpc_request = NetworkRpcRequest::StartNetwork {

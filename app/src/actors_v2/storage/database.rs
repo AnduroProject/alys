@@ -3,17 +3,17 @@
 //! This module provides the core database operations using RocksDB as the persistent
 //! storage backend for blocks, state, receipts, and other blockchain data.
 
+use super::actor::{AlysConsensusBlock, BlockRef, StorageError};
 use super::messages::WriteOperation;
-use super::actor::{StorageError, BlockRef, AlysConsensusBlock};
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
-use rocksdb::{DB, Options, ColumnFamilyDescriptor, WriteBatch};
+use lighthouse_wrapper::types::Hash256;
+use rocksdb::{ColumnFamilyDescriptor, Options, WriteBatch, DB};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::*;
-use lighthouse_wrapper::types::Hash256;
 
 /// Database manager for RocksDB operations
 #[derive(Debug, Clone)]
@@ -61,7 +61,10 @@ pub struct DatabaseStats {
 impl DatabaseManager {
     /// Create a new database manager with the given configuration
     pub async fn new(config: DatabaseConfig) -> Result<Self, StorageError> {
-        info!("Initializing database manager at path: {}", config.main_path);
+        info!(
+            "Initializing database manager at path: {}",
+            config.main_path
+        );
 
         let main_db = Self::open_database(&config.main_path, &config).await?;
 
@@ -130,68 +133,100 @@ impl DatabaseManager {
             column_families::CHAIN_HEAD,
         ];
 
-        cf_names.iter().map(|&name| {
-            let mut cf_opts = Options::default();
-            cf_opts.set_max_write_buffer_number(3);
-            cf_opts.set_write_buffer_size(config.write_buffer_size_mb * 1024 * 1024 / cf_names.len());
-            cf_opts.set_target_file_size_base(64 * 1024 * 1024);
+        cf_names
+            .iter()
+            .map(|&name| {
+                let mut cf_opts = Options::default();
+                cf_opts.set_max_write_buffer_number(3);
+                cf_opts.set_write_buffer_size(
+                    config.write_buffer_size_mb * 1024 * 1024 / cf_names.len(),
+                );
+                cf_opts.set_target_file_size_base(64 * 1024 * 1024);
 
-            if config.compression_enabled {
-                cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
-            }
+                if config.compression_enabled {
+                    cf_opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
+                }
 
-            ColumnFamilyDescriptor::new(name, cf_opts)
-        }).collect()
+                ColumnFamilyDescriptor::new(name, cf_opts)
+            })
+            .collect()
     }
 
     /// Get column family names mapping
     fn get_column_family_names() -> HashMap<String, String> {
         let mut cf_map = HashMap::new();
         cf_map.insert("blocks".to_string(), column_families::BLOCKS.to_string());
-        cf_map.insert("block_heights".to_string(), column_families::BLOCK_HEIGHTS.to_string());
+        cf_map.insert(
+            "block_heights".to_string(),
+            column_families::BLOCK_HEIGHTS.to_string(),
+        );
         cf_map.insert("state".to_string(), column_families::STATE.to_string());
-        cf_map.insert("receipts".to_string(), column_families::RECEIPTS.to_string());
+        cf_map.insert(
+            "receipts".to_string(),
+            column_families::RECEIPTS.to_string(),
+        );
         cf_map.insert("logs".to_string(), column_families::LOGS.to_string());
-        cf_map.insert("metadata".to_string(), column_families::METADATA.to_string());
-        cf_map.insert("chain_head".to_string(), column_families::CHAIN_HEAD.to_string());
+        cf_map.insert(
+            "metadata".to_string(),
+            column_families::METADATA.to_string(),
+        );
+        cf_map.insert(
+            "chain_head".to_string(),
+            column_families::CHAIN_HEAD.to_string(),
+        );
         cf_map
     }
 
     /// Store a block in the database
     pub async fn put_block(&self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::BLOCKS)
+        let cf = db
+            .cf_handle(column_families::BLOCKS)
             .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
 
         let block_hash = block.message.block_hash().to_block_hash();
         let key = block_hash.as_bytes();
-        let value = serde_json::to_vec(block)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let value =
+            serde_json::to_vec(block).map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         db.put_cf(&cf, key, value)
             .map_err(|e| StorageError::Database(format!("Failed to store block: {}", e)))?;
 
         // Also store by height for efficient lookups
-        let height_cf = db.cf_handle(column_families::BLOCK_HEIGHTS)
-            .ok_or_else(|| StorageError::Database("BLOCK_HEIGHTS column family not found".to_string()))?;
+        let height_cf = db
+            .cf_handle(column_families::BLOCK_HEIGHTS)
+            .ok_or_else(|| {
+                StorageError::Database("BLOCK_HEIGHTS column family not found".to_string())
+            })?;
 
         let height_key = block.message.execution_payload.block_number.to_be_bytes();
-        db.put_cf(&height_cf, &height_key, key)
-            .map_err(|e| StorageError::Database(format!("Failed to store block height index: {}", e)))?;
+        db.put_cf(&height_cf, &height_key, key).map_err(|e| {
+            StorageError::Database(format!("Failed to store block height index: {}", e))
+        })?;
 
-        debug!("Stored block {} at height {}", block.message.block_hash().to_block_hash(), block.message.execution_payload.block_number);
+        debug!(
+            "Stored block {} at height {}",
+            block.message.block_hash().to_block_hash(),
+            block.message.execution_payload.block_number
+        );
         Ok(())
     }
 
     /// Retrieve a block from the database by hash
-    pub async fn get_block(&self, block_hash: &Hash256) -> Result<Option<AlysConsensusBlock>, StorageError> {
+    pub async fn get_block(
+        &self,
+        block_hash: &Hash256,
+    ) -> Result<Option<AlysConsensusBlock>, StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::BLOCKS)
+        let cf = db
+            .cf_handle(column_families::BLOCKS)
             .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
 
         let key = block_hash.as_bytes();
-        match db.get_cf(&cf, key)
-            .map_err(|e| StorageError::Database(format!("Failed to retrieve block: {}", e)))? {
+        match db
+            .get_cf(&cf, key)
+            .map_err(|e| StorageError::Database(format!("Failed to retrieve block: {}", e)))?
+        {
             Some(value) => {
                 let block: AlysConsensusBlock = serde_json::from_slice(&value)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -202,14 +237,21 @@ impl DatabaseManager {
     }
 
     /// Retrieve a block from the database by height
-    pub async fn get_block_by_height(&self, height: u64) -> Result<Option<AlysConsensusBlock>, StorageError> {
+    pub async fn get_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<AlysConsensusBlock>, StorageError> {
         let db = self.main_db.read().await;
-        let height_cf = db.cf_handle(column_families::BLOCK_HEIGHTS)
-            .ok_or_else(|| StorageError::Database("BLOCK_HEIGHTS column family not found".to_string()))?;
+        let height_cf = db
+            .cf_handle(column_families::BLOCK_HEIGHTS)
+            .ok_or_else(|| {
+                StorageError::Database("BLOCK_HEIGHTS column family not found".to_string())
+            })?;
 
         let height_key = height.to_be_bytes();
-        match db.get_cf(&height_cf, &height_key)
-            .map_err(|e| StorageError::Database(format!("Failed to retrieve block height index: {}", e)))? {
+        match db.get_cf(&height_cf, &height_key).map_err(|e| {
+            StorageError::Database(format!("Failed to retrieve block height index: {}", e))
+        })? {
             Some(block_hash_bytes) => {
                 // Now get the actual block
                 let mut hash_bytes = [0u8; 32];
@@ -224,7 +266,8 @@ impl DatabaseManager {
     /// Store state data
     pub async fn put_state(&self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::STATE)
+        let cf = db
+            .cf_handle(column_families::STATE)
             .ok_or_else(|| StorageError::Database("STATE column family not found".to_string()))?;
 
         db.put_cf(&cf, key, value)
@@ -236,7 +279,8 @@ impl DatabaseManager {
     /// Retrieve state data
     pub async fn get_state(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::STATE)
+        let cf = db
+            .cf_handle(column_families::STATE)
             .ok_or_else(|| StorageError::Database("STATE column family not found".to_string()))?;
 
         db.get_cf(&cf, key)
@@ -246,11 +290,12 @@ impl DatabaseManager {
     /// Store chain head
     pub async fn put_chain_head(&self, head: &BlockRef) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::CHAIN_HEAD)
-            .ok_or_else(|| StorageError::Database("CHAIN_HEAD column family not found".to_string()))?;
+        let cf = db.cf_handle(column_families::CHAIN_HEAD).ok_or_else(|| {
+            StorageError::Database("CHAIN_HEAD column family not found".to_string())
+        })?;
 
-        let value = serde_json::to_vec(head)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let value =
+            serde_json::to_vec(head).map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         db.put_cf(&cf, b"current", value)
             .map_err(|e| StorageError::Database(format!("Failed to store chain head: {}", e)))?;
@@ -261,11 +306,14 @@ impl DatabaseManager {
     /// Retrieve chain head
     pub async fn get_chain_head(&self) -> Result<Option<BlockRef>, StorageError> {
         let db = self.main_db.read().await;
-        let cf = db.cf_handle(column_families::CHAIN_HEAD)
-            .ok_or_else(|| StorageError::Database("CHAIN_HEAD column family not found".to_string()))?;
+        let cf = db.cf_handle(column_families::CHAIN_HEAD).ok_or_else(|| {
+            StorageError::Database("CHAIN_HEAD column family not found".to_string())
+        })?;
 
-        match db.get_cf(&cf, b"current")
-            .map_err(|e| StorageError::Database(format!("Failed to retrieve chain head: {}", e)))? {
+        match db
+            .get_cf(&cf, b"current")
+            .map_err(|e| StorageError::Database(format!("Failed to retrieve chain head: {}", e)))?
+        {
             Some(value) => {
                 let head: BlockRef = serde_json::from_slice(&value)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -283,18 +331,24 @@ impl DatabaseManager {
         for operation in operations {
             match operation {
                 WriteOperation::Put { key, value } => {
-                    let cf = db.cf_handle(column_families::STATE)
-                        .ok_or_else(|| StorageError::Database("STATE column family not found".to_string()))?;
+                    let cf = db.cf_handle(column_families::STATE).ok_or_else(|| {
+                        StorageError::Database("STATE column family not found".to_string())
+                    })?;
                     batch.put_cf(&cf, &key, &value);
                 }
                 WriteOperation::Delete { key } => {
-                    let cf = db.cf_handle(column_families::STATE)
-                        .ok_or_else(|| StorageError::Database("STATE column family not found".to_string()))?;
+                    let cf = db.cf_handle(column_families::STATE).ok_or_else(|| {
+                        StorageError::Database("STATE column family not found".to_string())
+                    })?;
                     batch.delete_cf(&cf, &key);
                 }
-                WriteOperation::PutBlock { block, canonical: _ } => {
-                    let cf = db.cf_handle(column_families::BLOCKS)
-                        .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
+                WriteOperation::PutBlock {
+                    block,
+                    canonical: _,
+                } => {
+                    let cf = db.cf_handle(column_families::BLOCKS).ok_or_else(|| {
+                        StorageError::Database("BLOCKS column family not found".to_string())
+                    })?;
                     let block_hash = block.message.block_hash().to_block_hash();
                     let key = block_hash.as_bytes();
                     let value = serde_json::to_vec(&block)
@@ -302,8 +356,9 @@ impl DatabaseManager {
                     batch.put_cf(&cf, key, value);
                 }
                 WriteOperation::UpdateHead { head } => {
-                    let cf = db.cf_handle(column_families::CHAIN_HEAD)
-                        .ok_or_else(|| StorageError::Database("CHAIN_HEAD column family not found".to_string()))?;
+                    let cf = db.cf_handle(column_families::CHAIN_HEAD).ok_or_else(|| {
+                        StorageError::Database("CHAIN_HEAD column family not found".to_string())
+                    })?;
                     let value = serde_json::to_vec(&head)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?;
                     batch.put_cf(&cf, b"current", value);
@@ -362,7 +417,9 @@ impl DatabaseManager {
         ] {
             if let Some(cf) = db.cf_handle(cf_name) {
                 // Get approximate size
-                if let Ok(Some(size_str)) = db.property_value_cf(&cf, "rocksdb.estimate-live-data-size") {
+                if let Ok(Some(size_str)) =
+                    db.property_value_cf(&cf, "rocksdb.estimate-live-data-size")
+                {
                     if let Ok(size) = size_str.parse::<u64>() {
                         column_family_sizes.insert(cf_name.to_string(), size);
                         total_size_bytes += size;

@@ -4,15 +4,11 @@
 //! Provides HTTP/JSON-RPC interface for network operations.
 
 use actix::Addr;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
 
-use super::{
-    NetworkActor, SyncActor,
-    NetworkMessage, SyncMessage,
-    NetworkResponse, SyncResponse,
-};
+use super::{NetworkActor, NetworkMessage, NetworkResponse, SyncActor, SyncMessage, SyncResponse};
 
 /// RPC request types for NetworkActor V2
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,9 +20,7 @@ pub enum NetworkRpcRequest {
         bootstrap_peers: Vec<String>,
     },
     /// Stop networking subsystem
-    StopNetwork {
-        graceful: bool,
-    },
+    StopNetwork { graceful: bool },
     /// Get network status
     GetNetworkStatus,
     /// Get connected peers
@@ -41,13 +35,9 @@ pub enum NetworkRpcRequest {
         tx_data: String, // hex-encoded
     },
     /// Connect to specific peer
-    ConnectToPeer {
-        peer_address: String,
-    },
+    ConnectToPeer { peer_address: String },
     /// Disconnect from peer
-    DisconnectPeer {
-        peer_id: String,
-    },
+    DisconnectPeer { peer_id: String },
     /// Get network metrics
     GetNetworkMetrics,
     /// Start blockchain sync
@@ -65,14 +55,9 @@ pub enum NetworkRpcRequest {
 #[serde(untagged)]
 pub enum NetworkRpcResponse {
     /// Success response with data
-    Success {
-        result: NetworkRpcResult,
-    },
+    Success { result: NetworkRpcResult },
     /// Error response
-    Error {
-        error: String,
-        code: i32,
-    },
+    Error { error: String, code: i32 },
 }
 
 /// RPC result data types
@@ -89,18 +74,11 @@ pub enum NetworkRpcResult {
         is_running: bool,
     },
     /// Peer list
-    Peers {
-        peers: Vec<PeerRpcInfo>,
-    },
+    Peers { peers: Vec<PeerRpcInfo> },
     /// Broadcast confirmation
-    Broadcast {
-        message_id: String,
-    },
+    Broadcast { message_id: String },
     /// Connection result
-    Connection {
-        peer_id: String,
-        success: bool,
-    },
+    Connection { peer_id: String, success: bool },
     /// Network metrics
     NetworkMetrics {
         connected_peers: u32,
@@ -163,7 +141,10 @@ impl NetworkRpcHandler {
     /// Process individual RPC request
     async fn process_request(&self, request: NetworkRpcRequest) -> Result<NetworkRpcResult> {
         match request {
-            NetworkRpcRequest::StartNetwork { listen_addresses, bootstrap_peers } => {
+            NetworkRpcRequest::StartNetwork {
+                listen_addresses,
+                bootstrap_peers,
+            } => {
                 let msg = NetworkMessage::StartNetwork {
                     listen_addrs: listen_addresses,
                     bootstrap_peers,
@@ -211,12 +192,18 @@ impl NetworkRpcHandler {
 
                 match self.network_actor.send(msg).await {
                     Ok(Ok(NetworkResponse::Peers(peers))) => {
-                        let rpc_peers = peers.into_iter().map(|p| PeerRpcInfo {
-                            peer_id: p.peer_id,
-                            address: p.address,
-                            connection_time: humantime::format_rfc3339_millis(p.connection_time).to_string(),
-                            reputation: p.reputation,
-                        }).collect();
+                        let rpc_peers = peers
+                            .into_iter()
+                            .map(|p| PeerRpcInfo {
+                                peer_id: p.peer_id,
+                                address: p.address,
+                                connection_time: humantime::format_rfc3339_millis(
+                                    p.connection_time,
+                                )
+                                .to_string(),
+                                reputation: p.reputation,
+                            })
+                            .collect();
 
                         Ok(NetworkRpcResult::Peers { peers: rpc_peers })
                     }
@@ -226,7 +213,10 @@ impl NetworkRpcHandler {
                 }
             }
 
-            NetworkRpcRequest::BroadcastBlock { block_data, priority } => {
+            NetworkRpcRequest::BroadcastBlock {
+                block_data,
+                priority,
+            } => {
                 // Decode hex block data
                 let block_bytes = hex::decode(&block_data)
                     .map_err(|e| anyhow!("Invalid hex block data: {}", e))?;
@@ -265,11 +255,16 @@ impl NetworkRpcHandler {
             }
 
             NetworkRpcRequest::ConnectToPeer { peer_address } => {
-                let msg = NetworkMessage::ConnectToPeer { peer_addr: peer_address };
+                let msg = NetworkMessage::ConnectToPeer {
+                    peer_addr: peer_address,
+                };
 
                 match self.network_actor.send(msg).await {
                     Ok(Ok(NetworkResponse::Connected { peer_id })) => {
-                        Ok(NetworkRpcResult::Connection { peer_id, success: true })
+                        Ok(NetworkRpcResult::Connection {
+                            peer_id,
+                            success: true,
+                        })
                     }
                     Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Connection failed: {:?}", e)),
@@ -278,11 +273,16 @@ impl NetworkRpcHandler {
             }
 
             NetworkRpcRequest::DisconnectPeer { peer_id } => {
-                let msg = NetworkMessage::DisconnectPeer { peer_id: peer_id.clone() };
+                let msg = NetworkMessage::DisconnectPeer {
+                    peer_id: peer_id.clone(),
+                };
 
                 match self.network_actor.send(msg).await {
                     Ok(Ok(NetworkResponse::Disconnected { .. })) => {
-                        Ok(NetworkRpcResult::Connection { peer_id, success: false })
+                        Ok(NetworkRpcResult::Connection {
+                            peer_id,
+                            success: false,
+                        })
                     }
                     Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Disconnection failed: {:?}", e)),
@@ -334,15 +334,13 @@ impl NetworkRpcHandler {
                 let msg = SyncMessage::GetSyncStatus;
 
                 match self.sync_actor.send(msg).await {
-                    Ok(Ok(SyncResponse::Status(status))) => {
-                        Ok(NetworkRpcResult::SyncStatus {
-                            current_height: status.current_height,
-                            target_height: status.target_height,
-                            is_syncing: status.is_syncing,
-                            sync_peers: status.sync_peers.len(),
-                            pending_requests: status.pending_requests,
-                        })
-                    }
+                    Ok(Ok(SyncResponse::Status(status))) => Ok(NetworkRpcResult::SyncStatus {
+                        current_height: status.current_height,
+                        target_height: status.target_height,
+                        is_syncing: status.is_syncing,
+                        sync_peers: status.sync_peers.len(),
+                        pending_requests: status.pending_requests,
+                    }),
                     Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get sync status: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
@@ -353,14 +351,12 @@ impl NetworkRpcHandler {
                 let msg = SyncMessage::GetMetrics;
 
                 match self.sync_actor.send(msg).await {
-                    Ok(Ok(SyncResponse::Metrics(metrics))) => {
-                        Ok(NetworkRpcResult::SyncMetrics {
-                            blocks_synced: metrics.blocks_synced,
-                            blocks_processed: metrics.blocks_processed,
-                            sync_rate_bps: metrics.sync_rate_blocks_per_second,
-                            current_height: metrics.current_height,
-                        })
-                    }
+                    Ok(Ok(SyncResponse::Metrics(metrics))) => Ok(NetworkRpcResult::SyncMetrics {
+                        blocks_synced: metrics.blocks_synced,
+                        blocks_processed: metrics.blocks_processed,
+                        sync_rate_bps: metrics.sync_rate_blocks_per_second,
+                        current_height: metrics.current_height,
+                    }),
                     Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
                     Ok(Err(e)) => Err(anyhow!("Failed to get sync metrics: {:?}", e)),
                     Err(e) => Err(anyhow!("Actor communication error: {}", e)),
@@ -383,7 +379,10 @@ impl NetworkRpcHandler {
     /// Validate RPC request
     pub fn validate_request(request: &NetworkRpcRequest) -> Result<()> {
         match request {
-            NetworkRpcRequest::StartNetwork { listen_addresses, bootstrap_peers } => {
+            NetworkRpcRequest::StartNetwork {
+                listen_addresses,
+                bootstrap_peers,
+            } => {
                 if listen_addresses.is_empty() {
                     return Err(anyhow!("At least one listen address required"));
                 }
@@ -408,8 +407,7 @@ impl NetworkRpcHandler {
                 }
 
                 // Validate hex encoding
-                hex::decode(block_data)
-                    .map_err(|e| anyhow!("Invalid hex block data: {}", e))?;
+                hex::decode(block_data).map_err(|e| anyhow!("Invalid hex block data: {}", e))?;
             }
 
             NetworkRpcRequest::BroadcastTransaction { tx_data } => {
@@ -418,8 +416,7 @@ impl NetworkRpcHandler {
                 }
 
                 // Validate hex encoding
-                hex::decode(tx_data)
-                    .map_err(|e| anyhow!("Invalid hex transaction data: {}", e))?;
+                hex::decode(tx_data).map_err(|e| anyhow!("Invalid hex transaction data: {}", e))?;
             }
 
             NetworkRpcRequest::ConnectToPeer { peer_address } => {
@@ -512,18 +509,31 @@ impl NetworkSubsystem {
         let mut status = HashMap::new();
 
         // Get network status
-        match self.network_actor.send(NetworkMessage::GetNetworkStatus).await {
+        match self
+            .network_actor
+            .send(NetworkMessage::GetNetworkStatus)
+            .await
+        {
             Ok(Ok(NetworkResponse::Status(net_status))) => {
                 status.insert("network".to_string(), serde_json::to_value(net_status)?);
             }
             Ok(Ok(_)) => {
-                status.insert("network_error".to_string(), serde_json::Value::String("Unexpected response type".to_string()));
+                status.insert(
+                    "network_error".to_string(),
+                    serde_json::Value::String("Unexpected response type".to_string()),
+                );
             }
             Ok(Err(e)) => {
-                status.insert("network_error".to_string(), serde_json::Value::String(format!("{:?}", e)));
+                status.insert(
+                    "network_error".to_string(),
+                    serde_json::Value::String(format!("{:?}", e)),
+                );
             }
             Err(e) => {
-                status.insert("network_error".to_string(), serde_json::Value::String(e.to_string()));
+                status.insert(
+                    "network_error".to_string(),
+                    serde_json::Value::String(e.to_string()),
+                );
             }
         }
 
@@ -533,13 +543,22 @@ impl NetworkSubsystem {
                 status.insert("sync".to_string(), serde_json::to_value(sync_status)?);
             }
             Ok(Ok(_)) => {
-                status.insert("sync_error".to_string(), serde_json::Value::String("Unexpected response type".to_string()));
+                status.insert(
+                    "sync_error".to_string(),
+                    serde_json::Value::String("Unexpected response type".to_string()),
+                );
             }
             Ok(Err(e)) => {
-                status.insert("sync_error".to_string(), serde_json::Value::String(format!("{:?}", e)));
+                status.insert(
+                    "sync_error".to_string(),
+                    serde_json::Value::String(format!("{:?}", e)),
+                );
             }
             Err(e) => {
-                status.insert("sync_error".to_string(), serde_json::Value::String(e.to_string()));
+                status.insert(
+                    "sync_error".to_string(),
+                    serde_json::Value::String(e.to_string()),
+                );
             }
         }
 
@@ -554,7 +573,10 @@ impl NetworkSubsystem {
         let _ = self.sync_actor.send(SyncMessage::StopSync).await;
 
         // Stop network
-        let _ = self.network_actor.send(NetworkMessage::StopNetwork { graceful: true }).await;
+        let _ = self
+            .network_actor
+            .send(NetworkMessage::StopNetwork { graceful: true })
+            .await;
 
         tracing::info!("NetworkActor V2 subsystem shutdown complete");
         Ok(())

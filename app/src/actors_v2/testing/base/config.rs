@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Test configuration for various testing scenarios
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ impl TestConfig {
     pub fn chaos_test() -> Self {
         Self {
             timeout: Duration::from_secs(1800), // 30 minutes
-            max_retries: 1, // Don't retry chaos tests
+            max_retries: 1,                     // Don't retry chaos tests
             verbose_logging: true,
             enable_memory_profiling: true,
             enable_performance_metrics: true,

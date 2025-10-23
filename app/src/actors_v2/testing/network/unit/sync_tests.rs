@@ -1,6 +1,6 @@
-use crate::actors_v2::testing::network::{SyncTestHarness, SyncTestError};
+use crate::actors_v2::network::{SyncConfig, SyncMessage};
 use crate::actors_v2::testing::base::ActorTestHarness;
-use crate::actors_v2::network::{SyncMessage, SyncConfig};
+use crate::actors_v2::testing::network::{SyncTestError, SyncTestHarness};
 use uuid::Uuid;
 
 #[actix::test]
@@ -112,9 +112,7 @@ async fn test_peer_management() {
     harness.send_message(peers_message).await.unwrap();
 
     // Test empty peer list
-    let empty_peers_message = SyncMessage::UpdatePeers {
-        peers: vec![],
-    };
+    let empty_peers_message = SyncMessage::UpdatePeers { peers: vec![] };
 
     harness.send_message(empty_peers_message).await.unwrap();
 

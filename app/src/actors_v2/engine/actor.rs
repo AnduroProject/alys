@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use super::{EngineError, EngineMessage, EngineResponse, EngineActorMetrics};
+use super::{EngineActorMetrics, EngineError, EngineMessage, EngineResponse};
 use crate::engine::Engine;
 use lighthouse_wrapper::types::{ExecutionBlockHash, ExecutionPayload, MainnetEthSpec};
 
@@ -62,7 +62,8 @@ impl EngineActor {
     /// Record activity and update metrics
     fn record_activity(&mut self) {
         self.last_activity = Instant::now();
-        self.metrics.set_active_operations(self.pending_payloads.len() as i64);
+        self.metrics
+            .set_active_operations(self.pending_payloads.len() as i64);
     }
 
     /// Handle build payload message
@@ -84,14 +85,21 @@ impl EngineActor {
         );
 
         // Track pending operation
-        self.pending_payloads.insert(correlation_id, PendingPayload {
+        self.pending_payloads.insert(
             correlation_id,
-            started_at: start_time,
-        });
-        self.metrics.set_active_operations(self.pending_payloads.len() as i64);
+            PendingPayload {
+                correlation_id,
+                started_at: start_time,
+            },
+        );
+        self.metrics
+            .set_active_operations(self.pending_payloads.len() as i64);
 
         // Call V0 Engine
-        let result = self.engine.build_block(timestamp, parent_hash, add_balances).await;
+        let result = self
+            .engine
+            .build_block(timestamp, parent_hash, add_balances)
+            .await;
 
         // Remove from pending operations
         self.pending_payloads.remove(&correlation_id);
@@ -147,9 +155,10 @@ impl EngineActor {
 
         // For now, perform basic validation
         // In full implementation, would integrate with V0 Engine validation
-        let is_valid = payload.block_number() > 0 &&
-                      payload.gas_limit() > 0 &&
-                      !payload.transactions().is_empty() || payload.block_number() == 0; // Allow empty genesis
+        let is_valid = payload.block_number() > 0
+            && payload.gas_limit() > 0
+            && !payload.transactions().is_empty()
+            || payload.block_number() == 0; // Allow empty genesis
 
         let duration = start_time.elapsed();
 
@@ -297,7 +306,12 @@ impl Handler<EngineMessage> for EngineActor {
         self.record_activity();
 
         match msg {
-            EngineMessage::BuildPayload { timestamp, parent_hash, add_balances, correlation_id } => {
+            EngineMessage::BuildPayload {
+                timestamp,
+                parent_hash,
+                add_balances,
+                correlation_id,
+            } => {
                 // Capture necessary data before async context to avoid lifetime issues
                 let engine = self.engine.clone();
                 let metrics = self.metrics.clone();
@@ -315,11 +329,9 @@ impl Handler<EngineMessage> for EngineActor {
                     );
 
                     // Build block using engine
-                    let result = engine.build_block(
-                        timestamp,
-                        parent_hash,
-                        add_balances,
-                    ).await;
+                    let result = engine
+                        .build_block(timestamp, parent_hash, add_balances)
+                        .await;
 
                     let duration = start_time.elapsed();
 
@@ -356,7 +368,10 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
-            EngineMessage::ValidatePayload { payload, correlation_id } => {
+            EngineMessage::ValidatePayload {
+                payload,
+                correlation_id,
+            } => {
                 let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
@@ -371,11 +386,11 @@ impl Handler<EngineMessage> for EngineActor {
 
                     // Perform basic execution payload validation
                     // In full implementation, this would integrate with V0 Engine validation
-                    let is_valid = payload.block_number() > 0 &&
-                                  payload.gas_limit() > 0 &&
-                                  payload.gas_used() <= payload.gas_limit() &&
-                                  payload.timestamp() > 0 &&
-                                  (!payload.transactions().is_empty() || payload.block_number() == 0); // Allow empty genesis
+                    let is_valid = payload.block_number() > 0
+                        && payload.gas_limit() > 0
+                        && payload.gas_used() <= payload.gas_limit()
+                        && payload.timestamp() > 0
+                        && (!payload.transactions().is_empty() || payload.block_number() == 0); // Allow empty genesis
 
                     let duration = start_time.elapsed();
 
@@ -408,7 +423,10 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
-            EngineMessage::CommitBlock { execution_payload, correlation_id } => {
+            EngineMessage::CommitBlock {
+                execution_payload,
+                correlation_id,
+            } => {
                 let engine = self.engine.clone();
                 let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
@@ -458,7 +476,10 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
-            EngineMessage::SetFinalized { block_hash, correlation_id } => {
+            EngineMessage::SetFinalized {
+                block_hash,
+                correlation_id,
+            } => {
                 let engine = self.engine.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
@@ -503,11 +524,18 @@ impl Handler<EngineMessage> for EngineActor {
                 debug!(correlation_id = %correlation_id, "GetLatestBlock not yet implemented");
 
                 Box::pin(async move {
-                    Err(EngineError::Internal("GetLatestBlock not yet implemented".to_string()))
+                    Err(EngineError::Internal(
+                        "GetLatestBlock not yet implemented".to_string(),
+                    ))
                 })
             }
 
-            EngineMessage::UpdateForkChoice { head_hash, safe_hash, finalized_hash, correlation_id } => {
+            EngineMessage::UpdateForkChoice {
+                head_hash,
+                safe_hash,
+                finalized_hash,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
                 debug!(
                     correlation_id = %correlation_id,
@@ -518,11 +546,16 @@ impl Handler<EngineMessage> for EngineActor {
                 );
 
                 Box::pin(async move {
-                    Err(EngineError::Internal("UpdateForkChoice not yet implemented".to_string()))
+                    Err(EngineError::Internal(
+                        "UpdateForkChoice not yet implemented".to_string(),
+                    ))
                 })
             }
 
-            EngineMessage::GetBlockWithTransactions { block_hash, correlation_id } => {
+            EngineMessage::GetBlockWithTransactions {
+                block_hash,
+                correlation_id,
+            } => {
                 let engine = self.engine.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
@@ -547,7 +580,10 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
-            EngineMessage::GetTransactionReceipt { transaction_hash, correlation_id } => {
+            EngineMessage::GetTransactionReceipt {
+                transaction_hash,
+                correlation_id,
+            } => {
                 let engine = self.engine.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
@@ -572,13 +608,14 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
-            EngineMessage::Shutdown { graceful: _, correlation_id } => {
+            EngineMessage::Shutdown {
+                graceful: _,
+                correlation_id,
+            } => {
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
                 info!(correlation_id = %correlation_id, "Engine shutdown requested");
 
-                Box::pin(async move {
-                    Ok(EngineResponse::ShutdownComplete)
-                })
+                Box::pin(async move { Ok(EngineResponse::ShutdownComplete) })
             }
         }
     }

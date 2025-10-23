@@ -31,7 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n2. Testing Managers...");
 
     let mut peer_manager = app::actors_v2::network_v2::managers::PeerManager::new();
-    peer_manager.add_peer("test-peer".to_string(), "/ip4/127.0.0.1/tcp/8000".to_string());
+    peer_manager.add_peer(
+        "test-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/8000".to_string(),
+    );
     assert!(peer_manager.get_connected_peers().len() == 1);
     println!("✅ PeerManager functional");
 

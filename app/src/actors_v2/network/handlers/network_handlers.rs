@@ -3,11 +3,11 @@
 //! Handles P2P protocol operations for NetworkActor.
 //! Removed complex supervision and actor_system patterns.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use super::super::{
-    NetworkMessage, NetworkResponse, NetworkError,
-    messages::{PeerInfo, NetworkStatus},
+    messages::{NetworkStatus, PeerInfo},
+    NetworkError, NetworkMessage, NetworkResponse,
 };
 
 /// NetworkActor message handling utilities
@@ -25,8 +25,11 @@ impl NetworkMessageHandlers {
         }
 
         // In real implementation, this would initialize libp2p swarm
-        tracing::info!("Starting network with {} listen addresses and {} bootstrap peers",
-            listen_addrs.len(), bootstrap_peers.len());
+        tracing::info!(
+            "Starting network with {} listen addresses and {} bootstrap peers",
+            listen_addrs.len(),
+            bootstrap_peers.len()
+        );
 
         Ok(NetworkResponse::Started)
     }
@@ -67,7 +70,8 @@ impl NetworkMessageHandlers {
             return Err(anyhow!("Message data cannot be empty"));
         }
 
-        if data.len() > 10 * 1024 * 1024 { // 10MB limit
+        if data.len() > 10 * 1024 * 1024 {
+            // 10MB limit
             return Err(anyhow!("Message too large: {} bytes", data.len()));
         }
 
@@ -108,9 +112,13 @@ impl NetworkMessageHandlers {
 
     /// Convert internal peer info to response format
     pub fn convert_peer_info(
-        internal_peers: Vec<(String, crate::actors_v2::network::managers::peer_manager::PeerInfo)>
+        internal_peers: Vec<(
+            String,
+            crate::actors_v2::network::managers::peer_manager::PeerInfo,
+        )>,
     ) -> Vec<PeerInfo> {
-        internal_peers.into_iter()
+        internal_peers
+            .into_iter()
             .map(|(peer_id, info)| PeerInfo {
                 peer_id,
                 address: info.address,

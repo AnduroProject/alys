@@ -2,22 +2,21 @@
 //!
 //! Testing infrastructure for NetworkActor V2 system following StorageActor patterns exactly.
 
-pub mod unit;
-pub mod integration;
 pub mod fixtures;
+pub mod integration;
+pub mod unit;
 
 use super::base::*;
 use crate::actors_v2::network::{
-    NetworkActor, SyncActor, NetworkConfig, SyncConfig,
-    NetworkMessage, SyncMessage, NetworkError, SyncError,
-    NetworkResponse, SyncResponse,
+    NetworkActor, NetworkConfig, NetworkError, NetworkMessage, NetworkResponse, SyncActor,
+    SyncConfig, SyncError, SyncMessage, SyncResponse,
 };
 use async_trait::async_trait;
-use tempfile::TempDir;
-use uuid::Uuid;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::sync::RwLock;
-use tracing::{info, debug};
+use tracing::{debug, info};
+use uuid::Uuid;
 
 /// Test peer for NetworkActor testing
 #[derive(Debug, Clone)]
@@ -178,7 +177,9 @@ impl ActorTestHarness for NetworkTestHarness {
     }
 
     async fn actor_mut(&mut self) -> &mut Self::Actor {
-        panic!("Direct mutable actor access not supported. Use base.get_actor_ref() for async access.")
+        panic!(
+            "Direct mutable actor access not supported. Use base.get_actor_ref() for async access."
+        )
     }
 
     async fn send_message(&mut self, message: Self::Message) -> Result<(), Self::Error> {
@@ -187,17 +188,26 @@ impl ActorTestHarness for NetworkTestHarness {
 
         // Use spawn_blocking following StorageActor pattern for async compatibility
         let result = match message {
-            NetworkMessage::StartNetwork { listen_addrs, bootstrap_peers } => {
+            NetworkMessage::StartNetwork {
+                listen_addrs,
+                bootstrap_peers,
+            } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(async {
                         let _actor_guard = actor.read().await;
-                        info!("NetworkActor started with {} listen addresses", listen_addrs.len());
+                        info!(
+                            "NetworkActor started with {} listen addresses",
+                            listen_addrs.len()
+                        );
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
             NetworkMessage::StopNetwork { graceful: _ } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -207,19 +217,32 @@ impl ActorTestHarness for NetworkTestHarness {
                         info!("NetworkActor stopped");
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
-            NetworkMessage::BroadcastBlock { block_data, priority } => {
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
+            NetworkMessage::BroadcastBlock {
+                block_data,
+                priority,
+            } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(async {
                         let _actor_guard = actor.read().await;
-                        info!("Broadcasting block ({} bytes, priority: {})", block_data.len(), priority);
+                        info!(
+                            "Broadcasting block ({} bytes, priority: {})",
+                            block_data.len(),
+                            priority
+                        );
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
             NetworkMessage::BroadcastTransaction { tx_data } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -229,8 +252,11 @@ impl ActorTestHarness for NetworkTestHarness {
                         info!("Broadcasting transaction ({} bytes)", tx_data.len());
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
             NetworkMessage::ConnectToPeer { peer_addr } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -240,8 +266,11 @@ impl ActorTestHarness for NetworkTestHarness {
                         info!("Connecting to peer: {}", peer_addr);
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
             NetworkMessage::DisconnectPeer { peer_id } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -251,8 +280,11 @@ impl ActorTestHarness for NetworkTestHarness {
                         info!("Disconnecting from peer: {}", peer_id);
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+            }
             _ => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -262,7 +294,10 @@ impl ActorTestHarness for NetworkTestHarness {
                         debug!("Processing other NetworkMessage");
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
+                })
+                .await
+                .unwrap()
+                .map_err(|e| NetworkTestError::NetworkOperation(e.to_string()))
             }
         };
 
@@ -270,7 +305,7 @@ impl ActorTestHarness for NetworkTestHarness {
             Ok(_) => {
                 self.base.record_success().await;
                 Ok(())
-            },
+            }
             Err(e) => {
                 self.base.record_error(&e.to_string()).await;
                 Err(e)
@@ -290,7 +325,8 @@ impl ActorTestHarness for NetworkTestHarness {
 
     async fn verify_state(&self) -> Result<(), Self::Error> {
         debug!("Verifying NetworkActor state");
-        self.config.validate()
+        self.config
+            .validate()
             .map_err(|e| NetworkTestError::Configuration(e))?;
         Ok(())
     }
@@ -340,7 +376,9 @@ impl ActorTestHarness for SyncTestHarness {
     }
 
     async fn actor_mut(&mut self) -> &mut Self::Actor {
-        panic!("Direct mutable actor access not supported. Use base.get_actor_ref() for async access.")
+        panic!(
+            "Direct mutable actor access not supported. Use base.get_actor_ref() for async access."
+        )
     }
 
     async fn send_message(&mut self, message: Self::Message) -> Result<(), Self::Error> {
@@ -358,8 +396,11 @@ impl ActorTestHarness for SyncTestHarness {
                         info!("SyncActor started");
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| SyncTestError::SyncOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| SyncTestError::SyncOperation(e.to_string()))
+            }
             SyncMessage::StopSync => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -369,32 +410,50 @@ impl ActorTestHarness for SyncTestHarness {
                         info!("SyncActor stopped");
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| SyncTestError::SyncOperation(e.to_string()))
-            },
-            SyncMessage::RequestBlocks { start_height, count, peer_id } => {
+                })
+                .await
+                .unwrap()
+                .map_err(|e| SyncTestError::SyncOperation(e.to_string()))
+            }
+            SyncMessage::RequestBlocks {
+                start_height,
+                count,
+                peer_id,
+            } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(async {
                         let _actor_guard = actor.read().await;
-                        info!("Requesting {} blocks from height {} via peer {:?}",
-                            count, start_height, peer_id);
+                        info!(
+                            "Requesting {} blocks from height {} via peer {:?}",
+                            count, start_height, peer_id
+                        );
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| SyncTestError::SyncOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| SyncTestError::SyncOperation(e.to_string()))
+            }
             SyncMessage::HandleNewBlock { block, peer_id } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(async {
                         let _actor_guard = actor.read().await;
-                        info!("Processing new block ({} bytes) from peer {}",
-                            block.len(), peer_id);
+                        info!(
+                            "Processing new block ({} bytes) from peer {}",
+                            block.len(),
+                            peer_id
+                        );
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| SyncTestError::SyncOperation(e.to_string()))
-            },
+                })
+                .await
+                .unwrap()
+                .map_err(|e| SyncTestError::SyncOperation(e.to_string()))
+            }
             _ => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
@@ -404,7 +463,10 @@ impl ActorTestHarness for SyncTestHarness {
                         debug!("Processing other SyncMessage");
                         Ok::<(), anyhow::Error>(())
                     })
-                }).await.unwrap().map_err(|e| SyncTestError::SyncOperation(e.to_string()))
+                })
+                .await
+                .unwrap()
+                .map_err(|e| SyncTestError::SyncOperation(e.to_string()))
             }
         };
 
@@ -412,7 +474,7 @@ impl ActorTestHarness for SyncTestHarness {
             Ok(_) => {
                 self.base.record_success().await;
                 Ok(())
-            },
+            }
             Err(e) => {
                 self.base.record_error(&e.to_string()).await;
                 Err(e)
@@ -432,7 +494,8 @@ impl ActorTestHarness for SyncTestHarness {
 
     async fn verify_state(&self) -> Result<(), Self::Error> {
         debug!("Verifying SyncActor state");
-        self.config.validate()
+        self.config
+            .validate()
             .map_err(|e| SyncTestError::Configuration(e))?;
         Ok(())
     }

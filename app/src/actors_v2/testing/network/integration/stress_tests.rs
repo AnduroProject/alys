@@ -10,9 +10,7 @@ use actix::Actor;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-use crate::actors_v2::network::{
-    NetworkActor, NetworkConfig, NetworkMessage, NetworkResponse,
-};
+use crate::actors_v2::network::{NetworkActor, NetworkConfig, NetworkMessage, NetworkResponse};
 
 /// Helper to create test actor
 fn create_test_actor(port: u16) -> NetworkActor {
@@ -39,10 +37,14 @@ async fn test_1000_rapid_gossip_messages() {
     let actor = create_test_actor(20001).start();
 
     // Start network
-    actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20001".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20001".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -55,10 +57,12 @@ async fn test_1000_rapid_gossip_messages() {
 
     for i in 0..message_count {
         let block_data = format!("stress test block {}", i).into_bytes();
-        let result = actor.send(NetworkMessage::BroadcastBlock {
-            block_data,
-            priority: i % 10 == 0, // Every 10th message is priority
-        }).await;
+        let result = actor
+            .send(NetworkMessage::BroadcastBlock {
+                block_data,
+                priority: i % 10 == 0, // Every 10th message is priority
+            })
+            .await;
 
         match result {
             Ok(Ok(_)) => success_count += 1,
@@ -91,7 +95,9 @@ async fn test_1000_rapid_gossip_messages() {
     println!("  Messages/second: {:.2}", messages_per_second);
 
     // Verify metrics
-    let metrics = actor.send(NetworkMessage::GetMetrics).await
+    let metrics = actor
+        .send(NetworkMessage::GetMetrics)
+        .await
         .expect("Failed to get metrics")
         .expect("Metrics failed");
 
@@ -101,13 +107,19 @@ async fn test_1000_rapid_gossip_messages() {
             println!("  Gossip published: {}", m.gossip_messages_published);
             println!("  Messages sent: {}", m.messages_sent);
             println!("  Bytes sent: {}", m.bytes_sent);
-            assert!(m.gossip_messages_published > 0, "Should have published messages");
+            assert!(
+                m.gossip_messages_published > 0,
+                "Should have published messages"
+            );
         }
         _ => panic!("Unexpected metrics response"),
     }
 
     // Cleanup
-    actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }
 
@@ -119,10 +131,14 @@ async fn test_100_concurrent_block_requests() {
     let actor = create_test_actor(20002).start();
 
     // Start network
-    actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20002".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20002".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -139,11 +155,13 @@ async fn test_100_concurrent_block_requests() {
     for i in 0..request_count {
         let actor_clone = actor.clone();
         let handle = tokio::spawn(async move {
-            actor_clone.send(NetworkMessage::RequestBlocks {
-                start_height: i * 10,
-                count: 10,
-                correlation_id: None,
-            }).await
+            actor_clone
+                .send(NetworkMessage::RequestBlocks {
+                    start_height: i * 10,
+                    count: 10,
+                    correlation_id: None,
+                })
+                .await
         });
         handles.push(handle);
     }
@@ -180,7 +198,9 @@ async fn test_100_concurrent_block_requests() {
     println!("  Requests/second: {:.2}", requests_per_second);
 
     // Verify metrics
-    let metrics = actor.send(NetworkMessage::GetMetrics).await
+    let metrics = actor
+        .send(NetworkMessage::GetMetrics)
+        .await
         .expect("Failed to get metrics")
         .expect("Metrics failed");
 
@@ -195,7 +215,10 @@ async fn test_100_concurrent_block_requests() {
     }
 
     // Cleanup
-    actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }
 
@@ -207,17 +230,24 @@ async fn test_rapid_peer_churn() {
     let main_actor = create_test_actor(20003).start();
 
     // Start main actor
-    main_actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20003".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    main_actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20003".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
     let churn_cycles = 20;
     let peers_per_cycle = 3;
 
-    println!("Starting peer churn test: {} cycles, {} peers per cycle", churn_cycles, peers_per_cycle);
+    println!(
+        "Starting peer churn test: {} cycles, {} peers per cycle",
+        churn_cycles, peers_per_cycle
+    );
 
     for cycle in 0..churn_cycles {
         // Start multiple peer actors
@@ -229,7 +259,9 @@ async fn test_rapid_peer_churn() {
             peer.send(NetworkMessage::StartNetwork {
                 listen_addrs: vec![format!("/ip4/127.0.0.1/tcp/{}", port)],
                 bootstrap_peers: vec!["/ip4/127.0.0.1/tcp/20003".to_string()],
-            }).await.ok();
+            })
+            .await
+            .ok();
 
             peer_actors.push(peer);
         }
@@ -239,7 +271,9 @@ async fn test_rapid_peer_churn() {
 
         // Disconnect all peers
         for peer in peer_actors {
-            peer.send(NetworkMessage::StopNetwork { graceful: false }).await.ok();
+            peer.send(NetworkMessage::StopNetwork { graceful: false })
+                .await
+                .ok();
         }
 
         // Brief pause between cycles
@@ -253,20 +287,30 @@ async fn test_rapid_peer_churn() {
     println!("Peer churn test completed");
 
     // Verify main actor is still operational
-    let status = main_actor.send(NetworkMessage::GetNetworkStatus).await
+    let status = main_actor
+        .send(NetworkMessage::GetNetworkStatus)
+        .await
         .expect("Failed to get status")
         .expect("Status failed");
 
     match status {
         NetworkResponse::Status(s) => {
-            assert!(s.is_running, "Main actor should still be running after churn");
-            println!("Main actor status: running={}, peers={}", s.is_running, s.connected_peers);
+            assert!(
+                s.is_running,
+                "Main actor should still be running after churn"
+            );
+            println!(
+                "Main actor status: running={}, peers={}",
+                s.is_running, s.connected_peers
+            );
         }
         _ => panic!("Unexpected status response"),
     }
 
     // Check metrics
-    let metrics = main_actor.send(NetworkMessage::GetMetrics).await
+    let metrics = main_actor
+        .send(NetworkMessage::GetMetrics)
+        .await
         .expect("Failed to get metrics")
         .expect("Metrics failed");
 
@@ -281,7 +325,10 @@ async fn test_rapid_peer_churn() {
     }
 
     // Cleanup
-    main_actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    main_actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }
 
@@ -293,10 +340,14 @@ async fn test_mixed_high_load() {
     let actor = create_test_actor(20004).start();
 
     // Start network
-    actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20004".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20004".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -308,10 +359,13 @@ async fn test_mixed_high_load() {
     let actor1 = actor.clone();
     let broadcast_handle = tokio::spawn(async move {
         for i in 0..200 {
-            actor1.send(NetworkMessage::BroadcastBlock {
-                block_data: format!("mixed load block {}", i).into_bytes(),
-                priority: false,
-            }).await.ok();
+            actor1
+                .send(NetworkMessage::BroadcastBlock {
+                    block_data: format!("mixed load block {}", i).into_bytes(),
+                    priority: false,
+                })
+                .await
+                .ok();
             if i % 50 == 0 {
                 tokio::task::yield_now().await;
             }
@@ -321,9 +375,12 @@ async fn test_mixed_high_load() {
     let actor2 = actor.clone();
     let transaction_handle = tokio::spawn(async move {
         for i in 0..200 {
-            actor2.send(NetworkMessage::BroadcastTransaction {
-                tx_data: format!("mixed load tx {}", i).into_bytes(),
-            }).await.ok();
+            actor2
+                .send(NetworkMessage::BroadcastTransaction {
+                    tx_data: format!("mixed load tx {}", i).into_bytes(),
+                })
+                .await
+                .ok();
             if i % 50 == 0 {
                 tokio::task::yield_now().await;
             }
@@ -333,11 +390,14 @@ async fn test_mixed_high_load() {
     let actor3 = actor.clone();
     let request_handle = tokio::spawn(async move {
         for i in 0..50 {
-            actor3.send(NetworkMessage::RequestBlocks {
-                start_height: i * 20,
-                count: 20,
-                correlation_id: None,
-            }).await.ok();
+            actor3
+                .send(NetworkMessage::RequestBlocks {
+                    start_height: i * 20,
+                    count: 20,
+                    correlation_id: None,
+                })
+                .await
+                .ok();
             if i % 10 == 0 {
                 tokio::task::yield_now().await;
             }
@@ -363,20 +423,27 @@ async fn test_mixed_high_load() {
     println!("Mixed high-load test completed in {:?}", elapsed);
 
     // Verify system is still responsive
-    let final_status = actor.send(NetworkMessage::GetNetworkStatus).await
+    let final_status = actor
+        .send(NetworkMessage::GetNetworkStatus)
+        .await
         .expect("Failed to get status")
         .expect("Status failed");
 
     match final_status {
         NetworkResponse::Status(s) => {
-            assert!(s.is_running, "Actor should still be running after mixed load");
+            assert!(
+                s.is_running,
+                "Actor should still be running after mixed load"
+            );
             println!("Final status: running={}", s.is_running);
         }
         _ => panic!("Unexpected status response"),
     }
 
     // Check final metrics
-    let metrics = actor.send(NetworkMessage::GetMetrics).await
+    let metrics = actor
+        .send(NetworkMessage::GetMetrics)
+        .await
         .expect("Failed to get metrics")
         .expect("Metrics failed");
 
@@ -391,7 +458,10 @@ async fn test_mixed_high_load() {
     }
 
     // Cleanup
-    actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }
 
@@ -403,10 +473,14 @@ async fn test_channel_backpressure() {
     let actor = create_test_actor(20005).start();
 
     // Start network
-    actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20005".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20005".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -417,10 +491,12 @@ async fn test_channel_backpressure() {
     let mut sent_count = 0;
 
     for i in 0..burst_size {
-        let result = actor.send(NetworkMessage::BroadcastBlock {
-            block_data: vec![0u8; 1024], // 1KB blocks
-            priority: false,
-        }).await;
+        let result = actor
+            .send(NetworkMessage::BroadcastBlock {
+                block_data: vec![0u8; 1024], // 1KB blocks
+                priority: false,
+            })
+            .await;
 
         if result.is_ok() {
             sent_count += 1;
@@ -435,7 +511,9 @@ async fn test_channel_backpressure() {
     sleep(Duration::from_secs(2)).await;
 
     // Verify system is still responsive
-    let status = actor.send(NetworkMessage::GetNetworkStatus).await
+    let status = actor
+        .send(NetworkMessage::GetNetworkStatus)
+        .await
         .expect("Failed to get status")
         .expect("Status failed");
 
@@ -448,7 +526,10 @@ async fn test_channel_backpressure() {
     }
 
     // Cleanup
-    actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }
 
@@ -460,10 +541,14 @@ async fn test_long_running_stability() {
     let actor = create_test_actor(20006).start();
 
     // Start network
-    actor.send(NetworkMessage::StartNetwork {
-        listen_addrs: vec!["/ip4/127.0.0.1/tcp/20006".to_string()],
-        bootstrap_peers: vec![],
-    }).await.expect("Failed to start").expect("Start failed");
+    actor
+        .send(NetworkMessage::StartNetwork {
+            listen_addrs: vec!["/ip4/127.0.0.1/tcp/20006".to_string()],
+            bootstrap_peers: vec![],
+        })
+        .await
+        .expect("Failed to start")
+        .expect("Start failed");
 
     sleep(Duration::from_secs(1)).await;
 
@@ -471,14 +556,20 @@ async fn test_long_running_stability() {
     let start_time = Instant::now();
     let mut operation_count = 0;
 
-    println!("Starting long-running stability test ({:?})...", test_duration);
+    println!(
+        "Starting long-running stability test ({:?})...",
+        test_duration
+    );
 
     while start_time.elapsed() < test_duration {
         // Continuously perform various operations
-        actor.send(NetworkMessage::BroadcastBlock {
-            block_data: b"stability test block".to_vec(),
-            priority: false,
-        }).await.ok();
+        actor
+            .send(NetworkMessage::BroadcastBlock {
+                block_data: b"stability test block".to_vec(),
+                priority: false,
+            })
+            .await
+            .ok();
 
         actor.send(NetworkMessage::GetNetworkStatus).await.ok();
 
@@ -487,15 +578,26 @@ async fn test_long_running_stability() {
         sleep(Duration::from_millis(10)).await;
     }
 
-    println!("Completed {} operations over {:?}", operation_count, test_duration);
+    println!(
+        "Completed {} operations over {:?}",
+        operation_count, test_duration
+    );
 
     // Verify system is still healthy
-    let health = actor.send(NetworkMessage::HealthCheck {
-        correlation_id: Some(uuid::Uuid::new_v4()),
-    }).await.expect("Failed health check").expect("Health check error");
+    let health = actor
+        .send(NetworkMessage::HealthCheck {
+            correlation_id: Some(uuid::Uuid::new_v4()),
+        })
+        .await
+        .expect("Failed health check")
+        .expect("Health check error");
 
     match health {
-        NetworkResponse::Healthy { is_healthy, connected_peers: _, issues } => {
+        NetworkResponse::Healthy {
+            is_healthy,
+            connected_peers: _,
+            issues,
+        } => {
             assert!(is_healthy, "System should be healthy after long run");
             println!("System healthy after stability test");
             if !issues.is_empty() {
@@ -506,6 +608,9 @@ async fn test_long_running_stability() {
     }
 
     // Cleanup
-    actor.send(NetworkMessage::StopNetwork { graceful: true }).await.ok();
+    actor
+        .send(NetworkMessage::StopNetwork { graceful: true })
+        .await
+        .ok();
     sleep(Duration::from_millis(500)).await;
 }

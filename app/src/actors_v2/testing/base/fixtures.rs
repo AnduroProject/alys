@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 use uuid::Uuid;
 
 /// Common test data fixtures and generators
@@ -35,15 +35,18 @@ impl TestFixtures {
     }
 
     pub fn add_string(&mut self, key: &str, value: String) {
-        self.test_data.insert(key.to_string(), TestData::String(value));
+        self.test_data
+            .insert(key.to_string(), TestData::String(value));
     }
 
     pub fn add_number(&mut self, key: &str, value: i64) {
-        self.test_data.insert(key.to_string(), TestData::Number(value));
+        self.test_data
+            .insert(key.to_string(), TestData::Number(value));
     }
 
     pub fn add_binary(&mut self, key: &str, value: Vec<u8>) {
-        self.test_data.insert(key.to_string(), TestData::Binary(value));
+        self.test_data
+            .insert(key.to_string(), TestData::Binary(value));
     }
 
     pub fn get_string(&self, key: &str) -> Option<&String> {
@@ -77,7 +80,10 @@ impl TestFixtures {
         suffix.hash(&mut hasher);
         let hash = hasher.finish();
 
-        format!("test_{}_{:016x}", suffix, hash).chars().take(length).collect()
+        format!("test_{}_{:016x}", suffix, hash)
+            .chars()
+            .take(length)
+            .collect()
     }
 
     pub fn generate_deterministic_bytes(&self, size: usize, suffix: &str) -> Vec<u8> {

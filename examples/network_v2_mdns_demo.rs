@@ -42,7 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test mDNS peer discovery
     let discovered_peers = behaviour.discover_mdns_peers();
-    println!("✅ mDNS peer discovery: {} peers found", discovered_peers.len());
+    println!(
+        "✅ mDNS peer discovery: {} peers found",
+        discovered_peers.len()
+    );
 
     for (peer_id, addresses) in &discovered_peers {
         println!("   📡 Discovered: {} at {:?}", peer_id, addresses);
@@ -64,10 +67,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Add bootstrap peers
-    peer_manager.add_peer("bootstrap-peer".to_string(), "/ip4/127.0.0.1/tcp/9000".to_string());
+    peer_manager.add_peer(
+        "bootstrap-peer".to_string(),
+        "/ip4/127.0.0.1/tcp/9000".to_string(),
+    );
 
     let stats = peer_manager.get_connection_stats();
-    println!("✅ PeerManager: {} total peers (including mDNS discoveries)", stats.total_connected);
+    println!(
+        "✅ PeerManager: {} total peers (including mDNS discoveries)",
+        stats.total_connected
+    );
     println!("   📊 Average reputation: {:.1}", stats.average_reputation);
 
     // Test protocol stack completeness

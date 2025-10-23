@@ -1,6 +1,6 @@
-use crate::actors_v2::testing::network::{NetworkTestHarness, SyncTestHarness};
-use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::network::{NetworkMessage, SyncMessage};
+use crate::actors_v2::testing::base::ActorTestHarness;
+use crate::actors_v2::testing::network::{NetworkTestHarness, SyncTestHarness};
 
 #[actix::test]
 async fn test_network_sync_actor_coordination() {
@@ -74,7 +74,10 @@ async fn test_block_sync_workflow() {
         block_data: b"sync workflow test block".to_vec(),
         priority: false,
     };
-    network_harness.send_message(block_broadcast_msg).await.unwrap();
+    network_harness
+        .send_message(block_broadcast_msg)
+        .await
+        .unwrap();
 
     // Handle new block in sync
     let new_block_msg = SyncMessage::HandleNewBlock {
