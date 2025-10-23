@@ -20,8 +20,8 @@ RUN apt-get update && \
         libclang-dev \
         llvm-dev \
         git \
-        ca-certificates \
-        && \
+        ca-certificates && \
+    update-ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
@@ -50,14 +50,30 @@ RUN set -eux; \
     # targeted cleanup of possible corrupt/stale cargo git DB entries (safe)
     rm -rf /usr/local/cargo/git/db/lighthouse-* /usr/local/cargo/git/checkouts/lighthouse-* || true
 
+# 2) Force cargo to use the system Git CLI (avoids libgit2 issues under QEMU)
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+# Optional: Work around HTTP/2/TLS oddities sometimes seen via QEMU
+RUN git config --global http.version HTTP/1.1
+
+# 3) Fetch first (fail fast on git issues, with cache mounts), then build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo fetch --locked || cargo fetch
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --bin app --verbose
+
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
 #RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #    --mount=type=cache,target=/usr/local/cargo/git \
 #     cargo build --lib --verbose
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-      cargo build --bin app --verbose
+
+# RUN --mount=type=cache,target=/usr/local/cargo/registry \
+#     --mount=type=cache,target=/usr/local/cargo/git \
+#       cargo build --bin app --verbose
 
 #------------------------------------------------------------------------------------------
 
