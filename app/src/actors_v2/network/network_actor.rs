@@ -9,10 +9,14 @@
 use actix::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
+use std::sync::Arc;
 use anyhow::{Result, anyhow, Context as AnyhowContext};
+use ethereum_types::H256;
 use libp2p::{Multiaddr, PeerId, swarm::{Swarm, SwarmEvent, NetworkBehaviour, ConnectionHandler}};
 use libp2p::request_response::{RequestId, ResponseChannel};
-use tokio::sync::mpsc;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use tokio::sync::{mpsc, RwLock};
 use futures::{select, StreamExt, FutureExt};
 
 use super::{
@@ -200,6 +204,9 @@ pub struct NetworkActor {
     sync_actor: Option<Addr<crate::actors_v2::network::SyncActor>>,
     /// ChainActor address for AuxPoW forwarding (Phase 4: Integration Point 3b)
     chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
+    /// Phase 5: Cache of recently seen block hashes
+    /// Prevents duplicate forwarding to ChainActor
+    block_cache: Arc<RwLock<LruCache<H256, Instant>>>,
     /// Network running state
     is_running: bool,
     /// Shutdown flag
@@ -235,6 +242,11 @@ impl NetworkActor {
             config.max_bytes_per_peer_per_second,
         );
 
+        // Phase 5: Initialize block cache (LRU with capacity of 100 blocks)
+        let block_cache = Arc::new(RwLock::new(
+            LruCache::new(NonZeroUsize::new(100).unwrap())
+        ));
+
         Ok(Self {
             config,
             event_rx: None,
@@ -247,6 +259,7 @@ impl NetworkActor {
             active_subscriptions: HashMap::new(),
             pending_block_requests: HashMap::new(),
             sync_actor: None,
+            block_cache,
             chain_actor: None,
             is_running: false,
             shutdown_requested: false,
@@ -486,6 +499,9 @@ impl NetworkActor {
                 // Phase 1: Forward block gossip messages to ChainActor for import
                 if topic.contains("block") {
                     if let Some(ref chain_actor) = self.chain_actor {
+                        // Phase 5: Update metrics for block received
+                        self.metrics.blocks_received += 1;
+
                         // Deserialize block from MessagePack format
                         match crate::actors_v2::common::serialization::deserialize_block_from_network(&data) {
                             Ok(block) => {
@@ -498,7 +514,33 @@ impl NetworkActor {
                                     block_height = block_height,
                                     block_hash = %block_hash,
                                     topic = %topic,
-                                    "Received block via gossipsub, forwarding to ChainActor"
+                                    "Received block via gossipsub"
+                                );
+
+                                // Phase 5: Check block cache before forwarding to ChainActor
+                                {
+                                    // Use try_read() for non-async context
+                                    if let Ok(cache) = self.block_cache.try_read() {
+                                        if cache.peek(&block_hash).is_some() {
+                                            tracing::debug!(
+                                                peer_id = %source_peer,
+                                                block_hash = %block_hash,
+                                                block_height = block_height,
+                                                "Duplicate block detected via cache, skipping ChainActor forward"
+                                            );
+
+                                            // Update metrics
+                                            self.metrics.blocks_duplicate_cached += 1;
+
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+
+                                tracing::debug!(
+                                    peer_id = %source_peer,
+                                    block_hash = %block_hash,
+                                    "Block not in cache, proceeding with validation and forwarding"
                                 );
 
                                 // Perform basic structural validation before forwarding
@@ -524,6 +566,11 @@ impl NetworkActor {
                                 // Forward to ChainActor (async, non-blocking)
                                 let chain_actor_clone = chain_actor.clone();
                                 let peer_id_clone = source_peer.clone();
+                                let block_cache_clone = self.block_cache.clone();
+                                let block_hash_clone = block_hash;
+
+                                // Update metrics
+                                self.metrics.blocks_forwarded += 1;
 
                                 tokio::spawn(async move {
                                     let msg = crate::actors_v2::chain::messages::ChainMessage::NetworkBlockReceived {
@@ -541,6 +588,16 @@ impl NetworkActor {
                                                             block_height = block_height,
                                                             "Block successfully imported by ChainActor"
                                                         );
+
+                                                        // Phase 5: Add block to cache after successful import
+                                                        {
+                                                            let mut cache = block_cache_clone.write().await;
+                                                            cache.put(block_hash_clone, Instant::now());
+                                                            tracing::debug!(
+                                                                block_hash = %block_hash_clone,
+                                                                "Added block to cache after successful import"
+                                                            );
+                                                        }
                                                     } else {
                                                         tracing::warn!(
                                                             peer_id = %peer_id_clone,
@@ -580,6 +637,9 @@ impl NetworkActor {
 
                             }
                             Err(deserialization_error) => {
+                                // Phase 5: Update metrics for deserialization error
+                                self.metrics.blocks_deserialization_errors += 1;
+
                                 tracing::warn!(
                                     peer_id = %source_peer,
                                     topic = %topic,

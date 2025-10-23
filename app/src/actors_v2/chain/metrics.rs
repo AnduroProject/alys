@@ -55,6 +55,16 @@ pub struct ChainMetrics {
 
     /// Phase 4: Performance metrics for monitoring and optimization
     pub performance: PerformanceMetrics,
+
+    /// Phase 5: Fork detection and reorganization metrics
+    /// Forks detected counter
+    pub forks_detected: IntCounter,
+    /// Reorganizations performed counter
+    pub reorganizations: IntCounter,
+    /// Reorganization depth histogram (how many blocks rolled back)
+    pub reorganization_depth: Histogram,
+    /// Blocks in import queue gauge
+    pub import_queue_depth: IntGauge,
 }
 
 impl ChainMetrics {
@@ -76,6 +86,11 @@ impl ChainMetrics {
             block_validation_duration: Histogram::with_opts(prometheus::histogram_opts!("chain_block_validation_duration_seconds", "Block validation duration")).unwrap(),
             last_activity: Instant::now(),
             performance: PerformanceMetrics::new(), // Phase 4: Performance tracking
+            // Phase 5: Fork and reorganization metrics
+            forks_detected: IntCounter::new("chain_forks_detected_total", "Total forks detected").unwrap(),
+            reorganizations: IntCounter::new("chain_reorganizations_total", "Total reorganizations performed").unwrap(),
+            reorganization_depth: Histogram::with_opts(prometheus::histogram_opts!("chain_reorganization_depth", "Depth of chain reorganizations (blocks rolled back)")).unwrap(),
+            import_queue_depth: IntGauge::new("chain_import_queue_depth", "Number of blocks in import queue").unwrap(),
         }
     }
 

@@ -73,6 +73,16 @@ pub struct NetworkMetrics {
     pub request_response_success_rate: f64,
     pub uptime_seconds: u64,
     pub last_peer_discovered: Option<SystemTime>,
+
+    // Phase 5: Block reception metrics
+    /// Blocks received via gossipsub
+    pub blocks_received: u64,
+    /// Blocks forwarded to ChainActor
+    pub blocks_forwarded: u64,
+    /// Blocks dropped due to deserialization errors
+    pub blocks_deserialization_errors: u64,
+    /// Blocks dropped due to cache hits (duplicates)
+    pub blocks_duplicate_cached: u64,
 }
 
 impl NetworkMetrics {
@@ -123,6 +133,11 @@ impl NetworkMetrics {
             request_response_success_rate: 0.0,
             uptime_seconds: 0,
             last_peer_discovered: None,
+            // Phase 5: Initialize block reception metrics
+            blocks_received: 0,
+            blocks_forwarded: 0,
+            blocks_deserialization_errors: 0,
+            blocks_duplicate_cached: 0,
         }
     }
 

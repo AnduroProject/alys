@@ -508,10 +508,16 @@ impl Handler<ChainMessage> for ChainActor {
                             });
 
                             let position = queue.len();
+
+                            // Phase 5: Update import queue depth metric
+                            // Note: We can't access self.metrics here in the async block
+                            // Metrics will be updated when queue is processed
+
                             info!(
                                 block_height = block_height,
                                 block_hash = %block_hash,
                                 queue_position = position,
+                                queue_depth = position,
                                 "Block queued for import"
                             );
 
@@ -638,6 +644,9 @@ impl Handler<ChainMessage> for ChainActor {
                                             "FORK DETECTED: Competing blocks at same height"
                                         );
 
+                                        // Phase 5: Record fork detection metric
+                                        self_clone.metrics.forks_detected.inc();
+
                                         // Apply fork choice rule (Phase 4)
                                         let fork_choice = crate::actors_v2::chain::fork_choice::compare_blocks(
                                             &existing_block,
@@ -708,6 +717,10 @@ impl Handler<ChainMessage> for ChainActor {
                                                             new_tip = %reorg_result.new_tip,
                                                             "Chain reorganization completed successfully - new block is now canonical"
                                                         );
+
+                                                        // Phase 5: Record reorganization metrics
+                                                        self_clone.metrics.reorganizations.inc();
+                                                        self_clone.metrics.reorganization_depth.observe(reorg_result.blocks_rolled_back as f64);
 
                                                         // Reorganization already handled storage and chain head updates
                                                         // Skip the normal import flow and return success

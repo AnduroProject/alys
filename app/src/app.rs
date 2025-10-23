@@ -657,14 +657,15 @@ impl App {
                 .await;
         }
 
-        AuraSlotWorker::new(
-            Duration::from_millis(slot_duration),
-            authorities,
-            maybe_aura_signer,
-            chain,
-        )
-        .start_slot_worker()
-        .await;
+        // TODO: Uncomment this when not testing local two-node regtest
+        // AuraSlotWorker::new(
+        //     Duration::from_millis(slot_duration),
+        //     authorities,
+        //     maybe_aura_signer,
+        //     chain,
+        // )
+        // .start_slot_worker()
+        // .await;
 
         Ok(())
     }
