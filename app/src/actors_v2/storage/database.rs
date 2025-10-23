@@ -114,10 +114,19 @@ impl DatabaseManager {
         // Configure column families
         let column_families = Self::get_column_family_descriptors(config);
 
-        let db = DB::open_cf_descriptors(&opts, path, column_families)
-            .map_err(|e| StorageError::Database(format!("Failed to open database: {}", e)))?;
+        // RocksDB operations are blocking and must be spawned in a blocking task
+        let path_clone = path.to_path_buf();
+        let path_display = path.display().to_string();
+        let db = tokio::task::spawn_blocking(move || {
+            DB::open_cf_descriptors(&opts, &path_clone, column_families)
+        })
+        .await
+        .map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::Other, format!("Background task failed: {}", e))
+        })?
+        .map_err(|e| StorageError::Database(format!("Failed to open database: {}", e)))?;
 
-        info!("Successfully opened database at: {}", path.display());
+        info!("Successfully opened database at: {}", path_display);
         Ok(db)
     }
 
