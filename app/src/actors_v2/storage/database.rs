@@ -114,18 +114,11 @@ impl DatabaseManager {
         // Configure column families
         let column_families = Self::get_column_family_descriptors(config);
 
-        // RocksDB operations are blocking - must wrap in spawn_blocking since we're in async context
-        // Even though app.rs uses spawn_blocking -> block_on, the block_on creates a NEW async runtime
-        let path_clone = path.to_path_buf();
+        // RocksDB operations are blocking, but we're already in a blocking context
+        // (app.rs wraps V2 initialization in spawn_blocking), so we can call directly
         let path_display = path.display().to_string();
-        let db = tokio::task::spawn_blocking(move || {
-            DB::open_cf_descriptors(&opts, &path_clone, column_families)
-        })
-        .await
-        .map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Blocking task failed: {}", e))
-        })?
-        .map_err(|e| StorageError::Database(format!("Failed to open database: {}", e)))?;
+        let db = DB::open_cf_descriptors(&opts, path, column_families)
+            .map_err(|e| StorageError::Database(format!("Failed to open database at {}: {}", path_display, e)))?;
 
         info!("Successfully opened database at: {}", path_display);
         Ok(db)
