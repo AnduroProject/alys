@@ -66,11 +66,11 @@ impl DatabaseManager {
             config.main_path
         );
 
-        let main_db = Self::open_database(&config.main_path, &config).await?;
+        let main_db = Self::open_database(&config.main_path, &config)?;
 
         let archive_db = if let Some(archive_path) = &config.archive_path {
             info!("Opening archive database at: {}", archive_path);
-            Some(Self::open_database(archive_path, &config).await?)
+            Some(Self::open_database(archive_path, &config)?)
         } else {
             None
         };
@@ -86,12 +86,12 @@ impl DatabaseManager {
     }
 
     /// Open a RocksDB database with proper configuration
-    async fn open_database(path: &str, config: &DatabaseConfig) -> Result<DB, StorageError> {
+    fn open_database(path: &str, config: &DatabaseConfig) -> Result<DB, StorageError> {
         let path = Path::new(path);
 
-        // Create directory if it doesn't exist using async filesystem operations
+        // Create directory if it doesn't exist - use std::fs since we're in blocking context
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
 
         // Configure RocksDB options

@@ -398,9 +398,11 @@ impl App {
         // Start V2 JSON-RPC server on port 3001
         info!("Starting V2 RPC server on port 3001 (sharing state with V0 Chain)...");
 
-        // Spawn V2 RPC initialization in LocalSet context (required for Actix actors)
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Handle::current();
+        // Spawn V2 actor system in LocalSet (required for Actix !Send actors)
+        // Use std::thread instead of spawn_blocking to create a dedicated runtime
+        std::thread::spawn(move || {
+            // Create a new Tokio runtime for V2 actors
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create V2 runtime");
             rt.block_on(async move {
                 let local = tokio::task::LocalSet::new();
                 local.run_until(async move {
@@ -669,6 +671,11 @@ impl App {
         // )
         // .start_slot_worker()
         // .await;
+
+        // Keep the application running indefinitely
+        // The app will only exit on Ctrl-C or SIGTERM (handled by run_until_ctrl_c)
+        info!("Application initialized successfully. Running until shutdown signal...");
+        std::future::pending::<()>().await;
 
         Ok(())
     }
