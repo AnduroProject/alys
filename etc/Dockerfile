@@ -29,6 +29,9 @@ RUN apt-get update && \
 FROM system-pkg-cache AS builder
 WORKDIR /opt/alys
 
+# Install rustfmt component (required for some build scripts)
+RUN rustup component add rustfmt
+
 # Create mount points for cargo cache
 #RUN mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
