@@ -1,0 +1,49 @@
+# Prometheus Configuration for Alys V2 Two-Node Regtest
+# Scrapes metrics from both Alys nodes, Reth execution layer, and Bitcoin Core
+
+global:
+  scrape_interval: 15s      # Scrape targets every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    cluster: 'alys-regtest'
+    environment: 'development'
+
+# Scrape configurations
+scrape_configs:
+  # Alys Node 1 (Bootnode/Validator)
+  - job_name: 'alys-node-1'
+    static_configs:
+      - targets: ['alys-node-1:9090']  # Alys metrics endpoint
+        labels:
+          instance: 'node-1'
+          node_type: 'bootnode'
+          role: 'validator'
+
+  # Alys Node 2 (Peer node)
+  - job_name: 'alys-node-2'
+    static_configs:
+      - targets: ['alys-node-2:9090']  # Alys metrics endpoint
+        labels:
+          instance: 'node-2'
+          node_type: 'peer'
+          role: 'validator'
+
+  # Reth Execution Layer
+  - job_name: 'reth-execution'
+    static_configs:
+      - targets: ['execution:19001']
+        labels:
+          instance: 'execution-layer'
+          role: 'execution'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus'
+          role: 'monitoring'
+
+# Alert rules (optional, can be extended)
+# rule_files:
+#   - 'alerts.yml'
