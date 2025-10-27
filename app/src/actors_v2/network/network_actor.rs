@@ -73,6 +73,10 @@ pub enum SwarmCommand {
         channel: ResponseChannel<BlockResponse>,
         response: BlockResponse,
     },
+    /// Add peer as explicit gossipsub peer for immediate mesh formation
+    AddExplicitPeer {
+        peer_id: PeerId,
+    },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -857,6 +861,38 @@ impl NetworkActor {
                 if let Some(address) = addresses.first() {
                     self.peer_manager.add_peer(peer_id.clone(), address.clone());
 
+                    // Add peer as explicit gossipsub peer for immediate mesh formation
+                    // This is critical for small networks where automatic mesh formation is unreliable
+                    if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                        // Parse peer_id string to PeerId
+                        if let Ok(libp2p_peer_id) = peer_id.parse::<PeerId>() {
+                            let add_peer_cmd = SwarmCommand::AddExplicitPeer {
+                                peer_id: libp2p_peer_id,
+                            };
+
+                            match cmd_tx.try_send(add_peer_cmd) {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        "Sent AddExplicitPeer command for mDNS peer: {}",
+                                        peer_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to send AddExplicitPeer command for {}: {:?}",
+                                        peer_id,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                "Failed to parse peer_id {} for AddExplicitPeer command",
+                                peer_id
+                            );
+                        }
+                    }
+
                     // Phase 2 Task 2.4: Automatically dial discovered mDNS peer if enabled
                     if self.config.auto_dial_mdns_peers {
                         if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
@@ -1302,6 +1338,18 @@ impl Handler<NetworkMessage> for NetworkActor {
                                                 tracing::error!(error = ?e, "Failed to send request-response response");
                                             }
                                         }
+                                    }
+
+                                    Some(SwarmCommand::AddExplicitPeer { peer_id }) => {
+                                        // Add peer as explicit gossipsub peer for immediate mesh formation
+                                        // This is critical for small networks (e.g., 2-node regtest) where
+                                        // gossipsub's automatic mesh formation may be slow or unreliable
+                                        swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+
+                                        tracing::info!(
+                                            peer_id = %peer_id,
+                                            "Added peer as explicit gossipsub peer for immediate mesh formation"
+                                        );
                                     }
 
                                     None => {
