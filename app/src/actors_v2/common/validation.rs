@@ -97,6 +97,12 @@ pub async fn validate_parent_relationship(
         return Ok(());
     }
 
+    // Parent hash is zero for the first block after genesis
+    if parent_hash.is_zero() {
+        tracing::debug!("Parent hash is zero - accepting as first block after genesis");
+        return Ok(());
+    }
+
     tracing::debug!(
         block_height = block_height,
         parent_hash = %parent_hash,
