@@ -86,7 +86,8 @@ impl Handler<ChainMessage> for ChainActor {
 
                     Box::pin(async move {
                         // Step 2: Get parent block from storage
-                        let parent_hash = if let Some(ref storage_actor) = storage_actor {
+                        // Capture both execution hash (for Geth) and consensus hash (for ConsensusBlock.parent_hash)
+                        let (parent_execution_hash, parent_consensus_hash) = if let Some(ref storage_actor) = storage_actor {
                             let get_head_msg =
                                 crate::actors_v2::storage::messages::GetChainHeadMessage {
                                     correlation_id: Some(correlation_id),
@@ -98,16 +99,17 @@ impl Handler<ChainMessage> for ChainActor {
                                         Ok(Some(head_ref)) => {
                                             info!(
                                                 correlation_id = %correlation_id,
-                                                parent_hash = ?head_ref.execution_hash,
+                                                parent_execution_hash = ?head_ref.execution_hash,
+                                                parent_consensus_hash = ?head_ref.hash,
                                                 parent_height = head_ref.number,
                                                 "Retrieved chain head for block production"
                                             );
-                                            // Use execution hash for Geth (CRITICAL FIX)
-                                            head_ref.execution_hash
+                                            // Return both hashes: execution for Geth, consensus for parent_hash field
+                                            (head_ref.execution_hash, head_ref.hash)
                                         }
                                         Ok(None) => {
                                             info!(correlation_id = %correlation_id, "No chain head found - producing genesis block (parent_hash will be None for Engine)");
-                                            lighthouse_wrapper::types::ExecutionBlockHash::zero()
+                                            (lighthouse_wrapper::types::ExecutionBlockHash::zero(), lighthouse_wrapper::types::Hash256::zero())
                                         }
                                         Err(e) => {
                                             error!(correlation_id = %correlation_id, error = ?e, "Failed to get chain head");
@@ -193,10 +195,10 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Step 5: Build execution payload via EngineActor
                         // Convert zero hash to None for genesis (matches V0 behavior)
-                        let parent_hash_for_engine = if parent_hash.into_root().is_zero() {
+                        let parent_hash_for_engine = if parent_execution_hash.into_root().is_zero() {
                             None
                         } else {
-                            Some(parent_hash)
+                            Some(parent_execution_hash)
                         };
 
                         let execution_payload = if let Some(ref engine_actor) = engine_actor {
@@ -268,9 +270,7 @@ impl Handler<ChainMessage> for ChainActor {
                         };
 
                         let consensus_block = crate::block::ConsensusBlock {
-                            parent_hash: lighthouse_wrapper::types::Hash256::from_low_u64_be(
-                                slot.saturating_sub(1),
-                            ),
+                            parent_hash: parent_consensus_hash,  // Use actual parent consensus block hash, not derived from slot
                             slot,
                             auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
