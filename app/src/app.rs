@@ -532,9 +532,10 @@ impl App {
                 max_outbound_connections: 500,
                 connection_timeout: Duration::from_secs(30),
                 gossip_topics: vec![
-                    "alys-v2-blocks".to_string(),
-                    "alys-v2-transactions".to_string(),
-                    "alys-v2-auxpow".to_string(),
+                    "alys/blocks".to_string(),          // Regular block gossip
+                    "alys/blocks/priority".to_string(), // Priority block gossip
+                    "alys/transactions".to_string(),    // Transaction gossip
+                    "alys/auxpow".to_string(),          // AuxPoW mining coordination
                 ],
                 message_size_limit: 4 * 1024 * 1024, // 4MB
                 discovery_interval: Duration::from_secs(60),
