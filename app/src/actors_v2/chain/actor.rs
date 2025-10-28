@@ -14,7 +14,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use super::{messages::BlockSource, ChainConfig, ChainError, ChainMetrics, ChainState};
+use super::{
+    messages::BlockSource, ChainConfig, ChainError, ChainMetrics, ChainState,
+};
 
 use crate::actors_v2::{
     engine::EngineActor,

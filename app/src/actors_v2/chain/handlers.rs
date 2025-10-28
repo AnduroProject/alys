@@ -61,16 +61,14 @@ impl Handler<ChainMessage> for ChainActor {
                             "Node is not configured as validator".to_string(),
                         ))
                     })
-                } else if !self.state.is_synced() {
-                    info!("Block production requested but node is not synced");
-                    Box::pin(async move { Err(ChainError::NotSynced) })
                 } else {
-                    // Complete block production pipeline (Phase 2)
+                    // Complete block production pipeline
                     let start_time = Instant::now();
                     let correlation_id = Uuid::new_v4();
                     let engine_actor = self.engine_actor.clone();
                     let storage_actor = self.storage_actor.clone();
                     let network_actor = self.network_actor.clone();
+                    let sync_actor = self.sync_actor.clone();
 
                     // Capture simple state data and clone for async
                     let config_validator_address = self.config.validator_address;
@@ -85,6 +83,37 @@ impl Handler<ChainMessage> for ChainActor {
                     );
 
                     Box::pin(async move {
+                        // Phase 3: Check sync status before producing blocks (query SyncActor)
+                        if let Some(ref sync_actor) = sync_actor {
+                            match sync_actor.send(crate::actors_v2::network::SyncMessage::GetSyncStatus).await {
+                                Ok(Ok(crate::actors_v2::network::SyncResponse::Status(status))) => {
+                                    if status.is_syncing {
+                                        info!(
+                                            slot = slot,
+                                            current_height = status.current_height,
+                                            target_height = status.target_height,
+                                            "Skipping block production - node is syncing"
+                                        );
+                                        return Err(ChainError::NotSynced);
+                                    }
+                                    debug!(
+                                        slot = slot,
+                                        current_height = status.current_height,
+                                        "Node is synced - proceeding with block production"
+                                    );
+                                }
+                                other => {
+                                    error!(
+                                        slot = slot,
+                                        response = ?other,
+                                        "Failed to get sync status from SyncActor - skipping block production"
+                                    );
+                                    return Err(ChainError::NotSynced);
+                                }
+                            }
+                        }
+
+                        // Node is synced (or sync status unavailable) - proceed with block production
                         // Step 2: Get parent block from storage
                         // Capture both execution hash (for Geth) and consensus hash (for ConsensusBlock.parent_hash)
                         let (parent_execution_hash, parent_consensus_hash) = if let Some(ref storage_actor) = storage_actor {
