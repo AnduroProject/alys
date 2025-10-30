@@ -28,6 +28,7 @@ pub mod withdrawals;
 // Phase 4 production hardening modules
 pub mod auxpow;
 pub mod fork_choice;
+pub mod genesis;
 pub mod monitoring;
 pub mod recovery;
 pub mod reorganization;

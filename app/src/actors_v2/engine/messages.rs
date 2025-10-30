@@ -40,6 +40,12 @@ pub enum EngineMessage {
     /// Get latest execution block info
     GetLatestBlock { correlation_id: Option<Uuid> },
 
+    /// Get execution payload by block tag or number (e.g., "0x0" for genesis, "earliest", "latest")
+    GetPayloadByTag {
+        block_tag: String,
+        correlation_id: Option<Uuid>,
+    },
+
     /// Update finalized block hash
     SetFinalized {
         block_hash: ExecutionBlockHash,
@@ -109,6 +115,14 @@ impl std::fmt::Debug for EngineMessage {
                 .finish(),
             Self::GetLatestBlock { correlation_id } => f
                 .debug_struct("GetLatestBlock")
+                .field("correlation_id", correlation_id)
+                .finish(),
+            Self::GetPayloadByTag {
+                block_tag,
+                correlation_id,
+            } => f
+                .debug_struct("GetPayloadByTag")
+                .field("block_tag", block_tag)
                 .field("correlation_id", correlation_id)
                 .finish(),
             Self::SetFinalized {
@@ -181,6 +195,9 @@ pub enum EngineResponse {
     LatestBlock {
         hash: ExecutionBlockHash,
         number: u64,
+    },
+    PayloadByTag {
+        payload: ExecutionPayload<MainnetEthSpec>,
     },
     FinalizedUpdated {
         block_hash: ExecutionBlockHash,

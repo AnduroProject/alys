@@ -530,6 +530,62 @@ impl Handler<EngineMessage> for EngineActor {
                 })
             }
 
+            EngineMessage::GetPayloadByTag {
+                block_tag,
+                correlation_id,
+            } => {
+                let engine = self.engine.clone();
+                let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
+
+                Box::pin(async move {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        block_tag = %block_tag,
+                        "Getting execution payload by tag"
+                    );
+
+                    // Parse the block tag - BlockByNumberQuery<'_> accepts string tags
+                    // We'll use the Tag variant with the block_tag string
+                    let query = match block_tag.as_str() {
+                        "0x0" | "earliest" => {
+                            // For genesis/earliest, use "0x0" tag
+                            lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag("0x0")
+                        }
+                        "latest" => lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag(
+                            lighthouse_wrapper::execution_layer::LATEST_TAG,
+                        ),
+                        _ => {
+                            // For specific block numbers, pass the tag as-is
+                            // The execution layer API accepts hex block numbers like "0x1", "0x2", etc.
+                            lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag(&block_tag)
+                        }
+                    };
+
+                    match engine.get_payload_by_tag_from_engine(query).await {
+                        Ok(payload) => {
+                            info!(
+                                correlation_id = %correlation_id,
+                                block_number = payload.block_number,
+                                block_hash = %payload.block_hash,
+                                "Retrieved execution payload by tag"
+                            );
+
+                            Ok(EngineResponse::PayloadByTag {
+                                payload: ExecutionPayload::Capella(payload),
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to get payload by tag"
+                            );
+                            Err(EngineError::EngineApi(format!("{:?}", e)))
+                        }
+                    }
+                })
+            }
+
             EngineMessage::UpdateForkChoice {
                 head_hash,
                 safe_hash,

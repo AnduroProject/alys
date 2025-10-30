@@ -40,6 +40,9 @@ pub enum EngineError {
 
     #[error("Configuration error: {0}")]
     Configuration(String),
+
+    #[error("Invalid parameters: {0}")]
+    InvalidParameters(String),
 }
 
 impl From<crate::error::Error> for EngineError {

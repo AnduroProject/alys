@@ -137,8 +137,57 @@ impl Handler<ChainMessage> for ChainActor {
                                             (head_ref.execution_hash, head_ref.hash)
                                         }
                                         Ok(None) => {
-                                            info!(correlation_id = %correlation_id, "No chain head found - producing genesis block (parent_hash will be None for Engine)");
-                                            (lighthouse_wrapper::types::ExecutionBlockHash::zero(), lighthouse_wrapper::types::Hash256::zero())
+                                            info!(correlation_id = %correlation_id, "No chain head found - querying genesis for parent hashes");
+
+                                            // Query genesis block (height 0) to get proper parent hashes
+                                            let get_genesis_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+                                                height: 0,
+                                                correlation_id: Some(correlation_id),
+                                            };
+
+                                            match storage_actor.send(get_genesis_msg).await {
+                                                Ok(Ok(Some(genesis))) => {
+                                                    let genesis_hash = genesis.canonical_root();
+                                                    let genesis_exec_hash = genesis.message.execution_payload.block_hash;
+
+                                                    info!(
+                                                        correlation_id = %correlation_id,
+                                                        genesis_consensus_hash = %genesis_hash,
+                                                        genesis_execution_hash = %genesis_exec_hash,
+                                                        "Using genesis block as parent for block #1"
+                                                    );
+
+                                                    (genesis_exec_hash, genesis_hash)
+                                                }
+                                                Ok(Ok(None)) => {
+                                                    error!(
+                                                        correlation_id = %correlation_id,
+                                                        "Genesis block not found in storage - cannot produce blocks"
+                                                    );
+                                                    return Err(ChainError::InvalidState(
+                                                        "Cannot produce blocks without genesis - wait for ChainActor genesis initialization".to_string()
+                                                    ));
+                                                }
+                                                Ok(Err(e)) => {
+                                                    error!(
+                                                        correlation_id = %correlation_id,
+                                                        error = ?e,
+                                                        "Failed to query genesis from storage"
+                                                    );
+                                                    return Err(ChainError::Storage(e.to_string()));
+                                                }
+                                                Err(e) => {
+                                                    error!(
+                                                        correlation_id = %correlation_id,
+                                                        error = ?e,
+                                                        "Communication error querying genesis"
+                                                    );
+                                                    return Err(ChainError::NetworkError(format!(
+                                                        "Genesis query communication failed: {}",
+                                                        e
+                                                    )));
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             error!(correlation_id = %correlation_id, error = ?e, "Failed to get chain head");

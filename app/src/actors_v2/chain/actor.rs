@@ -517,12 +517,91 @@ impl ChainActor {
 impl Actor for ChainActor {
     type Context = Context<Self>;
 
-    fn started(&mut self, _ctx: &mut Context<Self>) {
+    fn started(&mut self, ctx: &mut Context<Self>) {
         info!(
             "ChainActor V2 started - is_validator: {}",
             self.config.is_validator
         );
         self.record_activity();
+
+        // Initialize genesis block if it doesn't exist
+        // This is critical for consensus - all nodes must share the same genesis
+        let storage = self.storage_actor.clone();
+        let engine = self.engine_actor.clone();
+
+        // Construct ChainSpec from state (Aura has authorities and slot_duration)
+        let chain_spec = crate::spec::ChainSpec {
+            slot_duration: self.state.aura.slot_duration,
+            authorities: self.state.aura.authorities.clone(),
+            federation: self.state.federation.clone(),
+            federation_bitcoin_pubkeys: Vec::new(), // Not needed for genesis
+            bits: self.state.retarget_params.pow_limit,
+            chain_id: self.config.chain_id,
+            max_blocks_without_pow: self.state.max_blocks_without_pow,
+            bitcoin_start_height: 0, // Not relevant for genesis
+            retarget_params: self.state.retarget_params.clone(),
+            is_validator: self.state.is_validator,
+            execution_timeout_length: 8, // Default value
+            required_btc_txn_confirmations: 6, // Default value
+        };
+
+        ctx.spawn(
+            async move {
+                // Check if genesis already exists
+                if let (Some(storage_actor), Some(engine_actor)) = (storage, engine) {
+                    match super::genesis::genesis_exists(&storage_actor).await {
+                        Ok(true) => {
+                            info!("Genesis block already exists in storage");
+                        }
+                        Ok(false) => {
+                            info!("Genesis block not found - creating from execution layer");
+
+                            // Create genesis block from execution layer
+                            match super::genesis::create_genesis_block(&engine_actor, chain_spec)
+                                .await
+                            {
+                                Ok(genesis) => {
+                                    let genesis_hash = genesis.canonical_root();
+                                    info!(
+                                        consensus_hash = %genesis_hash,
+                                        block_number = genesis.message.execution_payload.block_number,
+                                        "Genesis block created successfully"
+                                    );
+
+                                    // Store genesis block
+                                    let store_msg =
+                                        crate::actors_v2::storage::messages::StoreBlockMessage {
+                                            block: genesis.clone(),
+                                            canonical: true, // Genesis is always canonical
+                                            correlation_id: Some(Uuid::new_v4()),
+                                        };
+
+                                    if let Err(e) = storage_actor.send(store_msg).await {
+                                        error!(
+                                            error = ?e,
+                                            "Failed to send genesis block to storage actor"
+                                        );
+                                    } else {
+                                        info!("Genesis block stored successfully");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!(error = ?e, "Failed to create genesis block");
+                                    // Don't panic - this is a recoverable error
+                                    // Node can sync genesis from peers if needed
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = ?e, "Failed to check for genesis block existence");
+                        }
+                    }
+                } else {
+                    warn!("Storage or Engine actor not set - skipping genesis initialization");
+                }
+            }
+            .into_actor(self),
+        );
     }
 
     fn stopped(&mut self, _ctx: &mut Context<Self>) {
