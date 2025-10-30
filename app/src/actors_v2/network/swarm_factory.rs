@@ -82,6 +82,11 @@ fn create_behaviour(
         // Relax gossip parameters for small networks
         .gossip_lazy(3) // Gossip to this many peers (default: 6)
         .gossip_factor(0.5) // Gossip factor (default: 0.25)
+        // CRITICAL FIX: Enable flood publishing for small networks
+        // This ensures messages are sent to all connected peers immediately,
+        // even if the mesh hasn't formed yet. Essential for 2-node networks
+        // where mesh formation can be delayed.
+        .flood_publish(true) // Flood messages to all connected peers (default: false)
         .message_id_fn(|msg: &gossipsub::Message| {
             // Use first 20 bytes of hash as message ID
             let mut hasher = DefaultHasher::new();

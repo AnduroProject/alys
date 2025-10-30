@@ -329,6 +329,25 @@ impl NetworkActor {
                     endpoint.get_remote_address().to_string(),
                 );
                 self.metrics.record_connection_established();
+
+                // CRITICAL FIX FOR ISSUE #2: Add peer as explicit gossipsub peer immediately
+                // This ensures the peer is added to the gossipsub mesh for all topics
+                // without waiting for the heartbeat tick (which can take 1+ seconds)
+                if let Some(cmd_tx) = &self.swarm_cmd_tx {
+                    let cmd = SwarmCommand::AddExplicitPeer { peer_id };
+                    if let Err(e) = cmd_tx.try_send(cmd) {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = ?e,
+                            "Failed to send AddExplicitPeer command after connection"
+                        );
+                    } else {
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            "Sent AddExplicitPeer command for immediate mesh formation"
+                        );
+                    }
+                }
             }
 
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
