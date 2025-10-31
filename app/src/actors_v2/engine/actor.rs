@@ -389,8 +389,7 @@ impl Handler<EngineMessage> for EngineActor {
                     let is_valid = payload.block_number() > 0
                         && payload.gas_limit() > 0
                         && payload.gas_used() <= payload.gas_limit()
-                        && payload.timestamp() > 0
-                        && (!payload.transactions().is_empty() || payload.block_number() == 0); // Allow empty genesis
+                        && payload.timestamp() > 0;
 
                     let duration = start_time.elapsed();
 
