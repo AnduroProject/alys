@@ -93,12 +93,13 @@ jobs:
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
+          echo "PLATFORM_SLUG=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> $GITHUB_ENV
 
       - name: Upload digest
         if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform }}
+          name: digests-${{ env.PLATFORM_SLUG }}
           path: /tmp/digests/*
 
   merge:
