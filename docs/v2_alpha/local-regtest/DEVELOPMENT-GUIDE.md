@@ -78,7 +78,7 @@ docker logs alys-node-1 -f
 cd etc
 
 # Build and start
-docker compose -f docker-compose.v2-regtest.yml up -d --build
+docker compose -f etc/docker-compose.v2-regtest.yml up -d --build
 
 # View logs
 docker logs alys-node-1 -f --tail 1000
