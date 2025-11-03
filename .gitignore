@@ -34,3 +34,11 @@ docs/book/
 .idea/
 .vscode/
 .qodo
+
+data/
+
+keys/
+
+jwt/
+
+.knowledge/
