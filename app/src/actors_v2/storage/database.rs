@@ -117,8 +117,12 @@ impl DatabaseManager {
         // RocksDB operations are blocking, but we're already in a blocking context
         // (app.rs wraps V2 initialization in spawn_blocking), so we can call directly
         let path_display = path.display().to_string();
-        let db = DB::open_cf_descriptors(&opts, path, column_families)
-            .map_err(|e| StorageError::Database(format!("Failed to open database at {}: {}", path_display, e)))?;
+        let db = DB::open_cf_descriptors(&opts, path, column_families).map_err(|e| {
+            StorageError::Database(format!(
+                "Failed to open database at {}: {}",
+                path_display, e
+            ))
+        })?;
 
         info!("Successfully opened database at: {}", path_display);
         Ok(db)

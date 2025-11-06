@@ -74,9 +74,7 @@ pub enum SwarmCommand {
         response: BlockResponse,
     },
     /// Add peer as explicit gossipsub peer for immediate mesh formation
-    AddExplicitPeer {
-        peer_id: PeerId,
-    },
+    AddExplicitPeer { peer_id: PeerId },
 }
 
 /// Phase 4: Rate limiter for DOS protection
