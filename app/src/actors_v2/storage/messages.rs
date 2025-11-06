@@ -223,6 +223,14 @@ pub struct GetChainHeadMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message to get current chain height
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<u64, StorageError>")]
+pub struct GetChainHeightMessage {
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 /// Message to update chain head in storage
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<(), StorageError>")]

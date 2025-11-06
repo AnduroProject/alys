@@ -39,6 +39,15 @@ pub enum ChainError {
     #[error("Sync actor error: {0}")]
     Sync(crate::actors_v2::network::SyncError),
 
+    #[error("Sync actor not set")]
+    SyncActorNotSet,
+
+    #[error("Storage actor not set")]
+    StorageActorNotSet,
+
+    #[error("Actor mailbox error: {0}")]
+    ActorMailbox(String),
+
     #[error("Network communication error: {0}")]
     NetworkError(String),
 

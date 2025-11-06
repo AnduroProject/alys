@@ -49,6 +49,13 @@ pub enum SyncStatus {
     Error(String),
 }
 
+impl SyncStatus {
+    /// Returns true if currently syncing
+    pub fn is_syncing(&self) -> bool {
+        matches!(self, SyncStatus::Syncing { .. })
+    }
+}
+
 /// ChainActor state (simplified from chain.rs) - Arc/RwLock pattern for functional bridge processing
 #[derive(Clone)]
 pub struct ChainState {

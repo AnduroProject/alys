@@ -599,6 +599,16 @@ impl SyncMetrics {
         }
         (self.current_height as f64 / self.target_height as f64).min(1.0)
     }
+
+    pub fn get_sync_duration(&self) -> std::time::Duration {
+        if let Some(start_time) = self.sync_start_time {
+            SystemTime::now()
+                .duration_since(start_time)
+                .unwrap_or_default()
+        } else {
+            std::time::Duration::from_secs(0)
+        }
+    }
 }
 
 impl Default for SyncMetrics {

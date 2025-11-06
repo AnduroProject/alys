@@ -138,16 +138,22 @@ mod tests {
         let import_msg = ChainMessage::ImportBlock {
             block: block.clone(),
             source: BlockSource::Network("peer123".to_string()),
+            peer_id: Some("peer123".to_string()),
         };
 
         match import_msg {
-            ChainMessage::ImportBlock { block: b, source } => {
+            ChainMessage::ImportBlock {
+                block: b,
+                source,
+                peer_id,
+            } => {
                 assert_eq!(b.message.execution_payload.block_number, 100);
                 if let BlockSource::Network(peer) = source {
                     assert_eq!(peer, "peer123");
                 } else {
                     panic!("Expected Network source");
                 }
+                assert_eq!(peer_id, Some("peer123".to_string()));
             }
             _ => panic!("ImportBlock message matching failed"),
         }
@@ -1237,6 +1243,7 @@ mod tests {
         let import_msg = ChainMessage::ImportBlock {
             block: block.clone(),
             source: BlockSource::Network("peer123".to_string()),
+            peer_id: Some("peer123".to_string()),
         };
         let import_response = ChainResponse::BlockImported {
             block_hash: H256::from_low_u64_be(42),
@@ -1244,7 +1251,11 @@ mod tests {
         };
 
         match import_msg {
-            ChainMessage::ImportBlock { block: b, source } => {
+            ChainMessage::ImportBlock {
+                block: b,
+                source,
+                peer_id: _,
+            } => {
                 assert_eq!(b.message.execution_payload.block_number, 100);
                 if let BlockSource::Network(peer) = source {
                     assert_eq!(peer, "peer123");

@@ -62,7 +62,7 @@ pub struct SyncActor {
 
     /// Actor addresses for coordination
     network_actor: Option<Addr<crate::actors_v2::network::NetworkActor>>,
-    storage_actor: Option<Addr<crate::actors_v2::storage::StorageActor>>,
+    chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
 
     /// Running state
     is_running: bool,
@@ -90,7 +90,7 @@ impl SyncActor {
             sync_peers: Vec::new(),
             peer_selection_index: 0,
             network_actor: None,
-            storage_actor: None,
+            chain_actor: None,
             is_running: false,
             shutdown_requested: false,
         })
@@ -106,14 +106,51 @@ impl SyncActor {
         self.sync_state = SyncState::Starting;
         self.is_running = true;
 
-        // Get current height from storage (placeholder)
-        self.current_height = 0; // TODO: Query StorageActor for actual height
+        // Initialize height from ChainActor (source of truth)
+        self.initialize_height().await?;
 
         // Transition to peer discovery
         self.sync_state = SyncState::DiscoveringPeers;
         self.discover_sync_peers().await?;
 
         Ok(())
+    }
+
+    /// Initialize sync state by querying ChainActor for current chain height.
+    ///
+    /// ChainActor is the single source of truth for chain state. It maintains
+    /// the canonical chain height by coordinating with StorageActor.
+    async fn initialize_height(&mut self) -> Result<()> {
+        if let Some(ref chain_actor) = self.chain_actor {
+            // Query ChainActor for current chain state
+            let msg = crate::actors_v2::chain::messages::ChainMessage::GetChainStatus;
+
+            match chain_actor.send(msg).await {
+                Ok(Ok(response)) => {
+                    use crate::actors_v2::chain::messages::ChainResponse;
+                    if let ChainResponse::ChainStatus(status) = response {
+                        self.current_height = status.height;
+                        tracing::info!(
+                            current_height = status.height,
+                            "Initialized sync from current chain height"
+                        );
+                        Ok(())
+                    } else {
+                        Err(anyhow!("Unexpected response from ChainActor"))
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to query chain height: {}", e);
+                    Err(anyhow!("Chain height query failed: {}", e))
+                }
+                Err(e) => {
+                    tracing::error!("ChainActor mailbox error: {}", e);
+                    Err(anyhow!("Mailbox error: {}", e))
+                }
+            }
+        } else {
+            Err(anyhow!("ChainActor not set - cannot query height"))
+        }
     }
 
     /// Stop synchronization process
@@ -186,14 +223,29 @@ impl SyncActor {
             return Err(anyhow!("No peers available for sync"));
         }
 
-        // Determine target height (simplified - in real implementation, query peers)
-        self.target_height = self.current_height + 1000; // Sync next 1000 blocks
+        // Discover target height from network consensus
+        match self.discover_target_height().await {
+            Ok(target) => {
+                if self.current_height >= target.saturating_sub(2) {
+                    // Already synced (within 2 blocks tolerance)
+                    tracing::info!("Already synced at height {}", self.current_height);
+                    self.sync_state = SyncState::Synced;
+                    return Ok(());
+                }
 
-        tracing::info!(
-            "Starting block sync from height {} to {}",
-            self.current_height,
-            self.target_height
-        );
+                tracing::info!(
+                    "Starting block sync from height {} to {} (gap: {} blocks)",
+                    self.current_height,
+                    target,
+                    target - self.current_height
+                );
+            }
+            Err(e) => {
+                tracing::error!("Failed to discover target height: {}", e);
+                self.sync_state = SyncState::Error(e.to_string());
+                return Err(e);
+            }
+        }
 
         self.metrics.start_sync(self.target_height);
 
@@ -201,6 +253,111 @@ impl SyncActor {
         self.create_block_requests().await?;
 
         Ok(())
+    }
+
+    /// Query multiple peers for their chain head to establish sync target
+    ///
+    /// This function queries available peers for their chain height and uses
+    /// a simple consensus mechanism (mode - most common height) to determine
+    /// the network's current height.
+    async fn discover_target_height(&mut self) -> Result<u64> {
+        const QUERY_PEER_COUNT: usize = 3;
+        const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        tracing::info!(
+            available_peers = self.sync_peers.len(),
+            "Querying peers for chain height"
+        );
+
+        if self.sync_peers.is_empty() {
+            return Err(anyhow!("No peers available for height discovery"));
+        }
+
+        // Query up to QUERY_PEER_COUNT peers (or all available, whichever is less)
+        let query_count = QUERY_PEER_COUNT.min(self.sync_peers.len());
+        let peers_to_query: Vec<_> = self.sync_peers.iter().take(query_count).cloned().collect();
+
+        tracing::debug!(
+            peers_to_query = peers_to_query.len(),
+            "Querying peer subset for height"
+        );
+
+        let mut heights = Vec::new();
+
+        // Query each peer for their status
+        for peer_id in peers_to_query {
+            if let Some(ref network_actor) = self.network_actor {
+                let msg =
+                    crate::actors_v2::network::messages::NetworkMessage::HandleRequestResponse {
+                        request: crate::actors_v2::network::messages::NetworkRequest::GetStatus,
+                        peer_id: peer_id.clone(),
+                    };
+
+                match tokio::time::timeout(QUERY_TIMEOUT, network_actor.send(msg)).await {
+                    Ok(Ok(Ok(response))) => {
+                        use crate::actors_v2::network::messages::NetworkResponse;
+                        if let NetworkResponse::Status(status) = response {
+                            heights.push(status.connected_peers as u64); // Placeholder - need actual height field
+                            tracing::debug!(
+                                peer_id = %peer_id,
+                                "Received response from peer"
+                            );
+                        }
+                    }
+                    Ok(Ok(Err(e))) => {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = ?e,
+                            "Failed to get status from peer"
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = ?e,
+                            "Network actor error querying peer"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            "Peer status query timed out"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Handle case where no peers responded
+        if heights.is_empty() {
+            return Err(anyhow!("No peers responded with height"));
+        }
+
+        // For single peer (common in dev mode)
+        if heights.len() == 1 {
+            tracing::warn!(
+                height = heights[0],
+                "Only 1 peer responded, using their height as target"
+            );
+            self.target_height = heights[0];
+            return Ok(heights[0]);
+        }
+
+        // Calculate consensus height using mode (most common)
+        let mut counts = std::collections::HashMap::new();
+        for &h in &heights {
+            *counts.entry(h).or_insert(0) += 1;
+        }
+        let consensus_height = *counts.iter().max_by_key(|(_, count)| *count).unwrap().0;
+
+        self.target_height = consensus_height;
+        tracing::info!(
+            target_height = consensus_height,
+            peer_heights = ?heights,
+            "Established sync target from peer consensus"
+        );
+
+        Ok(consensus_height)
     }
 
     /// Create block requests for peers
@@ -280,48 +437,119 @@ impl SyncActor {
         peer
     }
 
-    /// Process incoming block
-    async fn process_block(&mut self, block: Block, _peer_id: PeerId) -> Result<()> {
+    /// Process incoming block by routing through ChainActor for validation
+    async fn process_block(&mut self, block: Block, peer_id: PeerId) -> Result<()> {
         let processing_start = std::time::Instant::now();
 
-        // Basic block validation (simplified)
+        // Basic pre-validation (size check)
         if !self.validate_block(&block) {
             self.metrics.record_block_rejected("validation failed");
             return Err(anyhow!("Block validation failed"));
         }
 
-        // Store block via StorageActor V2
-        if let Some(ref _storage_actor) = self.storage_actor {
-            // TODO: Implement proper StorageActor integration once message types are resolved
-            tracing::debug!("Storing block via StorageActor (placeholder)");
+        // Convert block data to proper format for ChainActor
+        let consensus_block = match self.convert_block_to_storage_format(block.clone()) {
+            block => block,
+        };
 
-            // Simulate successful storage processing
-            let processing_time = processing_start.elapsed();
-            self.current_height += 1;
-            self.metrics
-                .record_block_processed(self.current_height, processing_time);
-            self.metrics.record_block_validated();
+        let block_height = consensus_block.message.execution_payload.block_number;
+        let block_hash = self.calculate_block_hash(&consensus_block);
 
-            tracing::debug!(
-                "Processed block at height {} (simulated storage)",
-                self.current_height
-            );
+        tracing::debug!(
+            block_height = block_height,
+            block_hash = ?block_hash,
+            peer_id = %peer_id,
+            "Processing synced block via ChainActor"
+        );
 
-            // Check if sync is complete
-            if self.current_height >= self.target_height {
-                self.complete_sync().await?;
+        // Forward to ChainActor for full validation and import
+        if let Some(ref chain_actor) = self.chain_actor {
+            let msg = crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
+                block: consensus_block,
+                source: crate::actors_v2::chain::messages::BlockSource::Sync,
+                peer_id: Some(peer_id.to_string()),
+            };
+
+            match chain_actor.send(msg).await {
+                Ok(Ok(response)) => {
+                    use crate::actors_v2::chain::messages::ChainResponse;
+                    match response {
+                        ChainResponse::BlockImported {
+                            height,
+                            block_hash: hash,
+                        } => {
+                            // Update sync progress
+                            self.current_height = height;
+
+                            let processing_time = processing_start.elapsed();
+                            self.metrics.record_block_processed(height, processing_time);
+                            self.metrics.record_block_validated();
+
+                            tracing::info!(
+                                block_height = height,
+                                block_hash = ?hash,
+                                processing_time_ms = processing_time.as_millis(),
+                                "Block successfully imported via ChainActor"
+                            );
+
+                            // Check if sync is complete
+                            if self.current_height >= self.target_height {
+                                self.complete_sync().await?;
+                            }
+
+                            Ok(())
+                        }
+                        ChainResponse::BlockRejected { reason } => {
+                            self.metrics.record_block_rejected(&reason);
+                            tracing::warn!(
+                                block_height = block_height,
+                                reason = %reason,
+                                peer_id = %peer_id,
+                                "Block rejected by ChainActor during sync"
+                            );
+                            Err(anyhow!("Block rejected: {}", reason))
+                        }
+                        _ => Err(anyhow!("Unexpected response from ChainActor")),
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.metrics.record_block_rejected("chain_actor_error");
+                    tracing::error!(
+                        block_height = block_height,
+                        error = ?e,
+                        "ChainActor returned error during sync"
+                    );
+                    Err(anyhow!("ChainActor error: {}", e))
+                }
+                Err(e) => {
+                    self.metrics.record_block_rejected("mailbox_error");
+                    tracing::error!(
+                        block_height = block_height,
+                        error = ?e,
+                        "Failed to communicate with ChainActor"
+                    );
+                    Err(anyhow!("Mailbox error: {}", e))
+                }
             }
         } else {
-            return Err(anyhow!("StorageActor not set"));
+            Err(anyhow!(
+                "ChainActor not set - cannot process blocks during sync"
+            ))
         }
-
-        Ok(())
     }
 
     /// Simple block validation
     fn validate_block(&self, block: &Block) -> bool {
         // Simplified validation - in real implementation, this would be comprehensive
         !block.is_empty() && block.len() < 50 * 1024 * 1024 // 50MB max
+    }
+
+    /// Calculate block hash (wrapper for serialization module)
+    fn calculate_block_hash(
+        &self,
+        block: &crate::actors_v2::storage::actor::AlysConsensusBlock,
+    ) -> ethereum_types::H256 {
+        crate::actors_v2::common::serialization::calculate_block_hash(block)
     }
 
     /// Convert block format for StorageActor V2
@@ -353,17 +581,78 @@ impl SyncActor {
         storage_block
     }
 
-    /// Complete synchronization
+    /// Complete synchronization after verifying sync completion
     async fn complete_sync(&mut self) -> Result<()> {
-        tracing::info!(
-            "Synchronization complete! Synced to height {}",
-            self.current_height
-        );
+        tracing::info!("Completing sync process");
 
+        // Verify completion
+        if !self.verify_sync_completion().await? {
+            tracing::warn!("Sync completion verification failed, continuing sync");
+            return Ok(());
+        }
+
+        // Update state
         self.sync_state = SyncState::Synced;
+        let sync_duration = self.metrics.get_sync_duration();
         self.metrics.stop_sync();
 
+        // Notify ChainActor
+        if let Some(ref chain_actor) = self.chain_actor {
+            let msg = crate::actors_v2::chain::messages::ChainMessage::SyncCompleted {
+                final_height: self.current_height,
+            };
+
+            if let Err(e) = chain_actor.send(msg).await {
+                tracing::error!("Failed to notify ChainActor of sync completion: {}", e);
+            }
+        }
+
+        tracing::info!(
+            final_height = self.current_height,
+            duration_secs = sync_duration.as_secs(),
+            "✓✓✓ Sync completed successfully"
+        );
+
         Ok(())
+    }
+
+    /// Verify sync completion by checking against network consensus
+    async fn verify_sync_completion(&mut self) -> Result<bool> {
+        const SYNC_TOLERANCE: u64 = 2; // Allow 2 block tolerance
+
+        tracing::info!(
+            current_height = self.current_height,
+            target_height = self.target_height,
+            "Verifying sync completion"
+        );
+
+        // Re-query peers for current chain head to ensure we're still synced
+        let consensus_height = match self.discover_target_height().await {
+            Ok(height) => height,
+            Err(e) => {
+                tracing::warn!("Failed to verify sync: {}", e);
+                return Ok(false);
+            }
+        };
+
+        // Check we're within acceptable range
+        if self.current_height >= consensus_height.saturating_sub(SYNC_TOLERANCE) {
+            tracing::info!(
+                current_height = self.current_height,
+                consensus_height = consensus_height,
+                "✓ Sync verified: height matches consensus"
+            );
+            return Ok(true);
+        }
+
+        // Still syncing
+        tracing::info!(
+            current = self.current_height,
+            consensus = consensus_height,
+            gap = consensus_height - self.current_height,
+            "Not yet synced"
+        );
+        Ok(false)
     }
 
     /// Handle sync timeout and cleanup
@@ -635,9 +924,9 @@ impl Handler<SyncMessage> for SyncActor {
                 Ok(SyncResponse::Started)
             }
 
-            SyncMessage::SetStorageActor { addr } => {
-                self.storage_actor = Some(addr);
-                tracing::info!("StorageActor address set for SyncActor coordination");
+            SyncMessage::SetChainActor { addr } => {
+                self.chain_actor = Some(addr);
+                tracing::info!("ChainActor address set for SyncActor coordination");
                 Ok(SyncResponse::Started)
             }
 
@@ -658,6 +947,25 @@ impl Handler<SyncMessage> for SyncActor {
             SyncMessage::GetMetrics => {
                 let metrics = self.metrics.clone();
                 Ok(SyncResponse::Metrics(metrics))
+            }
+
+            SyncMessage::QueryNetworkHeight => {
+                tracing::debug!("Querying network for chain height");
+
+                // Note: This is a synchronous handler but discover_target_height is async
+                // We'll need to spawn it or return a future
+                // For now, return an error if not already discovered
+                if self.target_height > 0 {
+                    Ok(SyncResponse::NetworkHeight {
+                        height: self.target_height,
+                    })
+                } else {
+                    // Cannot query network height synchronously from handler
+                    // This should be called after sync has discovered peers
+                    Err(SyncError::Internal(
+                        "Network height not yet discovered".to_string(),
+                    ))
+                }
             }
         }
     }

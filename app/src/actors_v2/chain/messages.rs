@@ -28,6 +28,7 @@ pub enum ChainMessage {
     ImportBlock {
         block: SignedConsensusBlock<MainnetEthSpec>,
         source: BlockSource,
+        peer_id: Option<String>,
     },
 
     /// Process and validate AuxPoW
@@ -64,6 +65,21 @@ pub enum ChainMessage {
         block: SignedConsensusBlock<MainnetEthSpec>,
         peer_id: String,
     },
+
+    /// Sync completed notification from SyncActor
+    SyncCompleted { final_height: u64 },
+
+    /// Initialize sync state on startup (internal message)
+    InitializeSyncState,
+
+    /// Periodic sync health check (internal message)
+    CheckSyncHealth,
+
+    /// Peer connected notification
+    PeerConnected { peer_id: String },
+
+    /// Peer disconnected notification
+    PeerDisconnected { peer_id: String },
 }
 
 /// ChainManager interface messages (for future EngineActor/AuxPowActor coordination)
@@ -132,6 +148,9 @@ pub enum ChainResponse {
 
     /// Block imported successfully
     BlockImported { block_hash: H256, height: u64 },
+
+    /// Block rejected with reason
+    BlockRejected { reason: String },
 
     /// Block queued for import (Phase 2: import lock held)
     BlockQueued { position: usize },

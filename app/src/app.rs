@@ -1,6 +1,6 @@
 #![allow(clippy::manual_div_ceil)]
 
-use crate::actors_v2::network::NetworkMessage;
+use crate::actors_v2::network::{NetworkMessage, SyncMessage};
 use crate::aura::{Aura, AuraSlotWorker};
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
@@ -589,6 +589,15 @@ impl App {
                 Err(e) => error!("✗ NetworkActor mailbox error during SetChainActor: {:?}", e),
             }
 
+            // Phase 0: Wire ChainActor to SyncActor (CRITICAL FIX for security vulnerability)
+            match sync_actor.send(SyncMessage::SetChainActor {
+                addr: chain_actor_addr.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ ChainActor configured in SyncActor - blocks will route through validation"),
+                Ok(Err(e)) => error!("✗ Failed to set ChainActor in SyncActor: {:?}", e),
+                Err(e) => error!("✗ SyncActor mailbox error during SetChainActor: {:?}", e),
+            }
+
             // Clone chain_actor_addr for slot worker (before RPC consumes it)
             let chain_actor_addr_for_slot_worker = chain_actor_addr.clone();
 
@@ -633,7 +642,8 @@ impl App {
 
                     // Keep actors alive - this task runs indefinitely
                     loop {
-                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                        // tokio::time::sleep(Duration::from_secs(3600)).await;
+                        std::future::pending::<()>().await;
                     }
                 }).await;
             });

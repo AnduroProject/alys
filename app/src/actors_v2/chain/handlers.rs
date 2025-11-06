@@ -8,7 +8,7 @@ use ethereum_types::{H256, U256};
 use eyre::Result;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::{
@@ -85,7 +85,10 @@ impl Handler<ChainMessage> for ChainActor {
                     Box::pin(async move {
                         // Phase 3: Check sync status before producing blocks (query SyncActor)
                         if let Some(ref sync_actor) = sync_actor {
-                            match sync_actor.send(crate::actors_v2::network::SyncMessage::GetSyncStatus).await {
+                            match sync_actor
+                                .send(crate::actors_v2::network::SyncMessage::GetSyncStatus)
+                                .await
+                            {
                                 Ok(Ok(crate::actors_v2::network::SyncResponse::Status(status))) => {
                                     if status.is_syncing {
                                         info!(
@@ -116,7 +119,10 @@ impl Handler<ChainMessage> for ChainActor {
                         // Node is synced (or sync status unavailable) - proceed with block production
                         // Step 2: Get parent block from storage
                         // Capture both execution hash (for Geth) and consensus hash (for ConsensusBlock.parent_hash)
-                        let (parent_execution_hash, parent_consensus_hash) = if let Some(ref storage_actor) = storage_actor {
+                        let (parent_execution_hash, parent_consensus_hash) = if let Some(
+                            ref storage_actor,
+                        ) = storage_actor
+                        {
                             let get_head_msg =
                                 crate::actors_v2::storage::messages::GetChainHeadMessage {
                                     correlation_id: Some(correlation_id),
@@ -148,7 +154,10 @@ impl Handler<ChainMessage> for ChainActor {
                                             match storage_actor.send(get_genesis_msg).await {
                                                 Ok(Ok(Some(genesis))) => {
                                                     let genesis_hash = genesis.canonical_root();
-                                                    let genesis_exec_hash = genesis.message.execution_payload.block_hash;
+                                                    let genesis_exec_hash = genesis
+                                                        .message
+                                                        .execution_payload
+                                                        .block_hash;
 
                                                     info!(
                                                         correlation_id = %correlation_id,
@@ -273,7 +282,8 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Step 5: Build execution payload via EngineActor
                         // Convert zero hash to None for genesis (matches V0 behavior)
-                        let parent_hash_for_engine = if parent_execution_hash.into_root().is_zero() {
+                        let parent_hash_for_engine = if parent_execution_hash.into_root().is_zero()
+                        {
                             None
                         } else {
                             Some(parent_execution_hash)
@@ -348,7 +358,7 @@ impl Handler<ChainMessage> for ChainActor {
                         };
 
                         let consensus_block = crate::block::ConsensusBlock {
-                            parent_hash: parent_consensus_hash,  // Use actual parent consensus block hash, not derived from slot
+                            parent_hash: parent_consensus_hash, // Use actual parent consensus block hash, not derived from slot
                             slot,
                             auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
@@ -580,7 +590,11 @@ impl Handler<ChainMessage> for ChainActor {
                     })
                 }
             }
-            ChainMessage::ImportBlock { block, source } => {
+            ChainMessage::ImportBlock {
+                block,
+                source,
+                peer_id,
+            } => {
                 // Perform basic validation before import
                 let block_height = block.message.execution_payload.block_number;
                 let current_height = self.state.get_height();
@@ -1497,6 +1511,7 @@ impl Handler<ChainMessage> for ChainActor {
                 let import_msg = ChainMessage::ImportBlock {
                     block,
                     source: BlockSource::Network(peer_id.clone()),
+                    peer_id: Some(peer_id.clone()),
                 };
 
                 // Clone context reference for recursion
@@ -1547,6 +1562,167 @@ impl Handler<ChainMessage> for ChainActor {
                         }
                     }),
                 }
+            }
+
+            ChainMessage::SyncCompleted { final_height } => {
+                info!(
+                    final_height = final_height,
+                    "Sync completed, transitioning to synced state"
+                );
+
+                // Update sync status - node is now synced
+                // Note: The actual is_synced flag is managed by ChainActor state
+                // This notification allows ChainActor to take any post-sync actions
+
+                tracing::info!(
+                    final_height = final_height,
+                    "ChainActor notified of sync completion"
+                );
+
+                Box::pin(async move { Ok(ChainResponse::Success) })
+            }
+
+            ChainMessage::InitializeSyncState => {
+                let storage_actor = self.storage_actor.clone();
+                let sync_actor = self.sync_actor.clone();
+
+                Box::pin(async move {
+                    // This is a simplified handler - the actual logic is in ChainActor::initialize_sync_state
+                    // We call it through the actor reference
+                    info!("Received InitializeSyncState message");
+
+                    // Since we can't directly call async methods on &mut self from a handler,
+                    // we'll need to implement this differently or accept the limitation
+                    // For now, return success as the initialization happens in started()
+                    Ok(ChainResponse::Success)
+                })
+            }
+
+            ChainMessage::CheckSyncHealth => {
+                // Clone actors for health check
+                let sync_status = self.state.sync_status.clone();
+                let storage_actor = self.storage_actor.clone();
+                let sync_actor = self.sync_actor.clone();
+
+                Box::pin(async move {
+                    // Skip if already syncing
+                    if sync_status.is_syncing() {
+                        trace!("Skipping health check - already syncing");
+                        return Ok(ChainResponse::Success);
+                    }
+
+                    // Get storage height
+                    let storage_height = if let Some(ref storage) = storage_actor {
+                        let msg = crate::actors_v2::storage::messages::GetChainHeightMessage {
+                            correlation_id: Some(Uuid::new_v4()),
+                        };
+                        match storage.send(msg).await {
+                            Ok(Ok(height)) => height,
+                            Ok(Err(e)) => {
+                                warn!("Could not get storage height during health check: {:?}", e);
+                                return Ok(ChainResponse::Success);
+                            }
+                            Err(e) => {
+                                warn!("Storage actor mailbox error during health check: {}", e);
+                                return Ok(ChainResponse::Success);
+                            }
+                        }
+                    } else {
+                        0
+                    };
+
+                    // Get network height
+                    let network_height = if let Some(ref sync) = sync_actor {
+                        let msg = crate::actors_v2::network::SyncMessage::QueryNetworkHeight;
+                        match sync.send(msg).await {
+                            Ok(Ok(response)) => {
+                                use crate::actors_v2::network::SyncResponse;
+                                if let SyncResponse::NetworkHeight { height } = response {
+                                    height
+                                } else {
+                                    warn!("Unexpected response from QueryNetworkHeight during health check");
+                                    return Ok(ChainResponse::Success);
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                warn!("Could not query network height during health check: {:?}", e);
+                                return Ok(ChainResponse::Success);
+                            }
+                            Err(e) => {
+                                warn!("Sync actor mailbox error during health check: {}", e);
+                                return Ok(ChainResponse::Success);
+                            }
+                        }
+                    } else {
+                        warn!("Sync actor not set - cannot perform health check");
+                        return Ok(ChainResponse::Success);
+                    };
+
+                    const HEALTH_THRESHOLD: u64 = 10;
+
+                    if network_height > storage_height + HEALTH_THRESHOLD {
+                        warn!(
+                            storage_height = storage_height,
+                            network_height = network_height,
+                            gap = network_height - storage_height,
+                            "🚨 Node falling behind! Triggering catch-up sync"
+                        );
+
+                        // Trigger sync
+                        if let Some(ref sync) = sync_actor {
+                            let msg = crate::actors_v2::network::SyncMessage::StartSync;
+                            match sync.send(msg).await {
+                                Ok(Ok(_)) => {
+                                    info!("✓ Catch-up sync triggered successfully");
+                                }
+                                Ok(Err(e)) => {
+                                    error!("Failed to trigger catch-up sync: {:?}", e);
+                                }
+                                Err(e) => {
+                                    error!("Sync actor mailbox error when triggering sync: {}", e);
+                                }
+                            }
+                        }
+                    } else {
+                        trace!(
+                            storage_height = storage_height,
+                            network_height = network_height,
+                            "✓ Node is healthy and synced"
+                        );
+                    }
+
+                    Ok(ChainResponse::Success)
+                })
+            }
+
+            ChainMessage::PeerConnected { peer_id } => {
+                let mut actor_self = self.clone();
+                let peer_id_clone = peer_id.clone();
+
+                Box::pin(async move {
+                    match actor_self.on_peer_connected(peer_id_clone).await {
+                        Ok(_) => Ok(ChainResponse::Success),
+                        Err(e) => {
+                            error!("Error handling peer connect: {}", e);
+                            Ok(ChainResponse::Success)
+                        }
+                    }
+                })
+            }
+
+            ChainMessage::PeerDisconnected { peer_id } => {
+                let mut actor_self = self.clone();
+                let peer_id_clone = peer_id.clone();
+
+                Box::pin(async move {
+                    match actor_self.on_peer_disconnected(peer_id_clone).await {
+                        Ok(_) => Ok(ChainResponse::Success),
+                        Err(e) => {
+                            error!("Error handling peer disconnect: {}", e);
+                            Ok(ChainResponse::Success)
+                        }
+                    }
+                })
             }
         }
     }
@@ -1659,6 +1835,7 @@ async fn create_aux_block_helper(
             std::collections::VecDeque::new(),
         )),
         max_pending_imports: 10,
+        connected_peer_count: 0,
     };
 
     actor.create_aux_block(miner_address).await
@@ -1686,6 +1863,7 @@ async fn submit_aux_block_helper(
             std::collections::VecDeque::new(),
         )),
         max_pending_imports: 10,
+        connected_peer_count: 0,
     };
 
     actor

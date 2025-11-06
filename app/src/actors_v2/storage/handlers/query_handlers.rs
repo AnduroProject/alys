@@ -21,6 +21,24 @@ impl Handler<GetChainHeadMessage> for StorageActor {
     }
 }
 
+impl Handler<GetChainHeightMessage> for StorageActor {
+    type Result = ResponseFuture<Result<u64, StorageError>>;
+
+    fn handle(&mut self, msg: GetChainHeightMessage, _: &mut Context<Self>) -> Self::Result {
+        let _correlation_id = msg.correlation_id;
+        debug!("Handling GetChainHeightMessage");
+
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            match database.get_chain_head().await? {
+                Some(head) => Ok(head.number),
+                None => Ok(0), // No chain head means genesis (height 0)
+            }
+        })
+    }
+}
+
 impl Handler<UpdateChainHeadMessage> for StorageActor {
     type Result = ResponseFuture<Result<(), StorageError>>;
 

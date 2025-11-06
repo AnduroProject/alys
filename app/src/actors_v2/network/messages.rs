@@ -115,14 +115,16 @@ pub enum SyncMessage {
     SetNetworkActor {
         addr: Addr<crate::actors_v2::network::NetworkActor>,
     },
-    /// Set StorageActor address for coordination
-    SetStorageActor {
-        addr: Addr<crate::actors_v2::storage::StorageActor>,
+    /// Set ChainActor address for block forwarding
+    SetChainActor {
+        addr: Addr<crate::actors_v2::chain::ChainActor>,
     },
     /// Update available peers for sync
     UpdatePeers { peers: Vec<PeerId> },
     /// Get sync metrics
     GetMetrics,
+    /// Query network peers for consensus chain height
+    QueryNetworkHeight,
 }
 
 /// NetworkActor response types
@@ -175,6 +177,10 @@ pub enum SyncResponse {
     BlocksRequested { request_id: String },
     BlockProcessed { block_height: u64 },
     Metrics(crate::actors_v2::network::SyncMetrics),
+    /// Network height from peer consensus
+    NetworkHeight { height: u64 },
+    /// Already synced response
+    AlreadySynced,
 }
 
 /// Network status information
@@ -252,4 +258,29 @@ pub enum SyncError {
     Network(String),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Network query failed: {0}")]
+    NetworkQuery(String),
+    #[error("Insufficient peers for consensus: {0}")]
+    InsufficientPeers(String),
+    #[error("ChainActor not set")]
+    ChainActorNotSet,
+    #[error("NetworkActor not set")]
+    NetworkActorNotSet,
+    #[error("Block validation failed: {0}")]
+    ValidationFailed(String),
+    #[error("Peer request timeout")]
+    RequestTimeout,
+    #[error("Invalid block response: {0}")]
+    InvalidResponse(String),
+    #[error("Sync failed: {0}")]
+    SyncFailed(String),
+    #[error("Actor mailbox error: {0}")]
+    MailboxError(String),
+}
+
+// Conversion from actix MailboxError
+impl From<actix::MailboxError> for SyncError {
+    fn from(e: actix::MailboxError) -> Self {
+        SyncError::MailboxError(e.to_string())
+    }
 }
