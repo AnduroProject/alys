@@ -2,6 +2,8 @@
 //!
 //! Basic unit tests for ChainActor V2 functionality
 
+pub mod gap_detection_tests;
+
 #[cfg(test)]
 mod tests {
     use crate::actors_v2::testing::chain::fixtures::*;
