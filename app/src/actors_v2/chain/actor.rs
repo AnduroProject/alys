@@ -6,7 +6,7 @@
 use actix::prelude::*;
 use bitcoin::hashes::Hash;
 use ethereum_types::H256;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,6 +35,33 @@ pub struct PendingImport {
     pub block: SignedConsensusBlock<MainnetEthSpec>,
     pub source: BlockSource,
     pub queued_at: Instant,
+}
+
+/// Queued block waiting for gap fill (Phase 3)
+#[derive(Debug, Clone)]
+pub struct QueuedBlock {
+    pub block: SignedConsensusBlock<MainnetEthSpec>,
+    pub source: BlockSource,
+    pub peer_id: Option<String>,
+    pub queued_at: Instant,
+}
+
+/// Queue statistics (Phase 3)
+#[derive(Debug)]
+pub struct QueueStats {
+    pub size: usize,
+    pub min_height: u64,
+    pub max_height: u64,
+    pub oldest_age_secs: u64,
+}
+
+/// Gap fill request tracking (Phase 3)
+#[derive(Debug, Clone)]
+pub struct GapFillRequest {
+    pub start_height: u64,
+    pub count: u32,
+    pub requested_at: Instant,
+    pub retry_count: u32,
 }
 
 /// Simplified ChainActor - core blockchain functionality (Clone-enabled for async handlers)
@@ -69,6 +96,12 @@ pub struct ChainActor {
 
     /// Phase 2: Connected peer count for sync triggering on first peer
     pub(crate) connected_peer_count: usize,
+
+    /// Phase 3: Blocks queued due to gaps (height -> QueuedBlock)
+    pub(crate) queued_blocks: Arc<RwLock<HashMap<u64, QueuedBlock>>>,
+
+    /// Phase 3: Active gap fill requests (start_height -> GapFillRequest)
+    pub(crate) gap_fill_requests: Arc<RwLock<HashMap<u64, GapFillRequest>>>,
 }
 
 impl ChainActor {
@@ -94,6 +127,9 @@ impl ChainActor {
             pending_imports: Arc::new(RwLock::new(VecDeque::new())),
             max_pending_imports: 10, // Configurable limit
             connected_peer_count: 0, // Phase 2: Start with no peers
+            // Phase 3: Initialize gap detection queue
+            queued_blocks: Arc::new(RwLock::new(HashMap::new())),
+            gap_fill_requests: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -725,6 +761,447 @@ impl ChainActor {
         Ok(())
     }
 
+    /// Import block with gap detection (Phase 3)
+    pub async fn import_block_with_gap_detection(
+        &mut self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        source: BlockSource,
+        peer_id: Option<String>,
+    ) -> Result<(), ChainError> {
+        let block_height = block.message.execution_payload.block_number;
+        let current_height = self.state.get_height();
+        let expected_height = current_height + 1;
+
+        debug!(
+            block_height = block_height,
+            expected_height = expected_height,
+            source = ?source,
+            "Importing block with gap detection"
+        );
+
+        // Check for gap
+        if block_height > expected_height {
+            let gap_size = block_height - expected_height;
+
+            warn!(
+                block_height = block_height,
+                expected_height = expected_height,
+                gap_size = gap_size,
+                "🔍 Gap detected! Missing {} blocks",
+                gap_size
+            );
+
+            // Queue out-of-order block
+            let mut queued_blocks = self.queued_blocks.write().await;
+            queued_blocks.insert(
+                block_height,
+                QueuedBlock {
+                    block: block.clone(),
+                    source,
+                    peer_id: peer_id.clone(),
+                    queued_at: Instant::now(),
+                },
+            );
+
+            info!(
+                queued_height = block_height,
+                queue_size = queued_blocks.len(),
+                "Block queued, requesting missing blocks"
+            );
+            drop(queued_blocks);
+
+            // Request missing blocks via SyncActor
+            self.request_blocks(expected_height, gap_size as u32)
+                .await?;
+
+            return Ok(());
+        }
+
+        // Check for duplicate or old block
+        if block_height < expected_height {
+            debug!(
+                block_height = block_height,
+                expected_height = expected_height,
+                "Ignoring old/duplicate block"
+            );
+            return Ok(());
+        }
+
+        // Normal import (block_height == expected_height)
+        self.import_block_internal(block, source, peer_id).await?;
+
+        // Check if we can process queued blocks
+        self.process_queued_blocks().await?;
+
+        Ok(())
+    }
+
+    /// Process queued blocks that can now be imported
+    async fn process_queued_blocks(&mut self) -> Result<(), ChainError> {
+        let mut processed_count = 0;
+
+        loop {
+            let current_height = self.state.get_height();
+            let next_height = current_height + 1;
+
+            // Check if we have the next sequential block
+            let queued_block = {
+                let mut queued_blocks = self.queued_blocks.write().await;
+                queued_blocks.remove(&next_height)
+            };
+
+            if let Some(queued) = queued_block {
+                info!(
+                    height = next_height,
+                    "Processing queued block"
+                );
+
+                // Import the queued block
+                match self
+                    .import_block_internal(queued.block, queued.source, queued.peer_id)
+                    .await
+                {
+                    Ok(_) => {
+                        processed_count += 1;
+                    }
+                    Err(e) => {
+                        error!(
+                            height = next_height,
+                            error = ?e,
+                            "Failed to import queued block"
+                        );
+                        // Continue with next block
+                    }
+                }
+            } else {
+                // No more sequential blocks available
+                break;
+            }
+        }
+
+        if processed_count > 0 {
+            let queue_size = self.queued_blocks.read().await.len();
+            info!(
+                processed = processed_count,
+                queue_remaining = queue_size,
+                "✓ Processed queued blocks"
+            );
+        }
+
+        // Clean up old queued blocks (older than 5 minutes)
+        self.cleanup_stale_queued_blocks().await;
+
+        Ok(())
+    }
+
+    /// Remove queued blocks that are too old
+    async fn cleanup_stale_queued_blocks(&self) {
+        const MAX_QUEUE_AGE: Duration = Duration::from_secs(300); // 5 minutes
+
+        let now = Instant::now();
+        let mut queued_blocks = self.queued_blocks.write().await;
+        let initial_count = queued_blocks.len();
+
+        queued_blocks.retain(|height, queued| {
+            let age = now.duration_since(queued.queued_at);
+            if age > MAX_QUEUE_AGE {
+                warn!(
+                    height = height,
+                    age_secs = age.as_secs(),
+                    "Removing stale queued block"
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        let removed_count = initial_count - queued_blocks.len();
+        if removed_count > 0 {
+            warn!(
+                removed = removed_count,
+                remaining = queued_blocks.len(),
+                "Cleaned up stale queued blocks"
+            );
+        }
+    }
+
+    /// Internal block import (assumes block is at correct height)
+    async fn import_block_internal(
+        &mut self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        _source: BlockSource,
+        _peer_id: Option<String>,
+    ) -> Result<(), ChainError> {
+        // TODO: Implement actual block validation and import logic
+        // For now, just update the height
+        let block_height = block.message.execution_payload.block_number;
+
+        info!(
+            height = block_height,
+            "Block imported successfully (placeholder)"
+        );
+
+        // Update chain state height (placeholder)
+        // In real implementation, this would be done by StorageActor
+        // self.state.head.height = block_height;
+
+        // Mark gap fill as progressing (Phase 3)
+        self.complete_gap_fill(block_height, block_height).await;
+
+        Ok(())
+    }
+
+    /// Add block to queue with overflow protection (Phase 3)
+    async fn queue_block(
+        &self,
+        height: u64,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        source: BlockSource,
+        peer_id: Option<String>,
+    ) -> Result<(), ChainError> {
+        const MAX_QUEUED_BLOCKS: usize = 1000;
+
+        let mut queued_blocks = self.queued_blocks.write().await;
+
+        // Check queue size limit
+        if queued_blocks.len() >= MAX_QUEUED_BLOCKS {
+            error!(
+                queue_size = queued_blocks.len(),
+                max_size = MAX_QUEUED_BLOCKS,
+                "Queue full, rejecting block"
+            );
+
+            // Drop lock before cleanup
+            drop(queued_blocks);
+
+            // Emergency cleanup
+            self.cleanup_stale_queued_blocks().await;
+
+            // Re-acquire lock and check again
+            {
+                let queued_blocks_check = self.queued_blocks.read().await;
+                if queued_blocks_check.len() >= MAX_QUEUED_BLOCKS {
+                    return Err(ChainError::QueueFull);
+                }
+            }
+
+            // Re-acquire write lock to continue
+            queued_blocks = self.queued_blocks.write().await;
+        }
+
+        // Check for duplicate
+        if queued_blocks.contains_key(&height) {
+            debug!(height = height, "Block already queued, ignoring");
+            return Ok(());
+        }
+
+        // Queue the block
+        queued_blocks.insert(
+            height,
+            QueuedBlock {
+                block,
+                source,
+                peer_id,
+                queued_at: Instant::now(),
+            },
+        );
+
+        info!(
+            height = height,
+            queue_size = queued_blocks.len(),
+            "Block queued"
+        );
+
+        Ok(())
+    }
+
+    /// Get queue statistics
+    async fn get_queue_stats(&self) -> QueueStats {
+        let queued_blocks = self.queued_blocks.read().await;
+
+        if queued_blocks.is_empty() {
+            return QueueStats {
+                size: 0,
+                min_height: 0,
+                max_height: 0,
+                oldest_age_secs: 0,
+            };
+        }
+
+        let min_height = *queued_blocks.keys().min().unwrap();
+        let max_height = *queued_blocks.keys().max().unwrap();
+
+        let oldest_age = queued_blocks
+            .values()
+            .map(|q| Instant::now().duration_since(q.queued_at))
+            .max()
+            .unwrap_or(Duration::ZERO);
+
+        QueueStats {
+            size: queued_blocks.len(),
+            min_height,
+            max_height,
+            oldest_age_secs: oldest_age.as_secs(),
+        }
+    }
+
+    /// Monitor queue health periodically (Phase 3)
+    pub fn start_queue_monitor(&self, ctx: &mut Context<Self>) {
+        const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
+
+        let actor_clone = self.clone();
+        ctx.run_interval(MONITOR_INTERVAL, move |_actor, _ctx| {
+            let actor_clone_inner = actor_clone.clone();
+            tokio::spawn(async move {
+                let stats = actor_clone_inner.get_queue_stats().await;
+
+                if stats.size > 0 {
+                    info!(
+                        queue_size = stats.size,
+                        min_height = stats.min_height,
+                        max_height = stats.max_height,
+                        oldest_age_secs = stats.oldest_age_secs,
+                        "Queue status"
+                    );
+
+                    // Alert if queue is growing large
+                    if stats.size > 500 {
+                        warn!(
+                            queue_size = stats.size,
+                            "⚠️ Queue growing large - potential sync issue"
+                        );
+                    }
+
+                    // Alert if blocks are getting stale
+                    if stats.oldest_age_secs > 120 {
+                        warn!(
+                            oldest_age_secs = stats.oldest_age_secs,
+                            "⚠️ Queued blocks getting old - gap fill may be stuck"
+                        );
+                    }
+                }
+            });
+        });
+    }
+
+    /// Request blocks with retry tracking (Phase 3)
+    pub async fn request_blocks_with_retry(
+        &self,
+        start_height: u64,
+        count: u32,
+    ) -> Result<(), ChainError> {
+        const MAX_RETRIES: u32 = 3;
+
+        let mut gap_fill_requests = self.gap_fill_requests.write().await;
+
+        // Check if we already have an active request for this range
+        let existing_request = gap_fill_requests.get(&start_height);
+
+        if let Some(existing) = existing_request {
+            // Check if request is recent (< 30 seconds)
+            if existing.requested_at.elapsed() < Duration::from_secs(30) {
+                debug!(
+                    start_height = start_height,
+                    age_secs = existing.requested_at.elapsed().as_secs(),
+                    "Gap fill request already active, skipping"
+                );
+                return Ok(());
+            }
+
+            // Check retry limit
+            if existing.retry_count >= MAX_RETRIES {
+                error!(
+                    start_height = start_height,
+                    retry_count = existing.retry_count,
+                    "Gap fill failed after max retries"
+                );
+                // Remove failed request
+                gap_fill_requests.remove(&start_height);
+                return Err(ChainError::Internal("Gap fill failed after max retries".to_string()));
+            }
+        }
+
+        // Track retry count
+        let retry_count = existing_request.map(|r| r.retry_count + 1).unwrap_or(0);
+
+        // Drop write lock before sending message
+        drop(gap_fill_requests);
+
+        // Send request via SyncActor (reuse existing method)
+        self.request_blocks(start_height, count).await?;
+
+        // Re-acquire write lock to track request
+        let mut gap_fill_requests = self.gap_fill_requests.write().await;
+        gap_fill_requests.insert(
+            start_height,
+            GapFillRequest {
+                start_height,
+                count,
+                requested_at: Instant::now(),
+                retry_count,
+            },
+        );
+
+        info!(
+            start_height = start_height,
+            count = count,
+            retry_count = retry_count,
+            "Gap fill request sent"
+        );
+
+        Ok(())
+    }
+
+    /// Mark gap fill request as completed
+    async fn complete_gap_fill(&self, start_height: u64, end_height: u64) {
+        let mut gap_fill_requests = self.gap_fill_requests.write().await;
+
+        // Remove all completed requests in range
+        let to_remove: Vec<u64> = gap_fill_requests
+            .keys()
+            .filter(|&&h| h >= start_height && h <= end_height)
+            .copied()
+            .collect();
+
+        for height in to_remove {
+            gap_fill_requests.remove(&height);
+            debug!(height = height, "Gap fill completed");
+        }
+    }
+
+    /// Cleanup stale gap fill requests
+    async fn cleanup_stale_gap_requests(&self) {
+        const MAX_REQUEST_AGE: Duration = Duration::from_secs(60);
+
+        let now = Instant::now();
+        let mut gap_fill_requests = self.gap_fill_requests.write().await;
+        let initial_count = gap_fill_requests.len();
+
+        gap_fill_requests.retain(|height, request| {
+            let age = now.duration_since(request.requested_at);
+            if age > MAX_REQUEST_AGE {
+                warn!(
+                    height = height,
+                    age_secs = age.as_secs(),
+                    retry_count = request.retry_count,
+                    "Removing stale gap fill request"
+                );
+                false
+            } else {
+                true
+            }
+        });
+
+        let removed_count = initial_count - gap_fill_requests.len();
+        if removed_count > 0 {
+            warn!(
+                removed = removed_count,
+                "Cleaned up stale gap fill requests"
+            );
+        }
+    }
+
     /// Start background sync health monitoring
     pub fn start_sync_health_monitor(&self, ctx: &mut Context<Self>) {
         const CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -836,6 +1313,9 @@ impl Actor for ChainActor {
 
         // Start periodic sync health monitoring
         self.start_sync_health_monitor(ctx);
+
+        // Start queue monitoring (Phase 3)
+        self.start_queue_monitor(ctx);
 
         // Initialize sync state after genesis is ready
         let addr = ctx.address();
