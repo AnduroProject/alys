@@ -38,12 +38,14 @@ pub fn create_test_network_config() -> NetworkConfig {
 
 /// Create test SyncConfig for various scenarios
 pub fn create_test_sync_config() -> SyncConfig {
+    use std::path::PathBuf;
     SyncConfig {
         max_blocks_per_request: 32,
         sync_timeout: Duration::from_secs(10),
         max_concurrent_requests: 4,
         block_validation_timeout: Duration::from_secs(5),
         max_sync_peers: 8,
+        data_dir: PathBuf::from("/tmp/alys-test-sync"),
     }
 }
 
