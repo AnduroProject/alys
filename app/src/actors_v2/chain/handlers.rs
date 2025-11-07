@@ -1836,6 +1836,13 @@ async fn create_aux_block_helper(
         )),
         max_pending_imports: 10,
         connected_peer_count: 0,
+        // Phase 3 fields
+        queued_blocks: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
     };
 
     actor.create_aux_block(miner_address).await
@@ -1864,6 +1871,13 @@ async fn submit_aux_block_helper(
         )),
         max_pending_imports: 10,
         connected_peer_count: 0,
+        // Phase 3 fields
+        queued_blocks: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
+        gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
+            std::collections::HashMap::new(),
+        )),
     };
 
     actor

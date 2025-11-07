@@ -125,6 +125,12 @@ pub enum SyncMessage {
     GetMetrics,
     /// Query network peers for consensus chain height
     QueryNetworkHeight,
+    /// Load checkpoint on startup (Phase 5)
+    LoadCheckpoint,
+    /// Save checkpoint during sync (Phase 5)
+    SaveCheckpoint,
+    /// Clear checkpoint after sync completion (Phase 5)
+    ClearCheckpoint,
 }
 
 /// NetworkActor response types
