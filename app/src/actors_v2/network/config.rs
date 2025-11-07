@@ -4,6 +4,7 @@
 //! Removed complex V1 configurations and supervision settings.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// NetworkActor configuration - P2P protocols only
@@ -123,6 +124,8 @@ pub struct SyncConfig {
     pub block_validation_timeout: Duration,
     /// Maximum sync peers to use
     pub max_sync_peers: usize,
+    /// Data directory for checkpoint persistence (Phase 5)
+    pub data_dir: PathBuf,
 }
 
 impl Default for SyncConfig {
@@ -133,6 +136,7 @@ impl Default for SyncConfig {
             max_concurrent_requests: 4,
             block_validation_timeout: Duration::from_secs(10),
             max_sync_peers: 8,
+            data_dir: PathBuf::from("./data"),
         }
     }
 }

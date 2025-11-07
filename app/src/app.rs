@@ -22,6 +22,7 @@ use eyre::Result;
 use futures::pin_mut;
 use lighthouse_wrapper::bls::{Keypair, SecretKey};
 use lighthouse_wrapper::execution_layer::auth::JwtKey;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
@@ -480,9 +481,10 @@ impl App {
 
             // 1. Initialize StorageActor V2
             info!("📦 Initializing StorageActor V2...");
+            let v2_data_path = v2_db_path.unwrap_or_else(|| format!("{}/v2", crate::store::DEFAULT_ROOT_DIR));
             let storage_config = crate::actors_v2::storage::StorageConfig {
                 database: crate::actors_v2::storage::database::DatabaseConfig {
-                    main_path: v2_db_path.unwrap_or_else(|| format!("{}/v2", crate::store::DEFAULT_ROOT_DIR)),
+                    main_path: v2_data_path.clone(),
                     archive_path: None,
                     cache_size_mb: 256,
                     write_buffer_size_mb: 64,
@@ -556,12 +558,14 @@ impl App {
 
             // 4. Initialize SyncActor V2
             info!("🔄 Initializing SyncActor V2...");
+            let sync_data_dir = PathBuf::from(format!("{}/sync", v2_data_path));
             let sync_config = crate::actors_v2::network::SyncConfig {
                 max_blocks_per_request: 128,
                 sync_timeout: Duration::from_secs(30),
                 max_concurrent_requests: 4,
                 block_validation_timeout: Duration::from_secs(10),
                 max_sync_peers: 8,
+                data_dir: sync_data_dir,
             };
             let sync_actor = crate::actors_v2::network::SyncActor::new(sync_config)
                 .expect("Failed to create SyncActor V2")
