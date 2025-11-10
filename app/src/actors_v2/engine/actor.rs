@@ -372,6 +372,7 @@ impl Handler<EngineMessage> for EngineActor {
                 payload,
                 correlation_id,
             } => {
+                let engine = self.engine.clone();
                 let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
 
@@ -381,44 +382,75 @@ impl Handler<EngineMessage> for EngineActor {
                     debug!(
                         correlation_id = %correlation_id,
                         block_number = payload.block_number(),
-                        "Validating execution payload"
+                        block_hash = ?payload.block_hash(),
+                        "Validating execution payload via Engine API newPayload"
                     );
 
-                    // Perform basic execution payload validation
-                    // In full implementation, this would integrate with V0 Engine validation
-                    let is_valid = payload.block_number() > 0
-                        && payload.gas_limit() > 0
-                        && payload.gas_used() <= payload.gas_limit()
-                        && payload.timestamp() > 0;
+                    // Call newPayload to get full EL validation
+                    // This validates:
+                    // - Gas limit/usage
+                    // - State transitions
+                    // - Transaction execution
+                    // - Receipt roots
+                    // - Withdrawal processing
+                    let result = engine.api
+                        .new_payload::<MainnetEthSpec>(payload.clone())
+                        .await;
 
                     let duration = start_time.elapsed();
 
-                    if is_valid {
-                        info!(
-                            correlation_id = %correlation_id,
-                            block_number = payload.block_number(),
-                            duration_ms = duration.as_millis(),
-                            "Payload validation successful"
-                        );
-                        metrics.record_validate_payload_success(duration);
-                    } else {
-                        warn!(
-                            correlation_id = %correlation_id,
-                            block_number = payload.block_number(),
-                            gas_used = payload.gas_used(),
-                            gas_limit = payload.gas_limit(),
-                            tx_count = payload.transactions().len(),
-                            duration_ms = duration.as_millis(),
-                            "Payload validation failed"
-                        );
-                        metrics.record_validate_payload_failure(duration);
-                        metrics.record_validation_error();
-                    }
+                    match result {
+                        Ok(response) => {
+                            // Check if EL considers payload valid
+                            let is_valid = response.latest_valid_hash.is_some();
 
-                    Ok(EngineResponse::PayloadValid {
-                        is_valid,
-                        validation_time: duration,
-                    })
+                            if is_valid {
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    block_number = payload.block_number(),
+                                    block_hash = ?payload.block_hash(),
+                                    latest_valid_hash = ?response.latest_valid_hash,
+                                    duration_ms = duration.as_millis(),
+                                    "Execution payload validation successful (VALID)"
+                                );
+                                metrics.record_validate_payload_success(duration);
+                            } else {
+                                warn!(
+                                    correlation_id = %correlation_id,
+                                    block_number = payload.block_number(),
+                                    block_hash = ?payload.block_hash(),
+                                    payload_status = ?response.status,
+                                    duration_ms = duration.as_millis(),
+                                    "Execution payload validation failed (INVALID or SYNCING)"
+                                );
+                                metrics.record_validate_payload_failure(duration);
+                                metrics.record_validation_error();
+                            }
+
+                            Ok(EngineResponse::PayloadValid {
+                                is_valid,
+                                validation_time: duration,
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_number = payload.block_number(),
+                                error = ?e,
+                                duration_ms = duration.as_millis(),
+                                "Engine API error during payload validation"
+                            );
+
+                            metrics.record_validate_payload_failure(duration);
+                            metrics.record_engine_api_error();
+
+                            // Treat errors as invalid payload (fail-safe)
+                            Ok(EngineResponse::PayloadValid {
+                                is_valid: false,
+                                validation_time: duration,
+                            })
+                        }
+                    }
                 })
             }
 
@@ -519,13 +551,43 @@ impl Handler<EngineMessage> for EngineActor {
             }
 
             EngineMessage::GetLatestBlock { correlation_id } => {
+                let engine = self.engine.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
-                debug!(correlation_id = %correlation_id, "GetLatestBlock not yet implemented");
 
                 Box::pin(async move {
-                    Err(EngineError::Internal(
-                        "GetLatestBlock not yet implemented".to_string(),
-                    ))
+                    debug!(
+                        correlation_id = %correlation_id,
+                        "Fetching latest block from execution layer"
+                    );
+
+                    // Query latest block using LATEST_TAG
+                    let query = lighthouse_wrapper::execution_layer::BlockByNumberQuery::Tag(
+                        lighthouse_wrapper::execution_layer::LATEST_TAG,
+                    );
+
+                    match engine.get_payload_by_tag_from_engine(query).await {
+                        Ok(payload) => {
+                            info!(
+                                correlation_id = %correlation_id,
+                                block_number = payload.block_number,
+                                block_hash = %payload.block_hash,
+                                "Retrieved latest block from execution layer"
+                            );
+
+                            Ok(EngineResponse::LatestBlock {
+                                hash: payload.block_hash,
+                                number: payload.block_number,
+                            })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to retrieve latest block from execution layer"
+                            );
+                            Err(EngineError::EngineApi(format!("Failed to get latest block: {:?}", e)))
+                        }
+                    }
                 })
             }
 
@@ -591,19 +653,66 @@ impl Handler<EngineMessage> for EngineActor {
                 finalized_hash,
                 correlation_id,
             } => {
+                let engine = self.engine.clone();
+                let metrics = self.metrics.clone();
                 let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
-                debug!(
-                    correlation_id = %correlation_id,
-                    head_hash = ?head_hash,
-                    safe_hash = ?safe_hash,
-                    finalized_hash = ?finalized_hash,
-                    "UpdateForkChoice not yet implemented"
-                );
 
                 Box::pin(async move {
-                    Err(EngineError::Internal(
-                        "UpdateForkChoice not yet implemented".to_string(),
-                    ))
+                    let start_time = Instant::now();
+
+                    debug!(
+                        correlation_id = %correlation_id,
+                        head = ?head_hash,
+                        safe = ?safe_hash,
+                        finalized = ?finalized_hash,
+                        "Updating fork choice at execution layer"
+                    );
+
+                    // Build forkchoice state
+                    let forkchoice_state = lighthouse_wrapper::execution_layer::ForkchoiceState {
+                        head_block_hash: head_hash,
+                        safe_block_hash: safe_hash,
+                        finalized_block_hash: finalized_hash,
+                    };
+
+                    // Call forkchoiceUpdated without payload attributes (not building block)
+                    let result = engine
+                        .api
+                        .forkchoice_updated(forkchoice_state, None)
+                        .await;
+
+                    let duration = start_time.elapsed();
+
+                    match result {
+                        Ok(response) => {
+                            // Update internal finalized tracking
+                            engine.set_finalized(finalized_hash).await;
+
+                            info!(
+                                correlation_id = %correlation_id,
+                                duration_ms = duration.as_millis(),
+                                payload_status = ?response.payload_status,
+                                "Fork choice updated successfully at execution layer"
+                            );
+
+                            metrics.record_fork_choice_update_success(duration);
+
+                            Ok(EngineResponse::ForkChoiceUpdated { success: true })
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                duration_ms = duration.as_millis(),
+                                "Fork choice update failed at execution layer"
+                            );
+
+                            metrics.record_fork_choice_update_failure(duration);
+                            metrics.record_engine_api_error();
+
+                            Err(EngineError::ForkChoiceUpdateFailed(format!("{:?}", e)))
+                        }
+                    }
                 })
             }
 

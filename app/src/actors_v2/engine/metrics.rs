@@ -20,10 +20,15 @@ pub struct EngineActorMetrics {
     pub commit_block_success: Counter,
     pub commit_block_failed: Counter,
 
+    pub fork_choice_update_calls: Counter,
+    pub fork_choice_update_success: Counter,
+    pub fork_choice_update_failed: Counter,
+
     // Performance metrics
     pub build_payload_duration: Histogram,
     pub validate_payload_duration: Histogram,
     pub commit_block_duration: Histogram,
+    pub fork_choice_update_duration: Histogram,
 
     // State metrics
     pub active_operations: IntGauge,
@@ -95,6 +100,22 @@ impl EngineActorMetrics {
             )
             .unwrap(),
 
+            fork_choice_update_calls: Counter::new(
+                "engine_actor_fork_choice_update_calls_total",
+                "Total number of fork choice update requests",
+            )
+            .unwrap(),
+            fork_choice_update_success: Counter::new(
+                "engine_actor_fork_choice_update_success_total",
+                "Successful fork choice updates",
+            )
+            .unwrap(),
+            fork_choice_update_failed: Counter::new(
+                "engine_actor_fork_choice_update_failed_total",
+                "Failed fork choice updates",
+            )
+            .unwrap(),
+
             // Performance metrics
             build_payload_duration: Histogram::with_opts(HistogramOpts::new(
                 "engine_actor_build_payload_duration_seconds",
@@ -109,6 +130,11 @@ impl EngineActorMetrics {
             commit_block_duration: Histogram::with_opts(HistogramOpts::new(
                 "engine_actor_commit_block_duration_seconds",
                 "Time spent committing blocks",
+            ))
+            .unwrap(),
+            fork_choice_update_duration: Histogram::with_opts(HistogramOpts::new(
+                "engine_actor_fork_choice_update_duration_seconds",
+                "Fork choice update operation duration",
             ))
             .unwrap(),
 
@@ -220,5 +246,19 @@ impl EngineActorMetrics {
     /// Record validation error
     pub fn record_validation_error(&self) {
         self.validation_errors.inc();
+    }
+
+    /// Record successful fork choice update
+    pub fn record_fork_choice_update_success(&self, duration: std::time::Duration) {
+        self.fork_choice_update_calls.inc();
+        self.fork_choice_update_success.inc();
+        self.fork_choice_update_duration.observe(duration.as_secs_f64());
+    }
+
+    /// Record failed fork choice update
+    pub fn record_fork_choice_update_failure(&self, duration: std::time::Duration) {
+        self.fork_choice_update_calls.inc();
+        self.fork_choice_update_failed.inc();
+        self.fork_choice_update_duration.observe(duration.as_secs_f64());
     }
 }
