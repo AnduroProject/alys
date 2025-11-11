@@ -1069,13 +1069,50 @@ impl NetworkActor {
         Ok(())
     }
 
-    /// Get current network status
+    /// Get current network status (synchronous, uses chain_height = 0)
+    /// For async version with real chain height, use get_network_status_async()
     fn get_network_status(&self) -> NetworkStatus {
         NetworkStatus {
             local_peer_id: self.local_peer_id.clone(),
             connected_peers: self.peer_manager.get_connected_peers().len(),
             listening_addresses: self.config.listen_addresses.clone(),
             is_running: self.is_running,
+            chain_height: 0,  // Placeholder, use async version for real height
+        }
+    }
+
+    /// Get current network status with actual chain height (async)
+    async fn get_network_status_async(&self) -> NetworkStatus {
+        // Query ChainActor for current height
+        let chain_height = if let Some(ref chain_actor) = self.chain_actor {
+            match chain_actor
+                .send(crate::actors_v2::chain::ChainMessage::GetChainStatus)
+                .await
+            {
+                Ok(Ok(crate::actors_v2::chain::ChainResponse::ChainStatus(status))) => status.height,
+                Ok(Err(e)) => {
+                    tracing::warn!(error = ?e, "Failed to get chain status for network status");
+                    0
+                }
+                Err(e) => {
+                    tracing::warn!(error = ?e, "ChainActor mailbox error during network status");
+                    0
+                }
+                Ok(Ok(_)) => {
+                    tracing::warn!("Unexpected response from GetChainStatus");
+                    0
+                }
+            }
+        } else {
+            0
+        };
+
+        NetworkStatus {
+            local_peer_id: self.local_peer_id.clone(),
+            connected_peers: self.peer_manager.get_connected_peers().len(),
+            listening_addresses: self.config.listen_addresses.clone(),
+            is_running: self.is_running,
+            chain_height,
         }
     }
 

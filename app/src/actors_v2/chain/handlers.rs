@@ -1657,13 +1657,70 @@ impl Handler<ChainMessage> for ChainActor {
                 let sync_actor = self.sync_actor.clone();
 
                 Box::pin(async move {
-                    // This is a simplified handler - the actual logic is in ChainActor::initialize_sync_state
-                    // We call it through the actor reference
-                    info!("Received InitializeSyncState message");
+                    // Bug Fix: Phase 6.3.1 - Implement proper initialization logic
+                    // See: V2_SYNC_DETECTION_DIAGNOSTIC.md, Bug #3
+                    info!("Initializing sync state - querying storage and triggering sync check");
 
-                    // Since we can't directly call async methods on &mut self from a handler,
-                    // we'll need to implement this differently or accept the limitation
-                    // For now, return success as the initialization happens in started()
+                    // Step 1: Get current storage height
+                    let current_height = if let Some(ref storage) = storage_actor {
+                        let msg = crate::actors_v2::storage::messages::GetChainHeightMessage {
+                            correlation_id: Some(Uuid::new_v4()),
+                        };
+                        match storage.send(msg).await {
+                            Ok(Ok(height)) => {
+                                debug!(current_height = height, "Retrieved storage height");
+                                height
+                            }
+                            Ok(Err(e)) => {
+                                warn!(error = ?e, "Could not get storage height during sync init, defaulting to 0");
+                                0
+                            }
+                            Err(e) => {
+                                warn!(error = ?e, "Storage actor mailbox error during sync init, defaulting to 0");
+                                0
+                            }
+                        }
+                    } else {
+                        warn!("Storage actor not available during sync init, defaulting to height 0");
+                        0
+                    };
+
+                    // Step 2: Trigger sync check in SyncActor
+                    if let Some(ref sync) = sync_actor {
+                        // Use StartSync message with current height and unknown target
+                        // SyncActor will discover target from network and start sync if needed
+                        let msg = crate::actors_v2::network::SyncMessage::StartSync {
+                            start_height: current_height,
+                            target_height: None, // Will be discovered from network
+                        };
+
+                        match sync.send(msg).await {
+                            Ok(Ok(_)) => {
+                                info!(
+                                    current_height = current_height,
+                                    "Sync state initialized successfully - SyncActor will discover target and sync if needed"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                error!(
+                                    error = ?e,
+                                    current_height = current_height,
+                                    "Failed to start sync during initialization"
+                                );
+                                // Non-fatal: Sync health checks will eventually catch this
+                            }
+                            Err(e) => {
+                                error!(
+                                    error = ?e,
+                                    "Sync actor mailbox error during initialization"
+                                );
+                                // Non-fatal: Sync health checks will eventually catch this
+                            }
+                        }
+                    } else {
+                        warn!("Sync actor not available during initialization");
+                    }
+
                     Ok(ChainResponse::Success)
                 })
             }
@@ -1740,7 +1797,10 @@ impl Handler<ChainMessage> for ChainActor {
 
                         // Trigger sync
                         if let Some(ref sync) = sync_actor {
-                            let msg = crate::actors_v2::network::SyncMessage::StartSync;
+                            let msg = crate::actors_v2::network::SyncMessage::StartSync {
+                                start_height: storage_height,
+                                target_height: Some(network_height),
+                            };
                             match sync.send(msg).await {
                                 Ok(Ok(_)) => {
                                     info!("✓ Catch-up sync triggered successfully");

@@ -651,7 +651,10 @@ impl ChainActor {
         if let Some(ref sync_actor) = self.sync_actor {
             info!("Triggering SyncActor to start sync");
 
-            let msg = crate::actors_v2::network::SyncMessage::StartSync;
+            let msg = crate::actors_v2::network::SyncMessage::StartSync {
+                start_height: 0, // Will be determined from storage by SyncActor
+                target_height: None, // Discover from network
+            };
 
             match sync_actor.send(msg).await {
                 Ok(Ok(response)) => {
@@ -1203,9 +1206,23 @@ impl ChainActor {
     }
 
     /// Start background sync health monitoring
+    ///
+    /// Enhancement: Phase 6.4 - Add initial check after short delay
     pub fn start_sync_health_monitor(&self, ctx: &mut Context<Self>) {
         const CHECK_INTERVAL: Duration = Duration::from_secs(60);
+        const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(5);
 
+        // Schedule initial check after short delay (let network settle)
+        ctx.run_later(INITIAL_CHECK_DELAY, |_actor, ctx| {
+            let addr = ctx.address();
+            tokio::spawn(async move {
+                if let Err(e) = addr.send(ChainMessage::CheckSyncHealth).await {
+                    error!("Initial sync health check failed: {}", e);
+                }
+            });
+        });
+
+        // Then schedule periodic checks
         ctx.run_interval(CHECK_INTERVAL, |_actor, ctx| {
             let addr = ctx.address();
             tokio::spawn(async move {
@@ -1216,6 +1233,7 @@ impl ChainActor {
         });
 
         info!(
+            initial_check_secs = INITIAL_CHECK_DELAY.as_secs(),
             interval_secs = CHECK_INTERVAL.as_secs(),
             "Sync health monitor started"
         );

@@ -387,7 +387,7 @@ impl ActorTestHarness for SyncTestHarness {
 
         // Use spawn_blocking following StorageActor pattern for async compatibility
         let result = match message {
-            SyncMessage::StartSync => {
+            SyncMessage::StartSync { .. } => {
                 let actor = self.base.get_actor_ref().await;
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Handle::current();

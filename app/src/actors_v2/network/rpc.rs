@@ -72,6 +72,7 @@ pub enum NetworkRpcResult {
         connected_peers: usize,
         listening_addresses: Vec<String>,
         is_running: bool,
+        chain_height: u64,
     },
     /// Peer list
     Peers { peers: Vec<PeerRpcInfo> },
@@ -179,6 +180,7 @@ impl NetworkRpcHandler {
                             connected_peers: status.connected_peers,
                             listening_addresses: status.listening_addresses,
                             is_running: status.is_running,
+                            chain_height: status.chain_height,
                         })
                     }
                     Ok(Ok(_)) => Err(anyhow!("Unexpected response type")),
@@ -309,7 +311,10 @@ impl NetworkRpcHandler {
             }
 
             NetworkRpcRequest::StartSync => {
-                let msg = SyncMessage::StartSync;
+                let msg = SyncMessage::StartSync {
+                    start_height: 0, // Will be determined by SyncActor
+                    target_height: None, // Discover from network
+                };
 
                 match self.sync_actor.send(msg).await {
                     Ok(Ok(SyncResponse::Started)) => Ok(NetworkRpcResult::Success),

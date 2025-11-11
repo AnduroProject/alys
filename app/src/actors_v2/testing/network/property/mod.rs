@@ -232,7 +232,7 @@ mod tests {
         }
 
         // Property: Sync should still work with remaining peers
-        let sync_msg = SyncMessage::StartSync;
+        let sync_msg = SyncMessage::StartSync { start_height: 0, target_height: None };
         assert!(env.sync_harness.send_message(sync_msg).await.is_ok());
 
         // Property: System should work with mDNS peers only

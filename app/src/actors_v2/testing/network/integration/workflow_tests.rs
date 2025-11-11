@@ -58,7 +58,7 @@ async fn test_complete_sync_workflow() {
     harness.setup().await.unwrap();
 
     // Complete sync workflow
-    let start_sync_msg = SyncMessage::StartSync;
+    let start_sync_msg = SyncMessage::StartSync { start_height: 0, target_height: None };
     harness.send_message(start_sync_msg).await.unwrap();
 
     // Update peers for sync

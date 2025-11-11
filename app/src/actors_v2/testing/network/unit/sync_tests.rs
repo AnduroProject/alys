@@ -22,7 +22,7 @@ async fn test_sync_start_stop_operations() {
     harness.setup().await.unwrap();
 
     // Test sync start
-    let start_message = SyncMessage::StartSync;
+    let start_message = SyncMessage::StartSync { start_height: 0, target_height: None };
     harness.send_message(start_message).await.unwrap();
 
     // Test sync stop

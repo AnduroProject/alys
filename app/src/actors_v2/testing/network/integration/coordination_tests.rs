@@ -66,7 +66,7 @@ async fn test_block_sync_workflow() {
     sync_harness.setup().await.unwrap();
 
     // Start sync process
-    let start_sync_msg = SyncMessage::StartSync;
+    let start_sync_msg = SyncMessage::StartSync { start_height: 0, target_height: None };
     sync_harness.send_message(start_sync_msg).await.unwrap();
 
     // Simulate block broadcast from network

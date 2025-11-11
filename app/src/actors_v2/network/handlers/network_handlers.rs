@@ -90,6 +90,7 @@ impl NetworkMessageHandlers {
             connected_peers,
             listening_addresses,
             is_running,
+            chain_height: 0, // TODO: Query ChainActor for actual height
         }
     }
 

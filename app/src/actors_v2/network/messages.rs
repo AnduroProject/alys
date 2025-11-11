@@ -93,7 +93,10 @@ pub enum NetworkMessage {
 #[rtype(result = "Result<SyncResponse, SyncError>")]
 pub enum SyncMessage {
     /// Start synchronization
-    StartSync,
+    StartSync {
+        start_height: u64,
+        target_height: Option<u64>, // None means discover from network
+    },
     /// Stop synchronization
     StopSync,
     /// Get sync status

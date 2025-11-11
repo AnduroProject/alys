@@ -298,10 +298,13 @@ impl SyncActor {
                     Ok(Ok(Ok(response))) => {
                         use crate::actors_v2::network::messages::NetworkResponse;
                         if let NetworkResponse::Status(status) = response {
-                            heights.push(status.connected_peers as u64); // Placeholder - need actual height field
+                            // Bug Fix: Phase 6.1.3 - Use actual chain height instead of peer count
+                            // See: V2_SYNC_DETECTION_DIAGNOSTIC.md, Bug #1
+                            heights.push(status.chain_height);
                             tracing::debug!(
                                 peer_id = %peer_id,
-                                "Received response from peer"
+                                chain_height = status.chain_height,
+                                "Received chain height from peer"
                             );
                         }
                     }
@@ -689,14 +692,33 @@ impl SyncActor {
     }
 
     /// Get current sync status
+    ///
+    /// Bug Fix: Phase 6.2 - Use height comparison instead of state matching
+    /// See: V2_SYNC_DETECTION_DIAGNOSTIC.md, Bug #2
     fn get_sync_status(&self) -> SyncStatus {
+        // Determine if syncing based on height difference, not state
+        // This is more robust than state-based logic
+        const SYNC_THRESHOLD: u64 = 2; // Allow 2-block tolerance
+
+        let is_syncing = if self.target_height > 0 {
+            // If we know the target height, compare with current height
+            self.current_height + SYNC_THRESHOLD < self.target_height
+        } else {
+            // If target unknown, check if actively syncing
+            // This handles startup case where target hasn't been discovered yet
+            matches!(
+                self.sync_state,
+                SyncState::Starting
+                    | SyncState::DiscoveringPeers
+                    | SyncState::RequestingBlocks
+                    | SyncState::ProcessingBlocks
+            )
+        };
+
         SyncStatus {
             current_height: self.current_height,
             target_height: self.target_height,
-            is_syncing: matches!(
-                self.sync_state,
-                SyncState::RequestingBlocks | SyncState::ProcessingBlocks
-            ),
+            is_syncing,
             sync_peers: self.sync_peers.clone(),
             pending_requests: self.active_requests.len(),
         }
@@ -1157,15 +1179,63 @@ impl Handler<SyncMessage> for SyncActor {
 
     fn handle(&mut self, msg: SyncMessage, _ctx: &mut Context<Self>) -> Self::Result {
         match msg {
-            SyncMessage::StartSync => {
-                // Start sync in background
-                if self.sync_state != SyncState::Stopped {
+            SyncMessage::StartSync {
+                start_height,
+                target_height,
+            } => {
+                // Bug Fix: Phase 6.3.2 - Enhanced StartSync with height discovery
+                // See: V2_SYNC_DETECTION_DIAGNOSTIC.md, Bug #3
+
+                // Allow re-initialization if stopped
+                if self.sync_state != SyncState::Stopped && self.sync_state != SyncState::Synced {
+                    tracing::warn!(
+                        state = ?self.sync_state,
+                        "Sync already running, ignoring StartSync"
+                    );
                     return Err(SyncError::Internal("Sync already running".to_string()));
                 }
 
+                self.current_height = start_height;
                 self.sync_state = SyncState::Starting;
                 self.is_running = true;
-                tracing::info!("Starting blockchain synchronization");
+
+                tracing::info!(
+                    start_height = start_height,
+                    target_height = ?target_height,
+                    "Starting blockchain synchronization"
+                );
+
+                // Determine target height
+                if let Some(target) = target_height {
+                    // Explicit target provided
+                    self.target_height = target;
+                    tracing::info!(target_height = target, "Using provided target height");
+                } else {
+                    // Target unknown - will be discovered in started() lifecycle or on-demand
+                    self.target_height = 0;
+                    tracing::info!("Target height unknown, will discover from network");
+                }
+
+                // Check if already synced
+                const SYNC_THRESHOLD: u64 = 2;
+                if self.target_height > 0
+                    && self.current_height + SYNC_THRESHOLD >= self.target_height
+                {
+                    tracing::info!(
+                        current_height = self.current_height,
+                        target_height = self.target_height,
+                        "Already synced (within threshold)"
+                    );
+                    self.sync_state = SyncState::Synced;
+                    self.is_running = false;
+                    return Ok(SyncResponse::Started);
+                }
+
+                // Mark as discovering if we need to find target
+                if self.target_height == 0 {
+                    self.sync_state = SyncState::DiscoveringPeers;
+                }
+
                 Ok(SyncResponse::Started)
             }
 
