@@ -196,6 +196,7 @@ pub struct NetworkStatus {
     pub connected_peers: usize,
     pub listening_addresses: Vec<String>,
     pub is_running: bool,
+    pub chain_height: u64,  // Current blockchain height from ChainActor
 }
 
 /// Sync status information

@@ -19,6 +19,9 @@ use super::{
     ChainActor, ChainError,
 };
 
+use crate::actors_v2::engine::{EngineMessage, EngineResponse};
+use crate::types::ExecutionBlockHash;
+
 use crate::actors_v2::common::serialization::{calculate_block_hash, serialize_block};
 use crate::auxpow::AuxPow;
 use crate::block::SignedConsensusBlock;
@@ -865,6 +868,73 @@ impl Handler<ChainMessage> for ChainActor {
                                                         // Phase 5: Record reorganization metrics
                                                         self_clone.metrics.reorganizations.inc();
                                                         self_clone.metrics.reorganization_depth.observe(reorg_result.blocks_rolled_back as f64);
+
+                                                        // CRITICAL FIX: Update execution layer fork choice to new canonical head
+                                                        // Without this, EL and CL are desynchronized after reorg
+                                                        let new_head_hash = block.message.execution_payload.block_hash;
+                                                        let finalized_hash = ExecutionBlockHash::zero(); // TODO: Track actual finalized hash
+
+                                                        debug!(
+                                                            correlation_id = %correlation_id,
+                                                            new_head = ?new_head_hash,
+                                                            finalized = ?finalized_hash,
+                                                            "Updating execution layer fork choice after reorganization"
+                                                        );
+
+                                                        if let Some(ref engine_actor) = self_clone.engine_actor {
+                                                            let fork_choice_result = engine_actor
+                                                                .send(EngineMessage::UpdateForkChoice {
+                                                                    head_hash: new_head_hash,
+                                                                    safe_hash: finalized_hash,
+                                                                    finalized_hash: finalized_hash,
+                                                                    correlation_id: Some(correlation_id),
+                                                                })
+                                                                .await;
+
+                                                            match fork_choice_result {
+                                                                Ok(Ok(EngineResponse::ForkChoiceUpdated { success: true })) => {
+                                                                    info!(
+                                                                        correlation_id = %correlation_id,
+                                                                        new_head = ?new_head_hash,
+                                                                        "Execution layer fork choice updated successfully after reorganization"
+                                                                    );
+                                                                }
+                                                                Ok(Ok(_)) => {
+                                                                    error!(
+                                                                        correlation_id = %correlation_id,
+                                                                        "Unexpected response from UpdateForkChoice after reorganization"
+                                                                    );
+                                                                    // Non-fatal: CL updated, EL may recover on next block
+                                                                }
+                                                                Ok(Err(e)) => {
+                                                                    error!(
+                                                                        correlation_id = %correlation_id,
+                                                                        error = ?e,
+                                                                        "CRITICAL: Failed to update execution layer fork choice after reorganization"
+                                                                    );
+                                                                    // Non-fatal: Log critical error but continue
+                                                                    // CL reorg completed, EL will sync on next block
+                                                                    self_clone.metrics.fork_choice_failures_after_reorg.inc();
+                                                                }
+                                                                Err(e) => {
+                                                                    error!(
+                                                                        correlation_id = %correlation_id,
+                                                                        error = ?e,
+                                                                        "CRITICAL: Actor mailbox error during fork choice update after reorganization"
+                                                                    );
+                                                                    // Mailbox error is serious - return error
+                                                                    return Err(ChainError::ActorMailbox(format!(
+                                                                        "Failed to communicate with EngineActor after reorg: {:?}",
+                                                                        e
+                                                                    )));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            warn!(
+                                                                correlation_id = %correlation_id,
+                                                                "EngineActor not available - cannot update fork choice after reorganization"
+                                                            );
+                                                        }
 
                                                         // Reorganization already handled storage and chain head updates
                                                         // Skip the normal import flow and return success

@@ -65,6 +65,8 @@ pub struct ChainMetrics {
     pub reorganization_depth: Histogram,
     /// Blocks in import queue gauge
     pub import_queue_depth: IntGauge,
+    /// Fork choice update failures after reorganization (CRITICAL metric)
+    pub fork_choice_failures_after_reorg: IntCounter,
 }
 
 impl ChainMetrics {
@@ -140,6 +142,11 @@ impl ChainMetrics {
             import_queue_depth: IntGauge::new(
                 "chain_import_queue_depth",
                 "Number of blocks in import queue",
+            )
+            .unwrap(),
+            fork_choice_failures_after_reorg: IntCounter::new(
+                "chain_fork_choice_failures_after_reorg_total",
+                "Failed fork choice updates after reorganization",
             )
             .unwrap(),
         }
