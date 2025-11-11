@@ -99,7 +99,10 @@ async fn test_sync_can_start_and_stop() {
     let sync_actor = SyncActor::new(test_sync_config()).unwrap().start();
 
     // Test: Start sync (will fail without ChainActor, but should accept message)
-    let start_result = sync_actor.send(SyncMessage::StartSync).await;
+    let start_result = sync_actor.send(SyncMessage::StartSync {
+        start_height: 0,
+        target_height: None
+    }).await;
     assert!(start_result.is_ok(), "SyncActor should accept StartSync");
 
     // Test: Stop sync
