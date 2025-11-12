@@ -69,6 +69,11 @@ pub struct SyncActor {
     is_running: bool,
     /// Shutdown flag
     shutdown_requested: bool,
+
+    /// Timestamp when current sync_state was entered (for bootstrap detection)
+    state_entered_at: SystemTime,
+    /// Total time spent in DiscoveringPeers state (accumulated across attempts)
+    discovery_time_accumulated: Duration,
 }
 
 impl SyncActor {
@@ -94,6 +99,9 @@ impl SyncActor {
             chain_actor: None,
             is_running: false,
             shutdown_requested: false,
+            // Bootstrap detection fields
+            state_entered_at: SystemTime::now(),
+            discovery_time_accumulated: Duration::ZERO,
         })
     }
 
@@ -104,14 +112,14 @@ impl SyncActor {
         }
 
         tracing::info!("Starting blockchain synchronization");
-        self.sync_state = SyncState::Starting;
+        self.transition_to_state(SyncState::Starting);
         self.is_running = true;
 
         // Initialize height from ChainActor (source of truth)
         self.initialize_height().await?;
 
         // Transition to peer discovery
-        self.sync_state = SyncState::DiscoveringPeers;
+        self.transition_to_state(SyncState::DiscoveringPeers);
         self.discover_sync_peers().await?;
 
         Ok(())
@@ -168,7 +176,7 @@ impl SyncActor {
         // Clear block queue
         self.block_queue.clear();
 
-        self.sync_state = SyncState::Stopped;
+        self.transition_to_state(SyncState::Stopped);
         self.metrics.stop_sync();
         self.is_running = false;
 
@@ -196,7 +204,7 @@ impl SyncActor {
                         }
 
                         // Transition to requesting blocks
-                        self.sync_state = SyncState::RequestingBlocks;
+                        self.transition_to_state(SyncState::RequestingBlocks);
                         self.start_block_requests().await?;
                     }
                 }
@@ -230,7 +238,7 @@ impl SyncActor {
                 if self.current_height >= target.saturating_sub(2) {
                     // Already synced (within 2 blocks tolerance)
                     tracing::info!("Already synced at height {}", self.current_height);
-                    self.sync_state = SyncState::Synced;
+                    self.transition_to_state(SyncState::Synced);
                     return Ok(());
                 }
 
@@ -596,7 +604,7 @@ impl SyncActor {
         }
 
         // Update state
-        self.sync_state = SyncState::Synced;
+        self.transition_to_state(SyncState::Synced);
         let sync_duration = self.metrics.get_sync_duration();
         self.metrics.stop_sync();
 
@@ -693,27 +701,11 @@ impl SyncActor {
 
     /// Get current sync status
     ///
-    /// Bug Fix: Phase 6.2 - Use height comparison instead of state matching
-    /// See: V2_SYNC_DETECTION_DIAGNOSTIC.md, Bug #2
+    /// Updated for Bootstrap Detection (Phase 6.3):
+    /// Uses determine_sync_state() which implements bootstrap detection logic.
+    /// This prevents genesis deadlock while maintaining correct sync behavior.
     fn get_sync_status(&self) -> SyncStatus {
-        // Determine if syncing based on height difference, not state
-        // This is more robust than state-based logic
-        const SYNC_THRESHOLD: u64 = 2; // Allow 2-block tolerance
-
-        let is_syncing = if self.target_height > 0 {
-            // If we know the target height, compare with current height
-            self.current_height + SYNC_THRESHOLD < self.target_height
-        } else {
-            // If target unknown, check if actively syncing
-            // This handles startup case where target hasn't been discovered yet
-            matches!(
-                self.sync_state,
-                SyncState::Starting
-                    | SyncState::DiscoveringPeers
-                    | SyncState::RequestingBlocks
-                    | SyncState::ProcessingBlocks
-            )
-        };
+        let is_syncing = self.determine_sync_state();
 
         SyncStatus {
             current_height: self.current_height,
@@ -722,6 +714,136 @@ impl SyncActor {
             sync_peers: self.sync_peers.clone(),
             pending_requests: self.active_requests.len(),
         }
+    }
+
+    /// Bootstrap detection timeout (30 seconds for regtest)
+    /// - Regtest: 30s (matches node-2 startup delay)
+    /// - Production networks may use longer values (60-180s)
+    const BOOTSTRAP_DETECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Determine if we're in active sync or bootstrap mode
+    ///
+    /// This is the core logic that decides whether to allow block production.
+    /// Returns true if syncing (block production should be prevented).
+    fn determine_sync_state(&self) -> bool {
+        const SYNC_THRESHOLD: u64 = 2;
+
+        // Case 1: Target height known → Simple comparison
+        if self.target_height > 0 {
+            return self.current_height + SYNC_THRESHOLD < self.target_height;
+        }
+
+        // Case 2: Target unknown → State-based logic with bootstrap detection
+        match self.sync_state {
+            SyncState::DiscoveringPeers => self.check_bootstrap_mode(),
+            SyncState::RequestingBlocks | SyncState::ProcessingBlocks => true,
+            SyncState::Starting => true,
+            SyncState::Synced | SyncState::Stopped => false,
+            SyncState::Error(_) => false,
+        }
+    }
+
+    /// Check if bootstrap mode should be activated
+    ///
+    /// Bootstrap mode is activated when:
+    /// 1. We're at genesis (height 0)
+    /// 2. No peers have been discovered
+    /// 3. We've been trying to discover peers for BOOTSTRAP_DETECTION_TIMEOUT
+    ///
+    /// CRITICAL: Only genesis nodes can enter bootstrap mode to prevent forks
+    /// during network partitions at height > 0.
+    ///
+    /// Returns true if still syncing, false if bootstrap mode (allow block production)
+    fn check_bootstrap_mode(&self) -> bool {
+        // CRITICAL: Only genesis nodes can enter bootstrap mode
+        // Non-genesis nodes must wait for peers indefinitely to prevent forks
+        if self.current_height > 0 {
+            tracing::debug!(
+                current_height = self.current_height,
+                peer_count = self.sync_peers.len(),
+                "Non-genesis node waiting for peers - bootstrap mode not applicable"
+            );
+            return true; // Keep is_syncing = true
+        }
+
+        // Multi-factor bootstrap detection for genesis nodes
+        let at_genesis = self.current_height == 0;
+        let no_peers_found = self.sync_peers.is_empty();
+        let discovery_timeout_reached =
+            self.discovery_time_accumulated >= Self::BOOTSTRAP_DETECTION_TIMEOUT;
+
+        if at_genesis && no_peers_found && discovery_timeout_reached {
+            tracing::warn!(
+                discovery_time_secs = self.discovery_time_accumulated.as_secs(),
+                timeout_secs = Self::BOOTSTRAP_DETECTION_TIMEOUT.as_secs(),
+                current_height = self.current_height,
+                peer_count = self.sync_peers.len(),
+                "🚀 BOOTSTRAP MODE ACTIVATED: Genesis node with no peers, allowing block production"
+            );
+            return false; // is_syncing = false → Allow block production
+        }
+
+        // Log progress based on discovery state
+        if !no_peers_found {
+            tracing::debug!(
+                peer_count = self.sync_peers.len(),
+                "Peers discovered - using normal sync logic"
+            );
+        } else {
+            let remaining = Self::BOOTSTRAP_DETECTION_TIMEOUT
+                .saturating_sub(self.discovery_time_accumulated);
+
+            if remaining.as_secs() <= 10 {
+                tracing::info!(
+                    remaining_secs = remaining.as_secs(),
+                    "Approaching bootstrap timeout"
+                );
+            } else {
+                tracing::trace!(
+                    remaining_secs = remaining.as_secs(),
+                    "Peer discovery in progress"
+                );
+            }
+        }
+
+        true // Still syncing
+    }
+
+    /// Transition to new sync state with timing tracking
+    ///
+    /// This method ensures state timing is properly tracked for bootstrap detection.
+    /// It accumulates time spent in DiscoveringPeers state across multiple attempts.
+    fn transition_to_state(&mut self, new_state: SyncState) {
+        // Accumulate discovery time before transitioning out of DiscoveringPeers
+        if self.sync_state == SyncState::DiscoveringPeers {
+            if let Ok(elapsed) = self.state_entered_at.elapsed() {
+                self.discovery_time_accumulated += elapsed;
+
+                tracing::debug!(
+                    discovery_time_secs = self.discovery_time_accumulated.as_secs(),
+                    "Accumulated discovery time"
+                );
+            }
+        }
+
+        // Reset accumulated time when entering DiscoveringPeers from a different state
+        // This ensures we only accumulate time during continuous discovery attempts
+        if new_state == SyncState::DiscoveringPeers
+            && self.sync_state != SyncState::DiscoveringPeers
+        {
+            self.discovery_time_accumulated = Duration::ZERO;
+            tracing::debug!("Reset discovery time for new discovery cycle");
+        }
+
+        // Transition to new state
+        let old_state = std::mem::replace(&mut self.sync_state, new_state);
+        self.state_entered_at = SystemTime::now();
+
+        tracing::info!(
+            old_state = ?old_state,
+            new_state = ?self.sync_state,
+            "SyncActor state transition"
+        );
     }
 
     /// Update sync progress and create new requests if needed
@@ -776,7 +898,7 @@ impl SyncActor {
 
     /// Process blocks from the queue
     async fn process_block_queue(&mut self) -> Result<()> {
-        self.sync_state = SyncState::ProcessingBlocks;
+        self.transition_to_state(SyncState::ProcessingBlocks);
 
         while let Some((block, peer_id)) = self.block_queue.pop_front() {
             match self.process_block(block, peer_id.clone()).await {
@@ -792,7 +914,7 @@ impl SyncActor {
 
         // Return to requesting blocks if not complete
         if self.current_height < self.target_height {
-            self.sync_state = SyncState::RequestingBlocks;
+            self.transition_to_state(SyncState::RequestingBlocks);
         }
 
         Ok(())
@@ -996,7 +1118,7 @@ impl SyncActor {
 
         // Return to requesting blocks if not complete
         if self.current_height < self.target_height {
-            self.sync_state = SyncState::RequestingBlocks;
+            self.transition_to_state(SyncState::RequestingBlocks);
         }
 
         Ok(())
@@ -1196,7 +1318,7 @@ impl Handler<SyncMessage> for SyncActor {
                 }
 
                 self.current_height = start_height;
-                self.sync_state = SyncState::Starting;
+                self.transition_to_state(SyncState::Starting);
                 self.is_running = true;
 
                 tracing::info!(
@@ -1226,14 +1348,14 @@ impl Handler<SyncMessage> for SyncActor {
                         target_height = self.target_height,
                         "Already synced (within threshold)"
                     );
-                    self.sync_state = SyncState::Synced;
+                    self.transition_to_state(SyncState::Synced);
                     self.is_running = false;
                     return Ok(SyncResponse::Started);
                 }
 
                 // Mark as discovering if we need to find target
                 if self.target_height == 0 {
-                    self.sync_state = SyncState::DiscoveringPeers;
+                    self.transition_to_state(SyncState::DiscoveringPeers);
                 }
 
                 Ok(SyncResponse::Started)
@@ -1348,10 +1470,22 @@ impl Handler<SyncMessage> for SyncActor {
                 self.peer_selection_index = 0;
 
                 tracing::info!(
-                    "Updated sync peers: {} -> {} peers",
-                    previous_count,
-                    self.sync_peers.len()
+                    previous_count = previous_count,
+                    new_count = self.sync_peers.len(),
+                    "Updated sync peers"
                 );
+
+                // Reset bootstrap timer when peers first appear
+                // This prevents bootstrap mode from activating after peers connect
+                if previous_count == 0 && self.sync_peers.len() > 0 {
+                    tracing::info!(
+                        peer_count = self.sync_peers.len(),
+                        "First peers discovered - resetting bootstrap detection timer"
+                    );
+
+                    self.discovery_time_accumulated = Duration::ZERO;
+                    self.state_entered_at = SystemTime::now();
+                }
 
                 Ok(SyncResponse::Started)
             }
@@ -1441,5 +1575,149 @@ impl Handler<SyncMessage> for SyncActor {
                 Ok(SyncResponse::Started)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    fn create_test_actor() -> SyncActor {
+        let config = SyncConfig {
+            max_blocks_per_request: 100,
+            sync_timeout: Duration::from_secs(30),
+            max_concurrent_requests: 5,
+            block_validation_timeout: Duration::from_secs(10),
+            max_sync_peers: 10,
+            data_dir: std::path::PathBuf::from("/tmp/test"),
+        };
+        SyncActor::new(config).unwrap()
+    }
+
+    #[test]
+    fn test_bootstrap_detection_genesis_no_peers_timeout() {
+        let mut actor = create_test_actor();
+
+        // Setup: Genesis state, no peers
+        actor.current_height = 0;
+        actor.target_height = 0;
+        actor.sync_peers = vec![];
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+
+        // Before timeout: should be syncing (returns true)
+        assert_eq!(actor.check_bootstrap_mode(), true);
+
+        // After timeout: should NOT be syncing (bootstrap mode, returns false)
+        actor.discovery_time_accumulated = Duration::from_secs(31);
+        assert_eq!(actor.check_bootstrap_mode(), false);
+    }
+
+    #[test]
+    fn test_bootstrap_detection_not_at_genesis() {
+        let mut actor = create_test_actor();
+
+        // Setup: NOT at genesis, no peers, timeout reached
+        actor.current_height = 10; // Not genesis
+        actor.target_height = 0;
+        actor.sync_peers = vec![];
+        actor.discovery_time_accumulated = Duration::from_secs(31);
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+
+        // Should still be syncing (not genesis - prevents forks)
+        assert_eq!(actor.check_bootstrap_mode(), true);
+    }
+
+    #[test]
+    fn test_bootstrap_detection_has_peers() {
+        let mut actor = create_test_actor();
+
+        // Setup: Genesis, HAS peers, timeout reached
+        actor.current_height = 0;
+        actor.target_height = 0;
+        actor.sync_peers = vec!["peer1".to_string()]; // Has peer
+        actor.discovery_time_accumulated = Duration::from_secs(31);
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+
+        // Should still be syncing (has peers to sync from)
+        assert_eq!(actor.check_bootstrap_mode(), true);
+    }
+
+    #[test]
+    fn test_bootstrap_detection_before_timeout() {
+        let mut actor = create_test_actor();
+
+        // Setup: Genesis, no peers, BEFORE timeout
+        actor.current_height = 0;
+        actor.target_height = 0;
+        actor.sync_peers = vec![];
+        actor.discovery_time_accumulated = Duration::from_secs(15); // Half timeout
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+
+        // Should still be syncing (timeout not reached)
+        assert_eq!(actor.check_bootstrap_mode(), true);
+    }
+
+    #[test]
+    fn test_discovery_time_accumulation() {
+        let mut actor = create_test_actor();
+
+        // Simulate multiple discovery attempts
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+        std::thread::sleep(Duration::from_millis(100));
+
+        actor.transition_to_state(SyncState::RequestingBlocks);
+        let accumulated = actor.discovery_time_accumulated;
+        assert!(accumulated >= Duration::from_millis(90));
+        assert!(accumulated <= Duration::from_millis(200));
+
+        // Re-enter discovery - time should reset
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+        assert_eq!(actor.discovery_time_accumulated, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_determine_sync_state_known_target() {
+        let mut actor = create_test_actor();
+
+        // Case: Target known, behind
+        actor.current_height = 10;
+        actor.target_height = 20;
+        assert_eq!(actor.determine_sync_state(), true); // Syncing
+
+        // Case: Target known, caught up
+        actor.current_height = 19;
+        actor.target_height = 20;
+        assert_eq!(actor.determine_sync_state(), false); // Not syncing (within threshold)
+    }
+
+    #[test]
+    fn test_determine_sync_state_unknown_target_bootstrap() {
+        let mut actor = create_test_actor();
+
+        // Case: Unknown target, genesis, no peers, timeout
+        actor.current_height = 0;
+        actor.target_height = 0;
+        actor.sync_peers = vec![];
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+        actor.discovery_time_accumulated = Duration::from_secs(31);
+
+        assert_eq!(actor.determine_sync_state(), false); // Bootstrap mode
+    }
+
+    #[test]
+    fn test_get_sync_status_uses_bootstrap_detection() {
+        let mut actor = create_test_actor();
+
+        // Setup bootstrap scenario
+        actor.current_height = 0;
+        actor.target_height = 0;
+        actor.sync_peers = vec![];
+        actor.transition_to_state(SyncState::DiscoveringPeers);
+        actor.discovery_time_accumulated = Duration::from_secs(31);
+
+        let status = actor.get_sync_status();
+        assert_eq!(status.is_syncing, false); // Bootstrap mode active
+        assert_eq!(status.current_height, 0);
+        assert_eq!(status.target_height, 0);
     }
 }
