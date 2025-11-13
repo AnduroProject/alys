@@ -39,10 +39,14 @@ struct BlockRequestInfo {
     requested_at: SystemTime,
 }
 
-/// Simplified sync actor - blockchain sync only
-pub struct SyncActor {
-    /// Sync configuration
-    config: SyncConfig,
+/// Mutable state extracted for Arc<RwLock<T>> wrapping
+///
+/// This struct contains all mutable state that needs to be shared between
+/// synchronous message handlers and asynchronous workflow methods.
+///
+/// Refactor Context: Phase 1, Task 1.1 - Arc<RwLock<T>> Pattern
+/// See: SYNCACTOR_ARC_REFACTOR_PLAN.md
+struct SyncActorState {
     /// Current sync state
     sync_state: SyncState,
     /// Current blockchain height
@@ -51,7 +55,6 @@ pub struct SyncActor {
     target_height: u64,
     /// Sync metrics
     metrics: SyncMetrics,
-
     /// Block processing queue
     block_queue: VecDeque<(Block, PeerId)>,
     /// Active block requests
@@ -60,33 +63,20 @@ pub struct SyncActor {
     sync_peers: Vec<PeerId>,
     /// Peer selection index (round-robin)
     peer_selection_index: usize,
-
-    /// Actor addresses for coordination
-    network_actor: Option<Addr<crate::actors_v2::network::NetworkActor>>,
-    chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
-
     /// Running state
     is_running: bool,
     /// Shutdown flag
     shutdown_requested: bool,
-
     /// Timestamp when current sync_state was entered (for bootstrap detection)
     state_entered_at: SystemTime,
     /// Total time spent in DiscoveringPeers state (accumulated across attempts)
     discovery_time_accumulated: Duration,
 }
 
-impl SyncActor {
-    /// Create new SyncActor with simplified configuration
-    pub fn new(config: SyncConfig) -> Result<Self> {
-        tracing::info!("Creating SyncActor V2");
-
-        config
-            .validate()
-            .map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
-
-        Ok(Self {
-            config,
+impl SyncActorState {
+    /// Create new state with default values
+    fn new() -> Self {
+        Self {
             sync_state: SyncState::Stopped,
             current_height: 0,
             target_height: 0,
@@ -95,13 +85,182 @@ impl SyncActor {
             active_requests: HashMap::new(),
             sync_peers: Vec::new(),
             peer_selection_index: 0,
-            network_actor: None,
-            chain_actor: None,
             is_running: false,
             shutdown_requested: false,
-            // Bootstrap detection fields
             state_entered_at: SystemTime::now(),
             discovery_time_accumulated: Duration::ZERO,
+        }
+    }
+
+    /// Bootstrap detection timeout (30 seconds for regtest)
+    const BOOTSTRAP_DETECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Get current sync status (no async needed)
+    fn get_sync_status(&self) -> SyncStatus {
+        let is_syncing = self.determine_sync_state();
+
+        SyncStatus {
+            current_height: self.current_height,
+            target_height: self.target_height,
+            is_syncing,
+            sync_peers: self.sync_peers.clone(),
+            pending_requests: self.active_requests.len(),
+        }
+    }
+
+    /// Determine if we're in active sync or bootstrap mode
+    fn determine_sync_state(&self) -> bool {
+        const SYNC_THRESHOLD: u64 = 2;
+
+        // Case 1: Target height known → Simple comparison
+        if self.target_height > 0 {
+            return self.current_height + SYNC_THRESHOLD < self.target_height;
+        }
+
+        // Case 2: Target unknown → State-based logic with bootstrap detection
+        match self.sync_state {
+            SyncState::Stopped | SyncState::Synced => false,
+            SyncState::DiscoveringPeers => {
+                // Check if we've timed out (bootstrap mode)
+                let total_discovery_time = self.discovery_time_accumulated
+                    + self.state_entered_at.elapsed().unwrap_or(Duration::ZERO);
+
+                if total_discovery_time > Self::BOOTSTRAP_DETECTION_TIMEOUT {
+                    // Genesis node with no peers: Allow block production
+                    if self.current_height == 0 && self.sync_peers.is_empty() {
+                        tracing::info!(
+                            discovery_time_secs = total_discovery_time.as_secs(),
+                            "Bootstrap timeout reached (genesis, no peers) - allowing block production"
+                        );
+                        false
+                    } else {
+                        // Non-genesis or has peers: Continue sync attempts
+                        tracing::warn!(
+                            current_height = self.current_height,
+                            peer_count = self.sync_peers.len(),
+                            discovery_time_secs = total_discovery_time.as_secs(),
+                            "Timeout in peer discovery - continuing sync"
+                        );
+                        true
+                    }
+                } else {
+                    // Still discovering, block production should wait
+                    true
+                }
+            }
+            SyncState::Starting
+            | SyncState::RequestingBlocks
+            | SyncState::ProcessingBlocks
+            | SyncState::Error(_) => true,
+        }
+    }
+
+    /// Select next peer (round-robin)
+    fn select_sync_peer(&mut self) -> PeerId {
+        if self.sync_peers.is_empty() {
+            return "no_peers".to_string();
+        }
+
+        let peer = self.sync_peers[self.peer_selection_index].clone();
+        self.peer_selection_index =
+            (self.peer_selection_index + 1) % self.sync_peers.len();
+
+        peer
+    }
+
+    /// Handle request timeouts
+    fn handle_timeouts(&mut self, timeout: Duration) {
+        let mut timed_out_requests = Vec::new();
+        let now = SystemTime::now();
+
+        for (request_id, request_info) in &self.active_requests {
+            if let Ok(elapsed) = now.duration_since(request_info.requested_at) {
+                if elapsed > timeout {
+                    timed_out_requests.push(request_id.clone());
+                }
+            }
+        }
+
+        for request_id in timed_out_requests {
+            if let Some(request_info) = self.active_requests.remove(&request_id) {
+                tracing::warn!(
+                    request_id = %request_id,
+                    peer_id = %request_info.peer_id,
+                    elapsed_secs = ?now.duration_since(request_info.requested_at),
+                    "Block request timed out"
+                );
+
+                self.metrics.record_request_failure(&request_info.peer_id);
+            }
+        }
+    }
+
+    /// Transition to new state with timestamp tracking
+    fn transition_to_state(&mut self, new_state: SyncState) {
+        // Accumulate discovery time before transitioning out of DiscoveringPeers
+        if self.sync_state == SyncState::DiscoveringPeers {
+            if let Ok(elapsed) = self.state_entered_at.elapsed() {
+                self.discovery_time_accumulated += elapsed;
+
+                tracing::debug!(
+                    discovery_time_secs = self.discovery_time_accumulated.as_secs(),
+                    "Accumulated discovery time"
+                );
+            }
+        }
+
+        // Reset accumulated time when entering DiscoveringPeers from a different state
+        if new_state == SyncState::DiscoveringPeers
+            && self.sync_state != SyncState::DiscoveringPeers
+        {
+            self.discovery_time_accumulated = Duration::ZERO;
+            tracing::debug!("Reset discovery time for new discovery cycle");
+        }
+
+        // Transition to new state
+        let old_state = std::mem::replace(&mut self.sync_state, new_state);
+        self.state_entered_at = SystemTime::now();
+
+        tracing::info!(
+            old_state = ?old_state,
+            new_state = ?self.sync_state,
+            "SyncActor state transition"
+        );
+    }
+}
+
+/// Simplified sync actor - blockchain sync only (refactored with Arc<RwLock<State>>)
+///
+/// Refactor Context: Phase 1, Task 1.2 - Actor struct with shared state
+/// See: SYNCACTOR_ARC_REFACTOR_PLAN.md
+pub struct SyncActor {
+    /// Shared mutable state (wrapped for async access)
+    state: std::sync::Arc<tokio::sync::RwLock<SyncActorState>>,
+
+    /// Immutable configuration (no lock needed)
+    config: SyncConfig,
+
+    /// Actor addresses for coordination (set once, never mutated directly)
+    network_actor: Option<Addr<crate::actors_v2::network::NetworkActor>>,
+    chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
+}
+
+impl SyncActor {
+    /// Create new SyncActor with Arc<RwLock<State>> pattern
+    ///
+    /// Refactor Context: Phase 1, Task 1.3 - Updated constructor
+    pub fn new(config: SyncConfig) -> Result<Self> {
+        tracing::info!("Creating SyncActor V2 with Arc<RwLock<State>> pattern");
+
+        config
+            .validate()
+            .map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
+
+        Ok(Self {
+            state: std::sync::Arc::new(tokio::sync::RwLock::new(SyncActorState::new())),
+            config,
+            network_actor: None,
+            chain_actor: None,
         })
     }
 
@@ -1238,9 +1397,9 @@ impl Actor for SyncActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        tracing::info!("SyncActor V2 started");
+        tracing::info!("SyncActor V2 started (Arc<RwLock> pattern)");
 
-        // Phase 5: Load checkpoint on startup
+        // Load checkpoint on startup
         let addr = ctx.address();
         tokio::spawn(async move {
             if let Err(e) = addr.send(SyncMessage::LoadCheckpoint).await {
@@ -1248,50 +1407,71 @@ impl Actor for SyncActor {
             }
         });
 
-        // Start periodic timeout checking
+        // Periodic timeout checking
         ctx.run_interval(Duration::from_secs(10), |act, _ctx| {
-            act.handle_timeouts();
+            let state = std::sync::Arc::clone(&act.state);
+            let timeout = act.config.sync_timeout;
+
+            tokio::spawn(async move {
+                let mut s = state.write().await;
+                s.handle_timeouts(timeout);
+            });
         });
 
-        // Start periodic sync progress updates
+        // Periodic sync progress updates
         ctx.run_interval(Duration::from_secs(30), |act, _ctx| {
-            if act.is_running {
-                let progress = act.metrics.get_sync_progress();
-                tracing::debug!(
-                    "Sync progress: {:.1}% ({}/{})",
-                    progress * 100.0,
-                    act.current_height,
-                    act.target_height
+            let state = std::sync::Arc::clone(&act.state);
+
+            tokio::spawn(async move {
+                let s = state.read().await;
+                if s.is_running {
+                    let progress = s.metrics.get_sync_progress();
+                    tracing::debug!(
+                        "Sync progress: {:.1}% ({}/{})",
+                        progress * 100.0,
+                        s.current_height,
+                        s.target_height
+                    );
+                }
+            });
+        });
+
+        // Periodic checkpoint saving (every 30 seconds during sync)
+        ctx.run_interval(Duration::from_secs(30), |act, _ctx| {
+            let state = std::sync::Arc::clone(&act.state);
+            let addr_clone = _ctx.address();
+
+            tokio::spawn(async move {
+                let s = state.read().await;
+                let should_save = s.is_running && matches!(
+                    s.sync_state,
+                    SyncState::RequestingBlocks | SyncState::ProcessingBlocks
                 );
+                drop(s);
 
-                // Attempt to update sync progress
-                tokio::spawn(async move {
-                    // Progress update logic would go here
-                });
-            }
-        });
-
-        // Phase 5: Periodic checkpoint saving (every 30 seconds during sync)
-        ctx.run_interval(Duration::from_secs(30), |act, _ctx| {
-            if act.is_running && matches!(
-                act.sync_state,
-                SyncState::RequestingBlocks | SyncState::ProcessingBlocks
-            ) {
-                let addr_clone = _ctx.address();
-                tokio::spawn(async move {
+                if should_save {
                     if let Err(e) = addr_clone.send(SyncMessage::SaveCheckpoint).await {
                         tracing::error!("Failed to save checkpoint: {}", e);
                     }
-                });
-            }
+                }
+            });
         });
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("SyncActor V2 stopping");
-        self.shutdown_requested = true;
-        self.sync_state = SyncState::Stopped;
-        self.is_running = false;
+
+        // Update state synchronously (blocking is acceptable in shutdown)
+        let state = self.state.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut s = state.write().await;
+                s.shutdown_requested = true;
+                s.sync_state = SyncState::Stopped;
+                s.is_running = false;
+            })
+        });
+
         Running::Stop
     }
 }
