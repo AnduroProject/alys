@@ -1474,11 +1474,64 @@ impl Handler<SyncMessage> for SyncActor {
                             );
                         }
 
-                        // TODO Phase 3: Trigger process_block_queue_workflow
-                        // For now, just log
-                        tracing::warn!(
-                            "Block queued but processing workflow not yet connected (Phase 3)"
-                        );
+                        // Process the queued block immediately if we have ChainActor
+                        if let Some(chain_actor) = chain_actor {
+                            // Get the block we just queued
+                            let block_to_process = {
+                                let mut s = state.write().await;
+                                s.block_queue.pop_front()
+                            };
+
+                            if let Some((block_bytes, peer_id)) = block_to_process {
+                                // Deserialize block from MessagePack format
+                                match crate::actors_v2::common::serialization::deserialize_block_from_network(&block_bytes) {
+                                    Ok(block) => {
+                                        tracing::debug!(
+                                            height = block.message.execution_payload.block_number,
+                                            peer = peer_id,
+                                            "Processing new block"
+                                        );
+
+                                        if let Err(e) = chain_actor
+                                            .send(crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
+                                                block: block.clone(),
+                                                source: crate::actors_v2::chain::messages::BlockSource::Network(peer_id.clone()),
+                                                peer_id: Some(peer_id.clone()),
+                                            })
+                                            .await
+                                        {
+                                            tracing::error!(
+                                                height = block.message.execution_payload.block_number,
+                                                error = %e,
+                                                "Failed to import new block"
+                                            );
+
+                                            let mut s = state.write().await;
+                                            s.metrics.record_network_error();
+                                        } else {
+                                            // Update height after successful import
+                                            let mut s = state.write().await;
+                                            let block_height = block.message.execution_payload.block_number;
+                                            if block_height > s.current_height {
+                                                s.current_height = block_height;
+                                            }
+                                            s.metrics.record_block_processed(block_height, Duration::from_millis(0));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            peer = peer_id,
+                                            error = %e,
+                                            "Failed to deserialize block from network"
+                                        );
+                                        let mut s = state.write().await;
+                                        s.metrics.record_network_error();
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::warn!("ChainActor not set, block queued but not processed");
+                        }
                     }
                     .into_actor(self),
                 );
@@ -1519,11 +1572,80 @@ impl Handler<SyncMessage> for SyncActor {
                             }
                         }
 
-                        // TODO Phase 3: Call process_block_queue_workflow
-                        // This is THE critical fix for block processing
-                        tracing::warn!(
-                            "Blocks queued but processing workflow not yet connected (Phase 3)"
-                        );
+                        // Process queued blocks if we have a ChainActor
+                        if let Some(chain_actor) = chain_actor {
+                            loop {
+                                // Get next block from queue
+                                let next_block = {
+                                    let mut s = state.write().await;
+                                    s.block_queue.pop_front()
+                                };
+
+                                match next_block {
+                                    Some((block_bytes, peer_id)) => {
+                                        // Deserialize block from MessagePack format
+                                        match crate::actors_v2::common::serialization::deserialize_block_from_network(&block_bytes) {
+                                            Ok(block) => {
+                                                let block_height = block.message.execution_payload.block_number;
+
+                                                tracing::debug!(
+                                                    height = block_height,
+                                                    peer = peer_id,
+                                                    "Processing block from queue"
+                                                );
+
+                                                if let Err(e) = chain_actor
+                                                    .send(crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
+                                                        block: block.clone(),
+                                                        source: crate::actors_v2::chain::messages::BlockSource::Sync,
+                                                        peer_id: Some(peer_id.clone()),
+                                                    })
+                                                    .await
+                                                {
+                                                    tracing::error!(
+                                                        height = block_height,
+                                                        error = %e,
+                                                        "Failed to send block to ChainActor"
+                                                    );
+
+                                                    // Record error in metrics
+                                                    let mut s = state.write().await;
+                                                    s.metrics.record_network_error();
+                                                    break;
+                                                }
+
+                                                // Update current height after successful import
+                                                {
+                                                    let mut s = state.write().await;
+                                                    if block_height > s.current_height {
+                                                        s.current_height = block_height;
+                                                    }
+                                                    s.metrics.record_block_processed(block_height, Duration::from_millis(0));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    peer = peer_id,
+                                                    error = %e,
+                                                    "Failed to deserialize block from sync response"
+                                                );
+
+                                                let mut s = state.write().await;
+                                                s.metrics.record_network_error();
+                                                // Continue processing other blocks despite this error
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        // Queue is empty
+                                        tracing::trace!("Block queue empty, processing complete");
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::warn!("ChainActor not set, cannot process blocks");
+                        }
                     }
                     .into_actor(self),
                 );
