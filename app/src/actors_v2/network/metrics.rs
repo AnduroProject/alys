@@ -609,6 +609,26 @@ impl SyncMetrics {
             std::time::Duration::from_secs(0)
         }
     }
+
+    pub fn record_checkpoint_loaded(&mut self, blocks_synced: u64) {
+        self.blocks_synced = blocks_synced;
+        self.last_updated = SystemTime::now();
+        tracing::debug!(
+            blocks_synced = blocks_synced,
+            "Checkpoint loaded metrics recorded"
+        );
+    }
+
+    pub fn record_sync_complete(&mut self, final_height: u64) {
+        self.current_height = final_height;
+        self.is_syncing = false;
+        self.last_updated = SystemTime::now();
+        tracing::info!(
+            final_height = final_height,
+            blocks_synced = self.blocks_synced,
+            "Sync completed successfully - metrics recorded"
+        );
+    }
 }
 
 impl Default for SyncMetrics {

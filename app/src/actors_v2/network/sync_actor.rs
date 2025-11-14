@@ -334,6 +334,106 @@ impl Actor for SyncActor {
                 }
             });
         });
+
+        // Sync loop: Periodic block requesting during active sync
+        ctx.run_interval(Duration::from_secs(2), |act, ctx| {
+            let state = std::sync::Arc::clone(&act.state);
+            let addr = ctx.address();
+            let max_concurrent = act.config.max_concurrent_requests;
+            let max_per_request = act.config.max_blocks_per_request;
+
+            tokio::spawn(async move {
+                // Check if we should request blocks
+                let should_request = {
+                    let s = state.read().await;
+
+                    // Only request if:
+                    // 1. Sync is running
+                    // 2. We're in RequestingBlocks state
+                    // 3. We have peers
+                    // 4. We're behind target
+                    // 5. We're under max concurrent requests
+                    s.is_running
+                        && s.sync_state == SyncState::RequestingBlocks
+                        && !s.sync_peers.is_empty()
+                        && s.current_height < s.target_height
+                        && s.active_requests.len() < max_concurrent
+                };
+
+                if !should_request {
+                    return;
+                }
+
+                // Calculate request parameters
+                let (start_height, count) = {
+                    let s = state.read().await;
+                    let start_height = s.current_height + 1;
+                    let remaining = s.target_height.saturating_sub(s.current_height);
+                    let count = remaining.min(max_per_request as u64) as u32;
+                    (start_height, count)
+                };
+
+                if count == 0 {
+                    return;
+                }
+
+                tracing::debug!(
+                    start_height = start_height,
+                    count = count,
+                    "Sync loop triggering block request"
+                );
+
+                if let Err(e) = addr
+                    .send(SyncMessage::RequestBlocks {
+                        start_height,
+                        count,
+                        peer_id: None, // Auto-select peer via round-robin
+                    })
+                    .await
+                {
+                    tracing::error!(
+                        error = %e,
+                        "Sync loop failed to send RequestBlocks"
+                    );
+                }
+            });
+        });
+
+        // Sync completion detection: Check if we've reached target
+        ctx.run_interval(Duration::from_secs(5), |act, _ctx| {
+            let state = std::sync::Arc::clone(&act.state);
+
+            tokio::spawn(async move {
+                let mut s = state.write().await;
+
+                // Check if sync is complete
+                const SYNC_THRESHOLD: u64 = 2;
+                let is_complete = s.is_running
+                    && (s.sync_state == SyncState::RequestingBlocks
+                        || s.sync_state == SyncState::ProcessingBlocks)
+                    && s.target_height > 0
+                    && s.current_height + SYNC_THRESHOLD >= s.target_height
+                    && s.active_requests.is_empty()
+                    && s.block_queue.is_empty();
+
+                if is_complete {
+                    let current = s.current_height;
+                    let target = s.target_height;
+
+                    tracing::info!(
+                        current_height = current,
+                        target_height = target,
+                        "Sync complete - reached target height"
+                    );
+
+                    s.transition_to_state(SyncState::Synced);
+                    s.is_running = false;
+                    s.metrics.record_sync_complete(current);
+
+                    tracing::info!("Sync completed successfully");
+                }
+            });
+        });
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
@@ -424,12 +524,58 @@ impl Handler<SyncMessage> for SyncActor {
                             s.transition_to_state(SyncState::DiscoveringPeers);
                         }
 
-                        // Release lock before calling async workflow
+                        // Release lock before querying NetworkActor
                         drop(s);
 
-                        // TODO Phase 3: Call start_sync_workflow once converted to static method
-                        // For now, workflow methods still use &mut self so can't be called yet
-                        tracing::warn!("StartSync state updated, but workflow not yet connected (Phase 3)");
+                        // Query NetworkActor for connected peers
+                        if let Some(network_actor) = network_actor {
+                            let state_clone = state.clone();
+
+                            tokio::spawn(async move {
+                                match network_actor
+                                    .send(crate::actors_v2::network::NetworkMessage::GetConnectedPeers)
+                                    .await
+                                {
+                                    Ok(Ok(crate::actors_v2::network::NetworkResponse::Peers(peer_list))) => {
+                                        let mut s = state_clone.write().await;
+                                        s.sync_peers = peer_list.into_iter()
+                                            .map(|p| p.peer_id)
+                                            .collect();
+                                        s.peer_selection_index = 0;
+
+                                        tracing::info!(
+                                            peer_count = s.sync_peers.len(),
+                                            "Retrieved peers from NetworkActor"
+                                        );
+
+                                        // Transition based on peer availability
+                                        if !s.sync_peers.is_empty() {
+                                            s.transition_to_state(SyncState::RequestingBlocks);
+                                            tracing::info!("Peers available - transitioning to RequestingBlocks");
+                                        } else {
+                                            tracing::info!("No peers yet - staying in DiscoveringPeers");
+                                        }
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::error!(
+                                            error = ?e,
+                                            "Failed to get connected peers from NetworkActor"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            error = ?e,
+                                            "Failed to communicate with NetworkActor"
+                                        );
+                                    }
+                                    _ => {
+                                        tracing::warn!("Unexpected response from NetworkActor.GetConnectedPeers");
+                                    }
+                                }
+                            });
+                        } else {
+                            tracing::warn!("NetworkActor not set - cannot discover peers");
+                        }
                     }
                     .into_actor(self)
                 );
@@ -474,17 +620,20 @@ impl Handler<SyncMessage> for SyncActor {
                 peer_id,
             } => {
                 let state = std::sync::Arc::clone(&self.state);
+                let network_actor = self.network_actor.clone();
 
-                let (is_running, target_peer, request_id) = tokio::task::block_in_place(|| {
+                let (is_running, target_peer, request_uuid, request_id) = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         let mut s = state.write().await;
 
                         if !s.is_running {
-                            return (false, String::new(), String::new());
+                            return (false, String::new(), uuid::Uuid::nil(), String::new());
                         }
 
                         let target_peer = peer_id.unwrap_or_else(|| s.select_sync_peer());
-                        let request_id = uuid::Uuid::new_v4().to_string();
+                        // CRITICAL: Create both UUID and String versions for correlation
+                        let request_uuid = uuid::Uuid::new_v4();
+                        let request_id = request_uuid.to_string();
 
                         let request_info = BlockRequestInfo {
                             request_id: request_id.clone(),
@@ -497,7 +646,7 @@ impl Handler<SyncMessage> for SyncActor {
                         s.active_requests.insert(request_id.clone(), request_info);
                         s.metrics.record_block_request(&target_peer);
 
-                        (true, target_peer, request_id)
+                        (true, target_peer, request_uuid, request_id)
                     })
                 });
 
@@ -505,12 +654,67 @@ impl Handler<SyncMessage> for SyncActor {
                     return Err(SyncError::NotStarted);
                 }
 
-                tracing::debug!(
-                    "Created block request {} for {} blocks starting at height {}",
-                    request_id,
-                    count,
-                    start_height
+                tracing::info!(
+                    request_id = %request_id,
+                    peer_id = %target_peer,
+                    start_height = start_height,
+                    count = count,
+                    "Sending block request to NetworkActor"
                 );
+
+                // CORRECTED: Actually call NetworkActor to fetch blocks
+                // CRITICAL: Pass request_uuid via correlation_id so IDs match
+                if let Some(network_actor) = network_actor {
+                    let request_id_clone = request_id.clone();
+                    let state_clone = std::sync::Arc::clone(&state);
+
+                    tokio::spawn(async move {
+                        match network_actor
+                            .send(crate::actors_v2::network::NetworkMessage::RequestBlocks {
+                                start_height,
+                                count,
+                                correlation_id: Some(request_uuid),  // ✅ CRITICAL FIX: Pass our UUID
+                            })
+                            .await
+                        {
+                            Ok(Ok(_response)) => {
+                                tracing::info!(
+                                    request_id = %request_id_clone,
+                                    "NetworkActor accepted block request"
+                                );
+                                // NetworkActor will use our correlation_id when forwarding blocks
+                                // So HandleBlockResponse will receive matching request_id
+                            }
+                            Ok(Err(e)) => {
+                                tracing::error!(
+                                    request_id = %request_id_clone,
+                                    error = ?e,
+                                    "NetworkActor rejected block request"
+                                );
+
+                                // Remove failed request from active_requests
+                                let mut s = state_clone.write().await;
+                                s.active_requests.remove(&request_id_clone);
+                                s.metrics.record_network_error();
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    request_id = %request_id_clone,
+                                    error = ?e,
+                                    "Failed to communicate with NetworkActor"
+                                );
+
+                                // Remove failed request from active_requests
+                                let mut s = state_clone.write().await;
+                                s.active_requests.remove(&request_id_clone);
+                                s.metrics.record_network_error();
+                            }
+                        }
+                    });
+                } else {
+                    tracing::error!("NetworkActor not set - cannot request blocks");
+                    return Err(SyncError::NotStarted);
+                }
 
                 Ok(SyncResponse::BlocksRequested { request_id })
             }
@@ -750,6 +954,28 @@ impl Handler<SyncMessage> for SyncActor {
 
                             s.discovery_time_accumulated = Duration::ZERO;
                             s.state_entered_at = SystemTime::now();
+
+                            // Transition to RequestingBlocks if we're ready to sync
+                            if s.is_running && s.sync_state == SyncState::DiscoveringPeers {
+                                s.transition_to_state(SyncState::RequestingBlocks);
+
+                                tracing::info!(
+                                    current_height = s.current_height,
+                                    target_height = s.target_height,
+                                    peer_count = s.sync_peers.len(),
+                                    "Peers discovered - transitioning to RequestingBlocks"
+                                );
+                            }
+                        }
+
+                        // If we lost all peers while syncing, go back to discovering
+                        if s.sync_peers.is_empty() && s.is_running {
+                            if s.sync_state == SyncState::RequestingBlocks
+                                || s.sync_state == SyncState::ProcessingBlocks {
+                                s.transition_to_state(SyncState::DiscoveringPeers);
+
+                                tracing::warn!("All peers lost - returning to DiscoveringPeers");
+                            }
                         }
                     }
                     .into_actor(self),
@@ -802,10 +1028,79 @@ impl Handler<SyncMessage> for SyncActor {
 
                 ctx.spawn(
                     async move {
-                        // TODO Phase 3: Call load_checkpoint_workflow
-                        tracing::warn!(
-                            "LoadCheckpoint handler called but workflow not yet connected (Phase 3)"
-                        );
+                        match SyncCheckpoint::load(&data_dir).await {
+                            Ok(Some(checkpoint)) => {
+                                tracing::info!(
+                                    current_height = checkpoint.current_height,
+                                    target_height = checkpoint.target_height,
+                                    blocks_synced = checkpoint.blocks_synced,
+                                    "Loaded sync checkpoint successfully"
+                                );
+
+                                // Restore state from checkpoint
+                                let mut s = state.write().await;
+
+                                s.current_height = checkpoint.current_height;
+                                s.target_height = checkpoint.target_height;
+
+                                // Determine if we should resume syncing
+                                const SYNC_THRESHOLD: u64 = 2;
+                                let needs_sync = checkpoint.target_height > 0
+                                    && checkpoint.current_height + SYNC_THRESHOLD < checkpoint.target_height;
+
+                                if needs_sync {
+                                    // Resume sync - transition to Starting
+                                    s.transition_to_state(SyncState::Starting);
+                                    s.is_running = true;
+
+                                    tracing::info!(
+                                        resume_from = checkpoint.current_height,
+                                        target = checkpoint.target_height,
+                                        remaining = checkpoint.target_height - checkpoint.current_height,
+                                        "Resuming sync from checkpoint"
+                                    );
+
+                                    // Transition to DiscoveringPeers
+                                    // UpdatePeers or GetConnectedPeers will populate peers
+                                    s.transition_to_state(SyncState::DiscoveringPeers);
+                                } else {
+                                    // Sync was complete or nearly complete
+                                    s.transition_to_state(SyncState::Synced);
+                                    s.is_running = false;
+
+                                    tracing::info!(
+                                        current_height = checkpoint.current_height,
+                                        "Checkpoint indicates sync complete"
+                                    );
+                                }
+
+                                // Update metrics with checkpoint info
+                                s.metrics.record_checkpoint_loaded(checkpoint.blocks_synced);
+                            }
+                            Ok(None) => {
+                                tracing::debug!("No checkpoint file found - starting fresh");
+
+                                // Initialize with genesis state
+                                let mut s = state.write().await;
+                                s.current_height = 0;
+                                s.target_height = 0;
+                                s.transition_to_state(SyncState::Stopped);
+                                s.is_running = false;
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to load checkpoint - starting fresh"
+                                );
+
+                                // On error, start fresh (safe fallback)
+                                let mut s = state.write().await;
+                                s.current_height = 0;
+                                s.target_height = 0;
+                                s.transition_to_state(SyncState::Stopped);
+                                s.is_running = false;
+                            }
+                        }
                     }
                     .into_actor(self),
                 );
