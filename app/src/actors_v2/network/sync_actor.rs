@@ -234,8 +234,8 @@ impl SyncActorState {
 /// Refactor Context: Phase 1, Task 1.2 - Actor struct with shared state
 /// See: SYNCACTOR_ARC_REFACTOR_PLAN.md
 pub struct SyncActor {
-    /// Shared mutable state (wrapped for async access)
-    state: std::sync::Arc<tokio::sync::RwLock<SyncActorState>>,
+    /// Shared mutable state (wrapped for sync access - Actix actors are single-threaded)
+    state: std::sync::Arc<std::sync::RwLock<SyncActorState>>,
 
     /// Immutable configuration (no lock needed)
     config: SyncConfig,
@@ -257,7 +257,7 @@ impl SyncActor {
             .map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
 
         Ok(Self {
-            state: std::sync::Arc::new(tokio::sync::RwLock::new(SyncActorState::new())),
+            state: std::sync::Arc::new(std::sync::RwLock::new(SyncActorState::new())),
             config,
             network_actor: None,
             chain_actor: None,
@@ -291,7 +291,7 @@ impl Actor for SyncActor {
             let timeout = act.config.sync_timeout;
 
             tokio::spawn(async move {
-                let mut s = state.write().await;
+                let mut s = state.write().unwrap();
                 s.handle_timeouts(timeout);
             });
         });
@@ -301,7 +301,7 @@ impl Actor for SyncActor {
             let state = std::sync::Arc::clone(&act.state);
 
             tokio::spawn(async move {
-                let s = state.read().await;
+                let s = state.read().unwrap();
                 if s.is_running {
                     let progress = s.metrics.get_sync_progress();
                     tracing::debug!(
@@ -316,23 +316,24 @@ impl Actor for SyncActor {
 
         // Periodic checkpoint saving (every 30 seconds during sync)
         ctx.run_interval(Duration::from_secs(30), |act, ctx| {
-            let state = std::sync::Arc::clone(&act.state);
             let addr_clone = ctx.address();
 
-            tokio::spawn(async move {
-                let s = state.read().await;
-                let should_save = s.is_running && matches!(
+            // Check state synchronously (RwLockReadGuard is not Send)
+            let should_save = {
+                let s = act.state.read().unwrap();
+                s.is_running && matches!(
                     s.sync_state,
                     SyncState::RequestingBlocks | SyncState::ProcessingBlocks
-                );
-                drop(s);
+                )
+            };
 
-                if should_save {
+            if should_save {
+                tokio::spawn(async move {
                     if let Err(e) = addr_clone.send(SyncMessage::SaveCheckpoint).await {
                         tracing::error!("Failed to save checkpoint: {}", e);
                     }
-                }
-            });
+                });
+            }
         });
 
         // Sync loop: Periodic block requesting during active sync
@@ -345,7 +346,7 @@ impl Actor for SyncActor {
             tokio::spawn(async move {
                 // Check if we should request blocks
                 let should_request = {
-                    let s = state.read().await;
+                    let s = state.read().unwrap();
 
                     // Only request if:
                     // 1. Sync is running
@@ -366,7 +367,7 @@ impl Actor for SyncActor {
 
                 // Calculate request parameters
                 let (start_height, count) = {
-                    let s = state.read().await;
+                    let s = state.read().unwrap();
                     let start_height = s.current_height + 1;
                     let remaining = s.target_height.saturating_sub(s.current_height);
                     let count = remaining.min(max_per_request as u64) as u32;
@@ -404,7 +405,7 @@ impl Actor for SyncActor {
             let state = std::sync::Arc::clone(&act.state);
 
             tokio::spawn(async move {
-                let mut s = state.write().await;
+                let mut s = state.write().unwrap();
 
                 // Check if sync is complete
                 const SYNC_THRESHOLD: u64 = 2;
@@ -439,16 +440,12 @@ impl Actor for SyncActor {
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("SyncActor V2 stopping");
 
-        // Update state synchronously (blocking is acceptable in shutdown)
-        let state = self.state.clone();
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let mut s = state.write().await;
-                s.shutdown_requested = true;
-                s.sync_state = SyncState::Stopped;
-                s.is_running = false;
-            })
-        });
+        // Update state synchronously using std::sync::RwLock
+        if let Ok(mut s) = self.state.write() {
+            s.shutdown_requested = true;
+            s.sync_state = SyncState::Stopped;
+            s.is_running = false;
+        }
 
         Running::Stop
     }
@@ -481,7 +478,7 @@ impl Handler<SyncMessage> for SyncActor {
                 ctx.spawn(
                     async move {
                         // Acquire write lock to validate and update state
-                        let mut s = state.write().await;
+                        let mut s = state.write().unwrap();
 
                         // Validate state
                         if s.sync_state != SyncState::Stopped && s.sync_state != SyncState::Synced {
@@ -537,7 +534,7 @@ impl Handler<SyncMessage> for SyncActor {
                                     .await
                                 {
                                     Ok(Ok(crate::actors_v2::network::NetworkResponse::Peers(peer_list))) => {
-                                        let mut s = state_clone.write().await;
+                                        let mut s = state_clone.write().unwrap();
                                         s.sync_peers = peer_list.into_iter()
                                             .map(|p| p.peer_id)
                                             .collect();
@@ -589,7 +586,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                 ctx.spawn(
                     async move {
-                        let mut s = state.write().await;
+                        let mut s = state.write().unwrap();
                         s.sync_state = SyncState::Stopped;
                         s.metrics.stop_sync();
                         s.is_running = false;
@@ -602,14 +599,12 @@ impl Handler<SyncMessage> for SyncActor {
             }
 
             SyncMessage::GetSyncStatus => {
-                // Read-only access (use block_in_place for immediate response)
-                let state = self.state.clone();
-                let status = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let s = state.read().await;
-                        s.get_sync_status()
-                    })
-                });
+                // Read-only access using std::sync::RwLock
+                let status = self
+                    .state
+                    .read()
+                    .map(|s| s.get_sync_status())
+                    .map_err(|_| SyncError::Internal("Failed to acquire read lock".to_string()))?;
 
                 Ok(SyncResponse::Status(status))
             }
@@ -622,14 +617,16 @@ impl Handler<SyncMessage> for SyncActor {
                 let state = std::sync::Arc::clone(&self.state);
                 let network_actor = self.network_actor.clone();
 
-                let (is_running, target_peer, request_uuid, request_id) = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let mut s = state.write().await;
+                // Use std::sync::RwLock for synchronous access
+                let (is_running, target_peer, request_uuid, request_id) = {
+                    let mut s = self
+                        .state
+                        .write()
+                        .map_err(|_| SyncError::Internal("Failed to acquire write lock".to_string()))?;
 
-                        if !s.is_running {
-                            return (false, String::new(), uuid::Uuid::nil(), String::new());
-                        }
-
+                    if !s.is_running {
+                        (false, String::new(), uuid::Uuid::nil(), String::new())
+                    } else {
                         let target_peer = peer_id.unwrap_or_else(|| s.select_sync_peer());
                         // CRITICAL: Create both UUID and String versions for correlation
                         let request_uuid = uuid::Uuid::new_v4();
@@ -647,8 +644,8 @@ impl Handler<SyncMessage> for SyncActor {
                         s.metrics.record_block_request(&target_peer);
 
                         (true, target_peer, request_uuid, request_id)
-                    })
-                });
+                    }
+                };
 
                 if !is_running {
                     return Err(SyncError::NotStarted);
@@ -693,7 +690,7 @@ impl Handler<SyncMessage> for SyncActor {
                                 );
 
                                 // Remove failed request from active_requests
-                                let mut s = state_clone.write().await;
+                                let mut s = state_clone.write().unwrap();
                                 s.active_requests.remove(&request_id_clone);
                                 s.metrics.record_network_error();
                             }
@@ -705,7 +702,7 @@ impl Handler<SyncMessage> for SyncActor {
                                 );
 
                                 // Remove failed request from active_requests
-                                let mut s = state_clone.write().await;
+                                let mut s = state_clone.write().unwrap();
                                 s.active_requests.remove(&request_id_clone);
                                 s.metrics.record_network_error();
                             }
@@ -727,7 +724,7 @@ impl Handler<SyncMessage> for SyncActor {
                     async move {
                         // Queue block
                         {
-                            let mut s = state.write().await;
+                            let mut s = state.write().unwrap();
                             s.block_queue.push_back((block, peer_id.clone()));
 
                             tracing::debug!(
@@ -741,7 +738,7 @@ impl Handler<SyncMessage> for SyncActor {
                         if let Some(chain_actor) = chain_actor {
                             // Get the block we just queued
                             let block_to_process = {
-                                let mut s = state.write().await;
+                                let mut s = state.write().unwrap();
                                 s.block_queue.pop_front()
                             };
 
@@ -769,11 +766,11 @@ impl Handler<SyncMessage> for SyncActor {
                                                 "Failed to import new block"
                                             );
 
-                                            let mut s = state.write().await;
+                                            let mut s = state.write().unwrap();
                                             s.metrics.record_network_error();
                                         } else {
                                             // Update height after successful import
-                                            let mut s = state.write().await;
+                                            let mut s = state.write().unwrap();
                                             let block_height = block.message.execution_payload.block_number;
                                             if block_height > s.current_height {
                                                 s.current_height = block_height;
@@ -787,7 +784,7 @@ impl Handler<SyncMessage> for SyncActor {
                                             error = %e,
                                             "Failed to deserialize block from network"
                                         );
-                                        let mut s = state.write().await;
+                                        let mut s = state.write().unwrap();
                                         s.metrics.record_network_error();
                                     }
                                 }
@@ -816,7 +813,7 @@ impl Handler<SyncMessage> for SyncActor {
                     async move {
                         // Update state with received blocks
                         {
-                            let mut s = state.write().await;
+                            let mut s = state.write().unwrap();
 
                             // Find and complete the request
                             if let Some(request_info) = s.active_requests.remove(&request_id) {
@@ -840,7 +837,7 @@ impl Handler<SyncMessage> for SyncActor {
                             loop {
                                 // Get next block from queue
                                 let next_block = {
-                                    let mut s = state.write().await;
+                                    let mut s = state.write().unwrap();
                                     s.block_queue.pop_front()
                                 };
 
@@ -872,14 +869,14 @@ impl Handler<SyncMessage> for SyncActor {
                                                     );
 
                                                     // Record error in metrics
-                                                    let mut s = state.write().await;
+                                                    let mut s = state.write().unwrap();
                                                     s.metrics.record_network_error();
                                                     break;
                                                 }
 
                                                 // Update current height after successful import
                                                 {
-                                                    let mut s = state.write().await;
+                                                    let mut s = state.write().unwrap();
                                                     if block_height > s.current_height {
                                                         s.current_height = block_height;
                                                     }
@@ -893,7 +890,7 @@ impl Handler<SyncMessage> for SyncActor {
                                                     "Failed to deserialize block from sync response"
                                                 );
 
-                                                let mut s = state.write().await;
+                                                let mut s = state.write().unwrap();
                                                 s.metrics.record_network_error();
                                                 // Continue processing other blocks despite this error
                                             }
@@ -933,7 +930,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                 ctx.spawn(
                     async move {
-                        let mut s = state.write().await;
+                        let mut s = state.write().unwrap();
 
                         let previous_count = s.sync_peers.len();
                         s.sync_peers = peers;
@@ -985,14 +982,12 @@ impl Handler<SyncMessage> for SyncActor {
             }
 
             SyncMessage::GetMetrics => {
-                // Read-only access (use block_in_place for immediate response)
-                let state = self.state.clone();
-                let metrics = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let s = state.read().await;
-                        s.metrics.clone()
-                    })
-                });
+                // Read-only access using std::sync::RwLock
+                let metrics = self
+                    .state
+                    .read()
+                    .map(|s| s.metrics.clone())
+                    .map_err(|_| SyncError::Internal("Failed to acquire read lock".to_string()))?;
 
                 Ok(SyncResponse::Metrics(metrics))
             }
@@ -1000,13 +995,12 @@ impl Handler<SyncMessage> for SyncActor {
             SyncMessage::QueryNetworkHeight => {
                 tracing::debug!("Querying network for chain height");
 
-                let state = self.state.clone();
-                let target_height = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let s = state.read().await;
-                        s.target_height
-                    })
-                });
+                // Read-only access using std::sync::RwLock
+                let target_height = self
+                    .state
+                    .read()
+                    .map(|s| s.target_height)
+                    .map_err(|_| SyncError::Internal("Failed to acquire read lock".to_string()))?;
 
                 if target_height > 0 {
                     Ok(SyncResponse::NetworkHeight {
@@ -1038,7 +1032,7 @@ impl Handler<SyncMessage> for SyncActor {
                                 );
 
                                 // Restore state from checkpoint
-                                let mut s = state.write().await;
+                                let mut s = state.write().unwrap();
 
                                 s.current_height = checkpoint.current_height;
                                 s.target_height = checkpoint.target_height;
@@ -1081,7 +1075,7 @@ impl Handler<SyncMessage> for SyncActor {
                                 tracing::debug!("No checkpoint file found - starting fresh");
 
                                 // Initialize with genesis state
-                                let mut s = state.write().await;
+                                let mut s = state.write().unwrap();
                                 s.current_height = 0;
                                 s.target_height = 0;
                                 s.transition_to_state(SyncState::Stopped);
@@ -1094,7 +1088,7 @@ impl Handler<SyncMessage> for SyncActor {
                                 );
 
                                 // On error, start fresh (safe fallback)
-                                let mut s = state.write().await;
+                                let mut s = state.write().unwrap();
                                 s.current_height = 0;
                                 s.target_height = 0;
                                 s.transition_to_state(SyncState::Stopped);
@@ -1116,7 +1110,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                 ctx.spawn(
                     async move {
-                        let s = state.read().await;
+                        let s = state.read().unwrap();
 
                         // Only save if actively syncing
                         if matches!(
@@ -1188,7 +1182,7 @@ mod bootstrap_tests {
 
         // Setup: Genesis state, no peers
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 0;
             s.target_height = 0;
             s.sync_peers = vec![];
@@ -1197,13 +1191,13 @@ mod bootstrap_tests {
 
         // Before timeout: should be syncing (returns true)
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             assert_eq!(s.determine_sync_state(), true);
         }
 
         // After timeout: should NOT be syncing (bootstrap mode, returns false)
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.discovery_time_accumulated = Duration::from_secs(31);
             assert_eq!(s.determine_sync_state(), false);
         }
@@ -1215,7 +1209,7 @@ mod bootstrap_tests {
 
         // Setup: NOT at genesis, no peers, timeout reached
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 10; // Not genesis
             s.target_height = 0;
             s.sync_peers = vec![];
@@ -1225,7 +1219,7 @@ mod bootstrap_tests {
 
         // Should still be syncing (not genesis - prevents forks)
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             assert_eq!(s.determine_sync_state(), true);
         }
     }
@@ -1236,7 +1230,7 @@ mod bootstrap_tests {
 
         // Setup: Genesis, HAS peers, timeout reached
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 0;
             s.target_height = 0;
             s.sync_peers = vec!["peer1".to_string()]; // Has peer
@@ -1246,7 +1240,7 @@ mod bootstrap_tests {
 
         // Should still be syncing (has peers to sync from)
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             assert_eq!(s.determine_sync_state(), true);
         }
     }
@@ -1257,7 +1251,7 @@ mod bootstrap_tests {
 
         // Setup: Genesis, no peers, BEFORE timeout
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 0;
             s.target_height = 0;
             s.sync_peers = vec![];
@@ -1267,7 +1261,7 @@ mod bootstrap_tests {
 
         // Should still be syncing (timeout not reached)
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             assert_eq!(s.determine_sync_state(), true);
         }
     }
@@ -1278,14 +1272,14 @@ mod bootstrap_tests {
 
         // Simulate multiple discovery attempts
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.transition_to_state(SyncState::DiscoveringPeers);
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.transition_to_state(SyncState::RequestingBlocks);
             let accumulated = s.discovery_time_accumulated;
             assert!(accumulated >= Duration::from_millis(90));
@@ -1294,7 +1288,7 @@ mod bootstrap_tests {
 
         // Re-enter discovery - time should reset
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.transition_to_state(SyncState::DiscoveringPeers);
             assert_eq!(s.discovery_time_accumulated, Duration::ZERO);
         }
@@ -1306,7 +1300,7 @@ mod bootstrap_tests {
 
         // Case: Target known, behind
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 10;
             s.target_height = 20;
             assert_eq!(s.determine_sync_state(), true); // Syncing
@@ -1314,7 +1308,7 @@ mod bootstrap_tests {
 
         // Case: Target known, caught up
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 19;
             s.target_height = 20;
             assert_eq!(s.determine_sync_state(), false); // Not syncing (within threshold)
@@ -1327,7 +1321,7 @@ mod bootstrap_tests {
 
         // Case: Unknown target, genesis, no peers, timeout
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 0;
             s.target_height = 0;
             s.sync_peers = vec![];
@@ -1336,7 +1330,7 @@ mod bootstrap_tests {
         }
 
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             assert_eq!(s.determine_sync_state(), false); // Bootstrap mode
         }
     }
@@ -1347,7 +1341,7 @@ mod bootstrap_tests {
 
         // Setup bootstrap scenario
         {
-            let mut s = actor.state.write().await;
+            let mut s = actor.state.write().unwrap();
             s.current_height = 0;
             s.target_height = 0;
             s.sync_peers = vec![];
@@ -1356,7 +1350,7 @@ mod bootstrap_tests {
         }
 
         {
-            let s = actor.state.read().await;
+            let s = actor.state.read().unwrap();
             let status = s.get_sync_status();
             assert_eq!(status.is_syncing, false); // Bootstrap mode active
             assert_eq!(status.current_height, 0);
