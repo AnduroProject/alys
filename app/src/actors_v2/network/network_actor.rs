@@ -964,12 +964,23 @@ impl NetworkActor {
                 request_id,
                 response,
             } => {
-                tracing::info!(
-                    peer_id = %peer_id,
-                    request_id = ?request_id,
-                    response = ?response,
-                    "Received block response from peer"
-                );
+                match &response {
+                    BlockResponse::Blocks(blocks_response) => {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            request_id = ?request_id,
+                            block_count = blocks_response.blocks.len(),
+                            "Received block response from peer with blocks"
+                        );
+                    }
+                    _ => {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            request_id = ?request_id,
+                            "Received block response from peer (not Blocks variant)"
+                        );
+                    }
+                }
 
                 self.metrics.record_message_received(0); // Size would be calculated
 
