@@ -620,6 +620,15 @@ impl App {
                 Err(e) => error!("✗ SyncActor mailbox error during SetNetworkActor: {:?}", e),
             }
 
+            // Wire SyncActor to NetworkActor - without this, NetworkActor cannot forward received blocks to SyncActor for processing
+            match network_actor.send(NetworkMessage::SetSyncActor {
+                addr: sync_actor.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ SyncActor address configured in NetworkActor for block response forwarding"),
+                Ok(Err(e)) => error!("✗ Failed to set SyncActor in NetworkActor: {:?}", e),
+                Err(e) => error!("✗ NetworkActor mailbox error during SetSyncActor: {:?}", e),
+            }
+
             // Clone chain_actor_addr for slot worker (before RPC consumes it)
             let chain_actor_addr_for_slot_worker = chain_actor_addr.clone();
 
