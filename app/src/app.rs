@@ -602,6 +602,15 @@ impl App {
                 Err(e) => error!("✗ SyncActor mailbox error during SetChainActor: {:?}", e),
             }
 
+            // Wire NetworkActor to SyncActor - without this, SyncActor cannot query peers for chain heights or request historical blocks
+            match sync_actor.send(SyncMessage::SetNetworkActor {
+                addr: network_actor.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ NetworkActor configured in SyncActor - enables peer discovery for sync"),
+                Ok(Err(e)) => error!("✗ Failed to set NetworkActor in SyncActor: {:?}", e),
+                Err(e) => error!("✗ SyncActor mailbox error during SetNetworkActor: {:?}", e),
+            }
+
             // Clone chain_actor_addr for slot worker (before RPC consumes it)
             let chain_actor_addr_for_slot_worker = chain_actor_addr.clone();
 
