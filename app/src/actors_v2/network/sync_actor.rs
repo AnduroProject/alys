@@ -409,23 +409,39 @@ impl Actor for SyncActor {
 
                 // Check if sync is complete
                 const SYNC_THRESHOLD: u64 = 2;
-                let is_complete = s.is_running
+
+                // Sync is complete when:
+                // 1. Sync is running and in active sync state
+                // 2. No pending requests or blocks
+                // 3. Either: target_height == 0 (no peer has higher chain, already synced)
+                //    OR: we've reached target_height within threshold
+                let in_sync_state = s.is_running
                     && (s.sync_state == SyncState::RequestingBlocks
-                        || s.sync_state == SyncState::ProcessingBlocks)
-                    && s.target_height > 0
-                    && s.current_height + SYNC_THRESHOLD >= s.target_height
-                    && s.active_requests.is_empty()
-                    && s.block_queue.is_empty();
+                        || s.sync_state == SyncState::ProcessingBlocks);
+
+                let no_pending_work = s.active_requests.is_empty() && s.block_queue.is_empty();
+
+                let reached_target = s.target_height == 0
+                    || s.current_height + SYNC_THRESHOLD >= s.target_height;
+
+                let is_complete = in_sync_state && no_pending_work && reached_target;
 
                 if is_complete {
                     let current = s.current_height;
                     let target = s.target_height;
 
-                    tracing::info!(
-                        current_height = current,
-                        target_height = target,
-                        "Sync complete - reached target height"
-                    );
+                    if target == 0 {
+                        tracing::info!(
+                            current_height = current,
+                            "Sync complete - no higher chain discovered (already synced)"
+                        );
+                    } else {
+                        tracing::info!(
+                            current_height = current,
+                            target_height = target,
+                            "Sync complete - reached target height"
+                        );
+                    }
 
                     s.transition_to_state(SyncState::Synced);
                     s.is_running = false;
@@ -545,10 +561,31 @@ impl Handler<SyncMessage> for SyncActor {
                                             "Retrieved peers from NetworkActor"
                                         );
 
-                                        // Transition based on peer availability
+                                        // Transition based on peer availability and sync status
                                         if !s.sync_peers.is_empty() {
-                                            s.transition_to_state(SyncState::RequestingBlocks);
-                                            tracing::info!("Peers available - transitioning to RequestingBlocks");
+                                            // Check if we're already synced (target_height == 0 means no peer has a higher chain)
+                                            const SYNC_THRESHOLD: u64 = 2;
+                                            let already_synced = s.target_height == 0
+                                                || s.current_height + SYNC_THRESHOLD >= s.target_height;
+
+                                            if already_synced {
+                                                let height = s.current_height;
+                                                tracing::info!(
+                                                    current_height = height,
+                                                    target_height = s.target_height,
+                                                    "Already synced (no higher chain discovered) - completing sync"
+                                                );
+                                                s.transition_to_state(SyncState::Synced);
+                                                s.is_running = false;
+                                                s.metrics.record_sync_complete(height);
+                                            } else {
+                                                s.transition_to_state(SyncState::RequestingBlocks);
+                                                tracing::info!(
+                                                    current_height = s.current_height,
+                                                    target_height = s.target_height,
+                                                    "Peers available, behind target - transitioning to RequestingBlocks"
+                                                );
+                                            }
                                         } else {
                                             tracing::info!("No peers yet - staying in DiscoveringPeers");
                                         }
@@ -952,16 +989,33 @@ impl Handler<SyncMessage> for SyncActor {
                             s.discovery_time_accumulated = Duration::ZERO;
                             s.state_entered_at = SystemTime::now();
 
-                            // Transition to RequestingBlocks if we're ready to sync
+                            // Transition based on sync status
                             if s.is_running && s.sync_state == SyncState::DiscoveringPeers {
-                                s.transition_to_state(SyncState::RequestingBlocks);
+                                // Check if we're already synced (target_height == 0 means no peer has a higher chain)
+                                const SYNC_THRESHOLD: u64 = 2;
+                                let already_synced = s.target_height == 0
+                                    || s.current_height + SYNC_THRESHOLD >= s.target_height;
 
-                                tracing::info!(
-                                    current_height = s.current_height,
-                                    target_height = s.target_height,
-                                    peer_count = s.sync_peers.len(),
-                                    "Peers discovered - transitioning to RequestingBlocks"
-                                );
+                                if already_synced {
+                                    let height = s.current_height;
+                                    tracing::info!(
+                                        current_height = height,
+                                        target_height = s.target_height,
+                                        peer_count = s.sync_peers.len(),
+                                        "Already synced (no higher chain discovered) - completing sync"
+                                    );
+                                    s.transition_to_state(SyncState::Synced);
+                                    s.is_running = false;
+                                    s.metrics.record_sync_complete(height);
+                                } else {
+                                    s.transition_to_state(SyncState::RequestingBlocks);
+                                    tracing::info!(
+                                        current_height = s.current_height,
+                                        target_height = s.target_height,
+                                        peer_count = s.sync_peers.len(),
+                                        "Peers discovered, behind target - transitioning to RequestingBlocks"
+                                    );
+                                }
                             }
                         }
 
