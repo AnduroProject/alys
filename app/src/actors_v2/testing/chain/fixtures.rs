@@ -68,6 +68,8 @@ pub fn mock_chain_status() -> ChainStatus {
         last_block_time: Some(Duration::from_secs(1640995200)), // Mock timestamp
         auxpow_enabled: true,
         blocks_without_pow: 0,
+        observed_height: 100,
+        orphan_count: 0,
     }
 }
 

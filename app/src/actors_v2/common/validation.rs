@@ -121,10 +121,16 @@ pub async fn validate_parent_relationship(
         let parent_block = match storage_actor.send(get_block_msg).await {
             Ok(Ok(Some(parent))) => parent,
             Ok(Ok(None)) => {
-                return Err(ChainError::InvalidBlock(format!(
-                    "Block #1 parent not found: {} (should be genesis block)",
-                    parent_hash
-                )));
+                // Block #1's parent (genesis) not found - this is an orphan
+                tracing::debug!(
+                    parent_hash = %parent_hash,
+                    block_height = block_height,
+                    "Block #1 parent (genesis) not found - block is orphan"
+                );
+                return Err(ChainError::OrphanBlock {
+                    parent_hash: ethereum_types::H256::from_slice(parent_hash.as_bytes()),
+                    block_height,
+                });
             }
             Ok(Err(e)) => {
                 return Err(ChainError::Storage(format!(
@@ -189,12 +195,17 @@ pub async fn validate_parent_relationship(
     let parent_block = match storage_actor.send(get_block_msg).await {
         Ok(Ok(Some(parent))) => parent,
         Ok(Ok(None)) => {
-            return Err(ChainError::InvalidBlock(format!(
-                "Parent block not found: {} (height {} expects parent at height {})",
-                parent_hash,
+            // Parent not found - this is an orphan block
+            // Return specific error type so caller can cache it
+            tracing::debug!(
+                parent_hash = %parent_hash,
+                block_height = block_height,
+                "Parent block not found - block is orphan"
+            );
+            return Err(ChainError::OrphanBlock {
+                parent_hash: ethereum_types::H256::from_slice(parent_hash.as_bytes()),
                 block_height,
-                block_height - 1
-            )));
+            });
         }
         Ok(Err(e)) => {
             return Err(ChainError::Storage(format!(

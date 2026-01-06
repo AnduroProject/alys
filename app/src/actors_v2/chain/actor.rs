@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use super::{
     messages::{BlockSource, ChainMessage},
+    orphan_cache::OrphanBlockCache,
     state::SyncStatus,
     ChainConfig, ChainError, ChainMetrics, ChainState,
 };
@@ -102,6 +103,10 @@ pub struct ChainActor {
 
     /// Phase 3: Active gap fill requests (start_height -> GapFillRequest)
     pub(crate) gap_fill_requests: Arc<RwLock<HashMap<u64, GapFillRequest>>>,
+
+    /// Orphan block cache: stores blocks whose parents haven't been imported yet
+    /// Used for out-of-order block reception and tracking observed network height
+    pub(crate) orphan_cache: Arc<RwLock<OrphanBlockCache>>,
 }
 
 impl ChainActor {
@@ -130,6 +135,8 @@ impl ChainActor {
             // Phase 3: Initialize gap detection queue
             queued_blocks: Arc::new(RwLock::new(HashMap::new())),
             gap_fill_requests: Arc::new(RwLock::new(HashMap::new())),
+            // Orphan block cache for out-of-order block reception
+            orphan_cache: Arc::new(RwLock::new(OrphanBlockCache::new())),
         }
     }
 

@@ -75,6 +75,9 @@ struct SyncActorState {
     state_entered_at: SystemTime,
     /// Total time spent in DiscoveringPeers state (accumulated across attempts)
     discovery_time_accumulated: Duration,
+    /// Collected peer heights during QueryingNetworkHeight state
+    /// Used to calculate mode (consensus) height from peer responses
+    observed_peer_heights: Vec<u64>,
 }
 
 impl SyncActorState {
@@ -93,6 +96,7 @@ impl SyncActorState {
             shutdown_requested: false,
             state_entered_at: SystemTime::now(),
             discovery_time_accumulated: Duration::ZERO,
+            observed_peer_heights: Vec::new(),
         }
     }
 
@@ -202,16 +206,17 @@ impl SyncActorState {
 
     /// Transition to new state with timestamp tracking
     fn transition_to_state(&mut self, new_state: SyncState) {
+        // Calculate time spent in previous state
+        let time_in_previous_state = self.state_entered_at.elapsed().unwrap_or(Duration::ZERO);
+
         // Accumulate discovery time before transitioning out of DiscoveringPeers
         if self.sync_state == SyncState::DiscoveringPeers {
-            if let Ok(elapsed) = self.state_entered_at.elapsed() {
-                self.discovery_time_accumulated += elapsed;
+            self.discovery_time_accumulated += time_in_previous_state;
 
-                tracing::debug!(
-                    discovery_time_secs = self.discovery_time_accumulated.as_secs(),
-                    "Accumulated discovery time"
-                );
-            }
+            tracing::debug!(
+                discovery_time_secs = self.discovery_time_accumulated.as_secs(),
+                "Accumulated discovery time"
+            );
         }
 
         // Reset accumulated time when entering DiscoveringPeers from a different state
@@ -223,13 +228,32 @@ impl SyncActorState {
         }
 
         // Transition to new state
-        let old_state = std::mem::replace(&mut self.sync_state, new_state);
+        let old_state = std::mem::replace(&mut self.sync_state, new_state.clone());
         self.state_entered_at = SystemTime::now();
 
+        // Enhanced logging with full sync context
         tracing::info!(
-            old_state = ?old_state,
-            new_state = ?self.sync_state,
-            "SyncActor state transition"
+            "╔══════════════════════════════════════════════════════════════════╗"
+        );
+        tracing::info!(
+            "║ SYNC STATE TRANSITION: {:?} → {:?}",
+            old_state,
+            self.sync_state
+        );
+        tracing::info!(
+            "║ Current Height: {} | Target Height: {} | Peers: {} | Active Requests: {}",
+            self.current_height,
+            self.target_height,
+            self.sync_peers.len(),
+            self.active_requests.len()
+        );
+        tracing::info!(
+            "║ Time in previous state: {:.2}s | Block queue: {}",
+            time_in_previous_state.as_secs_f64(),
+            self.block_queue.len()
+        );
+        tracing::info!(
+            "╚══════════════════════════════════════════════════════════════════╝"
         );
     }
 }
@@ -267,6 +291,34 @@ impl SyncActor {
             network_actor: None,
             chain_actor: None,
         })
+    }
+
+
+    /// Calculate the mode (most common value) from a list of heights
+    /// Returns the highest value if there are ties (conservative approach)
+    /// Returns 0 if the list is empty
+    fn calculate_mode(heights: &[u64]) -> u64 {
+        if heights.is_empty() {
+            return 0;
+        }
+
+        // Count occurrences of each height
+        let mut counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        for &height in heights {
+            *counts.entry(height).or_insert(0) += 1;
+        }
+
+        // Find the maximum count
+        let max_count = counts.values().max().copied().unwrap_or(0);
+
+        // Among heights with the max count, pick the highest (conservative)
+        // This handles ties by choosing the higher height
+        counts
+            .into_iter()
+            .filter(|(_, count)| *count == max_count)
+            .map(|(height, _)| height)
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -342,9 +394,13 @@ impl Actor for SyncActor {
         });
 
         // Network height query: Poll for network height when in QueryingNetworkHeight state
+        // This handler does TWO things:
+        // 1. Queries NetworkActor to send GetChainStatus to peers (actual peer height discovery)
+        // 2. Falls back to checking local ChainActor (for gossipsub-delivered blocks)
         ctx.run_interval(Duration::from_secs(2), |act, _ctx| {
             let state = std::sync::Arc::clone(&act.state);
             let chain_actor = act.chain_actor.clone();
+            let network_actor = act.network_actor.clone();
 
             tokio::spawn(async move {
                 // Check if we're in QueryingNetworkHeight state
@@ -360,23 +416,50 @@ impl Actor for SyncActor {
                     return;
                 }
 
-                // Query ChainActor for chain status (to see if gossipsub has delivered any blocks)
+                // PRIMARY: Query NetworkActor to send GetChainStatus requests to all peers
+                // The responses will come back via ReportPeerHeights message
+                if let Some(network_actor) = network_actor {
+                    tracing::debug!("Sending QueryPeerHeights to NetworkActor for peer height discovery");
+                    if let Err(e) = network_actor
+                        .send(crate::actors_v2::network::NetworkMessage::QueryPeerHeights)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = ?e,
+                            "Failed to send QueryPeerHeights to NetworkActor"
+                        );
+                    }
+                    // Note: The actual height response comes via ReportPeerHeights message
+                    // which is handled separately and will trigger state transition
+                }
+
+                // FALLBACK: Also check local ChainActor for blocks received via gossipsub
+                // This catches blocks that arrived and were successfully imported,
+                // as well as blocks that were received but cached as orphans
                 if let Some(chain_actor) = chain_actor {
                     match chain_actor
                         .send(crate::actors_v2::chain::messages::ChainMessage::GetChainStatus)
                         .await
                     {
                         Ok(Ok(crate::actors_v2::chain::messages::ChainResponse::ChainStatus(status))) => {
-                            let network_height = status.height;
+                            // Use the higher of: imported height OR observed height (from orphan cache)
+                            // This catches blocks that arrived via gossipsub but couldn't be imported
+                            // because their parents were missing (they're cached as orphans)
+                            let imported_height = status.height;
+                            let observed_height = status.observed_height;
+                            let network_height = std::cmp::max(imported_height, observed_height);
 
-                            // If we received blocks via gossipsub, we now know network height
+                            // If we know of higher blocks (imported or observed), we know network height
                             if network_height > current_height {
                                 let mut s = state.write().unwrap();
                                 s.target_height = network_height;
                                 tracing::info!(
                                     current_height = s.current_height,
-                                    discovered_height = network_height,
-                                    "Network height discovered via gossipsub - transitioning to RequestingBlocks"
+                                    imported_height = imported_height,
+                                    observed_height = observed_height,
+                                    target_height = network_height,
+                                    orphan_count = status.orphan_count,
+                                    "Network height discovered via local chain status (includes orphan blocks) - transitioning to RequestingBlocks"
                                 );
                                 s.transition_to_state(SyncState::RequestingBlocks);
                                 return;
@@ -396,12 +479,17 @@ impl Actor for SyncActor {
                 if time_in_state > NETWORK_HEIGHT_QUERY_TIMEOUT {
                     let mut s = state.write().unwrap();
                     let height = s.current_height;
+                    let observations = s.observed_peer_heights.len();
 
                     tracing::info!(
                         current_height = height,
                         query_duration_secs = time_in_state.as_secs(),
+                        peer_responses = observations,
                         "Network height query timeout - no higher chain discovered, completing sync"
                     );
+
+                    // Clear collected peer heights
+                    s.observed_peer_heights.clear();
 
                     s.transition_to_state(SyncState::Synced);
                     s.is_running = false;
@@ -506,17 +594,14 @@ impl Actor for SyncActor {
                     let current = s.current_height;
                     let target = s.target_height;
 
-                    tracing::info!(
-                        current_height = current,
-                        target_height = target,
-                        "Sync complete - reached target height"
-                    );
+                    tracing::info!("┌─────────────────────────────────────────────────────────────────┐");
+                    tracing::info!("│ ✅ SYNC LIFECYCLE: Sync Complete!                              │");
+                    tracing::info!("│ Final Height: {} | Target Height: {} | Synced!", current, target);
+                    tracing::info!("└─────────────────────────────────────────────────────────────────┘");
 
                     s.transition_to_state(SyncState::Synced);
                     s.is_running = false;
                     s.metrics.record_sync_complete(current);
-
-                    tracing::info!("Sync completed successfully");
                 }
             });
         });
@@ -548,11 +633,10 @@ impl Handler<SyncMessage> for SyncActor {
                 // Phase 2: Refactored to spawn async workflow via ctx.spawn()
                 // This is THE critical fix - StartSync now triggers actual sync workflow
 
-                tracing::info!(
-                    start_height = start_height,
-                    target_height = ?target_height,
-                    "Received StartSync message"
-                );
+                tracing::info!("┌─────────────────────────────────────────────────────────────────┐");
+                tracing::info!("│ 🔄 SYNC LIFECYCLE: StartSync received                          │");
+                tracing::info!("│ Start Height: {} | Target Height: {:?}", start_height, target_height);
+                tracing::info!("└─────────────────────────────────────────────────────────────────┘");
 
                 // Clone Arc for workflow execution
                 let state = std::sync::Arc::clone(&self.state);
@@ -696,15 +780,29 @@ impl Handler<SyncMessage> for SyncActor {
             }
 
             SyncMessage::StopSync => {
+                tracing::info!("┌─────────────────────────────────────────────────────────────────┐");
+                tracing::info!("│ 🛑 SYNC LIFECYCLE: StopSync received                           │");
+                tracing::info!("└─────────────────────────────────────────────────────────────────┘");
+
                 let state = std::sync::Arc::clone(&self.state);
 
                 ctx.spawn(
                     async move {
                         let mut s = state.write().unwrap();
+                        let previous_state = s.sync_state.clone();
+                        let final_height = s.current_height;
+                        let target = s.target_height;
+
                         s.sync_state = SyncState::Stopped;
                         s.metrics.stop_sync();
                         s.is_running = false;
-                        tracing::info!("Sync stopped");
+
+                        tracing::info!(
+                            "│ Sync stopped - Previous state: {:?} | Final height: {} | Target was: {}",
+                            previous_state,
+                            final_height,
+                            target
+                        );
                     }
                     .into_actor(self),
                 );
@@ -728,6 +826,13 @@ impl Handler<SyncMessage> for SyncActor {
                 count,
                 peer_id,
             } => {
+                tracing::info!(
+                    "📥 SYNC: RequestBlocks - start_height={} count={} peer={:?}",
+                    start_height,
+                    count,
+                    peer_id
+                );
+
                 let state = std::sync::Arc::clone(&self.state);
                 let network_actor = self.network_actor.clone();
 
@@ -913,15 +1018,17 @@ impl Handler<SyncMessage> for SyncActor {
                 Ok(SyncResponse::BlockProcessed { block_height: 0 })
             }
 
-            SyncMessage::HandleBlockResponse { blocks, request_id } => {
-                tracing::debug!(
-                    "Received {} blocks for request {}",
+            SyncMessage::HandleBlockResponse { blocks, request_id, peer_id } => {
+                tracing::info!(
+                    "📦 SYNC: HandleBlockResponse - {} blocks received from peer {} (request_id={})",
                     blocks.len(),
+                    peer_id,
                     request_id
                 );
 
                 let state = std::sync::Arc::clone(&self.state);
                 let chain_actor = self.chain_actor.clone();
+                let peer_id_clone = peer_id.clone();
 
                 ctx.spawn(
                     async move {
@@ -929,21 +1036,35 @@ impl Handler<SyncMessage> for SyncActor {
                         {
                             let mut s = state.write().unwrap();
 
-                            // Find and complete the request
-                            if let Some(request_info) = s.active_requests.remove(&request_id) {
-                                s.metrics.record_block_response(blocks.len() as u32);
+                            // Find and complete the request (if tracked)
+                            // Note: request_id format may vary, try both formats
+                            let request_found = s.active_requests.remove(&request_id).is_some();
 
-                                // Queue blocks for processing
-                                for block in blocks.clone() {
-                                    s.block_queue.push_back((block, request_info.peer_id.clone()));
-                                }
-
+                            if request_found {
                                 tracing::debug!(
-                                    "Queued {} blocks (queue size: {})",
-                                    blocks.len(),
-                                    s.block_queue.len()
+                                    request_id = %request_id,
+                                    "Found and removed matching request from active_requests"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    request_id = %request_id,
+                                    active_requests = ?s.active_requests.keys().collect::<Vec<_>>(),
+                                    "Request not found in active_requests (may have been cleaned up)"
                                 );
                             }
+
+                            s.metrics.record_block_response(blocks.len() as u32);
+
+                            // Queue blocks for processing
+                            for block in blocks.clone() {
+                                s.block_queue.push_back((block, peer_id_clone.clone()));
+                            }
+
+                            tracing::info!(
+                                block_count = blocks.len(),
+                                queue_size = s.block_queue.len(),
+                                "Queued blocks for import processing"
+                            );
                         }
 
                         // Process queued blocks if we have a ChainActor
@@ -962,10 +1083,10 @@ impl Handler<SyncMessage> for SyncActor {
                                             Ok(block) => {
                                                 let block_height = block.message.execution_payload.block_number;
 
-                                                tracing::debug!(
-                                                    height = block_height,
-                                                    peer = peer_id,
-                                                    "Processing block from queue"
+                                                tracing::info!(
+                                                    "⛓️  SYNC: Processing block #{} from queue (peer={})",
+                                                    block_height,
+                                                    peer_id
                                                 );
 
                                                 if let Err(e) = chain_actor
@@ -991,8 +1112,16 @@ impl Handler<SyncMessage> for SyncActor {
                                                 // Update current height after successful import
                                                 {
                                                     let mut s = state.write().unwrap();
+                                                    let old_height = s.current_height;
                                                     if block_height > s.current_height {
                                                         s.current_height = block_height;
+                                                        tracing::info!(
+                                                            "📈 SYNC: Height updated {} → {} (target: {}, remaining: {})",
+                                                            old_height,
+                                                            block_height,
+                                                            s.target_height,
+                                                            s.target_height.saturating_sub(block_height)
+                                                        );
                                                     }
                                                     s.metrics.record_block_processed(block_height, Duration::from_millis(0));
                                                 }
@@ -1040,6 +1169,12 @@ impl Handler<SyncMessage> for SyncActor {
             }
 
             SyncMessage::UpdatePeers { peers } => {
+                let peer_count = peers.len();
+                tracing::info!(
+                    "👥 SYNC: UpdatePeers received - {} peers",
+                    peer_count
+                );
+
                 let state = std::sync::Arc::clone(&self.state);
 
                 ctx.spawn(
@@ -1050,11 +1185,13 @@ impl Handler<SyncMessage> for SyncActor {
                         s.sync_peers = peers;
                         s.peer_selection_index = 0;
 
-                        tracing::info!(
-                            previous_count = previous_count,
-                            new_count = s.sync_peers.len(),
-                            "Updated sync peers"
-                        );
+                        if previous_count != s.sync_peers.len() {
+                            tracing::info!(
+                                "👥 SYNC: Peer count changed {} → {}",
+                                previous_count,
+                                s.sync_peers.len()
+                            );
+                        }
 
                         // Reset bootstrap timer when peers first appear
                         if previous_count == 0 && s.sync_peers.len() > 0 {
@@ -1294,6 +1431,102 @@ impl Handler<SyncMessage> for SyncActor {
                 );
 
                 Ok(SyncResponse::Started)
+            }
+
+            SyncMessage::ReportPeerHeights { peer_heights } => {
+                // Handle peer height reports from NetworkActor
+                // This is called when ChainStatusResponse messages arrive from peers
+                // We accumulate heights and calculate mode (consensus) to determine network height
+
+                if peer_heights.is_empty() {
+                    tracing::debug!("Empty peer heights report - no action needed");
+                    return Ok(SyncResponse::Started);
+                }
+
+                tracing::info!(
+                    "🔍 SYNC: ReportPeerHeights - received {} peer height reports",
+                    peer_heights.len()
+                );
+
+                // Log each peer's height for debugging
+                for (peer_id, height, head_hash) in &peer_heights {
+                    tracing::info!(
+                        "   └─ Peer {} reports height {} (hash: {:?})",
+                        peer_id,
+                        height,
+                        &head_hash[..4]
+                    );
+                }
+
+                let mut s = self.state.write().unwrap();
+
+                // Only collect heights during QueryingNetworkHeight state
+                if s.sync_state != SyncState::QueryingNetworkHeight {
+                    tracing::debug!(
+                        state = ?s.sync_state,
+                        "Ignoring peer heights - not in QueryingNetworkHeight state"
+                    );
+                    return Ok(SyncResponse::Started);
+                }
+
+                // Accumulate new heights
+                for (peer_id, height, _) in &peer_heights {
+                    s.observed_peer_heights.push(*height);
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        height = height,
+                        total_observations = s.observed_peer_heights.len(),
+                        "Added peer height to observations"
+                    );
+                }
+
+                // Calculate mode (most common height) as consensus network height
+                // This requires at least 1 observation
+                let consensus_height = Self::calculate_mode(&s.observed_peer_heights);
+
+                tracing::info!(
+                    observations = s.observed_peer_heights.len(),
+                    heights = ?s.observed_peer_heights,
+                    consensus_height = consensus_height,
+                    "Calculated consensus network height from peer responses"
+                );
+
+                let current_height = s.current_height;
+
+                if consensus_height > current_height {
+                    tracing::info!(
+                        current_height = current_height,
+                        consensus_height = consensus_height,
+                        delta = consensus_height - current_height,
+                        peer_count = s.observed_peer_heights.len(),
+                        "Discovered higher chain from peer consensus (mode)!"
+                    );
+
+                    // Update target height to consensus height
+                    s.target_height = consensus_height;
+
+                    // Clear observations before transitioning
+                    s.observed_peer_heights.clear();
+
+                    // Transition to RequestingBlocks
+                    tracing::info!(
+                        target_height = consensus_height,
+                        "Transitioning from QueryingNetworkHeight to RequestingBlocks"
+                    );
+                    s.transition_to_state(SyncState::RequestingBlocks);
+
+                    Ok(SyncResponse::NetworkHeight {
+                        height: consensus_height,
+                    })
+                } else {
+                    tracing::debug!(
+                        current_height = current_height,
+                        consensus_height = consensus_height,
+                        observations = s.observed_peer_heights.len(),
+                        "Consensus height not higher than current - waiting for more responses or timeout"
+                    );
+                    Ok(SyncResponse::AlreadySynced)
+                }
             }
         }
     }

@@ -593,6 +593,15 @@ impl App {
                 Err(e) => error!("✗ NetworkActor mailbox error during SetChainActor: {:?}", e),
             }
 
+            // Set StorageActor address in NetworkActor for serving block requests to peers
+            match network_actor.send(NetworkMessage::SetStorageActor {
+                addr: storage_actor.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ StorageActor address configured in NetworkActor for block request handling"),
+                Ok(Err(e)) => error!("✗ Failed to set StorageActor in NetworkActor: {:?}", e),
+                Err(e) => error!("✗ NetworkActor mailbox error during SetStorageActor: {:?}", e),
+            }
+
             // Phase 0: Wire ChainActor to SyncActor (CRITICAL FIX for security vulnerability)
             match sync_actor.send(SyncMessage::SetChainActor {
                 addr: chain_actor_addr.clone(),

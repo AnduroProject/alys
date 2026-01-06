@@ -80,12 +80,19 @@ pub enum NetworkMessage {
     SetChainActor {
         addr: Addr<crate::actors_v2::chain::ChainActor>,
     },
+    /// Set StorageActor address for block request handling
+    SetStorageActor {
+        addr: Addr<crate::actors_v2::storage::StorageActor>,
+    },
     /// Get network metrics
     GetMetrics,
     /// Health check for production monitoring (Phase 4: Task 4.3.1)
     HealthCheck { correlation_id: Option<Uuid> },
     /// Cleanup timed-out requests (Phase 4: Task 7)
     CleanupTimeouts,
+    /// Query connected peers for their chain heights (for sync)
+    /// Sends GetChainStatus to all connected peers and reports results to SyncActor
+    QueryPeerHeights,
 }
 
 /// SyncActor messages - blockchain sync only
@@ -109,10 +116,11 @@ pub enum SyncMessage {
     },
     /// Handle new block from network
     HandleNewBlock { block: Block, peer_id: PeerId },
-    /// Handle block response
+    /// Handle block response from peer (blocks received via request-response protocol)
     HandleBlockResponse {
         blocks: Vec<Block>,
         request_id: String,
+        peer_id: PeerId,
     },
     /// Set NetworkActor address for coordination
     SetNetworkActor {
@@ -128,6 +136,12 @@ pub enum SyncMessage {
     GetMetrics,
     /// Query network peers for consensus chain height
     QueryNetworkHeight,
+    /// Report peer heights received from network queries
+    /// NetworkActor sends this after querying peers for their chain status
+    ReportPeerHeights {
+        /// Map of peer_id -> (height, head_hash)
+        peer_heights: Vec<(PeerId, u64, [u8; 32])>,
+    },
     /// Load checkpoint on startup (Phase 5)
     LoadCheckpoint,
     /// Save checkpoint during sync (Phase 5)

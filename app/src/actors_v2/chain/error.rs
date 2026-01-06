@@ -87,6 +87,12 @@ pub enum ChainError {
     #[error("Invalid parent relationship: {0}")]
     InvalidParent(String),
 
+    #[error("Orphan block: parent not found (parent_hash={parent_hash}, block_height={block_height})")]
+    OrphanBlock {
+        parent_hash: ethereum_types::H256,
+        block_height: u64,
+    },
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

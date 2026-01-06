@@ -240,6 +240,15 @@ pub struct ChainStatus {
 
     /// Blocks without AuxPoW
     pub blocks_without_pow: u64,
+
+    /// Observed network height (includes orphan blocks)
+    /// This tracks the highest block height seen from the network,
+    /// even if those blocks couldn't be imported due to missing parents.
+    /// Used by SyncActor for network height discovery.
+    pub observed_height: u64,
+
+    /// Number of orphan blocks in cache
+    pub orphan_count: usize,
 }
 
 /// Create AuxPoW block for mining (RPC endpoint)

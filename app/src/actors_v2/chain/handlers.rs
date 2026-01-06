@@ -38,6 +38,17 @@ impl Handler<ChainMessage> for ChainActor {
 
         match msg {
             ChainMessage::GetChainStatus => {
+                // Get orphan cache stats (sync access via try_read to avoid blocking)
+                let (observed_height, orphan_count) = {
+                    match self.orphan_cache.try_read() {
+                        Ok(cache) => (cache.observed_height(), cache.len()),
+                        Err(_) => {
+                            // If we can't get the lock, use current height as observed
+                            (self.state.get_height(), 0)
+                        }
+                    }
+                };
+
                 let status = super::messages::ChainStatus {
                     height: self.state.get_height(),
                     head_hash: self.state.get_head_hash(),
@@ -52,6 +63,8 @@ impl Handler<ChainMessage> for ChainActor {
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
                     auxpow_enabled: self.config.enable_auxpow,
                     blocks_without_pow: self.state.blocks_without_pow,
+                    observed_height,
+                    orphan_count,
                 };
                 Box::pin(async move { Ok(ChainResponse::ChainStatus(status)) })
             }
@@ -734,6 +747,65 @@ impl Handler<ChainMessage> for ChainActor {
                         // Step 1.7: Parent hash validation (Phase 3)
                         if let Some(ref storage_actor) = storage_actor {
                             if let Err(parent_error) = crate::actors_v2::common::validation::validate_parent_relationship(&block, storage_actor).await {
+                                // Check if this is an orphan block (parent not found)
+                                if let ChainError::OrphanBlock { parent_hash: orphan_parent_hash, block_height: orphan_height } = &parent_error {
+                                    // Cache as orphan instead of rejecting
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        parent_hash = %orphan_parent_hash,
+                                        block_height = orphan_height,
+                                        "Block is orphan (parent not found) - caching for later processing"
+                                    );
+
+                                    // Add to orphan cache
+                                    let cache_result = {
+                                        let mut cache = self_clone.orphan_cache.write().await;
+                                        let parent_hash_h256 = *orphan_parent_hash;
+                                        cache.add(
+                                            block.clone(),
+                                            *orphan_height,
+                                            block_hash,
+                                            parent_hash_h256,
+                                            current_height,
+                                            peer_id.clone(),
+                                        )
+                                    };
+
+                                    match cache_result {
+                                        Ok(true) => {
+                                            info!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                "Orphan block cached successfully"
+                                            );
+                                            // Return success - block is cached, not rejected
+                                            return Ok(ChainResponse::BlockRejected {
+                                                reason: format!("Orphan block cached: parent {} not found", orphan_parent_hash),
+                                            });
+                                        }
+                                        Ok(false) => {
+                                            debug!(
+                                                correlation_id = %correlation_id,
+                                                block_hash = %block_hash,
+                                                "Orphan block not cached (duplicate or too far ahead)"
+                                            );
+                                            return Ok(ChainResponse::BlockRejected {
+                                                reason: "Orphan block rejected: duplicate or too far ahead".to_string(),
+                                            });
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                correlation_id = %correlation_id,
+                                                error = %e,
+                                                "Failed to cache orphan block"
+                                            );
+                                            return Err(parent_error);
+                                        }
+                                    }
+                                }
+
+                                // Not an orphan error - propagate the error
                                 error!(
                                     correlation_id = %correlation_id,
                                     block_hash = %block_hash,
@@ -1242,6 +1314,50 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                             }
                         }
+
+                            // Step 8: Process orphan children that were waiting for this block
+                            // Check if any blocks in the orphan cache were waiting for this parent
+                            let orphan_children = {
+                                let mut cache = self_clone.orphan_cache.write().await;
+                                cache.remove_by_parent(&block_hash)
+                            };
+
+                            if !orphan_children.is_empty() {
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    parent_hash = %block_hash,
+                                    orphan_count = orphan_children.len(),
+                                    "Found orphan children waiting for this block - processing recursively"
+                                );
+
+                                // Process each orphan child as a new import
+                                for orphan_entry in orphan_children {
+                                    info!(
+                                        correlation_id = %correlation_id,
+                                        orphan_hash = %orphan_entry.hash,
+                                        orphan_height = orphan_entry.height,
+                                        "Re-processing orphan child after parent import"
+                                    );
+
+                                    // Re-submit the orphan block for import via the actor address
+                                    // This ensures proper sequencing through the import lock
+                                    let import_msg = ChainMessage::ImportBlock {
+                                        block: orphan_entry.block,
+                                        source: BlockSource::Sync, // Mark as sync since it was cached
+                                        peer_id: orphan_entry.peer_id,
+                                    };
+
+                                    // Send to self via the actor address for proper async handling
+                                    if let Err(e) = ctx_addr.send(import_msg).await {
+                                        warn!(
+                                            correlation_id = %correlation_id,
+                                            orphan_hash = %orphan_entry.hash,
+                                            error = ?e,
+                                            "Failed to re-submit orphan block for import"
+                                        );
+                                    }
+                                }
+                            }
 
                             let import_duration = start_time.elapsed();
 
@@ -1973,6 +2089,10 @@ async fn create_aux_block_helper(
         gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
+        // Orphan cache
+        orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::orphan_cache::OrphanBlockCache::new(),
+        )),
     };
 
     actor.create_aux_block(miner_address).await
@@ -2007,6 +2127,10 @@ async fn submit_aux_block_helper(
         )),
         gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
+        )),
+        // Orphan cache
+        orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::orphan_cache::OrphanBlockCache::new(),
         )),
     };
 

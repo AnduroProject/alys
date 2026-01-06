@@ -25,7 +25,7 @@ use tokio::sync::{mpsc, RwLock};
 use super::{
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
     managers::{PeerManager, Violation},
-    messages::{NetworkStatus, PeerInfo},
+    messages::{NetworkStatus, PeerInfo, SyncMessage},
     protocols::{BlockRequest, BlockResponse},
     NetworkConfig, NetworkError, NetworkMessage, NetworkMetrics, NetworkResponse,
 };
@@ -210,6 +210,8 @@ pub struct NetworkActor {
     sync_actor: Option<Addr<crate::actors_v2::network::SyncActor>>,
     /// ChainActor address for AuxPoW forwarding (Phase 4: Integration Point 3b)
     chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
+    /// StorageActor address for block request handling
+    storage_actor: Option<Addr<crate::actors_v2::storage::StorageActor>>,
     /// Phase 5: Cache of recently seen block hashes
     /// Prevents duplicate forwarding to ChainActor
     block_cache: Arc<RwLock<LruCache<H256, Instant>>>,
@@ -267,6 +269,7 @@ impl NetworkActor {
             sync_actor: None,
             block_cache,
             chain_actor: None,
+            storage_actor: None,
             is_running: false,
             shutdown_requested: false,
         })
@@ -730,34 +733,229 @@ impl NetworkActor {
                 request,
                 channel,
             } => {
-                tracing::debug!(
+                tracing::info!(
                     peer_id = %peer_id,
                     request_id = ?request_id,
                     request = ?request,
                     "Received block request from peer"
                 );
 
-                self.metrics.record_message_received(0); // Size would be calculated
+                self.metrics.record_message_received(0);
 
-                // Handle the block request - forward to ChainActor/SyncActor for data retrieval
-                // For now, send an error response (Phase 3 will integrate with ChainActor)
-                if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
-                    let error_response = BlockResponse::Error(
-                        crate::actors_v2::network::protocols::request_response::ErrorResponse {
-                            message: b"Block requests not yet implemented".to_vec(),
-                        },
-                    );
+                // Handle different request types
+                match request {
+                    BlockRequest::GetBlocks(range_request) => {
+                        let start_height = range_request.start_height;
+                        let count = range_request.count;
+                        let end_height = start_height + count as u64 - 1;
 
-                    let cmd = SwarmCommand::SendResponse {
-                        channel,
-                        response: error_response,
-                    };
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            start_height = start_height,
+                            end_height = end_height,
+                            count = count,
+                            "Processing GetBlocks request"
+                        );
 
-                    if let Err(e) = cmd_tx.try_send(cmd) {
-                        tracing::error!(error = ?e, "Failed to send response command");
+                        // Check if we have StorageActor available
+                        if let (Some(storage_actor), Some(cmd_tx)) = (self.storage_actor.clone(), self.swarm_cmd_tx.clone()) {
+                            // Spawn async task to query storage and send response
+                            let peer_id_clone = peer_id.clone();
+                            tokio::spawn(async move {
+                                // Query StorageActor for block range
+                                let query_msg = crate::actors_v2::storage::messages::GetBlockRangeMessage {
+                                    start_height,
+                                    end_height,
+                                    correlation_id: Some(uuid::Uuid::new_v4()),
+                                };
+
+                                match storage_actor.send(query_msg).await {
+                                    Ok(Ok(blocks)) => {
+                                        tracing::info!(
+                                            peer_id = %peer_id_clone,
+                                            block_count = blocks.len(),
+                                            "Retrieved blocks from storage for peer request"
+                                        );
+
+                                        // Convert SignedConsensusBlock to BlockData
+                                        let block_data_list: Vec<crate::actors_v2::network::protocols::request_response::BlockData> = blocks
+                                            .iter()
+                                            .map(|block| {
+                                                let block_hash = crate::actors_v2::common::serialization::calculate_block_hash(block);
+                                                let parent_hash = block.message.parent_hash;
+                                                let height = block.message.execution_payload.block_number;
+                                                let timestamp = block.message.execution_payload.timestamp;
+
+                                                // Serialize the block for transport
+                                                let serialized_block = crate::actors_v2::common::serialization::serialize_block_for_network(block)
+                                                    .unwrap_or_default();
+
+                                                crate::actors_v2::network::protocols::request_response::BlockData {
+                                                    height,
+                                                    hash: block_hash.0,
+                                                    parent_hash: parent_hash.0,
+                                                    timestamp,
+                                                    transactions: vec![serialized_block], // First "transaction" is the serialized block
+                                                }
+                                            })
+                                            .collect();
+
+                                        let response = BlockResponse::Blocks(
+                                            crate::actors_v2::network::protocols::request_response::BlocksResponse {
+                                                blocks: block_data_list,
+                                            },
+                                        );
+
+                                        let cmd = SwarmCommand::SendResponse { channel, response };
+                                        if let Err(e) = cmd_tx.send(cmd).await {
+                                            tracing::error!(
+                                                error = ?e,
+                                                "Failed to send blocks response command"
+                                            );
+                                        }
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::warn!(
+                                            peer_id = %peer_id_clone,
+                                            error = ?e,
+                                            start_height = start_height,
+                                            end_height = end_height,
+                                            "StorageActor returned error for block range query"
+                                        );
+
+                                        let error_response = BlockResponse::Error(
+                                            crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                                message: format!("Storage error: {}", e).into_bytes(),
+                                            },
+                                        );
+                                        let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                        let _ = cmd_tx.send(cmd).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            peer_id = %peer_id_clone,
+                                            error = ?e,
+                                            "Failed to communicate with StorageActor"
+                                        );
+
+                                        let error_response = BlockResponse::Error(
+                                            crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                                message: b"Internal storage error".to_vec(),
+                                            },
+                                        );
+                                        let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                        let _ = cmd_tx.send(cmd).await;
+                                    }
+                                }
+                            });
+                        } else {
+                            // No StorageActor available - send error response
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                "StorageActor not available for block request handling"
+                            );
+
+                            if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                                let error_response = BlockResponse::Error(
+                                    crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                        message: b"StorageActor not available".to_vec(),
+                                    },
+                                );
+                                let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                if let Err(e) = cmd_tx.try_send(cmd) {
+                                    tracing::error!(error = ?e, "Failed to send error response");
+                                }
+                            }
+                        }
                     }
-                } else {
-                    tracing::warn!("Cannot send response: command channel not available");
+                    BlockRequest::GetChainStatus(_) => {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "Processing GetChainStatus request"
+                        );
+
+                        // Query ChainActor for current status
+                        if let (Some(chain_actor), Some(cmd_tx)) = (self.chain_actor.clone(), self.swarm_cmd_tx.clone()) {
+                            let peer_id_clone = peer_id.clone();
+                            tokio::spawn(async move {
+                                match chain_actor
+                                    .send(crate::actors_v2::chain::messages::ChainMessage::GetChainStatus)
+                                    .await
+                                {
+                                    Ok(Ok(crate::actors_v2::chain::messages::ChainResponse::ChainStatus(status))) => {
+                                        let response = BlockResponse::ChainStatus(
+                                            crate::actors_v2::network::protocols::request_response::ChainStatusResponse {
+                                                height: status.height,
+                                                head_hash: status.head_hash.map(|h| h.0).unwrap_or([0u8; 32]),
+                                            },
+                                        );
+
+                                        let cmd = SwarmCommand::SendResponse { channel, response };
+                                        if let Err(e) = cmd_tx.send(cmd).await {
+                                            tracing::error!(
+                                                error = ?e,
+                                                "Failed to send chain status response"
+                                            );
+                                        }
+                                    }
+                                    Ok(Ok(_)) => {
+                                        tracing::warn!(
+                                            peer_id = %peer_id_clone,
+                                            "Unexpected response from ChainActor for GetChainStatus"
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::warn!(
+                                            peer_id = %peer_id_clone,
+                                            error = ?e,
+                                            "ChainActor returned error for GetChainStatus"
+                                        );
+
+                                        let error_response = BlockResponse::Error(
+                                            crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                                message: format!("Chain error: {}", e).into_bytes(),
+                                            },
+                                        );
+                                        let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                        let _ = cmd_tx.send(cmd).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            peer_id = %peer_id_clone,
+                                            error = ?e,
+                                            "Failed to communicate with ChainActor"
+                                        );
+
+                                        let error_response = BlockResponse::Error(
+                                            crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                                message: b"Internal chain error".to_vec(),
+                                            },
+                                        );
+                                        let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                        let _ = cmd_tx.send(cmd).await;
+                                    }
+                                }
+                            });
+                        } else {
+                            // No ChainActor available - send error response
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                "ChainActor not available for chain status request"
+                            );
+
+                            if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                                let error_response = BlockResponse::Error(
+                                    crate::actors_v2::network::protocols::request_response::ErrorResponse {
+                                        message: b"ChainActor not available".to_vec(),
+                                    },
+                                );
+                                let cmd = SwarmCommand::SendResponse { channel, response: error_response };
+                                if let Err(e) = cmd_tx.try_send(cmd) {
+                                    tracing::error!(error = ?e, "Failed to send error response");
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -779,18 +977,73 @@ impl NetworkActor {
                 match response {
                     BlockResponse::Blocks(blocks_response) => {
                         tracing::info!(
+                            peer_id = %peer_id,
                             block_count = blocks_response.blocks.len(),
-                            "Received blocks from peer"
+                            request_id = ?request_id,
+                            "Received blocks from peer - forwarding to SyncActor"
                         );
-                        // TODO: Forward to SyncActor in Phase 3
+
+                        // Forward blocks to SyncActor for processing and import
+                        if let Some(ref sync_actor) = self.sync_actor {
+                            // Convert BlockData to raw bytes for SyncActor
+                            // SyncActor will deserialize to SignedConsensusBlock
+                            let blocks: Vec<Vec<u8>> = blocks_response
+                                .blocks
+                                .iter()
+                                .map(|block_data| {
+                                    // Serialize BlockData to bytes for transport
+                                    // The transactions field contains the raw block data
+                                    // First transaction should be the serialized block
+                                    if !block_data.transactions.is_empty() {
+                                        block_data.transactions[0].clone()
+                                    } else {
+                                        // Fallback: empty block (shouldn't happen in practice)
+                                        tracing::warn!(
+                                            height = block_data.height,
+                                            "BlockData has no transactions - block data may be incomplete"
+                                        );
+                                        Vec::new()
+                                    }
+                                })
+                                .collect();
+
+                            sync_actor.do_send(SyncMessage::HandleBlockResponse {
+                                blocks,
+                                request_id: format!("{:?}", request_id),
+                                peer_id: peer_id.to_string(),
+                            });
+
+                            // Update peer reputation for successful response
+                            self.peer_manager.update_peer_reputation(&peer_id, 1.0);
+                        } else {
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                block_count = blocks_response.blocks.len(),
+                                "SyncActor not available - discarding received blocks"
+                            );
+                        }
                     }
                     BlockResponse::ChainStatus(status) => {
                         tracing::info!(
+                            peer_id = %peer_id,
                             height = status.height,
                             head_hash = ?status.head_hash,
-                            "Received chain status from peer"
+                            "Received chain status from peer - forwarding to SyncActor"
                         );
-                        // TODO: Forward to SyncActor in Phase 3
+
+                        // Forward to SyncActor for height discovery
+                        if let Some(ref sync_actor) = self.sync_actor {
+                            sync_actor.do_send(SyncMessage::ReportPeerHeights {
+                                peer_heights: vec![(
+                                    peer_id.to_string(),
+                                    status.height,
+                                    status.head_hash,
+                                )],
+                            });
+                        }
+
+                        // Update peer reputation for successful response
+                        self.peer_manager.update_peer_reputation(&peer_id, 1.0);
                     }
                     BlockResponse::Error(error) => {
                         let error_msg = String::from_utf8_lossy(&error.message);
@@ -2204,6 +2457,7 @@ impl Handler<NetworkMessage> for NetworkActor {
                     let msg = crate::actors_v2::network::SyncMessage::HandleBlockResponse {
                         blocks,
                         request_id: request_id.to_string(),
+                        peer_id: peer_id.clone(),
                     };
 
                     tokio::spawn(async move {
@@ -2246,6 +2500,11 @@ impl Handler<NetworkMessage> for NetworkActor {
             NetworkMessage::SetChainActor { addr } => {
                 self.chain_actor = Some(addr);
                 tracing::info!("ChainActor address set for NetworkActor AuxPoW forwarding");
+                Ok(NetworkResponse::Started)
+            }
+            NetworkMessage::SetStorageActor { addr } => {
+                self.storage_actor = Some(addr);
+                tracing::info!("StorageActor address set for NetworkActor block request handling");
                 Ok(NetworkResponse::Started)
             }
             NetworkMessage::HandleCompletedAuxPow {
@@ -2442,6 +2701,163 @@ impl Handler<NetworkMessage> for NetworkActor {
                 });
 
                 Ok(NetworkResponse::Started)
+            }
+
+            NetworkMessage::QueryPeerHeights => {
+                // Query up to 5 connected peers for their chain heights
+                // This is used by SyncActor during QueryingNetworkHeight state
+                // to discover the actual network height from peers via consensus (mode)
+                const MAX_PEERS_TO_QUERY: usize = 5;
+
+                tracing::info!("Querying connected peers for chain heights");
+
+                let connected_peers = self.peer_manager.get_connected_peers();
+                let total_peer_count = connected_peers.len();
+
+                if total_peer_count == 0 {
+                    tracing::warn!("No connected peers to query for heights");
+                    // Still report empty results so SyncActor knows query completed
+                    if let Some(sync_actor) = &self.sync_actor {
+                        sync_actor.do_send(SyncMessage::ReportPeerHeights {
+                            peer_heights: vec![],
+                        });
+                    }
+                    return Ok(NetworkResponse::Status(NetworkStatus {
+                        local_peer_id: self.local_peer_id.clone(),
+                        connected_peers: 0,
+                        listening_addresses: vec![],
+                        is_running: self.is_running,
+                        chain_height: 0,
+                    }));
+                }
+
+                // Get command channel for sending requests
+                let cmd_tx = match self.swarm_cmd_tx.as_ref() {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        tracing::error!("Swarm command channel not available for peer height query");
+                        return Err(NetworkError::Internal(
+                            "Command channel not available".to_string(),
+                        ));
+                    }
+                };
+
+                // Select up to MAX_PEERS_TO_QUERY peers, sorted by reputation (best first)
+                let mut peers_with_reputation: Vec<_> = connected_peers
+                    .iter()
+                    .map(|(id, info)| (id.clone(), info.reputation))
+                    .collect();
+
+                // Sort by reputation descending (best peers first)
+                peers_with_reputation.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Take top N peers and convert to PeerId
+                let peer_ids: Vec<(String, libp2p::PeerId)> = peers_with_reputation
+                    .into_iter()
+                    .take(MAX_PEERS_TO_QUERY)
+                    .filter_map(|(peer_id_str, _reputation)| {
+                        peer_id_str
+                            .parse::<libp2p::PeerId>()
+                            .ok()
+                            .map(|pid| (peer_id_str, pid))
+                    })
+                    .collect();
+
+                tracing::info!(
+                    total_peers = total_peer_count,
+                    querying_peers = peer_ids.len(),
+                    max_peers = MAX_PEERS_TO_QUERY,
+                    "Sending GetChainStatus requests to top peers by reputation"
+                );
+
+                // Spawn task to query all peers and collect responses
+                tokio::spawn(async move {
+                    use crate::actors_v2::network::protocols::request_response::{
+                        BlockRequest, BlockResponse, ChainStatusResponse, EmptyRequest,
+                    };
+                    use std::time::Duration;
+                    use tokio::time::timeout;
+
+                    let mut peer_heights: Vec<(String, u64, [u8; 32])> = Vec::new();
+                    let request = BlockRequest::GetChainStatus(EmptyRequest);
+
+                    for (peer_id_str, peer_id) in peer_ids {
+                        // Create channel for this request's response
+                        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                        let cmd = SwarmCommand::SendRequest {
+                            peer_id: peer_id.clone(),
+                            request: request.clone(),
+                            response_tx,
+                        };
+
+                        // Send request
+                        if let Err(e) = cmd_tx.try_send(cmd) {
+                            tracing::warn!(
+                                peer_id = %peer_id_str,
+                                error = ?e,
+                                "Failed to send GetChainStatus request"
+                            );
+                            continue;
+                        }
+
+                        // Wait for response with timeout (5 seconds per peer)
+                        match timeout(Duration::from_secs(5), response_rx).await {
+                            Ok(Ok(Ok(_request_id))) => {
+                                // Request was sent successfully, but we need to wait for
+                                // the actual response which comes via a different path
+                                // For now, we'll collect heights as they come in
+                                tracing::debug!(
+                                    peer_id = %peer_id_str,
+                                    "GetChainStatus request sent to peer"
+                                );
+                            }
+                            Ok(Ok(Err(e))) => {
+                                tracing::warn!(
+                                    peer_id = %peer_id_str,
+                                    error = ?e,
+                                    "GetChainStatus request failed"
+                                );
+                            }
+                            Ok(Err(_)) => {
+                                tracing::warn!(
+                                    peer_id = %peer_id_str,
+                                    "GetChainStatus response channel closed"
+                                );
+                            }
+                            Err(_) => {
+                                tracing::warn!(
+                                    peer_id = %peer_id_str,
+                                    "GetChainStatus request timed out"
+                                );
+                            }
+                        }
+                    }
+
+                    // Note: The actual ChainStatusResponse comes back via the request-response
+                    // behavior event stream. For a complete implementation, we need to:
+                    // 1. Track pending height queries with a correlation map
+                    // 2. Collect responses as they arrive in the event loop
+                    // 3. After timeout or all responses, send ReportPeerHeights
+                    //
+                    // For now, this spawned task just initiates the requests.
+                    // The responses will be handled in the existing BlockResponseReceived handler.
+                    // We'll add height tracking there.
+
+                    tracing::debug!(
+                        "GetChainStatus requests initiated, responses will be collected via event stream"
+                    );
+                });
+
+                Ok(NetworkResponse::Status(NetworkStatus {
+                    local_peer_id: self.local_peer_id.clone(),
+                    connected_peers: total_peer_count,
+                    listening_addresses: vec![],
+                    is_running: self.is_running,
+                    chain_height: 0,
+                }))
             }
         }
     }
