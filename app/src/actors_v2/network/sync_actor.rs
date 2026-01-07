@@ -16,6 +16,7 @@ use super::{
     sync_checkpoint::SyncCheckpoint,
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
+use crate::actors_v2::storage::{StorageActor, messages::GetChainHeadMessage};
 
 /// Simplified sync states (linear progression)
 #[derive(Debug, Clone, PartialEq)]
@@ -294,6 +295,7 @@ pub struct SyncActor {
     /// Actor addresses for coordination (set once, never mutated directly)
     network_actor: Option<Addr<crate::actors_v2::network::NetworkActor>>,
     chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
+    storage_actor: Option<Addr<StorageActor>>,
 }
 
 impl SyncActor {
@@ -312,6 +314,7 @@ impl SyncActor {
             config,
             network_actor: None,
             chain_actor: None,
+            storage_actor: None,
         })
     }
 
@@ -1289,6 +1292,12 @@ impl Handler<SyncMessage> for SyncActor {
                 Ok(SyncResponse::Started)
             }
 
+            SyncMessage::SetStorageActor { addr } => {
+                self.storage_actor = Some(addr);
+                tracing::info!("StorageActor address set for SyncActor height queries");
+                Ok(SyncResponse::Started)
+            }
+
             SyncMessage::UpdatePeers { peers } => {
                 let peer_count = peers.len();
                 tracing::info!(
@@ -1671,53 +1680,106 @@ impl Handler<SyncMessage> for SyncActor {
                             s.target_height = network_height;
                         }
 
-                        let gap = network_height.saturating_sub(s.current_height);
+                        // Extract state needed for async storage query
+                        let sync_actor_height = s.current_height; // Stale fallback
+                        let last_sync_completed_at = s.last_sync_completed_at;
+                        let consecutive_behind_checks = s.consecutive_behind_checks;
                         let resync_threshold = self.config.resync_threshold;
+                        let sync_cooldown_secs = self.config.sync_cooldown_secs;
+                        let state = std::sync::Arc::clone(&self.state);
+                        let storage_actor = self.storage_actor.clone();
 
-                        if gap > resync_threshold {
-                            s.consecutive_behind_checks += 1;
+                        // Drop state lock before spawning async task
+                        drop(s);
 
-                            // Check cooldown (don't trigger re-sync too soon after last sync)
-                            let cooldown_elapsed = s.last_sync_completed_at
-                                .map(|t| t.elapsed() > Duration::from_secs(self.config.sync_cooldown_secs))
-                                .unwrap_or(true);
+                        // Spawn async task to query StorageActor and evaluate gap
+                        // This is necessary because the handler is synchronous but we need async I/O
+                        ctx.spawn(
+                            async move {
+                                // Query StorageActor for authoritative chain height
+                                // This ensures we use the actual imported height, not SyncActor's stale tracking
+                                let storage_height = if let Some(storage) = storage_actor {
+                                    match storage.send(GetChainHeadMessage { correlation_id: None }).await {
+                                        Ok(Ok(Some(head))) => {
+                                            tracing::trace!(
+                                                storage_height = head.number,
+                                                sync_actor_height = sync_actor_height,
+                                                "Using StorageActor height for gap calculation"
+                                            );
+                                            head.number
+                                        }
+                                        Ok(Ok(None)) => {
+                                            tracing::debug!("No chain head in storage, using SyncActor height");
+                                            sync_actor_height
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(error = ?e, "StorageActor error, using SyncActor height");
+                                            sync_actor_height
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "StorageActor mailbox error, using SyncActor height");
+                                            sync_actor_height
+                                        }
+                                    }
+                                } else {
+                                    tracing::debug!("No StorageActor configured, using SyncActor height");
+                                    sync_actor_height
+                                };
 
-                            // Require 2 consecutive checks showing gap AND cooldown elapsed
-                            // This prevents thrashing from transient network conditions
-                            if s.consecutive_behind_checks >= 2 && cooldown_elapsed {
-                                tracing::warn!(
-                                    current_height = s.current_height,
-                                    network_height = network_height,
-                                    gap = gap,
-                                    consecutive_checks = s.consecutive_behind_checks,
-                                    "🚨 ACTIVE MONITORING: Fell behind network - triggering re-sync"
-                                );
+                                // Re-acquire state lock for updates
+                                let mut s = state.write().unwrap();
 
-                                // Reset state and trigger re-sync
-                                s.consecutive_behind_checks = 0;
-                                s.is_running = true;
-                                s.transition_to_state(SyncState::RequestingBlocks);
+                                // Calculate gap using authoritative storage height
+                                let gap = network_height.saturating_sub(storage_height);
 
-                                Ok(SyncResponse::NetworkHeight { height: network_height })
-                            } else {
-                                tracing::debug!(
-                                    gap = gap,
-                                    consecutive_checks = s.consecutive_behind_checks,
-                                    cooldown_elapsed = cooldown_elapsed,
-                                    "Behind network but waiting for confirmation before re-sync"
-                                );
-                                Ok(SyncResponse::Started)
+                                if gap > resync_threshold {
+                                    s.consecutive_behind_checks = consecutive_behind_checks + 1;
+
+                                    // Check cooldown (don't trigger re-sync too soon after last sync)
+                                    let cooldown_elapsed = last_sync_completed_at
+                                        .map(|t| t.elapsed() > Duration::from_secs(sync_cooldown_secs))
+                                        .unwrap_or(true);
+
+                                    // Require 2 consecutive checks showing gap AND cooldown elapsed
+                                    // This prevents thrashing from transient network conditions
+                                    if s.consecutive_behind_checks >= 2 && cooldown_elapsed {
+                                        tracing::warn!(
+                                            storage_height = storage_height,
+                                            network_height = network_height,
+                                            gap = gap,
+                                            consecutive_checks = s.consecutive_behind_checks,
+                                            "🚨 ACTIVE MONITORING: Fell behind network - triggering re-sync"
+                                        );
+
+                                        // Reset state and trigger re-sync
+                                        s.consecutive_behind_checks = 0;
+                                        s.is_running = true;
+                                        s.transition_to_state(SyncState::RequestingBlocks);
+                                    } else {
+                                        tracing::debug!(
+                                            storage_height = storage_height,
+                                            gap = gap,
+                                            consecutive_checks = s.consecutive_behind_checks,
+                                            cooldown_elapsed = cooldown_elapsed,
+                                            "Behind network but waiting for confirmation before re-sync"
+                                        );
+                                    }
+                                } else {
+                                    // Gap is acceptable - reset consecutive check counter
+                                    if consecutive_behind_checks > 0 {
+                                        tracing::trace!(
+                                            storage_height = storage_height,
+                                            network_height = network_height,
+                                            "Gap reduced below threshold - resetting consecutive check counter"
+                                        );
+                                    }
+                                    s.consecutive_behind_checks = 0;
+                                }
                             }
-                        } else {
-                            // Gap is acceptable - reset consecutive check counter
-                            if s.consecutive_behind_checks > 0 {
-                                tracing::trace!(
-                                    "Gap reduced below threshold - resetting consecutive check counter"
-                                );
-                            }
-                            s.consecutive_behind_checks = 0;
-                            Ok(SyncResponse::Started)
-                        }
+                            .into_actor(self),
+                        );
+
+                        Ok(SyncResponse::Started)
                     }
 
                     _ => {
@@ -1784,6 +1846,34 @@ impl Handler<SyncMessage> for SyncActor {
                 // Start fresh sync from DiscoveringPeers to rediscover network height
                 s.is_running = true;
                 s.transition_to_state(SyncState::DiscoveringPeers);
+
+                Ok(SyncResponse::Started)
+            }
+
+            SyncMessage::UpdateCurrentHeight { height } => {
+                // Update current_height to stay in sync with StorageActor
+                // Called by ChainActor after any successful block import (sync, gossipsub, production)
+                let mut s = self.state.write().unwrap();
+
+                // Only update if the new height is greater (blocks should be imported in order)
+                if height > s.current_height {
+                    tracing::trace!(
+                        previous_height = s.current_height,
+                        new_height = height,
+                        "Updating current_height from block import notification"
+                    );
+                    s.current_height = height;
+
+                    // Also update target_height if we've exceeded it (can happen via gossipsub)
+                    if height > s.target_height {
+                        tracing::debug!(
+                            previous_target = s.target_height,
+                            new_target = height,
+                            "Updating target_height from block import (exceeded via gossipsub)"
+                        );
+                        s.target_height = height;
+                    }
+                }
 
                 Ok(SyncResponse::Started)
             }

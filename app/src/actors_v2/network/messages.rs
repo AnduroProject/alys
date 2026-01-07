@@ -130,6 +130,10 @@ pub enum SyncMessage {
     SetChainActor {
         addr: Addr<crate::actors_v2::chain::ChainActor>,
     },
+    /// Set StorageActor address for accurate height queries (Active Height Monitoring)
+    SetStorageActor {
+        addr: Addr<crate::actors_v2::storage::StorageActor>,
+    },
     /// Update available peers for sync
     UpdatePeers { peers: Vec<PeerId> },
     /// Get sync metrics
@@ -155,6 +159,10 @@ pub enum SyncMessage {
     RefreshNetworkHeight,
     /// Force re-sync (emergency recovery, e.g., after repeated PayloadIdUnavailable errors)
     ForceResync { reason: String },
+
+    /// Update current height after block import (keeps SyncActor height in sync with StorageActor)
+    /// Called by ChainActor after any successful block import (sync, gossipsub, or production)
+    UpdateCurrentHeight { height: u64 },
 }
 
 /// NetworkActor response types

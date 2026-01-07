@@ -621,6 +621,15 @@ impl App {
                 Err(e) => error!("✗ SyncActor mailbox error during SetNetworkActor: {:?}", e),
             }
 
+            // Wire StorageActor to SyncActor - enables accurate height queries for Active Height Monitoring
+            match sync_actor.send(SyncMessage::SetStorageActor {
+                addr: storage_actor.clone(),
+            }).await {
+                Ok(Ok(_)) => info!("✓ StorageActor configured in SyncActor - enables accurate gap calculation"),
+                Ok(Err(e)) => error!("✗ Failed to set StorageActor in SyncActor: {:?}", e),
+                Err(e) => error!("✗ SyncActor mailbox error during SetStorageActor: {:?}", e),
+            }
+
             // Wire SyncActor to NetworkActor - without this, NetworkActor cannot forward received blocks to SyncActor for processing
             match network_actor.send(NetworkMessage::SetSyncActor {
                 addr: sync_actor.clone(),

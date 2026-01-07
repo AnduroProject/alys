@@ -49,24 +49,67 @@ impl Handler<ChainMessage> for ChainActor {
                     }
                 };
 
-                let status = super::messages::ChainStatus {
-                    height: self.state.get_height(),
-                    head_hash: self.state.get_head_hash(),
-                    is_synced: self.state.is_synced(),
-                    is_validator: self.config.is_validator,
-                    network_connected: false, // Would check network status
-                    peer_count: 0,            // Would be updated from NetworkActor
-                    pending_pegins: 0, // TODO: Count async - self.state.queued_pegins.read().await.len(),
-                    last_block_time: self
-                        .state
-                        .last_block_time
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()),
-                    auxpow_enabled: self.config.enable_auxpow,
-                    blocks_without_pow: self.state.blocks_without_pow,
-                    observed_height,
-                    orphan_count,
-                };
-                Box::pin(async move { Ok(ChainResponse::ChainStatus(status)) })
+                // Query StorageActor for actual chain height instead of using stale local state
+                // This is critical for Active Height Monitoring - peers need accurate heights
+                let storage_actor = self.storage_actor.clone();
+                let is_synced = self.state.is_synced();
+                let is_validator = self.config.is_validator;
+                let last_block_time = self
+                    .state
+                    .last_block_time
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+                let auxpow_enabled = self.config.enable_auxpow;
+                let blocks_without_pow = self.state.blocks_without_pow;
+                let local_height = self.state.get_height();
+                let local_head_hash = self.state.get_head_hash();
+
+                Box::pin(async move {
+                    // Query StorageActor for authoritative chain height and head
+                    let (height, head_hash) = if let Some(storage) = storage_actor {
+                        match storage
+                            .send(crate::actors_v2::storage::messages::GetChainHeadMessage {
+                                correlation_id: None,
+                            })
+                            .await
+                        {
+                            Ok(Ok(Some(head))) => {
+                                let hash = lighthouse_wrapper::types::Hash256::from_slice(&head.hash.0);
+                                (head.number, Some(hash))
+                            }
+                            Ok(Ok(None)) => {
+                                // No head in storage - use local state
+                                (local_height, local_head_hash)
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(error = ?e, "Failed to get chain head from StorageActor, using local state");
+                                (local_height, local_head_hash)
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "StorageActor mailbox error, using local state");
+                                (local_height, local_head_hash)
+                            }
+                        }
+                    } else {
+                        // No StorageActor available - use local state
+                        (local_height, local_head_hash)
+                    };
+
+                    let status = super::messages::ChainStatus {
+                        height,
+                        head_hash,
+                        is_synced,
+                        is_validator,
+                        network_connected: false, // Would check network status
+                        peer_count: 0,            // Would be updated from NetworkActor
+                        pending_pegins: 0, // TODO: Count async
+                        last_block_time,
+                        auxpow_enabled,
+                        blocks_without_pow,
+                        observed_height,
+                        orphan_count,
+                    };
+                    Ok(ChainResponse::ChainStatus(status))
+                })
             }
             ChainMessage::ProduceBlock { slot, timestamp } => {
                 // Validate preconditions before attempting block production
@@ -1414,6 +1457,14 @@ impl Handler<ChainMessage> for ChainActor {
                                 import_duration_ms = import_duration.as_millis(),
                                 "Block import completed successfully"
                             );
+
+                            // Notify SyncActor of new height to keep current_height in sync with StorageActor
+                            // This ensures RPC status, health checks, and sync decisions use accurate height
+                            if let Some(ref sync_actor) = self_clone.sync_actor {
+                                sync_actor.do_send(crate::actors_v2::network::SyncMessage::UpdateCurrentHeight {
+                                    height: block_height,
+                                });
+                            }
 
                             Ok(ChainResponse::BlockImported {
                                 block_hash,
