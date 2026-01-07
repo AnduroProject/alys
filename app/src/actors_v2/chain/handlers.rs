@@ -867,6 +867,49 @@ impl Handler<ChainMessage> for ChainActor {
                                                 block_hash = %block_hash,
                                                 "Orphan block cached successfully"
                                             );
+
+                                            // Bug Fix: Orphan-triggered re-sync
+                                            // If we receive orphan blocks that are far ahead of our current height,
+                                            // it indicates we've fallen behind and need to re-sync.
+                                            // This handles the case where gossipsub delivers blocks but
+                                            // Active Height Monitoring fails to detect the gap.
+                                            const ORPHAN_RESYNC_THRESHOLD: u64 = 5;
+
+                                            let observed_height = {
+                                                let cache = self_clone.orphan_cache.read().await;
+                                                cache.observed_height()
+                                            };
+
+                                            let gap = observed_height.saturating_sub(current_height);
+
+                                            if gap >= ORPHAN_RESYNC_THRESHOLD {
+                                                warn!(
+                                                    correlation_id = %correlation_id,
+                                                    current_height = current_height,
+                                                    observed_height = observed_height,
+                                                    gap = gap,
+                                                    threshold = ORPHAN_RESYNC_THRESHOLD,
+                                                    "Large orphan gap detected - triggering re-sync"
+                                                );
+
+                                                // Trigger ForceResync to fetch missing blocks
+                                                if let Some(ref sync_actor) = self_clone.sync_actor {
+                                                    let reason = format!(
+                                                        "Orphan gap {} exceeds threshold {} (current: {}, observed: {})",
+                                                        gap, ORPHAN_RESYNC_THRESHOLD, current_height, observed_height
+                                                    );
+                                                    if let Err(e) = sync_actor.send(
+                                                        crate::actors_v2::network::SyncMessage::ForceResync { reason }
+                                                    ).await {
+                                                        warn!(
+                                                            correlation_id = %correlation_id,
+                                                            error = %e,
+                                                            "Failed to trigger ForceResync from orphan detection"
+                                                        );
+                                                    }
+                                                }
+                                            }
+
                                             // Return success - block is cached, not rejected
                                             return Ok(ChainResponse::BlockRejected {
                                                 reason: format!("Orphan block cached: parent {} not found", orphan_parent_hash),

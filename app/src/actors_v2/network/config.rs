@@ -153,7 +153,8 @@ impl Default for SyncConfig {
             // Network height monitoring defaults
             peer_height_poll_interval_secs: 30,
             resync_threshold: 10,
-            min_peer_quorum: 2,
+            // Set to 1 for 2-node networks - quorum of 2 blocks recovery when only 1 peer exists
+            min_peer_quorum: 1,
             peer_height_max_age_secs: 60,
             sync_cooldown_secs: 30,
         }
