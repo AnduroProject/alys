@@ -20,6 +20,7 @@ fn test_sync_config() -> crate::actors_v2::network::SyncConfig {
         block_validation_timeout: Duration::from_secs(2),
         max_sync_peers: 8,
         data_dir: PathBuf::from("/tmp/alys-test-sync-validation"),
+        ..Default::default()
     }
 }
 
@@ -130,6 +131,7 @@ async fn test_sync_config_validation() {
         block_validation_timeout: Duration::from_secs(2),
         max_sync_peers: 8,
         data_dir: PathBuf::from("/tmp/alys-test-sync-invalid"),
+        ..Default::default()
     };
 
     assert!(

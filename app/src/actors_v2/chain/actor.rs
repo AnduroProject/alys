@@ -107,6 +107,10 @@ pub struct ChainActor {
     /// Orphan block cache: stores blocks whose parents haven't been imported yet
     /// Used for out-of-order block reception and tracking observed network height
     pub(crate) orphan_cache: Arc<RwLock<OrphanBlockCache>>,
+
+    /// Active Height Monitoring (Layer 3): Consecutive PayloadIdUnavailable errors
+    /// Used to detect chain head desynchronization and trigger emergency re-sync
+    pub(crate) payload_unavailable_count: u32,
 }
 
 impl ChainActor {
@@ -137,6 +141,8 @@ impl ChainActor {
             gap_fill_requests: Arc::new(RwLock::new(HashMap::new())),
             // Orphan block cache for out-of-order block reception
             orphan_cache: Arc::new(RwLock::new(OrphanBlockCache::new())),
+            // Active Height Monitoring (Layer 3): Initialize error counter
+            payload_unavailable_count: 0,
         }
     }
 
@@ -735,6 +741,10 @@ impl ChainActor {
     }
 
     /// Handle peer connection event
+    ///
+    /// ACTIVE HEIGHT MONITORING (Layer 2): Always check sync health after isolation ends.
+    /// Previously this only checked if `!is_synced()`, which missed the case where we
+    /// were "synced" but fell behind during a network partition.
     pub async fn on_peer_connected(&mut self, peer_id: String) -> Result<(), ChainError> {
         debug!(peer_id = %peer_id, "Peer connected");
 
@@ -742,16 +752,40 @@ impl ChainActor {
         let was_isolated = self.connected_peer_count == 0;
         self.connected_peer_count += 1;
 
-        if was_isolated && !self.state.is_synced() {
-            info!("First peer connected after isolation, checking sync state");
+        // CHANGED: Always check sync health after isolation ends
+        // Don't skip just because we think we're "synced" - we might have
+        // fallen behind during the isolation period (e.g., network partition)
+        if was_isolated {
+            info!("First peer connected after isolation - checking sync state");
 
-            // Give peers a moment to stabilize
+            // Give peer connection time to stabilize
             tokio::time::sleep(Duration::from_secs(2)).await;
+
+            // Force a fresh network height query before health check
+            // This ensures we have up-to-date peer height information
+            if let Some(ref sync_actor) = self.sync_actor {
+                match sync_actor
+                    .send(crate::actors_v2::network::SyncMessage::RefreshNetworkHeight)
+                    .await
+                {
+                    Ok(Ok(_)) => {
+                        // Give time for peer height responses to arrive
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        debug!("Network height refreshed after reconnection");
+                    }
+                    Ok(Err(e)) => {
+                        warn!(error = ?e, "Failed to refresh network height after reconnection");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Mailbox error refreshing network height");
+                    }
+                }
+            }
 
             // Check if we need to sync
             match self.check_sync_health().await {
-                Ok(_) => debug!("Sync health check completed after peer connect"),
-                Err(e) => warn!("Sync health check failed: {}", e),
+                Ok(_) => debug!("Sync health check completed after reconnection"),
+                Err(e) => warn!(error = ?e, "Sync health check failed after reconnection"),
             }
         }
 

@@ -566,6 +566,7 @@ impl App {
                 block_validation_timeout: Duration::from_secs(10),
                 max_sync_peers: 8,
                 data_dir: sync_data_dir,
+                ..Default::default()
             };
             let sync_actor = crate::actors_v2::network::SyncActor::new(sync_config)
                 .expect("Failed to create SyncActor V2")

@@ -488,6 +488,8 @@ mod tests {
             last_block_time: Some(Duration::from_secs(1640995200)),
             auxpow_enabled: true,
             blocks_without_pow: 0,
+            observed_height: 1000,
+            orphan_count: 0,
         };
 
         let response = ChainResponse::ChainStatus(status.clone());
@@ -1224,6 +1226,8 @@ mod tests {
             last_block_time: Some(Duration::from_secs(1640995200)),
             auxpow_enabled: true,
             blocks_without_pow: 0,
+            observed_height: 1000,
+            orphan_count: 0,
         };
         let status_response = ChainResponse::ChainStatus(mock_status);
 

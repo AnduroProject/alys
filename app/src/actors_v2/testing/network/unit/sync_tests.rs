@@ -86,6 +86,7 @@ async fn test_block_processing() {
     let block_response_message = SyncMessage::HandleBlockResponse {
         blocks: blocks_data,
         request_id: Uuid::new_v4().to_string(),
+        peer_id: "test-peer-1".to_string(),
     };
 
     harness.send_message(block_response_message).await.unwrap();

@@ -337,6 +337,48 @@ impl Handler<ChainMessage> for ChainActor {
                                         ));
                                     }
                                     Err(e) => {
+                                        // Layer 3: Detect PayloadIdUnavailable for chain head desync detection
+                                        let is_payload_unavailable = matches!(
+                                            e,
+                                            crate::actors_v2::engine::EngineError::PayloadIdUnavailable
+                                        );
+
+                                        if is_payload_unavailable {
+                                            // Track consecutive PayloadIdUnavailable errors
+                                            self_clone.payload_unavailable_count += 1;
+
+                                            const PAYLOAD_ERROR_THRESHOLD: u32 = 3;
+
+                                            if self_clone.payload_unavailable_count >= PAYLOAD_ERROR_THRESHOLD {
+                                                error!(
+                                                    consecutive_errors = self_clone.payload_unavailable_count,
+                                                    correlation_id = %correlation_id,
+                                                    "Repeated PayloadIdUnavailable - chain head likely desynchronized, triggering emergency re-sync"
+                                                );
+
+                                                // Trigger force resync to recover from desync
+                                                if let Some(ref sync_actor) = sync_actor {
+                                                    let reason = format!(
+                                                        "PayloadIdUnavailable threshold exceeded ({} consecutive errors)",
+                                                        self_clone.payload_unavailable_count
+                                                    );
+                                                    let _ = sync_actor
+                                                        .send(crate::actors_v2::network::SyncMessage::ForceResync { reason })
+                                                        .await;
+                                                }
+
+                                                // Reset counter after triggering resync
+                                                self_clone.payload_unavailable_count = 0;
+                                            } else {
+                                                warn!(
+                                                    consecutive_errors = self_clone.payload_unavailable_count,
+                                                    threshold = PAYLOAD_ERROR_THRESHOLD,
+                                                    correlation_id = %correlation_id,
+                                                    "PayloadIdUnavailable error - tracking for potential desync"
+                                                );
+                                            }
+                                        }
+
                                         error!(correlation_id = %correlation_id, error = ?e, "Failed to build execution payload");
                                         return Err(ChainError::Engine(format!(
                                             "Payload build failed: {}",
@@ -590,6 +632,9 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                             }
                         }
+
+                        // Layer 3: Reset PayloadIdUnavailable counter on successful block production
+                        self_clone.payload_unavailable_count = 0;
 
                         let duration = start_time.elapsed();
                         info!(
@@ -2093,6 +2138,8 @@ async fn create_aux_block_helper(
         orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
             super::orphan_cache::OrphanBlockCache::new(),
         )),
+        // Active Height Monitoring (Layer 3)
+        payload_unavailable_count: 0,
     };
 
     actor.create_aux_block(miner_address).await
@@ -2132,6 +2179,8 @@ async fn submit_aux_block_helper(
         orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
             super::orphan_cache::OrphanBlockCache::new(),
         )),
+        // Active Height Monitoring (Layer 3)
+        payload_unavailable_count: 0,
     };
 
     actor

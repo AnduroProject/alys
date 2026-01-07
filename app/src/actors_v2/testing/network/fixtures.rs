@@ -46,6 +46,7 @@ pub fn create_test_sync_config() -> SyncConfig {
         block_validation_timeout: Duration::from_secs(5),
         max_sync_peers: 8,
         data_dir: PathBuf::from("/tmp/alys-test-sync"),
+        ..Default::default()
     }
 }
 

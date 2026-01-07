@@ -148,6 +148,13 @@ pub enum SyncMessage {
     SaveCheckpoint,
     /// Clear checkpoint after sync completion (Phase 5)
     ClearCheckpoint,
+
+    // Network height monitoring messages (Active Height Monitoring feature)
+    /// Force refresh of network height from peers (used after reconnection)
+    /// Triggers immediate QueryPeerHeights to NetworkActor
+    RefreshNetworkHeight,
+    /// Force re-sync (emergency recovery, e.g., after repeated PayloadIdUnavailable errors)
+    ForceResync { reason: String },
 }
 
 /// NetworkActor response types

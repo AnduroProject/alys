@@ -9,7 +9,7 @@
 use actix::prelude::*;
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::{
     messages::{Block, NetworkMessage, PeerId, SyncStatus},
@@ -41,6 +41,15 @@ struct BlockRequestInfo {
     count: u32,
     peer_id: PeerId,
     requested_at: SystemTime,
+}
+
+/// Timestamped peer height observation for freshness tracking
+/// Used by Active Network Height Monitoring to filter stale data
+#[derive(Debug, Clone)]
+pub struct PeerHeightObservation {
+    pub peer_id: String,
+    pub height: u64,
+    pub observed_at: Instant,
 }
 
 /// Mutable state extracted for Arc<RwLock<T>> wrapping
@@ -78,6 +87,14 @@ struct SyncActorState {
     /// Collected peer heights during QueryingNetworkHeight state
     /// Used to calculate mode (consensus) height from peer responses
     observed_peer_heights: Vec<u64>,
+
+    // Network height monitoring state (Active Height Monitoring feature)
+    /// Timestamped peer height observations for freshness filtering
+    peer_height_observations: Vec<PeerHeightObservation>,
+    /// Last sync completion time (for cooldown enforcement)
+    last_sync_completed_at: Option<Instant>,
+    /// Consecutive checks showing node is behind (for hysteresis)
+    consecutive_behind_checks: u32,
 }
 
 impl SyncActorState {
@@ -97,6 +114,11 @@ impl SyncActorState {
             state_entered_at: SystemTime::now(),
             discovery_time_accumulated: Duration::ZERO,
             observed_peer_heights: Vec::new(),
+
+            // Network height monitoring initialization
+            peer_height_observations: Vec::new(),
+            last_sync_completed_at: None,
+            consecutive_behind_checks: 0,
         }
     }
 
@@ -320,6 +342,57 @@ impl SyncActor {
             .max()
             .unwrap_or(0)
     }
+
+    /// Calculate median height from peer observations (robust to outliers)
+    /// Used by Active Network Height Monitoring for Byzantine-resistant consensus
+    ///
+    /// Returns None if:
+    /// - Insufficient fresh observations (< min_quorum)
+    /// - All observations are stale (older than max_age)
+    ///
+    /// The median is preferred over mode/max because:
+    /// - Single malicious peer cannot skew result (unlike max)
+    /// - More robust with varied peer heights (unlike mode which needs agreement)
+    fn calculate_median_height(
+        observations: &[PeerHeightObservation],
+        max_age: Duration,
+        min_quorum: usize,
+    ) -> Option<u64> {
+        let now = Instant::now();
+
+        // Filter to fresh observations only
+        let fresh_heights: Vec<u64> = observations
+            .iter()
+            .filter(|obs| now.duration_since(obs.observed_at) < max_age)
+            .map(|obs| obs.height)
+            .collect();
+
+        // Require minimum quorum for Byzantine resistance
+        if fresh_heights.len() < min_quorum {
+            tracing::trace!(
+                total_observations = observations.len(),
+                fresh_observations = fresh_heights.len(),
+                min_quorum = min_quorum,
+                "Insufficient fresh peer heights for median calculation"
+            );
+            return None;
+        }
+
+        // Calculate median
+        let mut sorted = fresh_heights;
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+
+        tracing::trace!(
+            observation_count = sorted.len(),
+            median_height = median,
+            min_height = sorted.first().copied().unwrap_or(0),
+            max_height = sorted.last().copied().unwrap_or(0),
+            "Calculated median network height"
+        );
+
+        Some(median)
+    }
 }
 
 // Phase 4: All unused workflow methods deleted (947 lines removed)
@@ -493,6 +566,7 @@ impl Actor for SyncActor {
 
                     s.transition_to_state(SyncState::Synced);
                     s.is_running = false;
+                    s.last_sync_completed_at = Some(Instant::now());
                     s.metrics.record_sync_complete(height);
                 }
             });
@@ -601,10 +675,55 @@ impl Actor for SyncActor {
 
                     s.transition_to_state(SyncState::Synced);
                     s.is_running = false;
+                    s.last_sync_completed_at = Some(Instant::now());
                     s.metrics.record_sync_complete(current);
                 }
             });
         });
+
+        // ========================================================================
+        // ACTIVE NETWORK HEIGHT MONITORING (Layer 1)
+        // ========================================================================
+        // This interval runs ALWAYS (even when synced) to keep target_height fresh.
+        // Unlike other intervals that only run during active sync, this monitors
+        // for the node falling behind the network after sync completes.
+        let poll_interval_secs = self.config.peer_height_poll_interval_secs;
+        let poll_interval = Duration::from_secs(poll_interval_secs);
+
+        ctx.run_interval(poll_interval, |act, _ctx| {
+            let state = std::sync::Arc::clone(&act.state);
+            let network_actor = act.network_actor.clone();
+
+            tokio::spawn(async move {
+                // Only poll when synced or stopped (not during active sync to avoid interference)
+                let should_poll = {
+                    let s = state.read().unwrap();
+                    matches!(s.sync_state, SyncState::Synced | SyncState::Stopped)
+                        && !s.sync_peers.is_empty()
+                };
+
+                if !should_poll {
+                    return;
+                }
+
+                // Query peers for their current height via NetworkActor
+                if let Some(network) = network_actor {
+                    tracing::trace!("Active height monitoring: querying peer heights");
+                    if let Err(e) = network.send(NetworkMessage::QueryPeerHeights).await {
+                        tracing::debug!(
+                            error = %e,
+                            "Failed to query peer heights during active monitoring"
+                        );
+                    }
+                    // Responses arrive via ReportPeerHeights message
+                }
+            });
+        });
+
+        tracing::info!(
+            poll_interval_secs = poll_interval_secs,
+            "Active network height monitoring started (runs when synced)"
+        );
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
@@ -682,6 +801,7 @@ impl Handler<SyncMessage> for SyncActor {
                             );
                             s.transition_to_state(SyncState::Synced);
                             s.is_running = false;
+                            s.last_sync_completed_at = Some(Instant::now());
                             return;
                         }
 
@@ -737,6 +857,7 @@ impl Handler<SyncMessage> for SyncActor {
                                                 );
                                                 s.transition_to_state(SyncState::Synced);
                                                 s.is_running = false;
+                                                s.last_sync_completed_at = Some(Instant::now());
                                                 s.metrics.record_sync_complete(height);
                                             } else {
                                                 // We have a known target and we're behind it
@@ -1227,6 +1348,7 @@ impl Handler<SyncMessage> for SyncActor {
                                     );
                                     s.transition_to_state(SyncState::Synced);
                                     s.is_running = false;
+                                    s.last_sync_completed_at = Some(Instant::now());
                                     s.metrics.record_sync_complete(height);
                                 } else {
                                     // We have a known target and we're behind it
@@ -1337,6 +1459,7 @@ impl Handler<SyncMessage> for SyncActor {
                                     // Sync was complete or nearly complete
                                     s.transition_to_state(SyncState::Synced);
                                     s.is_running = false;
+                                    s.last_sync_completed_at = Some(Instant::now());
 
                                     tracing::info!(
                                         current_height = checkpoint.current_height,
@@ -1436,21 +1559,24 @@ impl Handler<SyncMessage> for SyncActor {
             SyncMessage::ReportPeerHeights { peer_heights } => {
                 // Handle peer height reports from NetworkActor
                 // This is called when ChainStatusResponse messages arrive from peers
-                // We accumulate heights and calculate mode (consensus) to determine network height
+                //
+                // ACTIVE HEIGHT MONITORING: This handler now processes heights in ALL states:
+                // - QueryingNetworkHeight: Original behavior (initial sync discovery)
+                // - Synced/Stopped: NEW - Detects when node falls behind network
 
                 if peer_heights.is_empty() {
                     tracing::debug!("Empty peer heights report - no action needed");
                     return Ok(SyncResponse::Started);
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     "🔍 SYNC: ReportPeerHeights - received {} peer height reports",
                     peer_heights.len()
                 );
 
                 // Log each peer's height for debugging
                 for (peer_id, height, head_hash) in &peer_heights {
-                    tracing::info!(
+                    tracing::trace!(
                         "   └─ Peer {} reports height {} (hash: {:?})",
                         peer_id,
                         height,
@@ -1459,74 +1585,207 @@ impl Handler<SyncMessage> for SyncActor {
                 }
 
                 let mut s = self.state.write().unwrap();
+                let current_state = s.sync_state.clone();
+                let now = Instant::now();
 
-                // Only collect heights during QueryingNetworkHeight state
-                if s.sync_state != SyncState::QueryingNetworkHeight {
+                // Store timestamped observations for freshness filtering
+                for (peer_id, height, _) in &peer_heights {
+                    s.peer_height_observations.push(PeerHeightObservation {
+                        peer_id: peer_id.clone(),
+                        height: *height,
+                        observed_at: now,
+                    });
+
+                    // Also maintain legacy observed_peer_heights for QueryingNetworkHeight state
+                    if current_state == SyncState::QueryingNetworkHeight {
+                        s.observed_peer_heights.push(*height);
+                    }
+                }
+
+                // Prune stale observations (older than max_age)
+                let max_age = Duration::from_secs(self.config.peer_height_max_age_secs);
+                s.peer_height_observations.retain(|obs| now.duration_since(obs.observed_at) < max_age);
+
+                // Handle based on current sync state
+                match current_state {
+                    SyncState::QueryingNetworkHeight => {
+                        // Original behavior: Use mode for initial sync discovery
+                        let consensus_height = Self::calculate_mode(&s.observed_peer_heights);
+
+                        tracing::info!(
+                            observations = s.observed_peer_heights.len(),
+                            consensus_height = consensus_height,
+                            "Calculated consensus network height from peer responses"
+                        );
+
+                        let current_height = s.current_height;
+
+                        if consensus_height > current_height {
+                            tracing::info!(
+                                current_height = current_height,
+                                consensus_height = consensus_height,
+                                delta = consensus_height - current_height,
+                                peer_count = s.observed_peer_heights.len(),
+                                "Discovered higher chain from peer consensus (mode)!"
+                            );
+
+                            s.target_height = consensus_height;
+                            s.observed_peer_heights.clear();
+
+                            tracing::info!(
+                                target_height = consensus_height,
+                                "Transitioning from QueryingNetworkHeight to RequestingBlocks"
+                            );
+                            s.transition_to_state(SyncState::RequestingBlocks);
+
+                            Ok(SyncResponse::NetworkHeight {
+                                height: consensus_height,
+                            })
+                        } else {
+                            tracing::debug!(
+                                current_height = current_height,
+                                consensus_height = consensus_height,
+                                "Waiting for more responses or timeout"
+                            );
+                            Ok(SyncResponse::AlreadySynced)
+                        }
+                    }
+
+                    SyncState::Synced | SyncState::Stopped => {
+                        // ACTIVE HEIGHT MONITORING: Check if we've fallen behind while synced
+                        // Use median for Byzantine resistance (single bad peer can't skew result)
+                        let network_height = match Self::calculate_median_height(
+                            &s.peer_height_observations,
+                            max_age,
+                            self.config.min_peer_quorum,
+                        ) {
+                            Some(h) => h,
+                            None => {
+                                tracing::trace!("Insufficient fresh peer heights for monitoring");
+                                return Ok(SyncResponse::Started);
+                            }
+                        };
+
+                        // Always update target_height if peers report higher
+                        if network_height > s.target_height {
+                            s.target_height = network_height;
+                        }
+
+                        let gap = network_height.saturating_sub(s.current_height);
+                        let resync_threshold = self.config.resync_threshold;
+
+                        if gap > resync_threshold {
+                            s.consecutive_behind_checks += 1;
+
+                            // Check cooldown (don't trigger re-sync too soon after last sync)
+                            let cooldown_elapsed = s.last_sync_completed_at
+                                .map(|t| t.elapsed() > Duration::from_secs(self.config.sync_cooldown_secs))
+                                .unwrap_or(true);
+
+                            // Require 2 consecutive checks showing gap AND cooldown elapsed
+                            // This prevents thrashing from transient network conditions
+                            if s.consecutive_behind_checks >= 2 && cooldown_elapsed {
+                                tracing::warn!(
+                                    current_height = s.current_height,
+                                    network_height = network_height,
+                                    gap = gap,
+                                    consecutive_checks = s.consecutive_behind_checks,
+                                    "🚨 ACTIVE MONITORING: Fell behind network - triggering re-sync"
+                                );
+
+                                // Reset state and trigger re-sync
+                                s.consecutive_behind_checks = 0;
+                                s.is_running = true;
+                                s.transition_to_state(SyncState::RequestingBlocks);
+
+                                Ok(SyncResponse::NetworkHeight { height: network_height })
+                            } else {
+                                tracing::debug!(
+                                    gap = gap,
+                                    consecutive_checks = s.consecutive_behind_checks,
+                                    cooldown_elapsed = cooldown_elapsed,
+                                    "Behind network but waiting for confirmation before re-sync"
+                                );
+                                Ok(SyncResponse::Started)
+                            }
+                        } else {
+                            // Gap is acceptable - reset consecutive check counter
+                            if s.consecutive_behind_checks > 0 {
+                                tracing::trace!(
+                                    "Gap reduced below threshold - resetting consecutive check counter"
+                                );
+                            }
+                            s.consecutive_behind_checks = 0;
+                            Ok(SyncResponse::Started)
+                        }
+                    }
+
+                    _ => {
+                        // During active sync (RequestingBlocks, ProcessingBlocks, etc.)
+                        // Don't interfere with ongoing sync operations
+                        tracing::trace!(
+                            state = ?current_state,
+                            "Storing peer heights but not processing during active sync"
+                        );
+                        Ok(SyncResponse::Started)
+                    }
+                }
+            }
+
+            // ========================================================================
+            // ACTIVE NETWORK HEIGHT MONITORING - New Message Handlers
+            // ========================================================================
+
+            SyncMessage::RefreshNetworkHeight => {
+                // Force immediate peer height query (used after reconnection)
+                let network_actor = self.network_actor.clone();
+
+                if let Some(network) = network_actor {
+                    tracing::debug!("RefreshNetworkHeight: Forcing immediate peer height query");
+                    tokio::spawn(async move {
+                        if let Err(e) = network.send(NetworkMessage::QueryPeerHeights).await {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to query peer heights for refresh"
+                            );
+                        }
+                    });
+                    Ok(SyncResponse::Started)
+                } else {
+                    Err(SyncError::NetworkActorNotSet)
+                }
+            }
+
+            SyncMessage::ForceResync { reason } => {
+                // Emergency re-sync trigger (e.g., after repeated PayloadIdUnavailable errors)
+                let mut s = self.state.write().unwrap();
+
+                // Don't force resync if already actively syncing
+                if s.is_running && !matches!(s.sync_state, SyncState::Synced | SyncState::Stopped) {
                     tracing::debug!(
-                        state = ?s.sync_state,
-                        "Ignoring peer heights - not in QueryingNetworkHeight state"
+                        reason = %reason,
+                        current_state = ?s.sync_state,
+                        "ForceResync ignored - sync already in progress"
                     );
                     return Ok(SyncResponse::Started);
                 }
 
-                // Accumulate new heights
-                for (peer_id, height, _) in &peer_heights {
-                    s.observed_peer_heights.push(*height);
-                    tracing::debug!(
-                        peer_id = %peer_id,
-                        height = height,
-                        total_observations = s.observed_peer_heights.len(),
-                        "Added peer height to observations"
-                    );
-                }
-
-                // Calculate mode (most common height) as consensus network height
-                // This requires at least 1 observation
-                let consensus_height = Self::calculate_mode(&s.observed_peer_heights);
-
-                tracing::info!(
-                    observations = s.observed_peer_heights.len(),
-                    heights = ?s.observed_peer_heights,
-                    consensus_height = consensus_height,
-                    "Calculated consensus network height from peer responses"
+                tracing::warn!(
+                    reason = %reason,
+                    current_height = s.current_height,
+                    target_height = s.target_height,
+                    "🚨 FORCE RE-SYNC triggered"
                 );
 
-                let current_height = s.current_height;
+                // Reset monitoring state
+                s.consecutive_behind_checks = 0;
+                s.peer_height_observations.clear();
 
-                if consensus_height > current_height {
-                    tracing::info!(
-                        current_height = current_height,
-                        consensus_height = consensus_height,
-                        delta = consensus_height - current_height,
-                        peer_count = s.observed_peer_heights.len(),
-                        "Discovered higher chain from peer consensus (mode)!"
-                    );
+                // Start fresh sync from DiscoveringPeers to rediscover network height
+                s.is_running = true;
+                s.transition_to_state(SyncState::DiscoveringPeers);
 
-                    // Update target height to consensus height
-                    s.target_height = consensus_height;
-
-                    // Clear observations before transitioning
-                    s.observed_peer_heights.clear();
-
-                    // Transition to RequestingBlocks
-                    tracing::info!(
-                        target_height = consensus_height,
-                        "Transitioning from QueryingNetworkHeight to RequestingBlocks"
-                    );
-                    s.transition_to_state(SyncState::RequestingBlocks);
-
-                    Ok(SyncResponse::NetworkHeight {
-                        height: consensus_height,
-                    })
-                } else {
-                    tracing::debug!(
-                        current_height = current_height,
-                        consensus_height = consensus_height,
-                        observations = s.observed_peer_heights.len(),
-                        "Consensus height not higher than current - waiting for more responses or timeout"
-                    );
-                    Ok(SyncResponse::AlreadySynced)
-                }
+                Ok(SyncResponse::Started)
             }
         }
     }
@@ -1544,6 +1803,7 @@ mod bootstrap_tests {
             block_validation_timeout: Duration::from_secs(10),
             max_sync_peers: 10,
             data_dir: std::path::PathBuf::from("/tmp/test"),
+            ..Default::default()
         };
         SyncActor::new(config).unwrap()
     }

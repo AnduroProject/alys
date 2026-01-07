@@ -31,6 +31,7 @@ async fn test_sync_chain_actor_communication() {
         block_validation_timeout: Duration::from_secs(2),
         max_sync_peers: 8,
         data_dir: PathBuf::from("/tmp/alys-test-sync-integration"),
+        ..Default::default()
     };
 
     let sync_actor_result = SyncActor::new(sync_config);

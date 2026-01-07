@@ -126,6 +126,18 @@ pub struct SyncConfig {
     pub max_sync_peers: usize,
     /// Data directory for checkpoint persistence (Phase 5)
     pub data_dir: PathBuf,
+
+    // Network height monitoring configuration (Active Height Monitoring feature)
+    /// Interval for polling peer heights when synced (seconds)
+    pub peer_height_poll_interval_secs: u64,
+    /// Threshold for re-sync trigger (blocks behind network)
+    pub resync_threshold: u64,
+    /// Minimum peers required to trust network height calculation
+    pub min_peer_quorum: usize,
+    /// Maximum age of peer height observations in seconds (stale data filtering)
+    pub peer_height_max_age_secs: u64,
+    /// Cooldown after sync completion before allowing another re-sync (seconds)
+    pub sync_cooldown_secs: u64,
 }
 
 impl Default for SyncConfig {
@@ -137,6 +149,13 @@ impl Default for SyncConfig {
             block_validation_timeout: Duration::from_secs(10),
             max_sync_peers: 8,
             data_dir: PathBuf::from("./data"),
+
+            // Network height monitoring defaults
+            peer_height_poll_interval_secs: 30,
+            resync_threshold: 10,
+            min_peer_quorum: 2,
+            peer_height_max_age_secs: 60,
+            sync_cooldown_secs: 30,
         }
     }
 }
@@ -154,6 +173,19 @@ impl SyncConfig {
 
         if self.max_sync_peers == 0 {
             return Err("Max sync peers must be greater than 0".to_string());
+        }
+
+        // Network height monitoring validation
+        if self.peer_height_poll_interval_secs == 0 {
+            return Err("Peer height poll interval must be greater than 0".to_string());
+        }
+
+        if self.min_peer_quorum == 0 {
+            return Err("Min peer quorum must be greater than 0".to_string());
+        }
+
+        if self.peer_height_max_age_secs == 0 {
+            return Err("Peer height max age must be greater than 0".to_string());
         }
 
         Ok(())
