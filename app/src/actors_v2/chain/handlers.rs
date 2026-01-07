@@ -663,6 +663,20 @@ impl Handler<ChainMessage> for ChainActor {
                                         height = v2_head_ref.number,
                                         "Updated ChainActor local state with fresh chain head"
                                     );
+
+                                    // BUG FIX: Notify SyncActor of new height after block production
+                                    // This keeps SyncActor's current_height in sync with StorageActor
+                                    // Without this, SyncActor thinks we're behind and blocks production
+                                    if let Some(ref sync_actor) = sync_actor {
+                                        sync_actor.do_send(crate::actors_v2::network::SyncMessage::UpdateCurrentHeight {
+                                            height: v2_head_ref.number,
+                                        });
+                                        debug!(
+                                            correlation_id = %correlation_id,
+                                            height = v2_head_ref.number,
+                                            "Notified SyncActor of new height after block production"
+                                        );
+                                    }
                                 }
                                 Ok(Ok(None)) => {
                                     warn!(correlation_id = %correlation_id, "StorageActor returned no chain head after block production");
@@ -786,7 +800,7 @@ impl Handler<ChainMessage> for ChainActor {
                         );
 
                         // Clone self to enable async method calls (Critical Blocker 1 solution)
-                        let self_clone = self.clone();
+                        let mut self_clone = self.clone();
 
                         // Capture actor references for async block
                         let engine_actor = self.engine_actor.clone();
@@ -798,6 +812,35 @@ impl Handler<ChainMessage> for ChainActor {
                         Box::pin(async move {
                             // Wrap entire import logic to ensure lock release on all paths
                             let import_result: Result<ChainResponse, ChainError> = async {
+                            // BUG FIX: Get actual current height from StorageActor
+                            // The `current_height` captured from self.state.get_height() is stale (0)
+                            // because ChainActor's state.head is not properly maintained across async ops
+                            let storage_current_height = if let Some(ref storage) = storage_actor {
+                                match storage.send(crate::actors_v2::storage::messages::GetChainHeightMessage {
+                                    correlation_id: Some(correlation_id),
+                                }).await {
+                                    Ok(Ok(h)) => {
+                                        trace!(
+                                            correlation_id = %correlation_id,
+                                            storage_height = h,
+                                            captured_height = current_height,
+                                            "Using StorageActor height for import validation"
+                                        );
+                                        h
+                                    }
+                                    _ => {
+                                        debug!(
+                                            correlation_id = %correlation_id,
+                                            "Could not get storage height, using captured height {}",
+                                            current_height
+                                        );
+                                        current_height
+                                    }
+                                }
+                            } else {
+                                current_height
+                            };
+
                             // Step 1: Structural validation
                             if let Err(validation_error) = crate::actors_v2::common::serialization::validate_block_structure(&block) {
                                 error!(
@@ -846,7 +889,7 @@ impl Handler<ChainMessage> for ChainActor {
                                         "Block is orphan (parent not found) - caching for later processing"
                                     );
 
-                                    // Add to orphan cache
+                                    // Add to orphan cache (use storage_current_height, not stale current_height)
                                     let cache_result = {
                                         let mut cache = self_clone.orphan_cache.write().await;
                                         let parent_hash_h256 = *orphan_parent_hash;
@@ -855,7 +898,7 @@ impl Handler<ChainMessage> for ChainActor {
                                             *orphan_height,
                                             block_hash,
                                             parent_hash_h256,
-                                            current_height,
+                                            storage_current_height,
                                             peer_id.clone(),
                                         )
                                     };
@@ -880,12 +923,12 @@ impl Handler<ChainMessage> for ChainActor {
                                                 cache.observed_height()
                                             };
 
-                                            let gap = observed_height.saturating_sub(current_height);
+                                            let gap = observed_height.saturating_sub(storage_current_height);
 
                                             if gap >= ORPHAN_RESYNC_THRESHOLD {
                                                 warn!(
                                                     correlation_id = %correlation_id,
-                                                    current_height = current_height,
+                                                    current_height = storage_current_height,
                                                     observed_height = observed_height,
                                                     gap = gap,
                                                     threshold = ORPHAN_RESYNC_THRESHOLD,
@@ -896,7 +939,7 @@ impl Handler<ChainMessage> for ChainActor {
                                                 if let Some(ref sync_actor) = self_clone.sync_actor {
                                                     let reason = format!(
                                                         "Orphan gap {} exceeds threshold {} (current: {}, observed: {})",
-                                                        gap, ORPHAN_RESYNC_THRESHOLD, current_height, observed_height
+                                                        gap, ORPHAN_RESYNC_THRESHOLD, storage_current_height, observed_height
                                                     );
                                                     if let Err(e) = sync_actor.send(
                                                         crate::actors_v2::network::SyncMessage::ForceResync { reason }
@@ -1499,6 +1542,21 @@ impl Handler<ChainMessage> for ChainActor {
                                 source = ?source,
                                 import_duration_ms = import_duration.as_millis(),
                                 "Block import completed successfully"
+                            );
+
+                            // BUG FIX: Update ChainActor's local state.head after successful import
+                            // Without this, state.get_height() returns 0 (head is None), which causes
+                            // orphan blocks to be rejected as "too far ahead" (height > 0 + 100)
+                            let new_head = crate::actors_v2::storage::actor::BlockRef {
+                                hash: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
+                                number: block_height,
+                                execution_hash: block.message.execution_payload.block_hash,
+                            };
+                            self_clone.state.update_head(new_head);
+                            debug!(
+                                correlation_id = %correlation_id,
+                                block_height = block_height,
+                                "Updated ChainActor local state head after block import"
                             );
 
                             // Notify SyncActor of new height to keep current_height in sync with StorageActor
