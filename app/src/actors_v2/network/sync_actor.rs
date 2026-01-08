@@ -1843,9 +1843,13 @@ impl Handler<SyncMessage> for SyncActor {
                 s.consecutive_behind_checks = 0;
                 s.peer_height_observations.clear();
 
-                // Start fresh sync from DiscoveringPeers to rediscover network height
+                // Reset target_height so QueryingNetworkHeight will re-discover network height
+                s.target_height = 0;
+
+                // Start sync - transition to QueryingNetworkHeight (has 2s polling interval)
+                // instead of DiscoveringPeers (has no polling interval and would get stuck)
                 s.is_running = true;
-                s.transition_to_state(SyncState::DiscoveringPeers);
+                s.transition_to_state(SyncState::QueryingNetworkHeight);
 
                 Ok(SyncResponse::Started)
             }
