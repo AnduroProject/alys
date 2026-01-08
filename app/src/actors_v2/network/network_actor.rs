@@ -1142,6 +1142,19 @@ impl NetworkActor {
                 if let Some(address) = addresses.first() {
                     self.peer_manager.add_peer(peer_id.clone(), address.clone());
 
+                    // Give mDNS-discovered peers a reputation boost (they're local network peers)
+                    // This ensures they can be immediately selected for block requests
+                    // (new peers start at 50.0, but select_peers_for_blocks needs >= 50.0)
+                    self.peer_manager.update_reputation(
+                        &peer_id,
+                        5.0,
+                        "mdns_discovery_boost",
+                    );
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Applied mDNS discovery reputation boost (+5.0)"
+                    );
+
                     // Add peer as explicit gossipsub peer for immediate mesh formation
                     // This is critical for small networks where automatic mesh formation is unreliable
                     if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {

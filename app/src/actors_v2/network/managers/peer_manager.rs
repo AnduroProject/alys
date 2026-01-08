@@ -344,15 +344,29 @@ impl PeerManager {
     }
 
     /// Select best peers for block requests (Phase 4: Task 2.2)
-    /// Stricter criteria: reputation > 50.0, success_rate > 0.7
+    /// Criteria relaxed to allow new peers: reputation >= 50.0, success_rate >= 0.5
+    /// Falls back to best available peers if no peers meet criteria
     pub fn select_peers_for_blocks(&self, count: usize) -> Vec<PeerId> {
+        // First, try peers meeting baseline criteria
+        // Note: New peers start with reputation=50.0 and success_rate=0.5,
+        // so we use >= to include them (they need a chance to prove themselves)
         let mut suitable_peers: Vec<_> = self
             .connected_peers
             .values()
-            .filter(|peer| peer.reputation > 50.0 && peer.success_rate() > 0.7)
+            .filter(|peer| peer.reputation >= 50.0 && peer.success_rate() >= 0.5)
             .collect();
 
-        // Sort by reputation descending
+        // If no peers meet baseline criteria, fall back to best available peers
+        // This prevents "No suitable peers" errors when all peers are new or recovering
+        if suitable_peers.is_empty() {
+            tracing::debug!(
+                connected_peers = self.connected_peers.len(),
+                "No peers meet baseline criteria for block requests - using best available"
+            );
+            return self.get_best_peers(count);
+        }
+
+        // Sort by reputation descending (prefer proven peers)
         suitable_peers.sort_by(|a, b| {
             b.reputation
                 .partial_cmp(&a.reputation)
