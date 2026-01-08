@@ -1283,10 +1283,12 @@ impl NetworkActor {
                     addresses.len()
                 );
 
-                // Update peer information
-                if let Some(address) = addresses.first() {
-                    self.peer_manager.add_peer(peer_id.clone(), address.clone());
-                }
+                // NOTE: We intentionally do NOT call add_peer() here.
+                // The peer is already added with the correct connection address
+                // from ConnectionEstablished. The identify protocol reports
+                // addresses from the peer's local perspective (including localhost),
+                // which would overwrite the correct external address and break
+                // reconnection in containerized environments.
 
                 // Track V2 protocol capability
                 let supports_v2 = self.peer_manager.update_peer_protocols(&peer_id, protocols);
