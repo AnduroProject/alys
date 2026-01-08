@@ -1,4 +1,4 @@
-use crate::actors_v2::network::{NetworkConfig, NetworkMessage};
+use crate::actors_v2::network::{NetworkActor, NetworkConfig, NetworkMessage};
 use crate::actors_v2::testing::base::ActorTestHarness;
 use crate::actors_v2::testing::network::{NetworkTestError, NetworkTestHarness};
 use uuid::Uuid;
@@ -184,4 +184,58 @@ async fn test_network_harness_lifecycle() {
 
     // Test teardown
     assert!(harness.teardown().await.is_ok());
+}
+
+/// Test the select_external_address function that filters loopback addresses
+/// This is critical for Docker/container environments where localhost addresses
+/// are unreachable from other containers
+#[test]
+fn test_select_external_address_filters_loopback() {
+    // Test 1: When external address comes first, it should be selected
+    let addrs1 = vec![
+        "/ip4/172.20.0.10/tcp/10000".to_string(),
+        "/ip4/127.0.0.1/tcp/10000".to_string(),
+    ];
+    let result1 = NetworkActor::select_external_address(&addrs1);
+    assert_eq!(result1, Some(&"/ip4/172.20.0.10/tcp/10000".to_string()));
+
+    // Test 2: When loopback comes first, external should still be selected
+    let addrs2 = vec![
+        "/ip4/127.0.0.1/tcp/10000".to_string(),
+        "/ip4/172.20.0.10/tcp/10000".to_string(),
+    ];
+    let result2 = NetworkActor::select_external_address(&addrs2);
+    assert_eq!(result2, Some(&"/ip4/172.20.0.10/tcp/10000".to_string()));
+
+    // Test 3: When all addresses are loopback, fallback to first
+    let addrs3 = vec![
+        "/ip4/127.0.0.1/tcp/10000".to_string(),
+        "/ip6/::1/tcp/10000".to_string(),
+    ];
+    let result3 = NetworkActor::select_external_address(&addrs3);
+    assert_eq!(result3, Some(&"/ip4/127.0.0.1/tcp/10000".to_string()));
+
+    // Test 4: Empty list should return None
+    let addrs4: Vec<String> = vec![];
+    let result4 = NetworkActor::select_external_address(&addrs4);
+    assert_eq!(result4, None);
+
+    // Test 5: Single external address should be selected
+    let addrs5 = vec!["/ip4/192.168.1.100/tcp/9000".to_string()];
+    let result5 = NetworkActor::select_external_address(&addrs5);
+    assert_eq!(result5, Some(&"/ip4/192.168.1.100/tcp/9000".to_string()));
+
+    // Test 6: Single loopback address should be returned as fallback
+    let addrs6 = vec!["/ip4/127.0.0.1/tcp/10000".to_string()];
+    let result6 = NetworkActor::select_external_address(&addrs6);
+    assert_eq!(result6, Some(&"/ip4/127.0.0.1/tcp/10000".to_string()));
+
+    // Test 7: Multiple external addresses - first external should be selected
+    let addrs7 = vec![
+        "/ip4/127.0.0.1/tcp/10000".to_string(),
+        "/ip4/172.20.0.10/tcp/10000".to_string(),
+        "/ip4/10.0.0.1/tcp/10000".to_string(),
+    ];
+    let result7 = NetworkActor::select_external_address(&addrs7);
+    assert_eq!(result7, Some(&"/ip4/172.20.0.10/tcp/10000".to_string()));
 }

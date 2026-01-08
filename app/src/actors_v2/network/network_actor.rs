@@ -313,6 +313,18 @@ impl NetworkActor {
         });
     }
 
+    /// Select a non-loopback address from a list of addresses.
+    /// Loopback addresses (127.0.0.1, ::1) are unreachable from other containers
+    /// in Docker networks, so we prefer external addresses for peer storage.
+    /// Falls back to first address if all addresses are loopback.
+    pub(crate) fn select_external_address(addresses: &[String]) -> Option<&String> {
+        // First, try to find a non-loopback address
+        addresses
+            .iter()
+            .find(|addr| !addr.contains("127.0.0.1") && !addr.contains("/ip6/::1/"))
+            .or_else(|| addresses.first())
+    }
+
     /// Cooldown duration between V2 reconnection attempts (30 seconds)
     const V2_RECONNECTION_COOLDOWN: Duration = Duration::from_secs(30);
 
@@ -1322,7 +1334,9 @@ impl NetworkActor {
                 self.metrics.record_mdns_discovery();
 
                 // Add discovered peer to peer manager
-                if let Some(address) = addresses.first() {
+                // Use select_external_address to avoid storing loopback addresses
+                // which are unreachable from other containers in Docker networks
+                if let Some(address) = Self::select_external_address(&addresses) {
                     self.peer_manager.add_peer(peer_id.clone(), address.clone());
 
                     // Give mDNS-discovered peers a reputation boost (they're local network peers)
