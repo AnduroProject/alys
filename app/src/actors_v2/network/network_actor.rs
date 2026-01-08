@@ -219,6 +219,8 @@ pub struct NetworkActor {
     is_running: bool,
     /// Shutdown flag
     shutdown_requested: bool,
+    /// Last V2 peer reconnection attempt (for cooldown)
+    last_v2_reconnection_attempt: Option<Instant>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -272,6 +274,7 @@ impl NetworkActor {
             storage_actor: None,
             is_running: false,
             shutdown_requested: false,
+            last_v2_reconnection_attempt: None,
         })
     }
 
@@ -308,6 +311,140 @@ impl NetworkActor {
                 true // Keep this request
             }
         });
+    }
+
+    /// Cooldown duration between V2 reconnection attempts (30 seconds)
+    const V2_RECONNECTION_COOLDOWN: Duration = Duration::from_secs(30);
+
+    /// Attempt to reconnect to known V2-capable peers
+    /// Called when the last V2 peer disconnects or periodically if no V2 peers are connected
+    /// Includes cooldown to prevent reconnection spam
+    fn attempt_v2_peer_reconnection(&mut self) {
+        // Check cooldown to prevent reconnection spam
+        if let Some(last_attempt) = self.last_v2_reconnection_attempt {
+            let elapsed = last_attempt.elapsed();
+            if elapsed < Self::V2_RECONNECTION_COOLDOWN {
+                tracing::debug!(
+                    elapsed_secs = elapsed.as_secs(),
+                    cooldown_secs = Self::V2_RECONNECTION_COOLDOWN.as_secs(),
+                    "V2 reconnection cooldown active - skipping attempt"
+                );
+                return;
+            }
+        }
+
+        let candidates = self.peer_manager.get_v2_reconnection_candidates();
+
+        if candidates.is_empty() {
+            // Use DEBUG level - this is expected during startup before any V2 peers are known
+            tracing::debug!(
+                "No V2-capable peers available for reconnection"
+            );
+            return;
+        }
+
+        // Update last attempt timestamp
+        self.last_v2_reconnection_attempt = Some(Instant::now());
+
+        tracing::info!(
+            candidate_count = candidates.len(),
+            "Attempting to reconnect to known V2-capable peers"
+        );
+
+        if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+            for (peer_id, address) in candidates {
+                // Parse multiaddr for dialing
+                match address.parse::<Multiaddr>() {
+                    Ok(multiaddr) => {
+                        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                        let dial_cmd = SwarmCommand::Dial {
+                            addr: multiaddr.clone(),
+                            response_tx,
+                        };
+
+                        match cmd_tx.try_send(dial_cmd) {
+                            Ok(_) => {
+                                tracing::info!(
+                                    peer_id = %peer_id,
+                                    address = %address,
+                                    "Attempting reconnection to V2 peer"
+                                );
+
+                                // Spawn task to handle dial response
+                                let peer_id_clone = peer_id.clone();
+                                tokio::spawn(async move {
+                                    match response_rx.await {
+                                        Ok(Ok(())) => {
+                                            tracing::info!(
+                                                peer_id = %peer_id_clone,
+                                                "Successfully reconnected to V2 peer"
+                                            );
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(
+                                                peer_id = %peer_id_clone,
+                                                error = %e,
+                                                "Failed to reconnect to V2 peer"
+                                            );
+                                        }
+                                        Err(_) => {
+                                            tracing::debug!(
+                                                peer_id = %peer_id_clone,
+                                                "Dial response channel closed for V2 peer"
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    error = ?e,
+                                    "Failed to send dial command for V2 peer"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            address = %address,
+                            error = %e,
+                            "Invalid multiaddr for V2 peer reconnection"
+                        );
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                "Cannot attempt V2 peer reconnection: command channel not available"
+            );
+        }
+    }
+
+    /// Check V2 peer connectivity and attempt reconnection if needed
+    /// This is called periodically to ensure network health
+    fn check_v2_peer_health(&mut self) {
+        let v2_count = self.peer_manager.connected_v2_peer_count();
+        let total_connected = self.peer_manager.get_connected_peers().len();
+
+        tracing::trace!(
+            v2_peer_count = v2_count,
+            total_connected = total_connected,
+            "V2 peer health check"
+        );
+
+        if v2_count == 0 && total_connected > 0 {
+            // We have peers but none support V2 - this is a problem
+            tracing::warn!(
+                total_connected = total_connected,
+                "Connected to peers but none support V2 protocol - sync will fail"
+            );
+            self.attempt_v2_peer_reconnection();
+        } else if v2_count == 0 && total_connected == 0 {
+            // No peers at all - peer discovery should handle this
+            tracing::debug!("No peers connected - waiting for peer discovery");
+        }
     }
 
     /// Handle swarm events (delegated from StreamHandler)
@@ -1106,8 +1243,32 @@ impl NetworkActor {
 
             AlysNetworkBehaviourEvent::PeerDisconnected { peer_id, reason } => {
                 tracing::info!("Peer disconnected: {} ({})", peer_id, reason);
+
+                // Check if this was a V2-capable peer BEFORE removing from connected_peers
+                let was_v2_peer = self.peer_manager.is_v2_peer(&peer_id);
+
                 self.peer_manager.remove_peer(&peer_id);
                 self.metrics.record_connection_closed();
+
+                // If a V2 peer disconnected, schedule reconnection attempt
+                if was_v2_peer {
+                    let v2_count = self.peer_manager.connected_v2_peer_count();
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        remaining_v2_peers = v2_count,
+                        "V2-capable peer disconnected - scheduling reconnection"
+                    );
+
+                    // If we have no V2 peers left, try to reconnect immediately
+                    if v2_count == 0 {
+                        tracing::error!(
+                            "No V2-capable peers connected! Network sync will be impaired."
+                        );
+
+                        // Attempt reconnection to known V2 peers
+                        self.attempt_v2_peer_reconnection();
+                    }
+                }
             }
 
             AlysNetworkBehaviourEvent::PeerIdentified {
@@ -1124,7 +1285,27 @@ impl NetworkActor {
 
                 // Update peer information
                 if let Some(address) = addresses.first() {
-                    self.peer_manager.add_peer(peer_id, address.clone());
+                    self.peer_manager.add_peer(peer_id.clone(), address.clone());
+                }
+
+                // Track V2 protocol capability
+                let supports_v2 = self.peer_manager.update_peer_protocols(&peer_id, protocols);
+
+                // Give V2-capable peers a reputation boost (they can serve block requests)
+                if supports_v2 {
+                    self.peer_manager.update_reputation(
+                        &peer_id,
+                        10.0,
+                        "v2_protocol_support_boost",
+                    );
+
+                    // Log V2 peer count for visibility
+                    let v2_count = self.peer_manager.connected_v2_peer_count();
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        v2_peer_count = v2_count,
+                        "V2-capable peer connected"
+                    );
                 }
             }
 
@@ -1447,6 +1628,12 @@ impl Actor for NetworkActor {
                 messages_received = act.metrics.messages_received,
                 "NetworkActor metrics"
             );
+        });
+
+        // V2 peer health check - ensures we maintain V2-capable peers for sync
+        // Runs every 15 seconds to detect and recover from V2 peer disconnections
+        ctx.run_interval(Duration::from_secs(15), |act, _ctx| {
+            act.check_v2_peer_health();
         });
 
         // Note: Swarm event loop started in StartNetwork handler
@@ -2882,6 +3069,34 @@ impl Handler<NetworkMessage> for NetworkActor {
                     is_running: self.is_running,
                     chain_height: 0,
                 }))
+            }
+
+            NetworkMessage::CheckV2PeerHealth => {
+                // Check V2 peer health and attempt reconnection if needed
+                // This is triggered by SyncActor when no peer height responses are received
+                let v2_count = self.peer_manager.connected_v2_peer_count();
+                let total_connected = self.peer_manager.get_connected_peers().len();
+
+                tracing::info!(
+                    v2_peer_count = v2_count,
+                    total_connected = total_connected,
+                    "V2 peer health check triggered by SyncActor (stale network height detected)"
+                );
+
+                if v2_count == 0 {
+                    tracing::warn!(
+                        total_connected = total_connected,
+                        "No V2-capable peers connected - attempting reconnection"
+                    );
+                    self.attempt_v2_peer_reconnection();
+                } else {
+                    tracing::debug!(
+                        v2_count = v2_count,
+                        "V2 peers are connected - network height should recover"
+                    );
+                }
+
+                Ok(NetworkResponse::Started)
             }
         }
     }

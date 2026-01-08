@@ -53,6 +53,13 @@ pub struct PeerInfo {
     pub violations: Vec<Violation>,
     #[serde(skip, default = "default_instant")]
     pub last_activity: Instant,
+    // V2 protocol capability tracking
+    /// Whether peer supports V2 block protocol (/alys/block/1.0.0)
+    #[serde(default)]
+    pub supports_v2_protocol: bool,
+    /// All protocols this peer supports
+    #[serde(default)]
+    pub protocols: Vec<String>,
 }
 
 impl PeerInfo {
@@ -72,6 +79,9 @@ impl PeerInfo {
             bytes_received: 0,
             violations: Vec::new(),
             last_activity: Instant::now(),
+            // V2 protocol capability (unknown until identify)
+            supports_v2_protocol: false,
+            protocols: Vec::new(),
         }
     }
 
@@ -179,6 +189,12 @@ impl PeerManager {
 
     /// Add a new peer connection
     pub fn add_peer(&mut self, peer_id: PeerId, address: String) {
+        // Check if peer already exists - if so, just update the address
+        if self.connected_peers.contains_key(&peer_id) {
+            self.update_peer_address(&peer_id, address);
+            return;
+        }
+
         let peer_info = PeerInfo::new(peer_id.clone(), address);
 
         tracing::info!("Added peer connection: {}", peer_id);
@@ -186,6 +202,30 @@ impl PeerManager {
         self.connected_peers
             .insert(peer_id.clone(), peer_info.clone());
         self.known_peers.insert(peer_id, peer_info);
+    }
+
+    /// Update peer's address without resetting other fields
+    /// This is called when PeerIdentified provides a potentially updated address
+    pub fn update_peer_address(&mut self, peer_id: &PeerId, address: String) {
+        // Update in connected_peers
+        if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
+            if peer_info.address != address {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    old_address = %peer_info.address,
+                    new_address = %address,
+                    "Updated peer address"
+                );
+                peer_info.address = address.clone();
+                peer_info.last_seen = SystemTime::now();
+                peer_info.last_activity = Instant::now();
+            }
+        }
+
+        // Also update in known_peers for future reconnection
+        if let Some(known_peer) = self.known_peers.get_mut(peer_id) {
+            known_peer.address = address;
+        }
     }
 
     /// Remove peer connection
@@ -453,6 +493,105 @@ impl PeerManager {
             high_reputation_peers: high_reputation_count,
             discovery_active: self.discovery_active,
         }
+    }
+
+    // ==================== V2 Protocol Capability Tracking ====================
+
+    /// V2 block protocol identifier
+    const V2_BLOCK_PROTOCOL: &'static str = "/alys/block/1.0.0";
+
+    /// Update peer's protocol capabilities after identify exchange
+    /// Returns true if peer supports V2 block protocol
+    pub fn update_peer_protocols(&mut self, peer_id: &PeerId, protocols: Vec<String>) -> bool {
+        let supports_v2 = protocols.iter().any(|p| p == Self::V2_BLOCK_PROTOCOL);
+
+        // Update connected peer
+        if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
+            peer_info.protocols = protocols.clone();
+            peer_info.supports_v2_protocol = supports_v2;
+            peer_info.last_seen = SystemTime::now();
+            peer_info.last_activity = Instant::now();
+
+            if supports_v2 {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    "Peer identified as V2-capable (supports {})",
+                    Self::V2_BLOCK_PROTOCOL
+                );
+            } else {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    protocol_count = protocols.len(),
+                    "Peer identified as V0 only (no V2 block protocol)"
+                );
+            }
+        }
+
+        // Also update known_peers for future reconnection
+        if let Some(known_peer) = self.known_peers.get_mut(peer_id) {
+            known_peer.protocols = protocols;
+            known_peer.supports_v2_protocol = supports_v2;
+        }
+
+        supports_v2
+    }
+
+    /// Check if we have at least one connected V2-capable peer
+    pub fn has_connected_v2_peer(&self) -> bool {
+        self.connected_peers
+            .values()
+            .any(|p| p.supports_v2_protocol)
+    }
+
+    /// Get count of connected V2-capable peers
+    pub fn connected_v2_peer_count(&self) -> usize {
+        self.connected_peers
+            .values()
+            .filter(|p| p.supports_v2_protocol)
+            .count()
+    }
+
+    /// Get connected V2-capable peers (for block requests)
+    pub fn get_connected_v2_peers(&self) -> Vec<&PeerInfo> {
+        self.connected_peers
+            .values()
+            .filter(|p| p.supports_v2_protocol)
+            .collect()
+    }
+
+    /// Get disconnected V2-capable peers for reconnection attempts
+    /// Returns peers that are known to support V2 but are not currently connected
+    pub fn get_disconnected_v2_peers(&self) -> Vec<&PeerInfo> {
+        self.known_peers
+            .values()
+            .filter(|peer| {
+                peer.supports_v2_protocol
+                    && !self.connected_peers.contains_key(&peer.peer_id)
+                    && peer.reputation > 20.0 // Only try peers with decent reputation
+            })
+            .collect()
+    }
+
+    /// Get addresses of disconnected V2 peers for reconnection
+    pub fn get_v2_reconnection_candidates(&self) -> Vec<(String, String)> {
+        self.get_disconnected_v2_peers()
+            .into_iter()
+            .map(|p| (p.peer_id.clone(), p.address.clone()))
+            .collect()
+    }
+
+    /// Check if disconnecting peer is V2-capable (called BEFORE remove_peer)
+    /// Returns true if peer supports V2 protocol
+    pub fn is_v2_peer(&self, peer_id: &PeerId) -> bool {
+        // Check connected_peers first (peer is still there before remove_peer is called)
+        if let Some(peer_info) = self.connected_peers.get(peer_id) {
+            return peer_info.supports_v2_protocol;
+        }
+        // Fallback to known_peers
+        if let Some(peer_info) = self.known_peers.get(peer_id) {
+            return peer_info.supports_v2_protocol;
+        }
+        false
     }
 }
 

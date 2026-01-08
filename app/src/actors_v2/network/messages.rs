@@ -93,6 +93,9 @@ pub enum NetworkMessage {
     /// Query connected peers for their chain heights (for sync)
     /// Sends GetChainStatus to all connected peers and reports results to SyncActor
     QueryPeerHeights,
+    /// Check V2 peer health and attempt reconnection if needed
+    /// Triggered by SyncActor when no peer height responses are received
+    CheckV2PeerHealth,
 }
 
 /// SyncActor messages - blockchain sync only

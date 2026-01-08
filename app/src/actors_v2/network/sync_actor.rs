@@ -96,6 +96,8 @@ struct SyncActorState {
     last_sync_completed_at: Option<Instant>,
     /// Consecutive checks showing node is behind (for hysteresis)
     consecutive_behind_checks: u32,
+    /// Consecutive queries with no peer responses (stale detection)
+    consecutive_no_response_queries: u32,
 }
 
 impl SyncActorState {
@@ -120,6 +122,7 @@ impl SyncActorState {
             peer_height_observations: Vec::new(),
             last_sync_completed_at: None,
             consecutive_behind_checks: 0,
+            consecutive_no_response_queries: 0,
         }
     }
 
@@ -1574,7 +1577,45 @@ impl Handler<SyncMessage> for SyncActor {
                 // - Synced/Stopped: NEW - Detects when node falls behind network
 
                 if peer_heights.is_empty() {
-                    tracing::debug!("Empty peer heights report - no action needed");
+                    // Track consecutive queries with no response for stale detection
+                    let mut s = self.state.write().unwrap();
+                    s.consecutive_no_response_queries += 1;
+
+                    // Threshold for stale detection (configurable via STALE_DETECTION_THRESHOLD)
+                    const STALE_DETECTION_THRESHOLD: u32 = 3;
+
+                    // After threshold queries (90 seconds at 30s intervals) with no responses,
+                    // network_height is likely stale
+                    if s.consecutive_no_response_queries >= STALE_DETECTION_THRESHOLD
+                        && matches!(s.sync_state, SyncState::Synced | SyncState::Stopped)
+                    {
+                        tracing::warn!(
+                            consecutive_no_responses = s.consecutive_no_response_queries,
+                            threshold = STALE_DETECTION_THRESHOLD,
+                            "⚠️ STALE NETWORK HEIGHT: No peer responses for {} queries - V2 peers may be disconnected",
+                            s.consecutive_no_response_queries
+                        );
+
+                        // Reset counter after triggering health check to prevent spam
+                        // Next trigger will require another STALE_DETECTION_THRESHOLD queries
+                        s.consecutive_no_response_queries = 0;
+
+                        // Signal to NetworkActor to check V2 peer health
+                        if let Some(network) = self.network_actor.clone() {
+                            drop(s); // Release lock before async
+                            tokio::spawn(async move {
+                                if let Err(e) = network.send(NetworkMessage::CheckV2PeerHealth).await {
+                                    tracing::warn!(error = %e, "Failed to trigger V2 peer health check");
+                                }
+                            });
+                        }
+                    } else {
+                        tracing::debug!(
+                            consecutive_no_responses = s.consecutive_no_response_queries,
+                            threshold = STALE_DETECTION_THRESHOLD,
+                            "Empty peer heights report - tracking for stale detection"
+                        );
+                    }
                     return Ok(SyncResponse::Started);
                 }
 
@@ -1596,6 +1637,9 @@ impl Handler<SyncMessage> for SyncActor {
                 let mut s = self.state.write().unwrap();
                 let current_state = s.sync_state.clone();
                 let now = Instant::now();
+
+                // Reset stale detection counter when we receive valid responses
+                s.consecutive_no_response_queries = 0;
 
                 // Store timestamped observations for freshness filtering
                 for (peer_id, height, _) in &peer_heights {
