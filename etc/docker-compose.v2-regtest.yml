@@ -191,15 +191,15 @@ services:
       alys-regtest:
         ipv4_address: 172.20.0.12
     ports:
-      - "3010:3000"    # V0 RPC
-      - "3011:3001"    # V2 RPC
-      - "9001:9000"    # V0 P2P
-      - "9091:9090"    # Prometheus Metrics
-      - "10001:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
+      - "3020:3000"    # V0 RPC
+      - "3021:3001"    # V2 RPC
+      - "9002:9000"    # V0 P2P
+      - "9092:9090"    # Prometheus Metrics
+      - "10002:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
     volumes:
-      - ../data/node2/db:/lib/alys/data/db
-      - ../data/node2/wallet:/lib/alys/data/wallet
-      - ../logs/node2:/opt/alys/logs
+      - ../data/node3/db:/lib/alys/data/db
+      - ../data/node3/wallet:/lib/alys/data/wallet
+      - ../logs/node3:/opt/alys/logs
       - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
     environment:
       RUST_LOG: trace
