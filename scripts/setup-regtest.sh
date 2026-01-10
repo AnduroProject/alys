@@ -115,8 +115,8 @@ if [ "${SKIP_KEYGEN}" != "true" ]; then
     echo "Generating keys..."
     echo ""
 
-    # Run keygen and save output
-    ./app/target/debug/keygen ${NUM_VALIDATORS} | tee "${KEYS_OUTPUT_FILE}"
+    # Run keygen and save output (binary is in workspace target directory)
+    ./target/debug/keygen ${NUM_VALIDATORS} | tee "${KEYS_OUTPUT_FILE}"
 
     echo ""
     echo "✓ Keys saved to ${KEYS_OUTPUT_FILE}"
