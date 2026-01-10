@@ -2545,6 +2545,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .map(|hash| hash.to_block_hash())
             .collect())
     }
+
+    /// Sync storage to disk for graceful shutdown.
+    /// This ensures all pending writes are flushed before the process exits.
+    pub fn sync_storage(&self) -> Result<(), Error> {
+        info!("Syncing storage for graceful shutdown...");
+        self.storage.sync()
+    }
 }
 
 #[async_trait::async_trait]

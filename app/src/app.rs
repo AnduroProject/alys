@@ -22,11 +22,13 @@ use eyre::Result;
 use futures::pin_mut;
 use lighthouse_wrapper::bls::{Keypair, SecretKey};
 use lighthouse_wrapper::execution_layer::auth::JwtKey;
+use lighthouse_wrapper::store::LevelDB;
+use lighthouse_wrapper::types::MainnetEthSpec;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use std::{future::Future, sync::Arc};
-use tokio::task::LocalSet;
+use tokio::sync::oneshot;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -194,8 +196,50 @@ impl App {
 
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
-        tokio_runtime.block_on(run_until_ctrl_c(self.execute()))?;
-        Ok(())
+
+        // Create channels for shutdown coordination
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (chain_tx, chain_rx) =
+            oneshot::channel::<Arc<Chain<LevelDB<MainnetEthSpec>>>>();
+
+        // Run the application with graceful shutdown
+        let result = tokio_runtime.block_on(async {
+            // Spawn the main application
+            let execute_handle = tokio::spawn(self.execute_with_shutdown(shutdown_rx, chain_tx));
+
+            // Wait for shutdown signal
+            let signal = run_until_ctrl_c(async {
+                // Wait for execute to complete (which only happens on error)
+                match execute_handle.await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(eyre::Error::msg(format!("Execute task panicked: {}", e))),
+                }
+            })
+            .await?;
+
+            // Signal shutdown to the execute task
+            let _ = shutdown_tx.send(());
+
+            // Perform graceful shutdown if we have the chain
+            if let Ok(chain) = chain_rx.await {
+                info!("Performing graceful shutdown...");
+
+                // Sync storage to disk
+                if let Err(e) = chain.sync_storage() {
+                    error!("Failed to sync storage during shutdown: {:?}", e);
+                } else {
+                    info!("Storage synced successfully during graceful shutdown");
+                }
+            } else {
+                warn!("Could not retrieve chain for graceful shutdown - storage may not be synced");
+            }
+
+            info!("Shutdown complete (signal: {:?})", signal);
+            Ok::<(), eyre::Error>(())
+        });
+
+        result
     }
 
     fn init_tracing(&self) {
@@ -229,7 +273,11 @@ impl App {
         tracing_subscriber::registry().with(layers).init();
     }
 
-    async fn execute(self) -> Result<()> {
+    async fn execute_with_shutdown(
+        self,
+        shutdown_rx: oneshot::Receiver<()>,
+        chain_tx: oneshot::Sender<Arc<Chain<LevelDB<MainnetEthSpec>>>>,
+    ) -> Result<()> {
         // Log dev-regtest node information
         if self.dev_regtest {
             info!(
@@ -724,10 +772,15 @@ impl App {
         // .start_slot_worker()
         // .await;
 
-        // Keep the application running indefinitely
-        // The app will only exit on Ctrl-C or SIGTERM (handled by run_until_ctrl_c)
+        // Send the chain Arc for graceful shutdown handling
+        if chain_tx.send(chain.clone()).is_err() {
+            warn!("Failed to send chain for graceful shutdown - receiver dropped");
+        }
+
+        // Keep the application running until shutdown signal
         info!("Application initialized successfully. Running until shutdown signal...");
-        std::future::pending::<()>().await;
+        let _ = shutdown_rx.await;
+        info!("Shutdown signal received in execute task");
 
         Ok(())
     }
@@ -741,7 +794,15 @@ pub fn tokio_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
         .build()
 }
 
-async fn run_until_ctrl_c<F, E>(fut: F) -> Result<(), E>
+/// Shutdown signal type
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShutdownSignal {
+    CtrlC,
+    Sigterm,
+    Normal,
+}
+
+async fn run_until_ctrl_c<F, E>(fut: F) -> Result<ShutdownSignal, E>
 where
     F: Future<Output = Result<(), E>>,
     E: Send + Sync + 'static + From<std::io::Error>,
@@ -752,15 +813,20 @@ where
     let sigterm = stream.recv();
     pin_mut!(sigterm, ctrl_c, fut);
 
-    tokio::select! {
+    let signal = tokio::select! {
         _ = ctrl_c => {
-            info!("Received ctrl-c");
+            info!("Received ctrl-c, initiating graceful shutdown...");
+            ShutdownSignal::CtrlC
         },
         _ = sigterm => {
-            info!("Received SIGTERM");
+            info!("Received SIGTERM, initiating graceful shutdown...");
+            ShutdownSignal::Sigterm
         },
-        res = fut => res?,
-    }
+        res = fut => {
+            res?;
+            ShutdownSignal::Normal
+        },
+    };
 
-    Ok(())
+    Ok(signal)
 }
