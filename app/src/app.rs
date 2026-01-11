@@ -187,10 +187,10 @@ impl App {
             ));
         }
 
-        // Validate regtest node ID
-        if self.dev_regtest && (self.regtest_node_id < 1 || self.regtest_node_id > 2) {
+        // Validate regtest node ID (supports up to 10 nodes)
+        if self.dev_regtest && (self.regtest_node_id < 1 || self.regtest_node_id > 10) {
             return Err(eyre::Error::msg(
-                "Invalid --regtest-node-id: must be 1 or 2",
+                "Invalid --regtest-node-id: must be between 1 and 10",
             ));
         }
 
