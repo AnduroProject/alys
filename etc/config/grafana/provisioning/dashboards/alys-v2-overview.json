@@ -3384,8 +3384,29 @@
       "type": "timeseries"
     },
     {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Reputation score for each connected peer. Reputation affects peer selection for sync and block requests. Higher is better (range: -100 to 100+)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "Reputation", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 80, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "line+area"}},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": -50}, {"color": "yellow", "value": 0}, {"color": "green", "value": 50}]},
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 163},
+      "id": 228,
+      "options": {"legend": {"calcs": ["last"], "displayMode": "table", "placement": "right", "showLegend": true, "sortBy": "Last", "sortDesc": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "10.0.0",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_peer_reputation{job=~\"$node\"}", "legendFormat": "{{peer_id}}", "refId": "A"}],
+      "title": "Per-Peer Reputation",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 163},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 171},
       "id": 220,
       "panels": [],
       "title": "Sync Progress Details",
@@ -3421,7 +3442,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 164},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 172},
       "id": 227,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3441,7 +3462,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 172},
       "id": 221,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3461,7 +3482,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 172},
       "id": 222,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3481,7 +3502,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 172},
       "id": 223,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3501,7 +3522,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 172},
       "id": 224,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3522,7 +3543,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 170},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 178},
       "id": 225,
       "options": {"legend": {"calcs": ["last", "min"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
       "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_blocks_remaining{job=~\"$node\"}", "legendFormat": "{{job}} - Remaining", "refId": "A"}],
@@ -3542,7 +3563,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 170},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 178},
       "id": 226,
       "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
       "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_rate_blocks_per_second{job=~\"$node\"}", "legendFormat": "{{job}} - Rate", "refId": "A"}],

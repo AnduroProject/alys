@@ -726,9 +726,9 @@ impl Default for SyncMetrics {
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_gauge_with_registry, register_histogram_with_registry,
+    register_gauge_vec_with_registry, register_gauge_with_registry, register_histogram_with_registry,
     register_int_counter_vec_with_registry, register_int_counter_with_registry,
-    register_int_gauge_with_registry, Gauge, Histogram, IntCounter, IntCounterVec, IntGauge,
+    register_int_gauge_with_registry, Gauge, GaugeVec, Histogram, IntCounter, IntCounterVec, IntGauge,
 };
 
 use crate::metrics::ALYS_REGISTRY;
@@ -946,6 +946,15 @@ lazy_static! {
         "alys_peer_errors_total",
         "Total errors encountered with each peer",
         &["peer_id", "error_type"],
+        ALYS_REGISTRY
+    )
+    .unwrap();
+
+    /// Reputation score for each connected peer
+    pub static ref PEER_REPUTATION: GaugeVec = register_gauge_vec_with_registry!(
+        "alys_peer_reputation",
+        "Current reputation score for each connected peer",
+        &["peer_id"],
         ALYS_REGISTRY
     )
     .unwrap();
@@ -1271,4 +1280,22 @@ pub fn update_prometheus_network_metrics(metrics: &NetworkMetrics) {
     NETWORK_LATENCY_P95.set(metrics.message_latency_p95_ms as f64);
     NETWORK_LATENCY_P99.set(metrics.message_latency_p99_ms as f64);
     NETWORK_UPTIME.set(metrics.uptime_seconds as i64);
+}
+
+/// Helper function to update per-peer reputation scores
+/// Takes a slice of (peer_id, reputation_score) tuples
+pub fn update_prometheus_peer_reputations(peer_reputations: &[(String, f64)]) {
+    // Reset existing peer reputation metrics to handle disconnected peers
+    // Note: This clears all labels, then sets new values
+    PEER_REPUTATION.reset();
+
+    for (peer_id, reputation) in peer_reputations {
+        // Use shortened peer ID for readability (first 8 chars)
+        let short_peer_id = if peer_id.len() > 16 {
+            format!("{}...", &peer_id[..16])
+        } else {
+            peer_id.clone()
+        };
+        PEER_REPUTATION.with_label_values(&[&short_peer_id]).set(*reputation);
+    }
 }
