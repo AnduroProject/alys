@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use super::super::messages::PeerId;
+use super::super::metrics::update_prometheus_peer_reputations;
 
 /// Default Instant value for deserialization
 fn default_instant() -> Instant {
@@ -202,6 +203,9 @@ impl PeerManager {
         self.connected_peers
             .insert(peer_id.clone(), peer_info.clone());
         self.known_peers.insert(peer_id, peer_info);
+
+        // Update Prometheus per-peer reputation metrics
+        self.update_prometheus_metrics();
     }
 
     /// Update peer's address without resetting other fields
@@ -235,6 +239,9 @@ impl PeerManager {
 
             // Keep in known_peers for potential reconnection
             self.known_peers.insert(peer_id.clone(), peer_info);
+
+            // Update Prometheus per-peer reputation metrics (removes disconnected peer)
+            self.update_prometheus_metrics();
         }
     }
 
@@ -292,6 +299,9 @@ impl PeerManager {
                 known_peer.reputation = peer_info.reputation;
             }
         }
+
+        // Update Prometheus per-peer reputation metrics
+        self.update_prometheus_metrics();
     }
 
     /// Phase 4: Get peers below reputation threshold (for disconnection)
@@ -493,6 +503,23 @@ impl PeerManager {
             high_reputation_peers: high_reputation_count,
             discovery_active: self.discovery_active,
         }
+    }
+
+    /// Update Prometheus metrics with current per-peer reputation scores
+    /// This exports individual peer reputations for Grafana dashboards
+    pub fn update_prometheus_metrics(&self) {
+        let peer_reputations: Vec<(String, f64)> = self
+            .connected_peers
+            .iter()
+            .map(|(peer_id, info)| (peer_id.clone(), info.reputation))
+            .collect();
+
+        update_prometheus_peer_reputations(&peer_reputations);
+
+        tracing::trace!(
+            peer_count = peer_reputations.len(),
+            "Updated Prometheus per-peer reputation metrics"
+        );
     }
 
     // ==================== V2 Protocol Capability Tracking ====================
