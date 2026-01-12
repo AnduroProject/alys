@@ -103,7 +103,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_height{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_height{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Chain Height",
           "refId": "A"
         }
@@ -165,7 +165,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_sync_status{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_sync_status{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -254,7 +254,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_network_peers{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_network_peers{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -374,7 +374,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_blocks_produced_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_chain_blocks_produced_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Produced",
           "refId": "A"
         },
@@ -383,7 +383,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_blocks_imported_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_chain_blocks_imported_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Imported",
           "refId": "B"
         }
@@ -473,7 +473,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_forks_detected_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_forks_detected_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Forks Detected",
           "refId": "A"
         },
@@ -482,7 +482,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_reorganizations_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_reorganizations_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Reorganizations",
           "refId": "B"
         }
@@ -571,7 +571,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_import_queue_depth{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_import_queue_depth{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Import Queue",
           "refId": "A"
         }
@@ -662,7 +662,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_block_production_failures_total{job=~\"alys-node-.*\"}[5m])",
+          "expr": "rate(alys_chain_block_production_failures_total{job=~\"$node\"}[5m])",
           "legendFormat": "{{instance}} - Production Failures",
           "refId": "A"
         },
@@ -671,7 +671,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_block_import_failures_total{job=~\"alys-node-.*\"}[5m])",
+          "expr": "rate(alys_chain_block_import_failures_total{job=~\"$node\"}[5m])",
           "legendFormat": "{{instance}} - Import Failures",
           "refId": "B"
         }
@@ -752,7 +752,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_orphan_blocks_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_orphan_blocks_total{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -903,7 +903,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_orphan_blocks_by_reason_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_orphan_blocks_by_reason_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - {{reason}}",
           "refId": "A"
         }
@@ -963,7 +963,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_last_orphan_timestamp_seconds{job=~\"alys-node-.*\"} * 1000",
+          "expr": "alys_chain_last_orphan_timestamp_seconds{job=~\"$node\"} * 1000",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1053,7 +1053,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_blocks_discarded_in_reorg_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_blocks_discarded_in_reorg_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Discarded in Reorg",
           "refId": "A"
         },
@@ -1062,7 +1062,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_blocks_with_unknown_parent_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_blocks_with_unknown_parent_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Unknown Parent",
           "refId": "B"
         }
@@ -1152,7 +1152,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.50, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - P50",
           "refId": "A"
         },
@@ -1161,7 +1161,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.95, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - P95",
           "refId": "B"
         }
@@ -1240,7 +1240,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_state{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_state{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1292,7 +1292,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_progress_ratio{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_progress_ratio{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1342,7 +1342,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_rate_blocks_per_second{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_rate_blocks_per_second{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1392,7 +1392,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_active_peers{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_active_peers{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1428,7 +1428,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_eta_seconds{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_eta_seconds{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1468,7 +1468,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_blocks_remaining{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_blocks_remaining{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1515,13 +1515,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_current_height{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_current_height{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Current",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_target_height{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_target_height{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Target",
           "refId": "B"
         }
@@ -1584,13 +1584,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_sync_blocks_synced_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_sync_blocks_synced_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Synced",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_sync_blocks_processed_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_sync_blocks_processed_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Processed",
           "refId": "B"
         }
@@ -1666,19 +1666,19 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_validation_errors_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_validation_errors_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Validation Errors",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_storage_errors_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_storage_errors_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Storage Errors",
           "refId": "B"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_network_errors_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_sync_network_errors_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Network Errors",
           "refId": "C"
         }
@@ -1726,7 +1726,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_connected_peers{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_connected_peers{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1762,7 +1762,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_gossipsub_mesh_size{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_gossipsub_mesh_size{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1802,7 +1802,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_peer_reputation_average{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_peer_reputation_average{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1838,7 +1838,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_message_latency_p50_ms{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_message_latency_p50_ms{job=~\"$node\"}",
           "legendFormat": "{{instance}} P50",
           "refId": "A"
         }
@@ -1885,13 +1885,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_messages_sent_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_messages_sent_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Sent",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_messages_received_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_messages_received_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Received",
           "refId": "B"
         }
@@ -1938,13 +1938,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_gossip_messages_published_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_gossip_messages_published_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Published",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_gossip_messages_received_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_gossip_messages_received_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Received",
           "refId": "B"
         }
@@ -1991,13 +1991,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_blocks_received_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_blocks_received_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Received",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_network_blocks_forwarded_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_network_blocks_forwarded_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Forwarded",
           "refId": "B"
         }
@@ -2047,19 +2047,19 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_blocks_deserialization_errors_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_blocks_deserialization_errors_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Deser Errors",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_blocks_duplicate_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_blocks_duplicate_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Duplicate",
           "refId": "B"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_network_connection_errors_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_network_connection_errors_total{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Conn Errors",
           "refId": "C"
         }
@@ -2107,7 +2107,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_storage_cache_hits_total{job=~\"alys-node-.*\"} / (alys_storage_cache_hits_total{job=~\"alys-node-.*\"} + alys_storage_cache_misses_total{job=~\"alys-node-.*\"})",
+          "expr": "alys_storage_cache_hits_total{job=~\"$node\"} / (alys_storage_cache_hits_total{job=~\"$node\"} + alys_storage_cache_misses_total{job=~\"$node\"})",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -2147,7 +2147,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_storage_database_size_bytes{job=~\"alys-node-.*\"}",
+          "expr": "alys_storage_database_size_bytes{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -2187,7 +2187,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_storage_cache_memory_bytes{job=~\"alys-node-.*\"}",
+          "expr": "alys_storage_cache_memory_bytes{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -2223,7 +2223,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_storage_current_chain_height{job=~\"alys-node-.*\"}",
+          "expr": "alys_storage_current_chain_height{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -2273,13 +2273,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_blocks_stored_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_blocks_stored_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Stored",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_blocks_retrieved_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_blocks_retrieved_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Retrieved",
           "refId": "B"
         }
@@ -2329,13 +2329,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_state_updates_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_state_updates_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - State Updates",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_state_queries_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_state_queries_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - State Queries",
           "refId": "B"
         }
@@ -2382,25 +2382,25 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.50, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - Store P50",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.95, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.95, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - Store P95",
           "refId": "B"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.50, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - Retrieve P50",
           "refId": "C"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.95, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.95, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - Retrieve P95",
           "refId": "D"
         }
@@ -2450,13 +2450,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_write_operations_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_write_operations_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Write Operations",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_write_failures_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_write_failures_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Write Failures",
           "refId": "B"
         }
@@ -2503,13 +2503,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_cache_hits_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_cache_hits_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Cache Hits",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_cache_misses_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_cache_misses_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Cache Misses",
           "refId": "B"
         }
@@ -2556,13 +2556,13 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "rate(alys_storage_batch_operations_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_storage_batch_operations_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Batch Ops",
           "refId": "A"
         },
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "histogram_quantile(0.50, rate(alys_storage_batch_size_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(alys_storage_batch_size_bucket{job=~\"$node\"}[5m]))",
           "legendFormat": "{{instance}} - Avg Batch Size",
           "refId": "B"
         }
@@ -2617,7 +2617,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, sum by (peer_id) (alys_peer_block_requests_total{job=~\"alys-node-.*\"}))",
+          "expr": "topk(10, sum by (peer_id) (alys_peer_block_requests_total{job=~\"$node\"}))",
           "legendFormat": "{{peer_id}}",
           "refId": "A"
         }
@@ -2664,7 +2664,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, sum by (peer_id) (alys_peer_block_responses_total{job=~\"alys-node-.*\"}))",
+          "expr": "topk(10, sum by (peer_id) (alys_peer_block_responses_total{job=~\"$node\"}))",
           "legendFormat": "{{peer_id}}",
           "refId": "A"
         }
@@ -2711,7 +2711,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, rate(alys_peer_bytes_received_total{job=~\"alys-node-.*\"}[1m]))",
+          "expr": "topk(10, rate(alys_peer_bytes_received_total{job=~\"$node\"}[1m]))",
           "legendFormat": "{{peer_id}} RX",
           "refId": "A"
         }
@@ -2758,7 +2758,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, rate(alys_peer_bytes_sent_total{job=~\"alys-node-.*\"}[1m]))",
+          "expr": "topk(10, rate(alys_peer_bytes_sent_total{job=~\"$node\"}[1m]))",
           "legendFormat": "{{peer_id}} TX",
           "refId": "A"
         }
@@ -2805,7 +2805,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, rate(alys_peer_messages_received_total{job=~\"alys-node-.*\"}[1m]))",
+          "expr": "topk(10, rate(alys_peer_messages_received_total{job=~\"$node\"}[1m]))",
           "legendFormat": "{{peer_id}}",
           "refId": "A"
         }
@@ -2856,7 +2856,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "topk(10, sum by (peer_id, error_type) (alys_peer_errors_total{job=~\"alys-node-.*\"}))",
+          "expr": "topk(10, sum by (peer_id, error_type) (alys_peer_errors_total{job=~\"$node\"}))",
           "legendFormat": "{{peer_id}} - {{error_type}}",
           "refId": "A"
         }
@@ -2865,7 +2865,7 @@
       "type": "timeseries"
     }
   ],
-  "refresh": "10s",
+  "refresh": "$refresh_interval",
   "schemaVersion": 38,
   "style": "dark",
   "tags": [
@@ -2874,7 +2874,60 @@
     "v2"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(up{job=~\"$node\"}, job)",
+        "description": "Select Alys node(s) to display",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": true,
+        "name": "node",
+        "options": [],
+        "query": {
+          "query": "label_values(up{job=~\"$node\"}, job)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "10s",
+          "value": "10s"
+        },
+        "description": "Auto-refresh interval",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Refresh",
+        "multi": false,
+        "name": "refresh_interval",
+        "options": [
+          {"selected": false, "text": "Off", "value": ""},
+          {"selected": false, "text": "5s", "value": "5s"},
+          {"selected": true, "text": "10s", "value": "10s"},
+          {"selected": false, "text": "30s", "value": "30s"},
+          {"selected": false, "text": "1m", "value": "1m"},
+          {"selected": false, "text": "5m", "value": "5m"}
+        ],
+        "query": "",
+        "skipUrlSync": false,
+        "type": "interval"
+      }
+    ]
   },
   "time": {
     "from": "now-30m",
@@ -2882,7 +2935,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Alys V2 - Two-Node Regtest Overview",
+  "title": "Alys V2 - Network Overview",
   "uid": "alys-v2-overview",
   "version": 1,
   "weekStart": ""

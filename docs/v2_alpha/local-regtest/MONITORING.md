@@ -163,56 +163,75 @@ Both nodes expose Prometheus metrics:
 
 ## Dashboard
 
-### Dashboard: "Alys V2 - Two-Node Regtest Overview"
+### Dashboard: "Alys V2 - Network Overview"
 
 **UID**: `alys-v2-overview`
-**Refresh**: 10 seconds
+**Refresh**: Configurable (default 10 seconds)
 **Time Range**: Last 30 minutes
+
+### Dashboard Variables
+
+The dashboard includes template variables for filtering and customization:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| **Node** | Filter metrics by specific node(s). Supports multi-select. | All nodes |
+| **Refresh** | Auto-refresh interval | 10s |
+
+**Using the Node Filter:**
+1. Click the "Node" dropdown at the top of the dashboard
+2. Select specific nodes (e.g., `alys-node-1`, `alys-node-2`) or "All"
+3. All panels automatically filter to show only selected node(s)
+
+This allows operators to:
+- Focus on a single node for debugging
+- Compare specific nodes side-by-side
+- Monitor the entire network at once
 
 ### Panels
 
 1. **Chain Height**
    - Type: Timeseries
-   - Shows current blockchain height for both nodes
-   - Query: `chain_height{job=~"alys-node-.*"}`
+   - Shows current blockchain height for selected nodes
+   - Query: `alys_chain_height{job=~"$node"}`
 
 2. **Sync Status**
    - Type: Gauge
    - Shows sync status (1=synced, 0=not synced)
-   - Query: `chain_sync_status{job=~"alys-node-.*"}`
+   - Query: `alys_chain_sync_status{job=~"$node"}`
 
 3. **Network Peers**
    - Type: Timeseries
    - Number of connected peers
-   - Query: `chain_network_peers{job=~"alys-node-.*"}`
+   - Query: `alys_chain_network_peers{job=~"$node"}`
 
 4. **Block Production/Import Rate**
    - Type: Timeseries
    - Blocks produced and imported per minute
    - Queries:
-     - `rate(chain_blocks_produced_total[5m]) * 60`
-     - `rate(chain_blocks_imported_total[5m]) * 60`
+     - `rate(alys_chain_blocks_produced_total{job=~"$node"}[1m])`
+     - `rate(alys_chain_blocks_imported_total{job=~"$node"}[1m])`
 
 5. **Fork Handling** (Phase 4/5)
    - Type: Timeseries
    - Forks detected and reorganizations
    - Queries:
-     - `chain_forks_detected_total`
-     - `chain_reorganizations_total`
+     - `alys_chain_forks_detected_total{job=~"$node"}`
+     - `alys_chain_reorganizations_total{job=~"$node"}`
 
 6. **Import Queue Depth** (Phase 2)
    - Type: Timeseries
    - Number of blocks waiting for import
-   - Query: `chain_import_queue_depth`
+   - Query: `alys_chain_import_queue_depth{job=~"$node"}`
 
 7. **Block Errors**
    - Type: Timeseries
    - Production and import failure rates
    - Queries:
-     - `rate(chain_block_production_failures_total[5m])`
-     - `rate(chain_block_import_failures_total[5m])`
+     - `rate(alys_chain_block_production_failures_total{job=~"$node"}[5m])`
+     - `rate(alys_chain_block_import_failures_total{job=~"$node"}[5m])`
 
-**Note**: The dashboard queries V2 metrics that may not be fully implemented yet. See [Troubleshooting](#troubleshooting) for how to adapt to available metrics.
+**Note**: All queries use the `$node` variable for filtering. Use `alys_` prefixed metrics (V2).
 
 ---
 
