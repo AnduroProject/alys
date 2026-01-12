@@ -3393,6 +3393,44 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Current state in the sync state machine: Stopped → Starting → DiscoveringPeers → QueryingNetworkHeight → RequestingBlocks → ProcessingBlocks → Synced (or Error)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [
+            {"options": {"0": {"color": "dark-gray", "index": 0, "text": "Stopped"}}, "type": "value"},
+            {"options": {"1": {"color": "blue", "index": 1, "text": "Starting"}}, "type": "value"},
+            {"options": {"2": {"color": "purple", "index": 2, "text": "Discovering Peers"}}, "type": "value"},
+            {"options": {"3": {"color": "light-blue", "index": 3, "text": "Querying Network"}}, "type": "value"},
+            {"options": {"4": {"color": "orange", "index": 4, "text": "Requesting Blocks"}}, "type": "value"},
+            {"options": {"5": {"color": "yellow", "index": 5, "text": "Processing Blocks"}}, "type": "value"},
+            {"options": {"6": {"color": "green", "index": 6, "text": "Synced"}}, "type": "value"},
+            {"options": {"7": {"color": "red", "index": 7, "text": "Error"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "dark-gray", "value": null},
+            {"color": "blue", "value": 1},
+            {"color": "purple", "value": 2},
+            {"color": "light-blue", "value": 3},
+            {"color": "orange", "value": 4},
+            {"color": "yellow", "value": 5},
+            {"color": "green", "value": 6},
+            {"color": "red", "value": 7}
+          ]},
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 164},
+      "id": 227,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "10.0.0",
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_state{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "title": "Sync State Machine",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Estimated time remaining until sync completes",
       "fieldConfig": {
         "defaults": {
@@ -3403,7 +3441,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 164},
       "id": 221,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3423,7 +3461,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 164},
       "id": 222,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3443,7 +3481,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 164},
       "id": 223,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
@@ -3463,7 +3501,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 164},
+      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 164},
       "id": 224,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
