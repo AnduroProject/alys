@@ -103,7 +103,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_height{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_height{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}} - Chain Height",
           "refId": "A"
         }
@@ -165,7 +165,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_sync_status{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_sync_status{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -254,7 +254,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_network_peers{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_network_peers{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -374,7 +374,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(chain_blocks_produced_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_chain_blocks_produced_total{job=~\"alys-node-.*\"}[1m])",
           "legendFormat": "{{instance}} - Produced",
           "refId": "A"
         },
@@ -383,7 +383,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(chain_blocks_imported_total{job=~\"alys-node-.*\"}[1m])",
+          "expr": "rate(alys_chain_blocks_imported_total{job=~\"alys-node-.*\"}[1m])",
           "legendFormat": "{{instance}} - Imported",
           "refId": "B"
         }
@@ -473,7 +473,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_forks_detected_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_forks_detected_total{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}} - Forks Detected",
           "refId": "A"
         },
@@ -482,7 +482,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_reorganizations_total{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_reorganizations_total{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}} - Reorganizations",
           "refId": "B"
         }
@@ -571,7 +571,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chain_import_queue_depth{job=~\"alys-node-.*\"}",
+          "expr": "alys_chain_import_queue_depth{job=~\"alys-node-.*\"}",
           "legendFormat": "{{instance}} - Import Queue",
           "refId": "A"
         }
@@ -662,7 +662,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(chain_block_production_failures_total{job=~\"alys-node-.*\"}[5m])",
+          "expr": "rate(alys_chain_block_production_failures_total{job=~\"alys-node-.*\"}[5m])",
           "legendFormat": "{{instance}} - Production Failures",
           "refId": "A"
         },
@@ -671,12 +671,2197 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(chain_block_import_failures_total{job=~\"alys-node-.*\"}[5m])",
+          "expr": "rate(alys_chain_block_import_failures_total{job=~\"alys-node-.*\"}[5m])",
           "legendFormat": "{{instance}} - Import Failures",
           "refId": "B"
         }
       ],
       "title": "Block Errors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 8,
+      "panels": [],
+      "title": "Orphan Block Metrics (Phase 6)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 25
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "alys_chain_orphan_blocks_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Orphan Blocks",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*reorg.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*stale.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*invalid.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*unknown.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 25
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last",
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "alys_chain_orphan_blocks_by_reason_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Orphan Blocks by Reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 25
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "alys_chain_last_orphan_timestamp_seconds{job=~\"alys-node-.*\"} * 1000",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Last Orphan Detected",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "alys_chain_blocks_discarded_in_reorg_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Discarded in Reorg",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "alys_chain_blocks_with_unknown_parent_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Unknown Parent",
+          "refId": "B"
+        }
+      ],
+      "title": "Block Discards & Unknown Parents",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.50, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - P50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, rate(alys_chain_reorg_recovery_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - P95",
+          "refId": "B"
+        }
+      ],
+      "title": "Reorg Recovery Duration",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "id": 14,
+      "panels": [],
+      "title": "Sync Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {"color": "red", "index": 0, "text": "Stopped"},
+                "1": {"color": "yellow", "index": 1, "text": "Starting"},
+                "2": {"color": "yellow", "index": 2, "text": "Discovering"},
+                "3": {"color": "yellow", "index": 3, "text": "Querying"},
+                "4": {"color": "blue", "index": 4, "text": "Requesting"},
+                "5": {"color": "blue", "index": 5, "text": "Processing"},
+                "6": {"color": "green", "index": 6, "text": "Synced"},
+                "7": {"color": "red", "index": 7, "text": "Error"}
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 42
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_state{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync State",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "green", "value": 95}
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 42
+      },
+      "id": 16,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_progress_ratio{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync Progress",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 42
+      },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_rate_blocks_per_second{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync Rate (blocks/sec)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 42
+      },
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_active_peers{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync Active Peers",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 46},
+      "id": 48,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_eta_seconds{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync ETA",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1000},
+              {"color": "red", "value": 10000}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 46},
+      "id": 49,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_blocks_remaining{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks Remaining",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 46},
+      "id": 50,
+      "options": {
+        "legend": {"calcs": ["last"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_current_height{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Current",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_target_height{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Target",
+          "refId": "B"
+        }
+      ],
+      "title": "Sync Height Progress",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 54
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "calcs": ["last", "sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_sync_blocks_synced_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Synced",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_sync_blocks_processed_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Processed",
+          "refId": "B"
+        }
+      ],
+      "title": "Sync Block Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byRegexp", "options": ".*Validation.*"},
+            "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]
+          },
+          {
+            "matcher": {"id": "byRegexp", "options": ".*Storage.*"},
+            "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]
+          },
+          {
+            "matcher": {"id": "byRegexp", "options": ".*Network.*"},
+            "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": ["last", "sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_validation_errors_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Validation Errors",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_storage_errors_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Storage Errors",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_sync_network_errors_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Network Errors",
+          "refId": "C"
+        }
+      ],
+      "title": "Sync Errors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 54},
+      "id": 21,
+      "panels": [],
+      "title": "Network Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "green", "value": 3}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 55},
+      "id": 22,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_connected_peers{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Connected Peers",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 55},
+      "id": 23,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_gossipsub_mesh_size{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Gossipsub Mesh Size",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 0.3},
+              {"color": "green", "value": 0.7}
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 55},
+      "id": 24,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_peer_reputation_average{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Peer Reputation",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 55},
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_message_latency_p50_ms{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} P50",
+          "refId": "A"
+        }
+      ],
+      "title": "Message Latency P50",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 59},
+      "id": 26,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_messages_sent_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Sent",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_messages_received_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Received",
+          "refId": "B"
+        }
+      ],
+      "title": "Message Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 59},
+      "id": 27,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_gossip_messages_published_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Published",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_gossip_messages_received_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Received",
+          "refId": "B"
+        }
+      ],
+      "title": "Gossip Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 67},
+      "id": 28,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_blocks_received_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Received",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_network_blocks_forwarded_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Forwarded",
+          "refId": "B"
+        }
+      ],
+      "title": "Block Flow Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*Errors.*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*Duplicate.*"}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 67},
+      "id": 29,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_blocks_deserialization_errors_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Deser Errors",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_blocks_duplicate_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Duplicate",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_network_connection_errors_total{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}} - Conn Errors",
+          "refId": "C"
+        }
+      ],
+      "title": "Network Errors",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 75},
+      "id": 30,
+      "panels": [],
+      "title": "Storage Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 50},
+              {"color": "green", "value": 80}
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 76},
+      "id": 31,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_storage_cache_hits_total{job=~\"alys-node-.*\"} / (alys_storage_cache_hits_total{job=~\"alys-node-.*\"} + alys_storage_cache_misses_total{job=~\"alys-node-.*\"})",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Hit Rate",
+      "type": "gauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 536870912},
+              {"color": "red", "value": 1073741824}
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 76},
+      "id": 32,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_storage_database_size_bytes{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Database Size",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 268435456},
+              {"color": "red", "value": 536870912}
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 76},
+      "id": 33,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_storage_cache_memory_bytes{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache Memory",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": null}]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 76},
+      "id": 34,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "alys_storage_current_chain_height{job=~\"alys-node-.*\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Storage Chain Height",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*Stored.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*Retrieved.*"}, "properties": [{"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 80},
+      "id": 35,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_blocks_stored_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Stored",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_blocks_retrieved_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Retrieved",
+          "refId": "B"
+        }
+      ],
+      "title": "Block Storage Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*Updates.*"}, "properties": [{"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*Queries.*"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 80},
+      "id": 36,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_state_updates_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - State Updates",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_state_queries_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - State Queries",
+          "refId": "B"
+        }
+      ],
+      "title": "State Operations Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 88},
+      "id": 37,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - Store P50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, rate(alys_storage_block_storage_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - Store P95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - Retrieve P50",
+          "refId": "C"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, rate(alys_storage_block_retrieval_duration_seconds_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - Retrieve P95",
+          "refId": "D"
+        }
+      ],
+      "title": "Block Storage Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*Failures.*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*Operations.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 88},
+      "id": 38,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_write_operations_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Write Operations",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_write_failures_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Write Failures",
+          "refId": "B"
+        }
+      ],
+      "title": "Write Operations",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 96},
+      "id": 39,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_cache_hits_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Cache Hits",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_cache_misses_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Cache Misses",
+          "refId": "B"
+        }
+      ],
+      "title": "Cache Hit/Miss Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 96},
+      "id": 40,
+      "options": {
+        "legend": {"calcs": ["last", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alys_storage_batch_operations_total{job=~\"alys-node-.*\"}[1m])",
+          "legendFormat": "{{instance}} - Batch Ops",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, rate(alys_storage_batch_size_bucket{job=~\"alys-node-.*\"}[5m]))",
+          "legendFormat": "{{instance}} - Avg Batch Size",
+          "refId": "B"
+        }
+      ],
+      "title": "Batch Operations",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 104},
+      "id": 41,
+      "panels": [],
+      "title": "Per-Peer Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 105},
+      "id": 42,
+      "options": {
+        "legend": {"calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, sum by (peer_id) (alys_peer_block_requests_total{job=~\"alys-node-.*\"}))",
+          "legendFormat": "{{peer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Block Requests by Peer (Top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 105},
+      "id": 43,
+      "options": {
+        "legend": {"calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, sum by (peer_id) (alys_peer_block_responses_total{job=~\"alys-node-.*\"}))",
+          "legendFormat": "{{peer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Block Responses by Peer (Top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 113},
+      "id": 44,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, rate(alys_peer_bytes_received_total{job=~\"alys-node-.*\"}[1m]))",
+          "legendFormat": "{{peer_id}} RX",
+          "refId": "A"
+        }
+      ],
+      "title": "Bandwidth by Peer - Received (Top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 113},
+      "id": 45,
+      "options": {
+        "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, rate(alys_peer_bytes_sent_total{job=~\"alys-node-.*\"}[1m]))",
+          "legendFormat": "{{peer_id}} TX",
+          "refId": "A"
+        }
+      ],
+      "title": "Bandwidth by Peer - Sent (Top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "none"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 121},
+      "id": 46,
+      "options": {
+        "legend": {"calcs": ["last", "sum"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, rate(alys_peer_messages_received_total{job=~\"alys-node-.*\"}[1m]))",
+          "legendFormat": "{{peer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Message Rate by Peer - Received (Top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {"type": "linear"},
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {"group": "A", "mode": "normal"},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*timeout.*"}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*protocol.*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+          {"matcher": {"id": "byRegexp", "options": ".*connection.*"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 121},
+      "id": 47,
+      "options": {
+        "legend": {"calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, sum by (peer_id, error_type) (alys_peer_errors_total{job=~\"alys-node-.*\"}))",
+          "legendFormat": "{{peer_id}} - {{error_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Errors by Peer (Top 10)",
       "type": "timeseries"
     }
   ],

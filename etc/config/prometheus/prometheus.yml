@@ -28,6 +28,15 @@ scrape_configs:
           node_type: 'peer'
           role: 'validator'
 
+  # Alys Node 3 (Peer node)
+  - job_name: 'alys-node-3'
+    static_configs:
+      - targets: ['alys-node-3:9090']  # Alys metrics endpoint
+        labels:
+          instance: 'node-3'
+          node_type: 'peer'
+          role: 'validator'
+
   # Reth Execution Layer
   - job_name: 'reth-execution'
     static_configs:
