@@ -736,28 +736,28 @@ use crate::metrics::ALYS_REGISTRY;
 lazy_static! {
     // Sync progress metrics
     pub static ref SYNC_CURRENT_HEIGHT: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_current_height",
+        "sync_current_height",
         "Current synced blockchain height",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_TARGET_HEIGHT: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_target_height",
+        "sync_target_height",
         "Target height to sync to",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_BLOCKS_SYNCED: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_blocks_synced_total",
+        "sync_blocks_synced_total",
         "Total blocks synced from peers",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_PROGRESS: Gauge = register_gauge_with_registry!(
-        "alys_sync_progress_ratio",
+        "sync_progress_ratio",
         "Sync progress as ratio (0.0 to 1.0)",
         ALYS_REGISTRY
     )
@@ -765,21 +765,21 @@ lazy_static! {
 
     // Request metrics
     pub static ref SYNC_BLOCK_REQUESTS_SENT: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_block_requests_sent_total",
+        "sync_block_requests_sent_total",
         "Total block requests sent to peers",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_BLOCK_RESPONSES_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_block_responses_received_total",
+        "sync_block_responses_received_total",
         "Total block responses received from peers",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_BLOCK_REQUEST_FAILURES: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_block_request_failures_total",
+        "sync_block_request_failures_total",
         "Total failed block requests",
         ALYS_REGISTRY
     )
@@ -787,21 +787,21 @@ lazy_static! {
 
     // Processing metrics
     pub static ref SYNC_BLOCKS_PROCESSED: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_blocks_processed_total",
+        "sync_blocks_processed_total",
         "Total blocks processed during sync",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_BLOCKS_VALIDATED: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_blocks_validated_total",
+        "sync_blocks_validated_total",
         "Total blocks validated during sync",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_BLOCKS_REJECTED: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_blocks_rejected_total",
+        "sync_blocks_rejected_total",
         "Total blocks rejected during sync",
         ALYS_REGISTRY
     )
@@ -809,14 +809,14 @@ lazy_static! {
 
     // Performance metrics
     pub static ref SYNC_BLOCK_PROCESSING_DURATION: Histogram = register_histogram_with_registry!(
-        "alys_sync_block_processing_duration_seconds",
+        "sync_block_processing_duration_seconds",
         "Block processing duration during sync",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_RATE_BPS: Gauge = register_gauge_with_registry!(
-        "alys_sync_rate_blocks_per_second",
+        "sync_rate_blocks_per_second",
         "Current sync rate in blocks per second",
         ALYS_REGISTRY
     )
@@ -824,7 +824,7 @@ lazy_static! {
 
     // Peer metrics
     pub static ref SYNC_ACTIVE_PEERS: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_active_peers",
+        "sync_active_peers",
         "Number of peers actively used for sync",
         ALYS_REGISTRY
     )
@@ -832,21 +832,21 @@ lazy_static! {
 
     // Error metrics
     pub static ref SYNC_VALIDATION_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_validation_errors_total",
+        "sync_validation_errors_total",
         "Total validation errors during sync",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_STORAGE_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_storage_errors_total",
+        "sync_storage_errors_total",
         "Total storage errors during sync",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_NETWORK_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_sync_network_errors_total",
+        "sync_network_errors_total",
         "Total network errors during sync",
         ALYS_REGISTRY
     )
@@ -854,14 +854,14 @@ lazy_static! {
 
     // State metrics
     pub static ref SYNC_IS_SYNCING: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_is_syncing",
+        "sync_is_syncing",
         "Whether sync is active (1) or not (0)",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref SYNC_STATE: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_state",
+        "sync_state",
         "Current sync state (0=Stopped, 1=Starting, 2=DiscoveringPeers, 3=QueryingNetworkHeight, 4=RequestingBlocks, 5=ProcessingBlocks, 6=Synced, 7=Error)",
         ALYS_REGISTRY
     )
@@ -869,7 +869,7 @@ lazy_static! {
 
     /// Estimated time to complete sync in seconds
     pub static ref SYNC_ETA_SECONDS: Gauge = register_gauge_with_registry!(
-        "alys_sync_eta_seconds",
+        "sync_eta_seconds",
         "Estimated time to complete sync in seconds",
         ALYS_REGISTRY
     )
@@ -877,7 +877,7 @@ lazy_static! {
 
     /// Blocks remaining to sync
     pub static ref SYNC_BLOCKS_REMAINING: IntGauge = register_int_gauge_with_registry!(
-        "alys_sync_blocks_remaining",
+        "sync_blocks_remaining",
         "Number of blocks remaining to sync",
         ALYS_REGISTRY
     )
@@ -889,7 +889,7 @@ lazy_static! {
 
     /// Block requests sent to each peer
     pub static ref PEER_BLOCK_REQUESTS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_block_requests_total",
+        "peer_block_requests_total",
         "Total block requests sent to each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -898,7 +898,7 @@ lazy_static! {
 
     /// Block responses received from each peer
     pub static ref PEER_BLOCK_RESPONSES: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_block_responses_total",
+        "peer_block_responses_total",
         "Total block responses received from each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -907,7 +907,7 @@ lazy_static! {
 
     /// Bytes received from each peer
     pub static ref PEER_BYTES_RECEIVED: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_bytes_received_total",
+        "peer_bytes_received_total",
         "Total bytes received from each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -916,7 +916,7 @@ lazy_static! {
 
     /// Bytes sent to each peer
     pub static ref PEER_BYTES_SENT: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_bytes_sent_total",
+        "peer_bytes_sent_total",
         "Total bytes sent to each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -925,7 +925,7 @@ lazy_static! {
 
     /// Messages received from each peer
     pub static ref PEER_MESSAGES_RECEIVED: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_messages_received_total",
+        "peer_messages_received_total",
         "Total messages received from each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -934,7 +934,7 @@ lazy_static! {
 
     /// Messages sent to each peer
     pub static ref PEER_MESSAGES_SENT: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_messages_sent_total",
+        "peer_messages_sent_total",
         "Total messages sent to each peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -943,7 +943,7 @@ lazy_static! {
 
     /// Errors encountered with each peer
     pub static ref PEER_ERRORS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "alys_peer_errors_total",
+        "peer_errors_total",
         "Total errors encountered with each peer",
         &["peer_id", "error_type"],
         ALYS_REGISTRY
@@ -952,7 +952,7 @@ lazy_static! {
 
     /// Reputation score for each connected peer
     pub static ref PEER_REPUTATION: GaugeVec = register_gauge_vec_with_registry!(
-        "alys_peer_reputation",
+        "peer_reputation",
         "Current reputation score for each connected peer",
         &["peer_id"],
         ALYS_REGISTRY
@@ -992,21 +992,21 @@ pub fn update_prometheus_sync_state(state: &super::sync_actor::SyncState) {
 lazy_static! {
     // Connection metrics
     pub static ref NETWORK_CONNECTED_PEERS: IntGauge = register_int_gauge_with_registry!(
-        "alys_network_connected_peers",
+        "network_connected_peers",
         "Number of currently connected peers",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_TOTAL_CONNECTIONS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_total_connections",
+        "network_total_connections",
         "Total number of peer connections established",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_FAILED_CONNECTIONS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_failed_connections_total",
+        "network_failed_connections_total",
         "Total number of failed connection attempts",
         ALYS_REGISTRY
     )
@@ -1014,28 +1014,28 @@ lazy_static! {
 
     // Message metrics
     pub static ref NETWORK_MESSAGES_SENT: IntCounter = register_int_counter_with_registry!(
-        "alys_network_messages_sent_total",
+        "network_messages_sent_total",
         "Total number of P2P messages sent",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_MESSAGES_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_messages_received_total",
+        "network_messages_received_total",
         "Total number of P2P messages received",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BYTES_SENT: IntCounter = register_int_counter_with_registry!(
-        "alys_network_bytes_sent_total",
+        "network_bytes_sent_total",
         "Total bytes sent over P2P network",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BYTES_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_bytes_received_total",
+        "network_bytes_received_total",
         "Total bytes received over P2P network",
         ALYS_REGISTRY
     )
@@ -1043,28 +1043,28 @@ lazy_static! {
 
     // Gossip metrics
     pub static ref NETWORK_GOSSIP_PUBLISHED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_gossip_messages_published_total",
+        "network_gossip_messages_published_total",
         "Total gossipsub messages published",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_GOSSIP_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_gossip_messages_received_total",
+        "network_gossip_messages_received_total",
         "Total gossipsub messages received",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_GOSSIP_SUBSCRIPTIONS: IntGauge = register_int_gauge_with_registry!(
-        "alys_network_gossip_subscriptions",
+        "network_gossip_subscriptions",
         "Number of active gossipsub subscriptions",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_GOSSIPSUB_MESH_SIZE: IntGauge = register_int_gauge_with_registry!(
-        "alys_network_gossipsub_mesh_size",
+        "network_gossipsub_mesh_size",
         "Current gossipsub mesh size",
         ALYS_REGISTRY
     )
@@ -1072,28 +1072,28 @@ lazy_static! {
 
     // Request-response metrics
     pub static ref NETWORK_REQUESTS_SENT: IntCounter = register_int_counter_with_registry!(
-        "alys_network_requests_sent_total",
+        "network_requests_sent_total",
         "Total request-response requests sent",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_REQUESTS_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_requests_received_total",
+        "network_requests_received_total",
         "Total request-response requests received",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_RESPONSES_SENT: IntCounter = register_int_counter_with_registry!(
-        "alys_network_responses_sent_total",
+        "network_responses_sent_total",
         "Total request-response responses sent",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_RESPONSES_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_responses_received_total",
+        "network_responses_received_total",
         "Total request-response responses received",
         ALYS_REGISTRY
     )
@@ -1101,14 +1101,14 @@ lazy_static! {
 
     // Error metrics
     pub static ref NETWORK_PROTOCOL_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_protocol_errors_total",
+        "network_protocol_errors_total",
         "Total protocol errors",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_CONNECTION_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_connection_errors_total",
+        "network_connection_errors_total",
         "Total connection errors",
         ALYS_REGISTRY
     )
@@ -1116,28 +1116,28 @@ lazy_static! {
 
     // Reputation metrics
     pub static ref NETWORK_PEER_REPUTATION_AVG: Gauge = register_gauge_with_registry!(
-        "alys_network_peer_reputation_average",
+        "network_peer_reputation_average",
         "Average peer reputation score",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_PEER_REPUTATION_MIN: Gauge = register_gauge_with_registry!(
-        "alys_network_peer_reputation_min",
+        "network_peer_reputation_min",
         "Minimum peer reputation score",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_PEER_REPUTATION_MAX: Gauge = register_gauge_with_registry!(
-        "alys_network_peer_reputation_max",
+        "network_peer_reputation_max",
         "Maximum peer reputation score",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BANNED_PEERS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_banned_peers_total",
+        "network_banned_peers_total",
         "Total peers banned",
         ALYS_REGISTRY
     )
@@ -1145,14 +1145,14 @@ lazy_static! {
 
     // Rate limiting metrics
     pub static ref NETWORK_RATE_LIMITED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_rate_limited_messages_total",
+        "network_rate_limited_messages_total",
         "Total messages rate limited",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_REJECTED_CONNECTIONS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_rejected_connections_total",
+        "network_rejected_connections_total",
         "Total connections rejected",
         ALYS_REGISTRY
     )
@@ -1160,21 +1160,21 @@ lazy_static! {
 
     // Latency metrics (gauges for percentiles)
     pub static ref NETWORK_LATENCY_P50: Gauge = register_gauge_with_registry!(
-        "alys_network_message_latency_p50_ms",
+        "network_message_latency_p50_ms",
         "Message latency 50th percentile in milliseconds",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_LATENCY_P95: Gauge = register_gauge_with_registry!(
-        "alys_network_message_latency_p95_ms",
+        "network_message_latency_p95_ms",
         "Message latency 95th percentile in milliseconds",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_LATENCY_P99: Gauge = register_gauge_with_registry!(
-        "alys_network_message_latency_p99_ms",
+        "network_message_latency_p99_ms",
         "Message latency 99th percentile in milliseconds",
         ALYS_REGISTRY
     )
@@ -1182,14 +1182,14 @@ lazy_static! {
 
     // mDNS discovery metrics
     pub static ref NETWORK_MDNS_DISCOVERIES: IntCounter = register_int_counter_with_registry!(
-        "alys_network_mdns_discoveries_total",
+        "network_mdns_discoveries_total",
         "Total peers discovered via mDNS",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_MDNS_EXPIRIES: IntCounter = register_int_counter_with_registry!(
-        "alys_network_mdns_expiries_total",
+        "network_mdns_expiries_total",
         "Total mDNS peer expirations",
         ALYS_REGISTRY
     )
@@ -1197,28 +1197,28 @@ lazy_static! {
 
     // Block reception metrics (Phase 5)
     pub static ref NETWORK_BLOCKS_RECEIVED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_blocks_received_total",
+        "network_blocks_received_total",
         "Total blocks received via gossipsub",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BLOCKS_FORWARDED: IntCounter = register_int_counter_with_registry!(
-        "alys_network_blocks_forwarded_total",
+        "network_blocks_forwarded_total",
         "Total blocks forwarded to ChainActor",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BLOCKS_DESER_ERRORS: IntCounter = register_int_counter_with_registry!(
-        "alys_network_blocks_deserialization_errors_total",
+        "network_blocks_deserialization_errors_total",
         "Total blocks dropped due to deserialization errors",
         ALYS_REGISTRY
     )
     .unwrap();
 
     pub static ref NETWORK_BLOCKS_DUPLICATE: IntCounter = register_int_counter_with_registry!(
-        "alys_network_blocks_duplicate_total",
+        "network_blocks_duplicate_total",
         "Total duplicate blocks cached/dropped",
         ALYS_REGISTRY
     )
@@ -1226,7 +1226,7 @@ lazy_static! {
 
     // Uptime metric
     pub static ref NETWORK_UPTIME: IntGauge = register_int_gauge_with_registry!(
-        "alys_network_uptime_seconds",
+        "network_uptime_seconds",
         "Network actor uptime in seconds",
         ALYS_REGISTRY
     )
