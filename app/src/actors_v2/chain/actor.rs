@@ -118,6 +118,13 @@ impl ChainActor {
     pub fn new(config: ChainConfig, state: ChainState) -> Self {
         let mut metrics = ChainMetrics::new();
 
+        // Register metrics with Prometheus ALYS_REGISTRY for /metrics exposure
+        tracing::info!("Registering ChainMetrics with Prometheus ALYS_REGISTRY...");
+        match metrics.register() {
+            Ok(()) => tracing::info!("✓ ChainMetrics registered successfully with Prometheus"),
+            Err(e) => tracing::error!("✗ Failed to register ChainMetrics with Prometheus: {}", e),
+        }
+
         // Initialize metrics based on current state
         metrics.set_sync_status(state.is_synced());
         metrics.set_chain_height(state.get_height());
