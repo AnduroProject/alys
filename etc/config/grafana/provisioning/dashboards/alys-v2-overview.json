@@ -46,7 +46,7 @@
       {
         "datasource": {"type": "prometheus", "uid": "prometheus"},
         "enable": true,
-        "expr": "changes(alys_sync_state{job=~\"$node\"}[5m]) > 0 and alys_sync_state{job=~\"$node\"} == 1",
+        "expr": "changes(alys_sync_is_syncing{job=~\"$node\"}[5m]) > 0 and alys_sync_is_syncing{job=~\"$node\"} == 1",
         "hide": false,
         "iconColor": "blue",
         "name": "Sync Started",
@@ -57,7 +57,7 @@
       {
         "datasource": {"type": "prometheus", "uid": "prometheus"},
         "enable": true,
-        "expr": "changes(alys_sync_state{job=~\"$node\"}[5m]) > 0 and alys_sync_state{job=~\"$node\"} == 2",
+        "expr": "changes(alys_sync_is_syncing{job=~\"$node\"}[5m]) > 0 and alys_sync_is_syncing{job=~\"$node\"} == 2",
         "hide": false,
         "iconColor": "green",
         "name": "Sync Completed",
@@ -98,7 +98,7 @@
       "id": 101,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(alys_chain_height)", "legendFormat": "Network", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(alys_storage_current_chain_height)", "legendFormat": "Network", "refId": "A"}],
       "title": "Network Height",
       "type": "stat"
     },
@@ -118,7 +118,7 @@
       "id": 102,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_chain_height{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_storage_current_chain_height{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Node Height",
       "type": "stat"
     },
@@ -138,7 +138,7 @@
       "id": 103,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(alys_chain_height) - alys_chain_height{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "max(alys_storage_current_chain_height) - alys_storage_current_chain_height{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Blocks Behind",
       "type": "stat"
     },
@@ -218,7 +218,7 @@
       "id": 107,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_chain_sync_status{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_is_syncing{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Sync Status",
       "type": "stat"
     },
@@ -283,7 +283,7 @@
       "id": 110,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(alys_chain_blocks_produced_total{job=~\"$node\"}[5m])) * 60", "legendFormat": "Blocks/min", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(alys_aura_produced_blocks_total{job=~\"$node\"}[5m])) * 60", "legendFormat": "Blocks/min", "refId": "A"}],
       "title": "Block Production",
       "type": "stat"
     },
@@ -376,7 +376,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_height{job=~\"$node\"}",
+          "expr": "alys_storage_current_chain_height{job=~\"$node\"}",
           "legendFormat": "{{instance}} - Chain Height",
           "refId": "A"
         }
@@ -438,7 +438,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_sync_status{job=~\"$node\"}",
+          "expr": "alys_sync_is_syncing{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -527,7 +527,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "alys_chain_network_peers{job=~\"$node\"}",
+          "expr": "alys_network_connected_peers{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -647,7 +647,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_blocks_produced_total{job=~\"$node\"}[1m])",
+          "expr": "rate(alys_aura_produced_blocks_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Produced",
           "refId": "A"
         },
@@ -656,7 +656,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_blocks_imported_total{job=~\"$node\"}[1m])",
+          "expr": "rate(alys_storage_blocks_stored_total{job=~\"$node\"}[1m])",
           "legendFormat": "{{instance}} - Imported",
           "refId": "B"
         }
@@ -935,7 +935,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(alys_chain_block_production_failures_total{job=~\"$node\"}[5m])",
+          "expr": "rate(alys_aura_produced_blocks_total{job=~\"$node\",status=\"failed\"}[5m])",
           "legendFormat": "{{instance}} - Production Failures",
           "refId": "A"
         },
@@ -1513,7 +1513,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_state{job=~\"$node\"}",
+          "expr": "alys_sync_is_syncing{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1665,7 +1665,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_active_peers{job=~\"$node\"}",
+          "expr": "alys_network_connected_peers{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1701,7 +1701,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_eta_seconds{job=~\"$node\"}",
+          "expr": "((alys_sync_target_height{job=~\"$node\"} - alys_sync_current_height{job=~\"$node\"}) / (alys_sync_rate_blocks_per_second{job=~\"$node\"} > 0 or vector(0.001)))",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -1741,7 +1741,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_blocks_remaining{job=~\"$node\"}",
+          "expr": "(alys_sync_target_height{job=~\"$node\"} - alys_sync_current_height{job=~\"$node\"})",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -3161,7 +3161,7 @@
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 130},
       "id": 201,
       "options": {"legend": {"calcs": ["last"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_aura_current_slot{job=~\"$node\"}", "legendFormat": "{{job}} - Slot", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_aura_current_slot", "legendFormat": "{{job}} - Slot", "refId": "A"}],
       "title": "Aura Slot Tracking",
       "type": "timeseries"
     },
@@ -3184,7 +3184,7 @@
       "id": 202,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "100 * (rate(alys_chain_blocks_produced_total{job=~\"$node\"}[5m]) / (rate(alys_chain_blocks_produced_total{job=~\"$node\"}[5m]) + rate(alys_chain_block_production_failures_total{job=~\"$node\"}[5m]) + 0.0001))", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "100 * (rate(alys_aura_produced_blocks_total{job=~\"$node\"}[5m]) / (rate(alys_aura_produced_blocks_total{job=~\"$node\"}[5m]) + rate(alys_aura_produced_blocks_total{job=~\"$node\",status=\"failed\"}[5m]) + 0.0001))", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Block Production Success Rate",
       "type": "stat"
     },
@@ -3204,7 +3204,7 @@
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 130},
       "id": 203,
       "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(alys_chain_blocks_produced_total{job=~\"$node\"}[1h])", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "increase(alys_aura_produced_blocks_total{job=~\"$node\"}[1h])", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Blocks Produced (1h)",
       "type": "timeseries"
     },
@@ -3228,7 +3228,7 @@
       "id": 204,
       "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
       "targets": [
-        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(alys_chain_block_production_failures_total{job=~\"$node\"}[5m]) * 60", "legendFormat": "{{job}} - Production Failures/min", "refId": "A"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(alys_aura_produced_blocks_total{job=~\"$node\",status=\"failed\"}[5m]) * 60", "legendFormat": "{{job}} - Production Failures/min", "refId": "A"},
         {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(alys_chain_block_import_failures_total{job=~\"$node\"}[5m]) * 60", "legendFormat": "{{job}} - Import Failures/min", "refId": "B"}
       ],
       "title": "Block Failures Rate",
@@ -3446,7 +3446,7 @@
       "id": 227,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_state{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_is_syncing{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Sync State Machine",
       "type": "stat"
     },
@@ -3466,7 +3466,7 @@
       "id": 221,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_eta_seconds{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "((alys_sync_target_height{job=~\"$node\"} - alys_sync_current_height{job=~\"$node\"}) / (alys_sync_rate_blocks_per_second{job=~\"$node\"} > 0 or vector(0.001)))", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Sync ETA",
       "type": "stat"
     },
@@ -3486,7 +3486,7 @@
       "id": 222,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_blocks_remaining{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(alys_sync_target_height{job=~\"$node\"} - alys_sync_current_height{job=~\"$node\"})", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Blocks Remaining",
       "type": "stat"
     },
@@ -3506,7 +3506,7 @@
       "id": 223,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_active_peers{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_network_connected_peers{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Sync Peers",
       "type": "stat"
     },
@@ -3546,7 +3546,7 @@
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 178},
       "id": 225,
       "options": {"legend": {"calcs": ["last", "min"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "none"}},
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_blocks_remaining{job=~\"$node\"}", "legendFormat": "{{job}} - Remaining", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "(alys_sync_target_height{job=~\"$node\"} - alys_sync_current_height{job=~\"$node\"})", "legendFormat": "{{job}} - Remaining", "refId": "A"}],
       "title": "Blocks Remaining vs Time",
       "type": "timeseries"
     },
