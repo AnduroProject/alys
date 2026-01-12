@@ -3591,7 +3591,7 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(up{job=~\"$node\"}, job)",
+        "definition": "label_values(up{job=~\"alys-node.*\"}, job)",
         "description": "Select Alys node(s) to display",
         "hide": 0,
         "includeAll": true,
@@ -3600,7 +3600,7 @@
         "name": "node",
         "options": [],
         "query": {
-          "query": "label_values(up{job=~\"$node\"}, job)",
+          "query": "label_values(up{job=~\"alys-node.*\"}, job)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
