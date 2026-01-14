@@ -208,8 +208,8 @@
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
-          "mappings": [{"options": {"0": {"color": "yellow", "index": 0, "text": "Syncing"}}, "type": "value"}, {"options": {"1": {"color": "green", "index": 1, "text": "Synced"}}, "type": "value"}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "green", "value": 1}]},
+          "mappings": [{"options": {"0": {"color": "green", "index": 0, "text": "Synced"}}, "type": "value"}, {"options": {"1": {"color": "yellow", "index": 1, "text": "Syncing"}}, "type": "value"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]},
           "unit": "none"
         },
         "overrides": []
@@ -399,11 +399,11 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "green",
                 "value": null
               },
               {
-                "color": "green",
+                "color": "yellow",
                 "value": 1
               }
             ]
@@ -1513,7 +1513,7 @@
       "targets": [
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alys_sync_is_syncing{job=~\"$node\"}",
+          "expr": "alys_sync_state{job=~\"$node\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -3446,7 +3446,7 @@
       "id": 227,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "10.0.0",
-      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_is_syncing{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "alys_sync_state{job=~\"$node\"}", "legendFormat": "{{job}}", "refId": "A"}],
       "title": "Sync State Machine",
       "type": "stat"
     },
