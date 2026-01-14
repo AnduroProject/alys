@@ -30,6 +30,8 @@ use crate::actors_v2::{
 use crate::block::SignedConsensusBlock;
 use lighthouse_wrapper::types::MainnetEthSpec;
 
+pub(crate) const DEFAULT_MAX_PENDING_IMPORTS: usize = 1000;
+
 /// Pending import request queued when import lock is held (Phase 2)
 #[derive(Debug, Clone)]
 pub struct PendingImport {
@@ -141,7 +143,7 @@ impl ChainActor {
             // Phase 2: Initialize import serialization
             import_in_progress: Arc::new(AtomicBool::new(false)),
             pending_imports: Arc::new(RwLock::new(VecDeque::new())),
-            max_pending_imports: 10, // Configurable limit
+            max_pending_imports: DEFAULT_MAX_PENDING_IMPORTS, // Configurable limit
             connected_peer_count: 0, // Phase 2: Start with no peers
             // Phase 3: Initialize gap detection queue
             queued_blocks: Arc::new(RwLock::new(HashMap::new())),

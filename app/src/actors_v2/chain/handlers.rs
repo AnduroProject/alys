@@ -2277,7 +2277,7 @@ async fn create_aux_block_helper(
         pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::VecDeque::new(),
         )),
-        max_pending_imports: 10,
+        max_pending_imports: super::actor::DEFAULT_MAX_PENDING_IMPORTS,
         connected_peer_count: 0,
         // Phase 3 fields
         queued_blocks: std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -2318,7 +2318,7 @@ async fn submit_aux_block_helper(
         pending_imports: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::VecDeque::new(),
         )),
-        max_pending_imports: 10,
+        max_pending_imports: super::actor::DEFAULT_MAX_PENDING_IMPORTS,
         connected_peer_count: 0,
         // Phase 3 fields
         queued_blocks: std::sync::Arc::new(tokio::sync::RwLock::new(
