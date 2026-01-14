@@ -26,6 +26,10 @@ use super::{
     behaviour::{AlysNetworkBehaviour, AlysNetworkBehaviourEvent},
     managers::{PeerManager, Violation},
     messages::{NetworkStatus, PeerInfo, SyncMessage},
+    metrics::{
+        NETWORK_BLOCKS_DESER_ERRORS, NETWORK_BLOCKS_DUPLICATE, NETWORK_BLOCKS_FORWARDED,
+        NETWORK_BLOCKS_RECEIVED,
+    },
     protocols::{BlockRequest, BlockResponse},
     NetworkConfig, NetworkError, NetworkMessage, NetworkMetrics, NetworkResponse,
 };
@@ -704,6 +708,7 @@ impl NetworkActor {
                     if let Some(ref chain_actor) = self.chain_actor {
                         // Phase 5: Update metrics for block received
                         self.metrics.blocks_received += 1;
+                        NETWORK_BLOCKS_RECEIVED.inc();
 
                         // Deserialize block from MessagePack format
                         match crate::actors_v2::common::serialization::deserialize_block_from_network(&data) {
@@ -734,6 +739,7 @@ impl NetworkActor {
 
                                             // Update metrics
                                             self.metrics.blocks_duplicate_cached += 1;
+                                            NETWORK_BLOCKS_DUPLICATE.inc();
 
                                             return Ok(());
                                         }
@@ -774,6 +780,7 @@ impl NetworkActor {
 
                                 // Update metrics
                                 self.metrics.blocks_forwarded += 1;
+                                NETWORK_BLOCKS_FORWARDED.inc();
 
                                 tokio::spawn(async move {
                                     let msg = crate::actors_v2::chain::messages::ChainMessage::NetworkBlockReceived {
@@ -842,6 +849,7 @@ impl NetworkActor {
                             Err(deserialization_error) => {
                                 // Phase 5: Update metrics for deserialization error
                                 self.metrics.blocks_deserialization_errors += 1;
+                                NETWORK_BLOCKS_DESER_ERRORS.inc();
 
                                 tracing::warn!(
                                     peer_id = %source_peer,

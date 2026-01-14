@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::{
     messages::{Block, NetworkMessage, PeerId, SyncStatus},
+    metrics::update_prometheus_sync_state,
     sync_checkpoint::SyncCheckpoint,
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
@@ -281,6 +282,9 @@ impl SyncActorState {
         tracing::info!(
             "╚══════════════════════════════════════════════════════════════════╝"
         );
+
+        // Update Prometheus metrics for state transition
+        update_prometheus_sync_state(&self.sync_state);
     }
 }
 

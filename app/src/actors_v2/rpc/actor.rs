@@ -4,10 +4,11 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use serde_json::Value;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use tokio::sync::RwLock;
 
 use super::config::RpcConfig;
+use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use super::error::{JsonRpcError, RpcError};
 use super::handlers::{CreateAuxBlockHandler, SubmitAuxBlockHandler};
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
@@ -72,8 +73,14 @@ impl RpcActor {
         req: Request<Body>,
         state: RpcServerState,
     ) -> Result<Response<Body>, Infallible> {
+        // Start timing for Prometheus metrics
+        let request_start = Instant::now();
+
         // Only accept POST requests
         if req.method() != Method::POST {
+            RPC_REQUESTS
+                .with_label_values(&["unknown", "error"])
+                .inc();
             return Ok(Self::error_response(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "Method not allowed",
@@ -100,6 +107,9 @@ impl RpcActor {
             Err(e) => {
                 tracing::error!(error = ?e, "Invalid JSON-RPC request");
                 state.metrics.write().await.errors_count += 1;
+                RPC_REQUESTS
+                    .with_label_values(&["parse_error", "error"])
+                    .inc();
                 return Ok(Self::json_rpc_error_response(
                     RpcError::InvalidRequest("Invalid JSON".to_string()),
                     None,
@@ -114,7 +124,14 @@ impl RpcActor {
         );
 
         // Route to appropriate handler
+        let method_name = rpc_request.method.clone();
         let result = Self::route_request(rpc_request.clone(), state.clone()).await;
+
+        // Record request duration for Prometheus
+        let duration = request_start.elapsed();
+        RPC_REQUEST_DURATION
+            .with_label_values(&[&method_name])
+            .observe(duration.as_secs_f64());
 
         // Update metrics
         {
@@ -125,14 +142,22 @@ impl RpcActor {
             }
         }
 
-        // Build response
+        // Build response and record Prometheus status
         let response = match result {
-            Ok(value) => JsonRpcResponse {
-                result: Some(value),
-                error: None,
-                id: rpc_request.id,
-            },
+            Ok(value) => {
+                RPC_REQUESTS
+                    .with_label_values(&[&method_name, "success"])
+                    .inc();
+                JsonRpcResponse {
+                    result: Some(value),
+                    error: None,
+                    id: rpc_request.id,
+                }
+            }
             Err(e) => {
+                RPC_REQUESTS
+                    .with_label_values(&[&method_name, "error"])
+                    .inc();
                 tracing::warn!(
                     method = %rpc_request.method,
                     error = ?e,
