@@ -194,7 +194,7 @@ services:
       - "3020:3000"    # V0 RPC
       - "3021:3001"    # V2 RPC
       - "9002:9000"    # V0 P2P
-      - "9092:9090"    # Prometheus Metrics
+      - "9093:9090"    # Prometheus Metrics
       - "10002:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
     volumes:
       - ../data/node3/db:/lib/alys/data/db
