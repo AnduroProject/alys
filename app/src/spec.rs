@@ -66,7 +66,7 @@ pub static DEV: Lazy<ChainSpec> = Lazy::new(|| {
             BitcoinPublicKey::from_str("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798").unwrap()
         ],
         bits: 505794034,
-        chain_id: 121212,
+        chain_id: 262626,
         max_blocks_without_pow: 50000,
         required_btc_txn_confirmations: 144,
         bitcoin_start_height: 0, // 95800, // TODO: change when deploying new testnet4
@@ -102,7 +102,7 @@ pub static DEV_REGTEST: Lazy<ChainSpec> = Lazy::new(|| {
             BitcoinPublicKey::from_str("027ac71d10aa80110b3d5896141fe391de473b7a3d03b15579fa6fcfbd2aecc624").unwrap()
         ],
         bits: 505794034,
-        chain_id: 121212,
+        chain_id: 262626,
         max_blocks_without_pow: 50000,
         required_btc_txn_confirmations: 144,
         bitcoin_start_height: 0,
