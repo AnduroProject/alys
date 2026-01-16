@@ -1,9 +1,9 @@
 use super::{ActorTestHarness, TestContext};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
 use std::time::Instant;
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 /// Generic test harness implementation
 pub struct BaseTestHarness<T> {

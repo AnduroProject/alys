@@ -4,8 +4,10 @@ use crate::{
     metrics::CHAIN_LAST_FINALIZED_BLOCK,
 };
 use ethers_core::types::U256;
+use leveldb::database::management::repair;
+use leveldb::options::Options as LevelDbOptions;
 use lighthouse_wrapper::store::{
-    get_key_for_col, ItemStore, KeyValueStoreOp, LevelDB, MemoryStore,
+    get_key_for_col, ItemStore, KeyValueStore, KeyValueStoreOp, LevelDB, MemoryStore,
 };
 use lighthouse_wrapper::types::{EthSpec, Hash256, MainnetEthSpec};
 use serde_derive::{Deserialize, Serialize};
@@ -84,7 +86,77 @@ impl Storage<MainnetEthSpec, LevelDB<MainnetEthSpec>> {
 
         info!("Using db path {}", db_path.display());
         let db_path = ensure_dir_exists(db_path).unwrap();
-        let level_db = LevelDB::<MainnetEthSpec>::open(&db_path).unwrap();
+
+        // Try to open the database, with automatic recovery on corruption
+        let level_db = match LevelDB::<MainnetEthSpec>::open(&db_path) {
+            Ok(db) => {
+                info!("Database opened successfully");
+                db
+            }
+            Err(e) => {
+                let error_msg = format!("{:?}", e);
+                warn!(
+                    "Failed to open database: {}. Attempting recovery...",
+                    error_msg
+                );
+
+                // Check if this is a corruption error
+                if error_msg.contains("Corruption")
+                    || error_msg.contains("unknown tag")
+                    || error_msg.contains("VersionEdit")
+                {
+                    info!("Detected database corruption, running LevelDB repair...");
+
+                    // Attempt to repair the database
+                    let mut repair_options = LevelDbOptions::new();
+                    repair_options.create_if_missing = false;
+
+                    match repair(&db_path, repair_options) {
+                        Ok(()) => {
+                            info!("Database repair completed successfully");
+
+                            // Try to open again after repair
+                            match LevelDB::<MainnetEthSpec>::open(&db_path) {
+                                Ok(db) => {
+                                    info!("Database opened successfully after repair");
+                                    db
+                                }
+                                Err(e2) => {
+                                    error!(
+                                        "Failed to open database after repair: {:?}. \
+                                         Database may need manual recovery or deletion.",
+                                        e2
+                                    );
+                                    panic!(
+                                        "Unable to recover database at {}. \
+                                         Consider deleting the database directory and resyncing. \
+                                         Original error: {:?}, Post-repair error: {:?}",
+                                        db_path.display(),
+                                        e,
+                                        e2
+                                    );
+                                }
+                            }
+                        }
+                        Err(repair_err) => {
+                            error!("Database repair failed: {:?}", repair_err);
+                            panic!(
+                                "Unable to repair corrupted database at {}. \
+                                 Consider deleting the database directory and resyncing. \
+                                 Original error: {:?}, Repair error: {:?}",
+                                db_path.display(),
+                                e,
+                                repair_err
+                            );
+                        }
+                    }
+                } else {
+                    // Non-corruption error, just propagate it
+                    panic!("Failed to open database at {}: {:?}", db_path.display(), e);
+                }
+            }
+        };
+
         Self {
             db: level_db,
             _phantom: PhantomData,
@@ -261,6 +333,18 @@ impl<DB: ItemStore<MainnetEthSpec>> Storage<MainnetEthSpec, DB> {
 
     pub fn commit_ops(&self, ops: Vec<KeyValueStoreOp>) -> Result<(), Error> {
         self.db.do_atomically(ops).map_err(|_| Error::StorageError)
+    }
+
+    /// Sync all pending writes to disk.
+    /// Should be called before graceful shutdown to prevent data loss.
+    pub fn sync(&self) -> Result<(), Error> {
+        info!("Syncing database to disk...");
+        self.db.sync().map_err(|e| {
+            error!("Failed to sync database: {:?}", e);
+            Error::StorageError
+        })?;
+        info!("Database sync completed");
+        Ok(())
     }
 }
 

@@ -4,16 +4,16 @@
 //! all persistent storage operations for the Alys blockchain including blocks, state,
 //! receipts, and advanced indexing operations.
 
-use super::actor::{StorageError, AlysConsensusBlock, BlockRef};
-use super::cache::{TransactionReceipt, CacheStats};
-use super::indexing::{IndexType, IndexingStats, TransactionIndex, AddressIndex, BlockRange};
+use super::actor::{AlysConsensusBlock, BlockRef, StorageError};
+use super::cache::{CacheStats, TransactionReceipt};
 use super::database::DatabaseStats;
+use super::indexing::{AddressIndex, BlockRange, IndexType, IndexingStats, TransactionIndex};
 use actix::prelude::*;
+use ethereum_types::{Address, H256, U256};
+use lighthouse_wrapper::types::Hash256;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use uuid::Uuid;
-use lighthouse_wrapper::types::Hash256;
-use ethereum_types::{H256, U256, Address};
 
 // =============================================================================
 // BLOCK OPERATIONS
@@ -186,6 +186,32 @@ pub struct StoreLogsMessage {
 }
 
 // =============================================================================
+// FEE ACCUMULATION OPERATIONS (V0 Compatibility)
+// =============================================================================
+
+/// Message to get accumulated fees for a block (matches V0 storage.get_accumulated_block_fees)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<U256>, StorageError>")]
+pub struct GetAccumulatedFeesMessage {
+    /// Block root hash to get accumulated fees for
+    pub block_root: Hash256,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to set accumulated fees for a block (matches V0 storage.set_accumulated_block_fees)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct SetAccumulatedFeesMessage {
+    /// Block root hash to set accumulated fees for
+    pub block_root: Hash256,
+    /// Total accumulated fees amount
+    pub fees: U256,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+// =============================================================================
 // CHAIN HEAD OPERATIONS
 // =============================================================================
 
@@ -193,6 +219,14 @@ pub struct StoreLogsMessage {
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<Option<BlockRef>, StorageError>")]
 pub struct GetChainHeadMessage {
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get current chain height
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<u64, StorageError>")]
+pub struct GetChainHeightMessage {
     /// Optional correlation ID for tracing
     pub correlation_id: Option<Uuid>,
 }
@@ -321,6 +355,14 @@ pub struct OptimizeDatabaseMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message for health check (Phase 4: Task 4.3.1)
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct HealthCheckMessage {
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 // =============================================================================
 // SUPPORTING DATA STRUCTURES
 // =============================================================================
@@ -333,9 +375,15 @@ pub enum WriteOperation {
     /// Delete key
     Delete { key: Vec<u8> },
     /// Put block with canonical flag
-    PutBlock { block: AlysConsensusBlock, canonical: bool },
+    PutBlock {
+        block: AlysConsensusBlock,
+        canonical: bool,
+    },
     /// Put transaction receipt
-    PutReceipt { receipt: TransactionReceipt, block_hash: Hash256 },
+    PutReceipt {
+        receipt: TransactionReceipt,
+        block_hash: Hash256,
+    },
     /// Update chain head
     UpdateHead { head: BlockRef },
 }

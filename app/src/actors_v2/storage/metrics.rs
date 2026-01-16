@@ -3,150 +3,150 @@
 //! This module provides comprehensive metrics collection and monitoring
 //! for the storage actor performance and health.
 
+use lazy_static::lazy_static;
 use prometheus::{
+    register_counter, register_gauge, register_histogram, register_int_counter, register_int_gauge,
     Counter, Gauge, Histogram, IntCounter, IntGauge,
-    register_counter, register_gauge, register_histogram, register_int_counter, register_int_gauge
 };
 use std::time::Duration;
 use tracing::*;
-use lazy_static::lazy_static;
 
 lazy_static! {
     // Block storage metrics
     static ref BLOCKS_STORED: IntCounter = register_int_counter!(
-        "storage_blocks_stored_total",
+        "alys_storage_blocks_stored_total",
         "Total number of blocks stored"
     ).unwrap();
 
     static ref BLOCKS_RETRIEVED: IntCounter = register_int_counter!(
-        "storage_blocks_retrieved_total",
+        "alys_storage_blocks_retrieved_total",
         "Total number of blocks retrieved"
     ).unwrap();
 
     static ref BLOCK_NOT_FOUND: IntCounter = register_int_counter!(
-        "storage_blocks_not_found_total",
+        "alys_storage_blocks_not_found_total",
         "Total number of block retrieval misses"
     ).unwrap();
 
     static ref BLOCK_STORAGE_DURATION: Histogram = register_histogram!(
-        "storage_block_storage_duration_seconds",
+        "alys_storage_block_storage_duration_seconds",
         "Time taken to store a block",
         vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0]
     ).unwrap();
 
     static ref BLOCK_RETRIEVAL_DURATION: Histogram = register_histogram!(
-        "storage_block_retrieval_duration_seconds",
+        "alys_storage_block_retrieval_duration_seconds",
         "Time taken to retrieve a block",
         vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
     ).unwrap();
 
     // State storage metrics
     static ref STATE_UPDATES: IntCounter = register_int_counter!(
-        "storage_state_updates_total",
+        "alys_storage_state_updates_total",
         "Total number of state updates"
     ).unwrap();
 
     static ref STATE_QUERIES: IntCounter = register_int_counter!(
-        "storage_state_queries_total",
+        "alys_storage_state_queries_total",
         "Total number of state queries"
     ).unwrap();
 
     static ref STATE_NOT_FOUND: IntCounter = register_int_counter!(
-        "storage_state_not_found_total",
+        "alys_storage_state_not_found_total",
         "Total number of state query misses"
     ).unwrap();
 
     static ref STATE_UPDATE_DURATION: Histogram = register_histogram!(
-        "storage_state_update_duration_seconds",
+        "alys_storage_state_update_duration_seconds",
         "Time taken to update state",
         vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]
     ).unwrap();
 
     static ref STATE_QUERY_DURATION: Histogram = register_histogram!(
-        "storage_state_query_duration_seconds",
+        "alys_storage_state_query_duration_seconds",
         "Time taken to query state",
         vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]
     ).unwrap();
 
     // Cache metrics
     static ref CACHE_HITS: IntCounter = register_int_counter!(
-        "storage_cache_hits_total",
+        "alys_storage_cache_hits_total",
         "Total number of cache hits"
     ).unwrap();
 
     static ref CACHE_MISSES: IntCounter = register_int_counter!(
-        "storage_cache_misses_total",
+        "alys_storage_cache_misses_total",
         "Total number of cache misses"
     ).unwrap();
 
     static ref CACHE_MEMORY_USAGE: Gauge = register_gauge!(
-        "storage_cache_memory_bytes",
+        "alys_storage_cache_memory_bytes",
         "Current cache memory usage in bytes"
     ).unwrap();
 
     // Write operation metrics
     static ref WRITE_OPERATIONS: IntCounter = register_int_counter!(
-        "storage_write_operations_total",
+        "alys_storage_write_operations_total",
         "Total number of write operations"
     ).unwrap();
 
     static ref WRITE_FAILURES: IntCounter = register_int_counter!(
-        "storage_write_failures_total",
+        "alys_storage_write_failures_total",
         "Total number of write operation failures"
     ).unwrap();
 
     static ref BATCH_OPERATIONS: IntCounter = register_int_counter!(
-        "storage_batch_operations_total",
+        "alys_storage_batch_operations_total",
         "Total number of batch operations"
     ).unwrap();
 
     static ref BATCH_SIZE: Histogram = register_histogram!(
-        "storage_batch_size",
+        "alys_storage_batch_size",
         "Size of batch operations",
         vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0]
     ).unwrap();
 
     static ref BATCH_DURATION: Histogram = register_histogram!(
-        "storage_batch_duration_seconds",
+        "alys_storage_batch_duration_seconds",
         "Time taken for batch operations",
         vec![0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
     ).unwrap();
 
     // Chain head metrics
     static ref CHAIN_HEAD_UPDATES: IntCounter = register_int_counter!(
-        "storage_chain_head_updates_total",
+        "alys_storage_chain_head_updates_total",
         "Total number of chain head updates"
     ).unwrap();
 
     static ref CURRENT_CHAIN_HEIGHT: IntGauge = register_int_gauge!(
-        "storage_current_chain_height",
+        "alys_storage_current_chain_height",
         "Current chain head height"
     ).unwrap();
 
     // Database metrics
     static ref DATABASE_SIZE: Gauge = register_gauge!(
-        "storage_database_size_bytes",
+        "alys_storage_database_size_bytes",
         "Current database size in bytes"
     ).unwrap();
 
     static ref COMPACTION_COUNT: IntCounter = register_int_counter!(
-        "storage_compaction_operations_total",
+        "alys_storage_compaction_operations_total",
         "Total number of database compaction operations"
     ).unwrap();
 
     // Actor lifecycle metrics
     static ref ACTOR_STARTS: IntCounter = register_int_counter!(
-        "storage_actor_starts_total",
+        "alys_storage_actor_starts_total",
         "Total number of storage actor starts"
     ).unwrap();
 
     static ref ACTOR_STOPS: IntCounter = register_int_counter!(
-        "storage_actor_stops_total",
+        "alys_storage_actor_stops_total",
         "Total number of storage actor stops"
     ).unwrap();
 
     static ref ACTOR_UPTIME: Gauge = register_gauge!(
-        "storage_actor_uptime_seconds",
+        "alys_storage_actor_uptime_seconds",
         "Storage actor uptime in seconds"
     ).unwrap();
 }
@@ -213,7 +213,10 @@ impl StorageActorMetrics {
             CURRENT_CHAIN_HEIGHT.set(height as i64);
         }
 
-        debug!("Block storage recorded: height={}, duration={:?}, canonical={}", height, duration, canonical);
+        debug!(
+            "Block storage recorded: height={}, duration={:?}, canonical={}",
+            height, duration, canonical
+        );
     }
 
     /// Record a block retrieval operation
@@ -230,7 +233,10 @@ impl StorageActorMetrics {
             CACHE_MISSES.inc();
         }
 
-        debug!("Block retrieval recorded: duration={:?}, from_cache={}", duration, from_cache);
+        debug!(
+            "Block retrieval recorded: duration={:?}, from_cache={}",
+            duration, from_cache
+        );
     }
 
     /// Record a block not found
@@ -263,7 +269,10 @@ impl StorageActorMetrics {
             CACHE_MISSES.inc();
         }
 
-        debug!("State query recorded: duration={:?}, from_cache={}", duration, from_cache);
+        debug!(
+            "State query recorded: duration={:?}, from_cache={}",
+            duration, from_cache
+        );
     }
 
     /// Record a state not found
@@ -280,7 +289,10 @@ impl StorageActorMetrics {
         BATCH_SIZE.observe(batch_size as f64);
         BATCH_DURATION.observe(duration.as_secs_f64());
 
-        info!("Batch operation recorded: size={}, duration={:?}", batch_size, duration);
+        info!(
+            "Batch operation recorded: size={}, duration={:?}",
+            batch_size, duration
+        );
     }
 
     /// Record a write completion
@@ -390,11 +402,11 @@ impl Default for StorageActorMetrics {
 impl Default for StorageAlertThresholds {
     fn default() -> Self {
         Self {
-            max_cache_miss_rate: 0.2,        // 20% cache miss rate
-            max_write_failure_rate: 0.01,    // 1% write failure rate
-            max_storage_duration_ms: 1000,   // 1 second storage duration
-            max_memory_usage_mb: 1024.0,     // 1GB memory usage
-            max_database_size_gb: 100.0,     // 100GB database size
+            max_cache_miss_rate: 0.2,      // 20% cache miss rate
+            max_write_failure_rate: 0.01,  // 1% write failure rate
+            max_storage_duration_ms: 1000, // 1 second storage duration
+            max_memory_usage_mb: 1024.0,   // 1GB memory usage
+            max_database_size_gb: 100.0,   // 100GB database size
         }
     }
 }

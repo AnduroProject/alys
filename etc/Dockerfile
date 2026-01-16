@@ -13,13 +13,24 @@ ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 FROM planner AS system-pkg-cache
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends cmake ninja-build && \
-        apt-get clean && \
-        rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        cmake \
+        ninja-build \
+        clang \
+        libclang-dev \
+        llvm-dev \
+        git \
+        ca-certificates && \
+    update-ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 #------------------------------------------------------------------------------------------
 
 FROM system-pkg-cache AS builder
 WORKDIR /opt/alys
+
+# Install rustfmt component (required for some build scripts)
+RUN rustup component add rustfmt
 
 # Create mount points for cargo cache
 #RUN mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
@@ -32,14 +43,40 @@ WORKDIR /opt/alys
 
 COPY . .
 
+# --- Step 3: cleanup stale/partial cargo git clones and run a quick git reachability check ---
+# This removes only lighthouse-related partial clones and runs `git ls-remote` against the exact SHA.
+RUN set -eux; \
+    # ensure git available (installed in system-pkg-cache stage above)
+    git --version || (apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*); \
+    echo "Checking remote for lighthouse commit 441fc1691b69f9edc4bbdc6665f3efab16265c9b"; \
+    git ls-remote https://github.com/sigp/lighthouse 441fc1691b69f9edc4bbdc6665f3efab16265c9b || true; \
+    # targeted cleanup of possible corrupt/stale cargo git DB entries (safe)
+    rm -rf /usr/local/cargo/git/db/lighthouse-* /usr/local/cargo/git/checkouts/lighthouse-* || true
+
+# 2) Force cargo to use the system Git CLI (avoids libgit2 issues under QEMU)
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+# Optional: Work around HTTP/2/TLS oddities sometimes seen via QEMU
+RUN git config --global http.version HTTP/1.1
+
+# 3) Fetch first (fail fast on git issues, with cache mounts), then build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo fetch --locked || cargo fetch
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --bin app --verbose
+
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
 #RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #    --mount=type=cache,target=/usr/local/cargo/git \
 #     cargo build --lib --verbose
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-      cargo build --bin app --verbose
+
+# RUN --mount=type=cache,target=/usr/local/cargo/registry \
+#     --mount=type=cache,target=/usr/local/cargo/git \
+#       cargo build --bin app --verbose
 
 #------------------------------------------------------------------------------------------
 

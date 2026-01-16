@@ -27,7 +27,7 @@ use tracing::{debug, trace};
 const DEFAULT_EXECUTION_PUBLIC_ENDPOINT: &str = "http://0.0.0.0:8545";
 const ENGINE_API_QUERY_RETRY_COUNT: i32 = 1;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, PartialOrd)]
 pub struct ConsensusAmount(pub u64); // Gwei = 1e9
 
 impl ConsensusAmount {
@@ -54,6 +54,7 @@ impl std::ops::Add for ConsensusAmount {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AddBalance(Address, ConsensusAmount);
 
 impl From<(Address, ConsensusAmount)> for AddBalance {
@@ -180,31 +181,31 @@ impl Engine {
             .inc();
 
         let finalized = self.finalized.read().await.unwrap_or_default();
+        let parent_hash = execution_payload.parent_hash();
+        let block_number = execution_payload.block_number();
 
-        self.api
-            .forkchoice_updated(
-                ForkchoiceState {
-                    head_block_hash: execution_payload.parent_hash(),
-                    safe_block_hash: finalized,
-                    finalized_block_hash: finalized,
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        debug!(
+            "Committing block: number={}, parent_hash={:?}, finalized={:?}",
+            block_number, parent_hash, finalized
+        );
 
-        // we need to push the payload back to geth
+        // Submit new payload directly to execution layer
+        // The parent is already known from build_block's forkchoice_updated call
         // https://github.com/ethereum/go-ethereum/blob/577be37e0e7a69564224e0a15e49d648ed461ac5/eth/catalyst/api.go#L259
         let response = self
             .api
-            .new_payload::<MainnetEthSpec>(execution_payload)
+            .new_payload::<MainnetEthSpec>(execution_payload.clone())
             .await
             .map_err(|err| {
                 ENGINE_COMMIT_BLOCK_CALLS
                     .with_label_values(&["engine_api_new_payload_error"])
                     .inc();
-                Error::EngineApiError(format!("{:?}", err))
+                Error::EngineApiError(format!(
+                    "Failed to submit new payload (block={}, parent={:?}): {:?}",
+                    block_number, parent_hash, err
+                ))
             })?;
+
         let head = response.latest_valid_hash.ok_or_else(|| {
             ENGINE_COMMIT_BLOCK_CALLS
                 .with_label_values(&["engine_api_invalid_block_hash_error"])
@@ -212,8 +213,12 @@ impl Engine {
             Error::InvalidBlockHash
         })?;
 
-        // update now to the new head so we can fetch the txs and
-        // receipts from the ethereum rpc
+        debug!(
+            "New payload accepted, head={:?}, block_number={}",
+            head, block_number
+        );
+
+        // Update forkchoice to the new block as the canonical head
         self.api
             .forkchoice_updated(
                 ForkchoiceState {
@@ -224,7 +229,24 @@ impl Engine {
                 None,
             )
             .await
-            .unwrap();
+            .map_err(|err| {
+                ENGINE_COMMIT_BLOCK_CALLS
+                    .with_label_values(&["engine_api_forkchoice_head_error"])
+                    .inc();
+                Error::EngineApiError(format!(
+                    "Failed to update forkchoice to new head (block={}, head={:?}): {:?}",
+                    block_number, head, err
+                ))
+            })?;
+
+        debug!(
+            "Forkchoice updated to new head successfully, block_number={}",
+            block_number
+        );
+
+        ENGINE_COMMIT_BLOCK_CALLS
+            .with_label_values(&["success"])
+            .inc();
 
         Ok(head)
     }

@@ -1,7 +1,7 @@
 {
     "config": {
-        "chainId": 121212,
-        "networkId": 121212,
+        "chainId": 262626,
+        "networkId": 262626,
         "homesteadBlock": 0,
         "eip150Block": 0,
         "eip155Block": 0,

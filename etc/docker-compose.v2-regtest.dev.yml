@@ -1,0 +1,258 @@
+# Development Mode Docker Compose
+# Optimized for fast iteration cycles during development
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Features:
+# - Source code mounted as volume (instant code changes)
+# - Cargo cache mounted (reuse local cargo cache)
+# - Build inside container (no separate docker build needed)
+# - Auto-rebuild on code changes (with cargo-watch)
+
+networks:
+  alys-regtest:
+    name: alys-regtest
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+  # Bitcoin Core (unchanged from production)
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    platform: linux/amd64
+    container_name: bitcoin-core
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.30
+    ports:
+      - "18333:18333"  # P2P
+      - "18443:18443"  # RPC
+    volumes:
+      - ../data/bitcoin:/root/.bitcoin
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+    # healthcheck:
+    #   test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "getblockchaininfo"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+
+  # Execution Layer - Shared Reth instance for both Alys nodes
+  execution:
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    platform: linux/amd64
+    container_name: execution
+    restart: unless-stopped
+    pid: host
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.20
+    ports:
+      - "8545:8545"    # HTTP RPC
+      - "8551:8551"    # Engine API
+      - "8456:8456"    # WebSocket
+      - "19001:19001"  # Metrics
+      - "30303:30303"  # ETH P2P
+    volumes:
+      - ../data/execution/data:/opt/alys/execution/data
+      - ../data/execution/logs:/opt/alys/execution/logs
+      - ./config:/opt/alys/execution/config
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+    command: >
+      node
+      --chain /opt/alys/execution/config/genesis.json
+      --log.file.directory /opt/alys/execution/logs
+      --datadir /opt/alys/execution/data
+      --config /opt/alys/execution/config/eth-config.toml
+      --metrics 0.0.0.0:19001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "debug,net,eth,web3,txpool"
+      --http.corsdomain "*"
+      --ws.api "eth,net,web3,debug,txpool"
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+
+  # Alys Node 1 - Development Mode
+  alys-node-1:
+    image: rust:bullseye
+    container_name: alys-node-1-dev
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "3000:3000"    # V0 RPC
+      - "3001:3001"    # V2 RPC
+      - "9000:9000"    # V0 P2P
+      - "9090:9090"    # Prometheus Metrics
+      - "10000:10000"  # V2 P2P
+    volumes:
+      # Mount source code for instant changes
+      - ..:/opt/alys:cached
+      # Mount local cargo cache for faster builds
+      - ~/.cargo/registry:/usr/local/cargo/registry:cached
+      - ~/.cargo/git:/usr/local/cargo/git:cached
+      # Mount data directories
+      - ../data/node1:/lib/alys/data
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    working_dir: /opt/alys
+    environment:
+      - RUST_LOG=info,app=debug
+      - RUST_BACKTRACE=1
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        echo '🔧 Installing system dependencies...'
+        apt-get update && apt-get install -y cmake ninja-build clang libclang-dev llvm-dev git ca-certificates > /dev/null 2>&1
+
+        echo '🔧 Installing Rust components...'
+        rustup component add rustfmt
+
+        echo '🔨 Building Alys (debug mode)...'
+        cargo build --bin app
+
+        echo '🚀 Starting Alys Node 1 (Development Mode)...'
+        exec /opt/alys/target/debug/app \
+          --dev-regtest \
+          --regtest-node-id 1 \
+          --rpc-port 3000 \
+          --p2p-port 9000 \
+          --p2p-listen-addr 0.0.0.0 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+    depends_on:
+      - execution
+      - bitcoin-core
+
+  # Alys Node 2 - Development Mode
+  alys-node-2:
+    image: rust:bullseye
+    container_name: alys-node-2-dev
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.11
+    ports:
+      - "3010:3000"    # V0 RPC
+      - "3011:3001"    # V2 RPC
+      - "9001:9000"    # V0 P2P
+      - "9091:9090"    # Prometheus Metrics
+      - "10001:10000"  # V2 P2P
+    volumes:
+      # Mount source code for instant changes
+      - ..:/opt/alys:cached
+      # Mount local cargo cache for faster builds
+      - ~/.cargo/registry:/usr/local/cargo/registry:cached
+      - ~/.cargo/git:/usr/local/cargo/git:cached
+      # Mount data directories
+      - ../data/node2:/lib/alys/data
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    working_dir: /opt/alys
+    environment:
+      - RUST_LOG=info,app=debug
+      - RUST_BACKTRACE=1
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        echo '🔧 Installing system dependencies...'
+        apt-get update && apt-get install -y cmake ninja-build clang libclang-dev llvm-dev git ca-certificates > /dev/null 2>&1
+
+        echo '🔧 Installing Rust components...'
+        rustup component add rustfmt
+
+        echo '🔨 Building Alys (debug mode)...'
+        cargo build --bin app
+
+        echo '🚀 Starting Alys Node 2 (Development Mode)...'
+        exec /opt/alys/target/debug/app \
+          --dev-regtest \
+          --regtest-node-id 2 \
+          --rpc-port 3000 \
+          --p2p-port 9000 \
+          --p2p-listen-addr 0.0.0.0 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+    depends_on:
+      - execution
+      - bitcoin-core
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.40
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../data/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - alys-node-1
+      - alys-node-2
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.41
+    ports:
+      - "3030:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../data/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus

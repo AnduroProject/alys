@@ -120,29 +120,39 @@ impl Bridge {
             self.required_confirmations.into(),
         )
         .await;
-        while let Some(x) = stream.next().await {
-            info!("Streamed block");
-            let (block, height) = x.unwrap();
-            let block_hash = block.block_hash();
-            info!(
-                "Processing block from stream at height {} with hash {:?}",
-                height, block_hash
-            );
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok((block, height)) => {
+                    info!("Streamed block");
+                    let block_hash = block.block_hash();
+                    info!(
+                        "Processing block from stream at height {} with hash {:?}",
+                        height, block_hash
+                    );
 
-            let pegins: Vec<PegInInfo> = block
-                .txdata
-                .iter()
-                .filter_map(|tx| self.pegin_info(tx, block_hash, height))
-                .collect();
-            info!(
-                "Found {} peg-ins in block at height {}",
-                pegins.len(),
-                height
-            );
+                    let pegins: Vec<PegInInfo> = block
+                        .txdata
+                        .iter()
+                        .filter_map(|tx| self.pegin_info(tx, block_hash, height))
+                        .collect();
+                    info!(
+                        "Found {} peg-ins in block at height {}",
+                        pegins.len(),
+                        height
+                    );
 
-            cb(pegins, height).await;
+                    cb(pegins, height).await;
+                }
+                Err(e) => {
+                    warn!("Bitcoin block stream error: {:?}. Retrying...", e);
+                    // brief backoff to avoid hot loop on persistent errors
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
         }
-        panic!("Unexpected end of stream");
+        // Stream should be infinite; exiting loop indicates upstream termination.
+        warn!("Bitcoin block stream terminated unexpectedly");
     }
 
     pub fn get_confirmed_pegin_from_txid(

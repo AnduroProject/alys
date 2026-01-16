@@ -1,3 +1,4 @@
+pub mod actors_v2;
 mod app;
 mod aura;
 mod auxpow;
@@ -14,7 +15,6 @@ mod rpc;
 mod signatures;
 mod spec;
 mod store;
-pub mod actors_v2;
 
 // for main.rs
 pub use app::run;

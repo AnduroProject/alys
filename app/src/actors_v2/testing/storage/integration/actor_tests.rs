@@ -1,5 +1,5 @@
-use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::actors_v2::testing::base::ActorTestHarness;
+use crate::actors_v2::testing::storage::StorageTestHarness;
 use crate::auxpow_miner::BlockIndex;
 
 #[actix::test]
@@ -22,12 +22,16 @@ async fn test_full_actor_lifecycle() {
     for (i, block) in test_blocks.iter().enumerate().take(5) {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = block.block_hash().to_block_hash();
+        let block_hash = block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
 
         assert!(result.is_some(), "Block {} should exist", i);
         let retrieved_block = result.unwrap();
-        assert_eq!(retrieved_block.slot, block.slot, "Block slot mismatch for block {}", i);
+        assert_eq!(
+            retrieved_block.message.slot, block.message.slot,
+            "Block slot mismatch for block {}",
+            i
+        );
     }
 
     // Verify final state
@@ -35,7 +39,10 @@ async fn test_full_actor_lifecycle() {
 
     // Check metrics
     let storage_metrics = harness.get_storage_metrics().await.unwrap();
-    assert!(storage_metrics.blocks_stored >= 5, "Expected at least 5 blocks stored");
+    assert!(
+        storage_metrics.blocks_stored >= 5,
+        "Expected at least 5 blocks stored"
+    );
 
     harness.teardown().await.unwrap();
 }
@@ -75,6 +82,7 @@ async fn test_concurrent_read_write_operations() {
             let block_hash = {
                 use crate::block::ConvertBlockHash;
                 harness.test_blocks[i % harness.test_blocks.len()]
+                    .message
                     .block_hash()
                     .to_block_hash()
             };
@@ -91,7 +99,11 @@ async fn test_concurrent_read_write_operations() {
         let result = handle.await.unwrap();
         assert!(result.is_ok(), "Read operation {} failed: {:?}", i, result);
         let block_option = result.unwrap();
-        assert!(block_option.is_some(), "Block should exist for read operation {}", i);
+        assert!(
+            block_option.is_some(),
+            "Block should exist for read operation {}",
+            i
+        );
     }
 
     harness.verify_state().await.unwrap();
@@ -107,32 +119,52 @@ async fn test_performance_under_load() {
     let block_count = 100;
 
     // Generate and store many blocks
-    let performance_blocks = crate::actors_v2::testing::storage::fixtures::create_performance_test_blocks(block_count, false);
+    let performance_blocks =
+        crate::actors_v2::testing::storage::fixtures::create_performance_test_blocks(
+            block_count,
+            false,
+        );
     let actor_ref = harness.base.get_actor_ref().await;
 
     for (i, block) in performance_blocks.iter().enumerate() {
         let mut actor_guard = actor_ref.write().await;
         let result = actor_guard.store_block(block.clone(), true).await;
-        assert!(result.is_ok(), "Failed to store performance test block {}: {:?}", i, result);
+        assert!(
+            result.is_ok(),
+            "Failed to store performance test block {}: {:?}",
+            i,
+            result
+        );
     }
 
     let duration = start_time.elapsed();
     let blocks_per_second = block_count as f64 / duration.as_secs_f64();
 
     // Assert minimum performance threshold (relaxed for testing environment)
-    assert!(blocks_per_second > 10.0,
-           "Storage performance too low: {:.2} blocks/sec (expected > 10)", blocks_per_second);
+    assert!(
+        blocks_per_second > 10.0,
+        "Storage performance too low: {:.2} blocks/sec (expected > 10)",
+        blocks_per_second
+    );
 
     // Verify all blocks can be retrieved
-    for (i, block) in performance_blocks.iter().enumerate().take(10) { // Sample first 10
+    for (i, block) in performance_blocks.iter().enumerate().take(10) {
+        // Sample first 10
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = block.block_hash().to_block_hash();
+        let block_hash = block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
-        assert!(result.is_some(), "Performance test block {} should be retrievable", i);
+        assert!(
+            result.is_some(),
+            "Performance test block {} should be retrievable",
+            i
+        );
     }
 
-    println!("Performance test completed: {:.2} blocks/sec", blocks_per_second);
+    println!(
+        "Performance test completed: {:.2} blocks/sec",
+        blocks_per_second
+    );
 
     harness.teardown().await.unwrap();
 }
@@ -157,7 +189,7 @@ async fn test_cache_and_database_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
         assert!(result.is_some(), "Block should exist");
     }
@@ -168,14 +200,16 @@ async fn test_cache_and_database_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await.unwrap();
         assert!(result.is_some(), "Block should exist in cache");
     }
     let second_retrieval_time = second_retrieval_start.elapsed();
 
-    println!("First retrieval: {:?}, Second retrieval: {:?}",
-             first_retrieval_time, second_retrieval_time);
+    println!(
+        "First retrieval: {:?}, Second retrieval: {:?}",
+        first_retrieval_time, second_retrieval_time
+    );
 
     // Cache hit should generally be faster (though not guaranteed in test environment)
     // This is more of a performance indicator than a strict requirement
@@ -196,8 +230,14 @@ async fn test_error_handling_integration() {
         use lighthouse_wrapper::types::Hash256;
         let non_existent_hash = Hash256::from_low_u64_be(99999);
         let result = actor_guard.get_block(&non_existent_hash).await;
-        assert!(result.is_ok(), "Get operation should not error for non-existent block");
-        assert!(result.unwrap().is_none(), "Non-existent block should return None");
+        assert!(
+            result.is_ok(),
+            "Get operation should not error for non-existent block"
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "Non-existent block should return None"
+        );
     }
 
     // Test storing block and then retrieving it
@@ -212,7 +252,7 @@ async fn test_error_handling_integration() {
     {
         let mut actor_guard = actor_ref.write().await;
         use crate::block::ConvertBlockHash;
-        let block_hash = test_block.block_hash().to_block_hash();
+        let block_hash = test_block.message.block_hash().to_block_hash();
         let result = actor_guard.get_block(&block_hash).await;
         assert!(result.is_ok(), "Get operation should succeed after storage");
         assert!(result.unwrap().is_some(), "Stored block should exist");
@@ -233,7 +273,10 @@ async fn test_chain_head_management() {
         let actor_guard = actor_ref.read().await;
         let head_result = actor_guard.database.get_chain_head().await;
         assert!(head_result.is_ok(), "Get chain head should not error");
-        assert!(head_result.unwrap().is_none(), "Initial chain head should be None");
+        assert!(
+            head_result.unwrap().is_none(),
+            "Initial chain head should be None"
+        );
     }
 
     // Store a canonical block
@@ -250,12 +293,18 @@ async fn test_chain_head_management() {
         let head_result = actor_guard.database.get_chain_head().await;
         assert!(head_result.is_ok(), "Get chain head should not error");
         let head = head_result.unwrap();
-        assert!(head.is_some(), "Chain head should be set after canonical block");
+        assert!(
+            head.is_some(),
+            "Chain head should be set after canonical block"
+        );
 
         let head_ref = head.unwrap();
         use crate::block::ConvertBlockHash;
-        assert_eq!(head_ref.hash, first_block.block_hash().to_block_hash());
-        assert_eq!(head_ref.number, first_block.slot);
+        assert_eq!(
+            head_ref.hash,
+            first_block.message.block_hash().to_block_hash()
+        );
+        assert_eq!(head_ref.number, first_block.message.slot);
     }
 
     // Store a newer canonical block
@@ -276,8 +325,11 @@ async fn test_chain_head_management() {
 
         let head_ref = head.unwrap();
         use crate::block::ConvertBlockHash;
-        assert_eq!(head_ref.hash, second_block.block_hash().to_block_hash());
-        assert_eq!(head_ref.number, second_block.slot);
+        assert_eq!(
+            head_ref.hash,
+            second_block.message.block_hash().to_block_hash()
+        );
+        assert_eq!(head_ref.number, second_block.message.slot);
     }
 
     harness.teardown().await.unwrap();
@@ -312,7 +364,11 @@ async fn test_state_persistence_integration() {
         assert!(result.is_ok(), "Failed to retrieve state entry");
         let retrieved_value = result.unwrap();
         assert!(retrieved_value.is_some(), "State entry should exist");
-        assert_eq!(retrieved_value.unwrap(), *expected_value, "State value mismatch");
+        assert_eq!(
+            retrieved_value.unwrap(),
+            *expected_value,
+            "State value mismatch"
+        );
     }
 
     // Test overwriting state
@@ -320,7 +376,10 @@ async fn test_state_persistence_integration() {
     let new_value = b"new_value1".to_vec();
     {
         let mut actor_guard = actor_ref.write().await;
-        let result = actor_guard.database.put_state(&overwrite_key, &new_value).await;
+        let result = actor_guard
+            .database
+            .put_state(&overwrite_key, &new_value)
+            .await;
         assert!(result.is_ok(), "Failed to overwrite state entry");
     }
 
@@ -330,8 +389,15 @@ async fn test_state_persistence_integration() {
         let result = actor_guard.database.get_state(&overwrite_key).await;
         assert!(result.is_ok(), "Failed to retrieve overwritten state entry");
         let retrieved_value = result.unwrap();
-        assert!(retrieved_value.is_some(), "Overwritten state entry should exist");
-        assert_eq!(retrieved_value.unwrap(), new_value, "Overwritten state value mismatch");
+        assert!(
+            retrieved_value.is_some(),
+            "Overwritten state entry should exist"
+        );
+        assert_eq!(
+            retrieved_value.unwrap(),
+            new_value,
+            "Overwritten state value mismatch"
+        );
     }
 
     harness.teardown().await.unwrap();

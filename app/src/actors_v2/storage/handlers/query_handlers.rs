@@ -1,9 +1,9 @@
 //! Query-related message handlers for Storage Actor - V2
 
 use crate::actors_v2::storage::{
-    actor::{StorageActor, BlockRef, StorageError},
-    messages::*,
+    actor::{BlockRef, StorageActor, StorageError},
     cache::CacheStats,
+    messages::*,
 };
 use actix::prelude::*;
 use tracing::*;
@@ -17,8 +17,24 @@ impl Handler<GetChainHeadMessage> for StorageActor {
 
         let database = self.database.clone();
 
+        Box::pin(async move { database.get_chain_head().await })
+    }
+}
+
+impl Handler<GetChainHeightMessage> for StorageActor {
+    type Result = ResponseFuture<Result<u64, StorageError>>;
+
+    fn handle(&mut self, msg: GetChainHeightMessage, _: &mut Context<Self>) -> Self::Result {
+        let _correlation_id = msg.correlation_id;
+        debug!("Handling GetChainHeightMessage");
+
+        let database = self.database.clone();
+
         Box::pin(async move {
-            database.get_chain_head().await
+            match database.get_chain_head().await? {
+                Some(head) => Ok(head.number),
+                None => Ok(0), // No chain head means genesis (height 0)
+            }
         })
     }
 }
@@ -28,7 +44,10 @@ impl Handler<UpdateChainHeadMessage> for StorageActor {
 
     fn handle(&mut self, msg: UpdateChainHeadMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        info!("Handling UpdateChainHeadMessage to {} at height {}", msg.new_head.hash, msg.new_head.number);
+        info!(
+            "Handling UpdateChainHeadMessage to {} at height {}",
+            msg.new_head.hash, msg.new_head.number
+        );
 
         let new_head = msg.new_head;
         let database = self.database.clone();
@@ -78,7 +97,7 @@ impl Handler<GetStatsMessage> for StorageActor {
                 blocks_stored: metrics.blocks_stored,
                 blocks_cached: cache_stats.block_cache_bytes / 256, // Rough estimate
                 state_entries: metrics.state_updates,
-                state_cached: cache_stats.state_cache_bytes / 64,   // Rough estimate
+                state_cached: cache_stats.state_cache_bytes / 64, // Rough estimate
                 cache_hit_rate: hit_rates.get("overall").copied().unwrap_or(0.0),
                 pending_writes: pending_writes_count as u64,
                 database_size_mb: db_stats.total_size_bytes / (1024 * 1024),
@@ -96,9 +115,7 @@ impl Handler<GetCacheStatsMessage> for StorageActor {
 
         let cache = self.cache.clone();
 
-        Box::pin(async move {
-            cache.get_stats().await
-        })
+        Box::pin(async move { cache.get_stats().await })
     }
 }
 
@@ -107,7 +124,10 @@ impl Handler<GetTransactionByHashMessage> for StorageActor {
 
     fn handle(&mut self, msg: GetTransactionByHashMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        debug!("Handling GetTransactionByHashMessage for tx {}", msg.tx_hash);
+        debug!(
+            "Handling GetTransactionByHashMessage for tx {}",
+            msg.tx_hash
+        );
 
         let tx_hash = msg.tx_hash;
         let indexing = self.indexing.clone();
@@ -132,16 +152,27 @@ impl Handler<GetTransactionByHashMessage> for StorageActor {
 impl Handler<GetAddressTransactionsMessage> for StorageActor {
     type Result = ResponseFuture<Result<Vec<AddressTransactionInfo>, StorageError>>;
 
-    fn handle(&mut self, msg: GetAddressTransactionsMessage, _: &mut Context<Self>) -> Self::Result {
+    fn handle(
+        &mut self,
+        msg: GetAddressTransactionsMessage,
+        _: &mut Context<Self>,
+    ) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        debug!("Handling GetAddressTransactionsMessage for address {:?}", msg.address);
+        debug!(
+            "Handling GetAddressTransactionsMessage for address {:?}",
+            msg.address
+        );
 
         let address = msg.address;
         let limit = msg.limit;
         let indexing = self.indexing.clone();
 
         Box::pin(async move {
-            let address_indices = indexing.read().await.get_address_transactions(&address, limit).await?;
+            let address_indices = indexing
+                .read()
+                .await
+                .get_address_transactions(&address, limit)
+                .await?;
 
             let tx_info: Vec<AddressTransactionInfo> = address_indices
                 .into_iter()
@@ -164,7 +195,10 @@ impl Handler<QueryLogsMessage> for StorageActor {
 
     fn handle(&mut self, msg: QueryLogsMessage, _: &mut Context<Self>) -> Self::Result {
         let _correlation_id = msg.correlation_id;
-        debug!("Handling QueryLogsMessage with filter from {:?} to {:?}", msg.filter.from_block, msg.filter.to_block);
+        debug!(
+            "Handling QueryLogsMessage with filter from {:?} to {:?}",
+            msg.filter.from_block, msg.filter.to_block
+        );
 
         let filter = msg.filter;
         let indexing = self.indexing.clone();
@@ -176,12 +210,16 @@ impl Handler<QueryLogsMessage> for StorageActor {
                 vec![]
             };
 
-            let eth_logs = indexing.read().await.query_logs(
-                filter.from_block,
-                filter.to_block,
-                &addresses,
-                &filter.topics,
-            ).await?;
+            let eth_logs = indexing
+                .read()
+                .await
+                .query_logs(
+                    filter.from_block,
+                    filter.to_block,
+                    &addresses,
+                    &filter.topics,
+                )
+                .await?;
 
             // Convert EthereumLog to EventLog
             let event_logs: Vec<EventLog> = eth_logs

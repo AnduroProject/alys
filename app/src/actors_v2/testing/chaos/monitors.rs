@@ -1,10 +1,10 @@
-use async_trait::async_trait;
-use std::time::{Duration, Instant};
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use tokio::time::interval;
-use tracing::{info, warn, error, debug};
 use super::super::base::SystemHealthReport;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use tokio::time::interval;
+use tracing::{debug, error, info, warn};
 
 /// System monitoring trait for chaos testing
 #[async_trait]
@@ -89,8 +89,8 @@ impl Default for MonitoringThresholds {
         Self {
             max_response_time: Duration::from_secs(5),
             max_memory_usage: 1024 * 1024 * 1024, // 1GB
-            max_error_rate: 0.1, // 10%
-            min_success_rate: 0.9, // 90%
+            max_error_rate: 0.1,                  // 10%
+            min_success_rate: 0.9,                // 90%
         }
     }
 }
@@ -145,7 +145,7 @@ impl StorageActorMonitor {
                 self.detect_anomalies(&report, response_time).await;
 
                 Ok(report)
-            },
+            }
             Err(e) => {
                 self.stats.failed_checks += 1;
                 error!("Health check failed: {:?}", e);
@@ -193,13 +193,21 @@ impl StorageActorMonitor {
                 } else {
                     AnomalySeverity::Medium
                 },
-                description: format!("Response time {}ms exceeds threshold {}ms",
-                                   response_time.as_millis(),
-                                   self.thresholds.max_response_time.as_millis()),
+                description: format!(
+                    "Response time {}ms exceeds threshold {}ms",
+                    response_time.as_millis(),
+                    self.thresholds.max_response_time.as_millis()
+                ),
                 metrics: {
                     let mut metrics = HashMap::new();
-                    metrics.insert("response_time_ms".to_string(), response_time.as_millis() as f64);
-                    metrics.insert("threshold_ms".to_string(), self.thresholds.max_response_time.as_millis() as f64);
+                    metrics.insert(
+                        "response_time_ms".to_string(),
+                        response_time.as_millis() as f64,
+                    );
+                    metrics.insert(
+                        "threshold_ms".to_string(),
+                        self.thresholds.max_response_time.as_millis() as f64,
+                    );
                     metrics
                 },
             };
@@ -217,13 +225,18 @@ impl StorageActorMonitor {
                 } else {
                     AnomalySeverity::High
                 },
-                description: format!("Memory usage {}MB exceeds threshold {}MB",
-                                   report.memory_usage / (1024 * 1024),
-                                   self.thresholds.max_memory_usage / (1024 * 1024)),
+                description: format!(
+                    "Memory usage {}MB exceeds threshold {}MB",
+                    report.memory_usage / (1024 * 1024),
+                    self.thresholds.max_memory_usage / (1024 * 1024)
+                ),
                 metrics: {
                     let mut metrics = HashMap::new();
                     metrics.insert("memory_usage_bytes".to_string(), report.memory_usage as f64);
-                    metrics.insert("threshold_bytes".to_string(), self.thresholds.max_memory_usage as f64);
+                    metrics.insert(
+                        "threshold_bytes".to_string(),
+                        self.thresholds.max_memory_usage as f64,
+                    );
                     metrics
                 },
             };
@@ -255,9 +268,11 @@ impl StorageActorMonitor {
                 } else {
                     AnomalySeverity::Medium
                 },
-                description: format!("Error rate {:.2}% exceeds threshold {:.2}%",
-                                   error_rate * 100.0,
-                                   self.thresholds.max_error_rate * 100.0),
+                description: format!(
+                    "Error rate {:.2}% exceeds threshold {:.2}%",
+                    error_rate * 100.0,
+                    self.thresholds.max_error_rate * 100.0
+                ),
                 metrics: {
                     let mut metrics = HashMap::new();
                     metrics.insert("error_rate".to_string(), error_rate);
@@ -273,15 +288,36 @@ impl StorageActorMonitor {
 
     /// Calculate monitoring summary statistics
     fn calculate_summary(&self) -> MonitoringSummary {
-        let duration = self.start_time.map(|start| start.elapsed()).unwrap_or_default();
+        let duration = self
+            .start_time
+            .map(|start| start.elapsed())
+            .unwrap_or_default();
 
         let (avg_response, max_response, min_response) = if self.response_times.is_empty() {
-            (Duration::default(), Duration::default(), Duration::default())
+            (
+                Duration::default(),
+                Duration::default(),
+                Duration::default(),
+            )
         } else {
-            let total_ms: u64 = self.response_times.iter().map(|d| d.as_millis() as u64).sum();
+            let total_ms: u64 = self
+                .response_times
+                .iter()
+                .map(|d| d.as_millis() as u64)
+                .sum();
             let avg_ms = total_ms / self.response_times.len() as u64;
-            let max_ms = self.response_times.iter().max().copied().unwrap_or_default();
-            let min_ms = self.response_times.iter().min().copied().unwrap_or_default();
+            let max_ms = self
+                .response_times
+                .iter()
+                .max()
+                .copied()
+                .unwrap_or_default();
+            let min_ms = self
+                .response_times
+                .iter()
+                .min()
+                .copied()
+                .unwrap_or_default();
 
             (Duration::from_millis(avg_ms), max_ms, min_ms)
         };
@@ -309,7 +345,10 @@ impl SystemMonitor for StorageActorMonitor {
             return Err(MonitoringError::AlreadyMonitoring);
         }
 
-        info!("Starting system monitoring with interval: {:?}", self.check_interval);
+        info!(
+            "Starting system monitoring with interval: {:?}",
+            self.check_interval
+        );
 
         self.monitoring_active = true;
         self.start_time = Some(Instant::now());
@@ -333,8 +372,13 @@ impl SystemMonitor for StorageActorMonitor {
 
         let summary = self.calculate_summary();
 
-        info!("Monitoring summary: {} total checks, {} successful, {} failed, {} anomalies detected",
-              summary.total_checks, summary.successful_checks, summary.failed_checks, summary.anomalies_detected.len());
+        info!(
+            "Monitoring summary: {} total checks, {} successful, {} failed, {} anomalies detected",
+            summary.total_checks,
+            summary.successful_checks,
+            summary.failed_checks,
+            summary.anomalies_detected.len()
+        );
 
         Ok(summary)
     }
@@ -405,7 +449,9 @@ impl ContinuousMonitor {
     pub async fn stop(&mut self) -> Result<MonitoringSummary, MonitoringError> {
         if let Some(handle) = self.task_handle.take() {
             self.monitor.monitoring_active = false;
-            handle.await.map_err(|e| MonitoringError::TaskError(e.to_string()))?
+            handle
+                .await
+                .map_err(|e| MonitoringError::TaskError(e.to_string()))?
         } else {
             Err(MonitoringError::NotMonitoring)
         }

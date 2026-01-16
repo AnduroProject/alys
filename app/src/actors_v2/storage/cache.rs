@@ -3,7 +3,9 @@
 //! This module provides efficient caching for frequently accessed blockchain data
 //! including blocks, state, and other storage operations.
 
-use super::actor::{AlysConsensusBlock};
+use super::actor::AlysConsensusBlock;
+use ethereum_types::H256;
+use lighthouse_wrapper::types::Hash256;
 use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
@@ -11,8 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::*;
-use lighthouse_wrapper::types::Hash256;
-use ethereum_types::H256;
 
 /// State key type
 pub type StateKey = Vec<u8>;
@@ -120,17 +120,17 @@ pub struct CacheStats {
 impl StorageCache {
     /// Create a new storage cache with the given configuration
     pub fn new(config: CacheConfig) -> Self {
-        let block_cache = Arc::new(RwLock::new(
-            LruCache::new(NonZeroUsize::new(config.max_blocks).unwrap())
-        ));
+        let block_cache = Arc::new(RwLock::new(LruCache::new(
+            NonZeroUsize::new(config.max_blocks).unwrap(),
+        )));
 
-        let state_cache = Arc::new(RwLock::new(
-            LruCache::new(NonZeroUsize::new(config.max_state_entries).unwrap())
-        ));
+        let state_cache = Arc::new(RwLock::new(LruCache::new(
+            NonZeroUsize::new(config.max_state_entries).unwrap(),
+        )));
 
-        let receipt_cache = Arc::new(RwLock::new(
-            LruCache::new(NonZeroUsize::new(config.max_receipts).unwrap())
-        ));
+        let receipt_cache = Arc::new(RwLock::new(LruCache::new(
+            NonZeroUsize::new(config.max_receipts).unwrap(),
+        )));
 
         let stats = Arc::new(RwLock::new(CacheStats::default()));
         let state_expirations = Arc::new(RwLock::new(HashMap::new()));
@@ -355,7 +355,10 @@ impl StorageCache {
         }
 
         if expired_count > 0 {
-            debug!("Cache cleanup completed: removed {} expired entries", expired_count);
+            debug!(
+                "Cache cleanup completed: removed {} expired entries",
+                expired_count
+            );
         }
     }
 
@@ -365,7 +368,8 @@ impl StorageCache {
         let mut result = stats.clone();
 
         // Update memory usage calculations
-        result.total_memory_bytes = result.block_cache_bytes + result.state_cache_bytes + result.receipt_cache_bytes;
+        result.total_memory_bytes =
+            result.block_cache_bytes + result.state_cache_bytes + result.receipt_cache_bytes;
 
         result
     }
@@ -459,10 +463,10 @@ impl Default for CacheConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethereum_types::H256;
+    use lighthouse_wrapper::types::Hash256;
     use std::time::Duration;
     use tokio::time;
-    use lighthouse_wrapper::types::Hash256;
-    use ethereum_types::H256;
 
     #[tokio::test]
     async fn test_cache_cleanup_expired() {
@@ -471,7 +475,7 @@ mod tests {
             max_blocks: 100,
             max_state_entries: 100,
             max_receipts: 100,
-            state_ttl: Duration::from_millis(100),  // Very short for testing
+            state_ttl: Duration::from_millis(100), // Very short for testing
             receipt_ttl: Duration::from_millis(100),
             enable_warming: false,
         };
@@ -492,7 +496,10 @@ mod tests {
         // Get cache stats to verify cleanup worked
         let stats = cache.get_stats().await;
         // Note: The exact expiration count depends on implementation details
-        println!("Cache cleanup test completed with {} state expirations", stats.state_expirations);
+        println!(
+            "Cache cleanup test completed with {} state expirations",
+            stats.state_expirations
+        );
     }
 
     #[tokio::test]

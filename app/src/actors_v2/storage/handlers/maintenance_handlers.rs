@@ -261,6 +261,7 @@ impl Default for crate::actors_v2::storage::actor::BlockRef {
         Self {
             hash: lighthouse_wrapper::types::Hash256::zero(),
             number: 0,
+            execution_hash: lighthouse_wrapper::types::ExecutionBlockHash::zero(),
         }
     }
 }

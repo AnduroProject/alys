@@ -1,0 +1,284 @@
+# Docker Compose Two-Node Regtest Configuration
+# Purpose: Testing NetworkActor V2 libp2p stack with peer-to-peer communication
+# Architecture: Shared execution layer (Reth) and Bitcoin Core for both Alys nodes
+# Documentation: docs/v2_alpha/docker-two-node-testnet-architecture.md
+services:
+  # Bitcoin Core - Shared regtest instance
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    platform: linux/amd64
+    container_name: bitcoin-core
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.30
+    ports:
+      - "18333:18333"  # P2P
+      - "18443:18443"  # RPC
+    volumes:
+      - ../data/bitcoin:/root/.bitcoin
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+    # healthcheck:
+    #   test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "getblockchaininfo"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+
+  # Execution Layer - Shared Reth instance for both Alys nodes
+  execution:
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    platform: linux/amd64
+    container_name: execution
+    restart: unless-stopped
+    pid: host
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.20
+    ports:
+      - "8545:8545"    # HTTP RPC
+      - "8551:8551"    # Engine API
+      - "8456:8456"    # WebSocket
+      - "19001:19001"  # Metrics
+      - "30303:30303"  # ETH P2P
+    volumes:
+      - ../data/execution/data:/opt/alys/execution/data
+      - ../data/execution/logs:/opt/alys/execution/logs
+      - ./config:/opt/alys/execution/config
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+    command: >
+      node
+      --chain /opt/alys/execution/config/genesis.json
+      --log.file.directory /opt/alys/execution/logs
+      --datadir /opt/alys/execution/data
+      --config /opt/alys/execution/config/eth-config.toml
+      --metrics 0.0.0.0:19001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "debug,net,eth,web3,txpool"
+      --http.corsdomain "*"
+      --ws.api "eth,net,web3,debug,txpool"
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+
+  # Alys Node 1 - Bootnode/Validator
+  alys-node-1:
+    # build:
+    #   context: ..
+    #   dockerfile: ./etc/Dockerfile
+    image: ghcr.io/anduroproject/alys:feature-v2-network
+    container_name: alys-node-1
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.10
+    ports:
+      - "3000:3000"    # V0 RPC
+      - "3001:3001"    # V2 RPC
+      - "9000:9000"    # V0 P2P
+      - "9090:9090"    # Prometheus Metrics
+      - "10000:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
+    volumes:
+      - ../data/node1/db:/lib/alys/data/db
+      - ../data/node1/wallet:/lib/alys/data/wallet
+      - ../logs/node1:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: trace
+      RUST_BACKTRACE: full
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 10
+        exec /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 1 \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 2d2026129eae1cb9543f0bc6245a08d17e0439cdd77dffd54e70d7335043e86f \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+    depends_on:
+      - execution
+      - bitcoin-core
+
+  # Alys Node 2 - Peer node (mDNS auto-discovery, no explicit bootnode)
+  alys-node-2:
+    # build:
+    #   context: ..
+    #   dockerfile: ./etc/Dockerfile
+    image: ghcr.io/anduroproject/alys:feature-v2-network
+    container_name: alys-node-2
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.11
+    ports:
+      - "3010:3000"    # V0 RPC
+      - "3011:3001"    # V2 RPC
+      - "9001:9000"    # V0 P2P
+      - "9091:9090"    # Prometheus Metrics
+      - "10001:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
+    volumes:
+      - ../data/node2/db:/lib/alys/data/db
+      - ../data/node2/wallet:/lib/alys/data/wallet
+      - ../logs/node2:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: trace
+      RUST_BACKTRACE: full
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 90
+        exec /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 2 \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 101d4ae7fd91d7dc658f8a59f028e499cf876c3a20cf21de5693cf72521f18a3 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+      # Note: No --remote-bootnode flag - using mDNS auto-discovery
+    depends_on:
+      - execution
+      - bitcoin-core
+
+  # Alys Node 3 - Peer node (mDNS auto-discovery, no explicit bootnode)
+  alys-node-3:
+    # build:
+    #   context: ..
+    #   dockerfile: ./etc/Dockerfile
+    image: ghcr.io/anduroproject/alys:feature-v2-network
+    container_name: alys-node-3
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.12
+    ports:
+      - "3020:3000"    # V0 RPC
+      - "3021:3001"    # V2 RPC
+      - "9002:9000"    # V0 P2P
+      - "9093:9090"    # Prometheus Metrics
+      - "10002:10000"  # V2 P2P (auto-calculated: --p2p-port + 1000)
+    volumes:
+      - ../data/node3/db:/lib/alys/data/db
+      - ../data/node3/wallet:/lib/alys/data/wallet
+      - ../logs/node3:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: trace
+      RUST_BACKTRACE: full
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 10
+        exec /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 3 \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 6b971afc6708ec419ff72864740fa76586dd7174f95625fc656186ea0c8f0f80 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+      # Note: No --remote-bootnode flag - using mDNS auto-discovery
+    depends_on:
+      - execution
+      - bitcoin-core
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.40
+    ports:
+      - "9092:9090"  # Prometheus UI & API
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../data/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - alys-node-1
+      - alys-node-2
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      alys-regtest:
+        ipv4_address: 172.20.0.41
+    ports:
+      - "3030:3000"  # Grafana UI (using 3030 to avoid conflict with Alys RPC)
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../data/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3030
+      - GF_INSTALL_PLUGINS=
+    depends_on:
+      - prometheus
+
+networks:
+  alys-regtest:
+    name: alys-regtest
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

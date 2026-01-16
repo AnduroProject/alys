@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-store = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc16" }
+execution_layer = { git = "https://github.com/sigp/lighthouse", rev = "441fc1691b69f9edc4bbdc6665f3efab16265c9b" }
+sensitive_url = { git = "https://github.com/sigp/lighthouse", rev = "441fc1691b69f9edc4bbdc6665f3efab16265c9b" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "441fc1691b69f9edc4bbdc6665f3efab16265c9b" }
+store = { git = "https://github.com/sigp/lighthouse", rev = "441fc1691b69f9edc4bbdc6665f3efab16265c9b" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "441fc1691b69f9edc4bbdc6665f3efab16265c9b" }

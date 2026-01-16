@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use std::collections::HashMap;
 
 /// Test timing utilities
 pub struct TestTimer {
@@ -72,8 +72,10 @@ where
                 }
 
                 let delay = base_delay * attempts;
-                warn!("Operation failed (attempt {}/{}), retrying in {:?}: {:?}",
-                      attempts, max_attempts, delay, error);
+                warn!(
+                    "Operation failed (attempt {}/{}), retrying in {:?}: {:?}",
+                    attempts, max_attempts, delay, error
+                );
                 sleep(delay).await;
             }
         }
@@ -198,4 +200,4 @@ macro_rules! assert_async_within_timeout {
     };
 }
 
-pub use {assert_within_timeout, assert_async_within_timeout};
+pub use {assert_async_within_timeout, assert_within_timeout};

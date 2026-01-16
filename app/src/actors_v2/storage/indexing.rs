@@ -3,15 +3,15 @@
 //! This module provides indexing capabilities for efficient blockchain data queries
 //! including transaction lookups, address histories, and event log filtering.
 
-use super::actor::{StorageError, AlysConsensusBlock};
+use super::actor::{AlysConsensusBlock, StorageError};
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
+use ethereum_types::{Address, H256, U256};
+use lighthouse_wrapper::types::Hash256;
 use rocksdb::DB;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::*;
-use lighthouse_wrapper::types::Hash256;
-use ethereum_types::{H256, U256, Address};
 
 /// Ethereum transaction type placeholder
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -93,15 +93,16 @@ impl StorageIndexing {
 
         let stats = IndexingStats::default();
 
-        Ok(StorageIndexing {
-            db_handle,
-            stats,
-        })
+        Ok(StorageIndexing { db_handle, stats })
     }
 
     /// Index a block and its transactions
     pub async fn index_block(&mut self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
-        debug!("Indexing block: {} at height: {}", block.block_hash().to_block_hash(), block.slot);
+        debug!(
+            "Indexing block: {} at height: {}",
+            block.message.block_hash().to_block_hash(),
+            block.message.execution_payload.block_number
+        );
 
         let mut batch = rocksdb::WriteBatch::default();
 
@@ -110,28 +111,37 @@ impl StorageIndexing {
 
         // For now, we'll simulate transaction indexing since we don't have actual transactions in ConsensusBlock
         // In a real implementation, you would iterate over block.body.transactions
-        self.simulate_transaction_indexing(&mut batch, block)?;
+        // self.simulate_transaction_indexing(&mut batch, block)?;
 
         // Write batch to database
         {
             let db = self.db_handle.read().await;
-            db.write(batch)
-                .map_err(|e| StorageError::Database(format!("Failed to write indexing batch: {}", e)))?;
+            db.write(batch).map_err(|e| {
+                StorageError::Database(format!("Failed to write indexing batch: {}", e))
+            })?;
         }
 
         // Update statistics
         self.stats.blocks_indexed += 1;
-        self.stats.last_indexed_block = Some(block.slot);
+        self.stats.last_indexed_block = Some(block.message.execution_payload.block_number);
 
-        debug!("Successfully indexed block: {} with {} simulated transactions", block.block_hash().to_block_hash(), 1);
+        debug!(
+            "Successfully indexed block: {} with {} simulated transactions",
+            block.message.block_hash().to_block_hash(),
+            1
+        );
         Ok(())
     }
 
     /// Index block height mapping
-    fn index_block_height(&self, batch: &mut rocksdb::WriteBatch, block: &AlysConsensusBlock) -> Result<(), StorageError> {
+    fn index_block_height(
+        &self,
+        batch: &mut rocksdb::WriteBatch,
+        block: &AlysConsensusBlock,
+    ) -> Result<(), StorageError> {
         // Create height -> block_hash mapping for efficient height lookups
-        let height_key = format!("height:{}", block.slot);
-        let block_hash = block.block_hash().to_block_hash();
+        let height_key = format!("height:{}", block.message.execution_payload.block_number);
+        let block_hash = block.message.block_hash().to_block_hash();
         let block_hash_value = block_hash.as_bytes();
 
         batch.put(height_key.as_bytes(), block_hash_value);
@@ -139,7 +149,11 @@ impl StorageIndexing {
     }
 
     /// Simulate transaction indexing (since we don't have real transactions in ConsensusBlock)
-    fn simulate_transaction_indexing(&mut self, batch: &mut rocksdb::WriteBatch, block: &AlysConsensusBlock) -> Result<(), StorageError> {
+    fn simulate_transaction_indexing(
+        &mut self,
+        batch: &mut rocksdb::WriteBatch,
+        block: &AlysConsensusBlock,
+    ) -> Result<(), StorageError> {
         // In a real implementation, you would:
         // 1. Extract transactions from block.body.transactions
         // 2. Create transaction hash -> block info mapping
@@ -147,11 +161,12 @@ impl StorageIndexing {
         // 4. Index transaction logs and events
 
         // For now, create a placeholder transaction index entry
-        let placeholder_tx_hash = H256::from_low_u64_be(block.slot);
+        let placeholder_tx_hash =
+            H256::from_low_u64_be(block.message.execution_payload.block_number);
         let tx_index = TransactionIndex {
             transaction_hash: placeholder_tx_hash,
-            block_hash: block.block_hash().to_block_hash(),
-            block_number: block.slot,
+            block_hash: block.message.block_hash().to_block_hash(),
+            block_number: block.message.execution_payload.block_number,
             transaction_index: 0,
             from_address: Address::zero(),
             to_address: Some(Address::zero()),
@@ -168,12 +183,16 @@ impl StorageIndexing {
     }
 
     /// Get transaction by hash
-    pub async fn get_transaction(&self, tx_hash: &H256) -> Result<Option<TransactionIndex>, StorageError> {
+    pub async fn get_transaction(
+        &self,
+        tx_hash: &H256,
+    ) -> Result<Option<TransactionIndex>, StorageError> {
         let db = self.db_handle.read().await;
         let tx_key = format!("tx:{}", tx_hash);
 
-        match db.get(tx_key.as_bytes())
-            .map_err(|e| StorageError::Database(format!("Failed to get transaction index: {}", e)))? {
+        match db.get(tx_key.as_bytes()).map_err(|e| {
+            StorageError::Database(format!("Failed to get transaction index: {}", e))
+        })? {
             Some(value) => {
                 let tx_index: TransactionIndex = serde_json::from_slice(&value)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -184,23 +203,39 @@ impl StorageIndexing {
     }
 
     /// Get transactions for an address
-    pub async fn get_address_transactions(&self, address: &Address, limit: Option<usize>) -> Result<Vec<AddressIndex>, StorageError> {
+    pub async fn get_address_transactions(
+        &self,
+        address: &Address,
+        limit: Option<usize>,
+    ) -> Result<Vec<AddressIndex>, StorageError> {
         // In a real implementation, you would:
         // 1. Query the address index
         // 2. Return paginated results
         // 3. Include both sent and received transactions
 
-        debug!("Getting transactions for address: {:?} (limit: {:?})", address, limit);
+        debug!(
+            "Getting transactions for address: {:?} (limit: {:?})",
+            address, limit
+        );
 
         // For now, return empty results
         Ok(Vec::new())
     }
 
     /// Query logs with filters
-    pub async fn query_logs(&self, from_block: Option<u64>, to_block: Option<u64>, addresses: &[Address], topics: &[H256]) -> Result<Vec<EthereumLog>, StorageError> {
+    pub async fn query_logs(
+        &self,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        addresses: &[Address],
+        topics: &[H256],
+    ) -> Result<Vec<EthereumLog>, StorageError> {
         debug!(
             "Querying logs: from_block={:?}, to_block={:?}, addresses={}, topics={}",
-            from_block, to_block, addresses.len(), topics.len()
+            from_block,
+            to_block,
+            addresses.len(),
+            topics.len()
         );
 
         // In a real implementation, you would:
@@ -276,7 +311,10 @@ impl StorageIndexing {
             issues.push("No blocks have been indexed".to_string());
         }
 
-        debug!("Index consistency check completed: {} issues found", issues.len());
+        debug!(
+            "Index consistency check completed: {} issues found",
+            issues.len()
+        );
         Ok(issues)
     }
 }

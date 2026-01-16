@@ -12,20 +12,20 @@
 //! - Integration with ChainActor for block persistence
 
 pub mod actor;
-pub mod database;
 pub mod cache;
+pub mod database;
+pub mod handlers;
 pub mod indexing;
 pub mod messages;
 pub mod metrics;
-pub mod handlers;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export main types for easy access
 pub use actor::{StorageActor, StorageConfig, WritePriority};
-pub use database::{DatabaseManager, DatabaseConfig};
-pub use cache::{StorageCache, CacheConfig, CacheStats};
-pub use indexing::{StorageIndexing, IndexingStats, TransactionIndex, AddressIndex, BlockRange};
+pub use cache::{CacheConfig, CacheStats, StorageCache};
+pub use database::{DatabaseConfig, DatabaseManager};
+pub use indexing::{AddressIndex, BlockRange, IndexingStats, StorageIndexing, TransactionIndex};
 pub use messages::*;
 pub use metrics::{StorageActorMetrics, StorageAlertThresholds};

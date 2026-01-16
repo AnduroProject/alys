@@ -12,8 +12,7 @@ pub mod blockchain {
 
     /// Generate block hashes (as hex strings)
     pub fn block_hash() -> impl Strategy<Value = String> {
-        prop::collection::vec(any::<u8>(), 32)
-            .prop_map(|bytes| format!("0x{}", hex::encode(bytes)))
+        prop::collection::vec(any::<u8>(), 32).prop_map(|bytes| format!("0x{}", hex::encode(bytes)))
     }
 
     /// Generate gas limits
@@ -33,8 +32,7 @@ pub mod blockchain {
 
     /// Generate ethereum addresses
     pub fn address() -> impl Strategy<Value = String> {
-        prop::collection::vec(any::<u8>(), 20)
-            .prop_map(|bytes| format!("0x{}", hex::encode(bytes)))
+        prop::collection::vec(any::<u8>(), 20).prop_map(|bytes| format!("0x{}", hex::encode(bytes)))
     }
 }
 
@@ -64,8 +62,7 @@ pub mod storage {
 
     /// Generate database paths
     pub fn db_path() -> impl Strategy<Value = String> {
-        prop::string::string_regex(r"/tmp/test_db_[a-z0-9]{8}")
-            .expect("Valid regex")
+        prop::string::string_regex(r"/tmp/test_db_[a-z0-9]{8}").expect("Valid regex")
     }
 }
 
@@ -75,17 +72,18 @@ pub mod messages {
 
     /// Generate message IDs (UUIDs as strings)
     pub fn message_id() -> impl Strategy<Value = String> {
-        prop::collection::vec(any::<u8>(), 16)
-            .prop_map(|bytes| {
-                format!(
-                    "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-                    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-                    u16::from_be_bytes([bytes[4], bytes[5]]),
-                    u16::from_be_bytes([bytes[6], bytes[7]]),
-                    u16::from_be_bytes([bytes[8], bytes[9]]),
-                    u64::from_be_bytes([bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], 0, 0]) >> 16
-                )
-            })
+        prop::collection::vec(any::<u8>(), 16).prop_map(|bytes| {
+            format!(
+                "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+                u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+                u16::from_be_bytes([bytes[4], bytes[5]]),
+                u16::from_be_bytes([bytes[6], bytes[7]]),
+                u16::from_be_bytes([bytes[8], bytes[9]]),
+                u64::from_be_bytes([
+                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], 0, 0
+                ]) >> 16
+            )
+        })
     }
 
     /// Generate correlation IDs
@@ -131,7 +129,9 @@ pub mod scenarios {
     use super::*;
 
     /// Generate a sequence of block operations
-    pub fn block_sequence(length: impl Into<prop::collection::SizeRange>) -> impl Strategy<Value = Vec<BlockOperation>> {
+    pub fn block_sequence(
+        length: impl Into<prop::collection::SizeRange>,
+    ) -> impl Strategy<Value = Vec<BlockOperation>> {
         prop::collection::vec(block_operation(), length)
     }
 
@@ -145,7 +145,8 @@ pub mod scenarios {
 
     pub fn block_operation() -> impl Strategy<Value = BlockOperation> {
         prop_oneof![
-            (blockchain::block_number(), any::<bool>()).prop_map(|(slot, canonical)| BlockOperation::Store { slot, canonical }),
+            (blockchain::block_number(), any::<bool>())
+                .prop_map(|(slot, canonical)| BlockOperation::Store { slot, canonical }),
             blockchain::block_number().prop_map(|slot| BlockOperation::Retrieve { slot }),
             blockchain::block_number().prop_map(|slot| BlockOperation::Delete { slot }),
             blockchain::block_number().prop_map(|slot| BlockOperation::UpdateHead { slot }),
@@ -153,11 +154,13 @@ pub mod scenarios {
     }
 
     /// Generate concurrent operation patterns
-    pub fn concurrent_operations(max_concurrent: usize) -> impl Strategy<Value = Vec<Vec<BlockOperation>>> {
+    pub fn concurrent_operations(
+        max_concurrent: usize,
+    ) -> impl Strategy<Value = Vec<Vec<BlockOperation>>> {
         (1..=max_concurrent).prop_flat_map(|thread_count| {
             prop::collection::vec(
                 prop::collection::vec(block_operation(), 1..20),
-                thread_count
+                thread_count,
             )
         })
     }
@@ -175,13 +178,16 @@ pub mod config {
             storage::batch_size(),
             any::<bool>(), // enable_compression
             any::<bool>(), // enable_statistics
-        ).prop_map(|(path, cache_size, batch_size, compression, stats)| MockDatabaseConfig {
-            path,
-            cache_size,
-            write_batch_size: batch_size,
-            enable_compression: compression,
-            enable_statistics: stats,
-        })
+        )
+            .prop_map(|(path, cache_size, batch_size, compression, stats)| {
+                MockDatabaseConfig {
+                    path,
+                    cache_size,
+                    write_batch_size: batch_size,
+                    enable_compression: compression,
+                    enable_statistics: stats,
+                }
+            })
     }
 
     #[derive(Debug, Clone)]
@@ -196,9 +202,5 @@ pub mod config {
 
 /// Utility functions for property test data generation
 pub fn generate_test_data_map(size: usize) -> impl Strategy<Value = HashMap<Vec<u8>, Vec<u8>>> {
-    prop::collection::hash_map(
-        storage::storage_key(),
-        storage::storage_value(),
-        0..size
-    )
+    prop::collection::hash_map(storage::storage_key(), storage::storage_value(), 0..size)
 }

@@ -16,7 +16,7 @@
     "037b169ff8392c0c1c488b5ac3f8fbc8a6387a3ea75904fa2cf9b175128d9890e7"
   ],
   "bits": 486604799,
-  "chainId": 727272,
+  "chainId": 262626,
   "maxBlocksWithoutPow": 50000,
   "bitcoinStartHeight": 0,
   "retargetParams": {

@@ -1,7 +1,8 @@
 pub mod injectors;
-pub mod scenarios;
 pub mod monitors;
+pub mod scenarios;
+pub mod sync_chaos_tests;
 
 pub use injectors::*;
-pub use scenarios::*;
 pub use monitors::*;
+pub use scenarios::*;
