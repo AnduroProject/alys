@@ -174,6 +174,1312 @@ pub enum ForkChoice {
 - ❌ Parent hash validation
 - ❌ Block validity beyond height
 
+---
+
+### Fork Choice Gap Analysis: Detailed Technical Specification
+
+The following sections provide detailed technical specifications for each missing fork choice component. These specifications are intended to guide implementation.
+
+---
+
+#### Gap FC-1: AuxPoW Difficulty/Work
+
+##### 1.1 Conceptual Overview
+
+**What is AuxPoW Difficulty?**
+
+AuxPoW (Auxiliary Proof of Work) is the mechanism by which Alys blocks are secured through Bitcoin's mining network. When a Bitcoin miner includes an Alys block commitment in their coinbase transaction and successfully mines a Bitcoin block, they produce an AuxPoW proof.
+
+The **difficulty** of an AuxPoW block represents the computational work required to produce it:
+
+```
+Difficulty = Maximum Target / Block Target
+
+Where:
+- Maximum Target = 0x00000000FFFF... (Bitcoin's maximum target)
+- Block Target = value derived from the 'bits' field in the Bitcoin block header
+```
+
+Higher difficulty = more computational work = stronger security guarantee.
+
+**Why This Matters for Fork Choice:**
+
+In proof-of-work systems, the fundamental consensus rule is **"most work wins"**. This is not arbitrary - it's the core security assumption:
+
+1. **Economic Security:** More work = more electricity spent = more expensive to attack
+2. **Sybil Resistance:** Can't fake computational work without actually doing it
+3. **Convergence:** All honest nodes will eventually agree on the chain with most work
+
+Without considering AuxPoW difficulty, Alys's fork choice violates its own security model.
+
+##### 1.2 Current State
+
+**What Exists:**
+- AuxPoW validation exists in `auxpow.rs` (validates proofs are correct)
+- AuxPoW headers are stored with blocks
+- Difficulty target is available in `parent_block.bits`
+
+**What's Missing:**
+- No extraction of difficulty value from AuxPoW headers
+- No difficulty comparison in fork choice
+- No cumulative difficulty tracking
+- Fork choice ignores AuxPoW entirely
+
+**Current Vulnerable Code Path:**
+```rust
+// fork_choice.rs - CURRENT (vulnerable)
+fn apply_tiebreaker(block_a, block_b) -> ForkChoice {
+    // Only looks at timestamps and hashes
+    // A block with NO AuxPoW can beat a block WITH AuxPoW
+    // if it has an earlier timestamp!
+}
+```
+
+##### 1.3 Complete Implementation Specification
+
+**1.3.1 Difficulty Extraction Function**
+
+```rust
+// Location: app/src/actors_v2/chain/auxpow.rs
+
+use bitcoin::blockdata::constants::max_target;
+use bitcoin::Target;
+
+/// Calculate the difficulty value from an AuxPoW header.
+///
+/// Returns the difficulty as a u128 to handle Bitcoin's large difficulty values.
+/// For blocks without AuxPoW, returns a base difficulty of 1.
+///
+/// # Formula
+/// difficulty = max_target / block_target
+///
+/// # Example
+/// - Bitcoin block with bits=0x1d00ffff has difficulty ≈ 1
+/// - Bitcoin block with bits=0x1a0575ee has difficulty ≈ 1,873,105
+pub fn calculate_block_difficulty(block: &SignedConsensusBlock) -> u128 {
+    // Check if block has AuxPoW
+    let auxpow = match &block.message.auxpow {
+        Some(auxpow) => auxpow,
+        None => {
+            // No AuxPoW - return base difficulty
+            // This represents an "unsecured" block
+            return BASE_DIFFICULTY; // Configurable, recommend: 1
+        }
+    };
+
+    // Extract the target from the Bitcoin block header's 'bits' field
+    let bits = auxpow.parent_block.bits;
+    let target = Target::from_compact(bits);
+
+    // Calculate difficulty
+    // difficulty = max_target / target
+    let max_target = max_target(bitcoin::Network::Bitcoin);
+
+    // Handle division carefully to avoid overflow
+    let difficulty = target_to_difficulty(target, max_target);
+
+    tracing::trace!(
+        bits = %bits,
+        difficulty = difficulty,
+        block_hash = %calculate_block_hash(block),
+        "Calculated AuxPoW difficulty"
+    );
+
+    difficulty
+}
+
+/// Convert a target to a difficulty value.
+///
+/// Uses u256 arithmetic internally to handle Bitcoin's large values,
+/// then truncates to u128 (sufficient for practical difficulty values).
+fn target_to_difficulty(target: Target, max_target: Target) -> u128 {
+    // Difficulty = max_target / target
+    // We need arbitrary precision here
+
+    let max_target_u256 = U256::from_be_bytes(max_target.to_be_bytes());
+    let target_u256 = U256::from_be_bytes(target.to_be_bytes());
+
+    if target_u256.is_zero() {
+        return u128::MAX; // Infinite difficulty (shouldn't happen)
+    }
+
+    let difficulty_u256 = max_target_u256 / target_u256;
+
+    // Truncate to u128 - sufficient for Bitcoin difficulty values
+    // Current Bitcoin difficulty is ~80 trillion, well within u128
+    difficulty_u256.as_u128()
+}
+
+/// Base difficulty for blocks without AuxPoW.
+///
+/// This value represents the "work" of a block that has no proof-of-work.
+/// Setting this to 1 means AuxPoW blocks will always beat non-AuxPoW blocks
+/// in fork choice (assuming any real Bitcoin difficulty >> 1).
+///
+/// Configurable based on network requirements.
+pub const BASE_DIFFICULTY: u128 = 1;
+```
+
+**1.3.2 Fork Choice Integration**
+
+```rust
+// Location: app/src/actors_v2/chain/fork_choice.rs
+
+/// Compare two competing blocks considering AuxPoW difficulty.
+///
+/// # Fork Choice Rules (in priority order)
+///
+/// 1. **Most Work Wins (Primary):** Block with higher cumulative difficulty wins
+/// 2. **Timestamp Tiebreaker:** If difficulty equal, earlier timestamp wins
+/// 3. **Hash Tiebreaker:** If timestamp equal, lower hash wins (deterministic)
+///
+/// # Arguments
+///
+/// * `current_block` - The block currently in our canonical chain
+/// * `current_cumulative_difficulty` - Total difficulty of chain ending at current_block
+/// * `new_block` - The competing block received from the network
+/// * `new_cumulative_difficulty` - Total difficulty of chain ending at new_block
+///
+/// # Returns
+///
+/// * `ForkChoice::KeepCurrent` - Current block wins, reject new block
+/// * `ForkChoice::Reorganize` - New block wins, reorganize to it
+/// * `ForkChoice::RequiresDeepAnalysis` - Blocks have different parents, need deep reorg
+pub fn compare_blocks_with_difficulty(
+    current_block: &SignedConsensusBlock<MainnetEthSpec>,
+    current_cumulative_difficulty: u128,
+    new_block: &SignedConsensusBlock<MainnetEthSpec>,
+    new_cumulative_difficulty: u128,
+) -> ForkChoice {
+    let current_height = current_block.message.execution_payload.block_number;
+    let new_height = new_block.message.execution_payload.block_number;
+    let current_hash = calculate_block_hash(current_block);
+    let new_hash = calculate_block_hash(new_block);
+
+    // Validate same height (for same-height fork comparison)
+    if current_height != new_height {
+        tracing::warn!(
+            current_height = current_height,
+            new_height = new_height,
+            "compare_blocks called with different heights - use deep reorg"
+        );
+        return ForkChoice::RequiresDeepAnalysis;
+    }
+
+    // === RULE 0: Parent Hash Validation ===
+    // True same-height forks must share the same parent
+    let current_parent = current_block.message.parent_root;
+    let new_parent = new_block.message.parent_root;
+
+    if current_parent != new_parent {
+        tracing::warn!(
+            current_parent = %current_parent,
+            new_parent = %new_parent,
+            height = current_height,
+            "Same-height blocks have different parents - not a true fork"
+        );
+        return ForkChoice::RequiresDeepAnalysis;
+    }
+
+    // === RULE 1: Most Work Wins (Primary Rule) ===
+    // The chain with more cumulative proof-of-work is canonical
+    if new_cumulative_difficulty > current_cumulative_difficulty {
+        tracing::info!(
+            current_difficulty = current_cumulative_difficulty,
+            new_difficulty = new_cumulative_difficulty,
+            diff = new_cumulative_difficulty - current_cumulative_difficulty,
+            winner = "new_block",
+            "Fork choice: new block has more work"
+        );
+        return ForkChoice::Reorganize {
+            new_tip: new_hash,
+            rollback_to: current_height,
+        };
+    } else if current_cumulative_difficulty > new_cumulative_difficulty {
+        tracing::info!(
+            current_difficulty = current_cumulative_difficulty,
+            new_difficulty = new_cumulative_difficulty,
+            diff = current_cumulative_difficulty - new_cumulative_difficulty,
+            winner = "current_block",
+            "Fork choice: current block has more work"
+        );
+        return ForkChoice::KeepCurrent;
+    }
+
+    // Difficulties are equal - fall through to tiebreakers
+    tracing::debug!(
+        difficulty = current_cumulative_difficulty,
+        "Difficulties equal, using tiebreakers"
+    );
+
+    // === RULE 2: Timestamp Tiebreaker ===
+    let current_timestamp = current_block.message.execution_payload.timestamp;
+    let new_timestamp = new_block.message.execution_payload.timestamp;
+
+    if new_timestamp < current_timestamp {
+        tracing::info!(
+            current_timestamp = current_timestamp,
+            new_timestamp = new_timestamp,
+            winner = "new_block",
+            "Fork choice: new block has earlier timestamp"
+        );
+        return ForkChoice::Reorganize {
+            new_tip: new_hash,
+            rollback_to: current_height,
+        };
+    } else if current_timestamp < new_timestamp {
+        tracing::info!(
+            current_timestamp = current_timestamp,
+            new_timestamp = new_timestamp,
+            winner = "current_block",
+            "Fork choice: current block has earlier timestamp"
+        );
+        return ForkChoice::KeepCurrent;
+    }
+
+    // Timestamps are equal - fall through to hash tiebreaker
+    tracing::debug!(
+        timestamp = current_timestamp,
+        "Timestamps equal, using hash tiebreaker"
+    );
+
+    // === RULE 3: Hash Tiebreaker (Deterministic Fallback) ===
+    // Lower hash wins - ensures all nodes make the same decision
+    if new_hash < current_hash {
+        tracing::info!(
+            current_hash = %current_hash,
+            new_hash = %new_hash,
+            winner = "new_block",
+            "Fork choice: new block has lower hash"
+        );
+        ForkChoice::Reorganize {
+            new_tip: new_hash,
+            rollback_to: current_height,
+        }
+    } else {
+        tracing::info!(
+            current_hash = %current_hash,
+            new_hash = %new_hash,
+            winner = "current_block",
+            "Fork choice: current block has lower hash (or equal)"
+        );
+        ForkChoice::KeepCurrent
+    }
+}
+```
+
+##### 1.4 Edge Cases
+
+| Edge Case | Behavior | Rationale |
+|-----------|----------|-----------|
+| Neither block has AuxPoW | Both have BASE_DIFFICULTY=1, use timestamp tiebreaker | Fair comparison |
+| One block has AuxPoW, other doesn't | AuxPoW block always wins | Security requirement |
+| Both have AuxPoW with same difficulty | Extremely rare, use timestamp | Difficulty is derived from Bitcoin blocks |
+| AuxPoW with difficulty=0 | Treat as BASE_DIFFICULTY | Invalid AuxPoW shouldn't give advantage |
+| Difficulty overflow (u128) | Saturate at u128::MAX | Theoretical, current Bitcoin difficulty is ~80T |
+
+##### 1.5 Testing Requirements
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auxpow_beats_no_auxpow() {
+        let block_with_auxpow = create_block_with_auxpow(difficulty: 1_000_000);
+        let block_without_auxpow = create_block_without_auxpow();
+
+        // Even if non-AuxPoW has earlier timestamp
+        block_without_auxpow.timestamp = 1000;
+        block_with_auxpow.timestamp = 2000;
+
+        let result = compare_blocks_with_difficulty(
+            &block_without_auxpow, BASE_DIFFICULTY,
+            &block_with_auxpow, 1_000_000,
+        );
+
+        assert!(matches!(result, ForkChoice::Reorganize { .. }));
+    }
+
+    #[test]
+    fn test_higher_difficulty_wins() {
+        let block_a = create_block_with_auxpow(difficulty: 1_000_000);
+        let block_b = create_block_with_auxpow(difficulty: 2_000_000);
+
+        let result = compare_blocks_with_difficulty(
+            &block_a, 1_000_000,
+            &block_b, 2_000_000,
+        );
+
+        assert!(matches!(result, ForkChoice::Reorganize { .. }));
+    }
+
+    #[test]
+    fn test_equal_difficulty_uses_timestamp() {
+        let mut block_a = create_block_with_auxpow(difficulty: 1_000_000);
+        let mut block_b = create_block_with_auxpow(difficulty: 1_000_000);
+
+        block_a.timestamp = 2000;
+        block_b.timestamp = 1000; // Earlier
+
+        let result = compare_blocks_with_difficulty(
+            &block_a, 1_000_000,
+            &block_b, 1_000_000,
+        );
+
+        assert!(matches!(result, ForkChoice::Reorganize { .. }));
+    }
+}
+```
+
+---
+
+#### Gap FC-2: Cumulative Chain Weight
+
+##### 2.1 Conceptual Overview
+
+**What is Cumulative Chain Weight?**
+
+Cumulative chain weight (also called "total work" or "chainwork") is the sum of all difficulty values from genesis to the current block:
+
+```
+cumulative_difficulty(block_N) = Σ difficulty(block_i) for i = 0 to N
+                                = cumulative_difficulty(block_N-1) + difficulty(block_N)
+```
+
+This is the fundamental metric for comparing chains in proof-of-work systems.
+
+**Why Cumulative, Not Per-Block?**
+
+Consider this scenario:
+```
+Chain A: [100 work] → [100 work] → [100 work] → [100 work]
+         Total: 400 work
+
+Chain B: [50 work] → [50 work] → [50 work] → [50 work] → [200 work]
+         Total: 400 work
+```
+
+Per-block difficulty doesn't tell you which chain is "better" - you need the cumulative sum.
+
+**Why This Matters for Fork Choice:**
+
+1. **Deep Reorgs:** When comparing chains that diverged many blocks ago, you need cumulative difficulty to determine which chain has more total work
+2. **Security Guarantee:** A longer chain with less total work should NOT beat a shorter chain with more total work
+3. **Attack Resistance:** Attackers can't win by producing many low-difficulty blocks quickly
+
+##### 2.2 Current State
+
+**What's Missing:**
+- No `cumulative_difficulty` field in ChainState
+- No difficulty stored per-block in database
+- No way to calculate total chain work
+- Deep reorg can't compare chain weights
+
+**Impact:**
+```
+Scenario: Network partition heals after 10 blocks
+
+Chain A (our chain): 10 blocks, all with AuxPoW (high difficulty)
+Chain B (their chain): 15 blocks, none with AuxPoW (base difficulty)
+
+Current behavior: Can't compare - deep reorg not implemented
+Correct behavior: Chain A should win (more total work despite fewer blocks)
+```
+
+##### 2.3 Complete Implementation Specification
+
+**2.3.1 Storage Schema**
+
+```rust
+// Location: app/src/actors_v2/storage/database.rs
+
+/// Column family for storing cumulative difficulty per block height.
+///
+/// Key: block height (u64, big-endian)
+/// Value: cumulative difficulty (u128, big-endian)
+///
+/// This enables O(1) lookup of cumulative difficulty at any height,
+/// which is required for efficient fork choice comparison.
+pub const CUMULATIVE_DIFFICULTY: &str = "cumulative_difficulty";
+
+impl Database {
+    /// Store the cumulative difficulty at a given height.
+    pub fn put_cumulative_difficulty(
+        &self,
+        height: u64,
+        cumulative_difficulty: u128,
+    ) -> Result<(), StorageError> {
+        let cf = self.db.cf_handle(CUMULATIVE_DIFFICULTY)
+            .ok_or(StorageError::ColumnFamilyNotFound)?;
+
+        let key = height.to_be_bytes();
+        let value = cumulative_difficulty.to_be_bytes();
+
+        self.db.put_cf(&cf, key, value)?;
+
+        tracing::trace!(
+            height = height,
+            cumulative_difficulty = cumulative_difficulty,
+            "Stored cumulative difficulty"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve the cumulative difficulty at a given height.
+    ///
+    /// Returns None if no difficulty is stored at that height.
+    pub fn get_cumulative_difficulty(
+        &self,
+        height: u64,
+    ) -> Result<Option<u128>, StorageError> {
+        let cf = self.db.cf_handle(CUMULATIVE_DIFFICULTY)
+            .ok_or(StorageError::ColumnFamilyNotFound)?;
+
+        let key = height.to_be_bytes();
+
+        match self.db.get_cf(&cf, key)? {
+            Some(bytes) => {
+                let arr: [u8; 16] = bytes.as_slice().try_into()
+                    .map_err(|_| StorageError::InvalidData)?;
+                Ok(Some(u128::from_be_bytes(arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get the cumulative difficulty at the chain tip.
+    ///
+    /// Convenience method that combines get_chain_height + get_cumulative_difficulty.
+    pub fn get_tip_cumulative_difficulty(&self) -> Result<u128, StorageError> {
+        let head = self.get_chain_head()?
+            .ok_or(StorageError::ChainNotInitialized)?;
+
+        self.get_cumulative_difficulty(head.number)?
+            .ok_or(StorageError::DifficultyNotFound { height: head.number })
+    }
+}
+```
+
+**2.3.2 ChainState Integration**
+
+```rust
+// Location: app/src/actors_v2/chain/state.rs
+
+pub struct ChainState {
+    // ... existing fields ...
+
+    /// Cumulative difficulty of the current canonical chain tip.
+    ///
+    /// This is cached in memory for fast fork choice decisions.
+    /// It's updated on every block import and reorg.
+    ///
+    /// Formula: cumulative_difficulty = parent_cumulative_difficulty + block_difficulty
+    pub cumulative_difficulty: u128,
+
+    /// Cache of recent cumulative difficulties for fork choice.
+    ///
+    /// Stores the last N heights' cumulative difficulties to avoid
+    /// frequent database lookups during fork detection.
+    ///
+    /// Key: height, Value: cumulative_difficulty
+    pub difficulty_cache: LruCache<u64, u128>,
+}
+
+impl ChainState {
+    /// Update cumulative difficulty when a new block is imported.
+    pub fn update_difficulty_on_import(
+        &mut self,
+        new_block: &SignedConsensusBlock,
+        storage: &Database,
+    ) -> Result<(), ChainError> {
+        let block_height = new_block.message.execution_payload.block_number;
+        let block_difficulty = calculate_block_difficulty(new_block);
+
+        // Get parent's cumulative difficulty
+        let parent_cumulative = if block_height == 0 {
+            0 // Genesis block
+        } else {
+            self.get_cumulative_difficulty_at(block_height - 1, storage)?
+        };
+
+        // Calculate new cumulative difficulty
+        let new_cumulative = parent_cumulative.saturating_add(block_difficulty);
+
+        // Update state
+        self.cumulative_difficulty = new_cumulative;
+        self.difficulty_cache.put(block_height, new_cumulative);
+
+        // Persist to storage
+        storage.put_cumulative_difficulty(block_height, new_cumulative)?;
+
+        tracing::debug!(
+            height = block_height,
+            block_difficulty = block_difficulty,
+            parent_cumulative = parent_cumulative,
+            new_cumulative = new_cumulative,
+            "Updated cumulative difficulty"
+        );
+
+        Ok(())
+    }
+
+    /// Get cumulative difficulty at a specific height.
+    ///
+    /// Checks cache first, then falls back to database.
+    pub fn get_cumulative_difficulty_at(
+        &mut self,
+        height: u64,
+        storage: &Database,
+    ) -> Result<u128, ChainError> {
+        // Check cache first
+        if let Some(&difficulty) = self.difficulty_cache.get(&height) {
+            return Ok(difficulty);
+        }
+
+        // Fall back to database
+        let difficulty = storage.get_cumulative_difficulty(height)?
+            .ok_or(ChainError::DifficultyNotFound { height })?;
+
+        // Cache for future lookups
+        self.difficulty_cache.put(height, difficulty);
+
+        Ok(difficulty)
+    }
+}
+```
+
+**2.3.3 Block Import Integration**
+
+```rust
+// Location: app/src/actors_v2/chain/handlers.rs (block import path)
+
+async fn import_block(
+    &mut self,
+    block: SignedConsensusBlock,
+    correlation_id: Uuid,
+) -> Result<ChainResponse, ChainError> {
+    // ... existing validation ...
+
+    // Calculate and store cumulative difficulty
+    let block_height = block.message.execution_payload.block_number;
+    let block_difficulty = calculate_block_difficulty(&block);
+
+    let parent_cumulative = if block_height == 0 {
+        0
+    } else {
+        self.state.get_cumulative_difficulty_at(
+            block_height - 1,
+            &self.storage
+        )?
+    };
+
+    let new_cumulative = parent_cumulative.saturating_add(block_difficulty);
+
+    // Store block with difficulty
+    self.storage_actor.send(StoreBlockMessage {
+        block: block.clone(),
+        canonical: true,
+        cumulative_difficulty: Some(new_cumulative), // NEW FIELD
+        correlation_id: Some(correlation_id),
+    }).await??;
+
+    // Update state
+    self.state.cumulative_difficulty = new_cumulative;
+    self.state.difficulty_cache.put(block_height, new_cumulative);
+
+    // ... rest of import ...
+}
+```
+
+##### 2.4 Migration Strategy
+
+For existing chains that don't have cumulative difficulty stored:
+
+```rust
+/// Migrate an existing chain to include cumulative difficulty.
+///
+/// This should be run once during upgrade. It walks the chain from genesis
+/// to tip, calculating and storing cumulative difficulty at each height.
+pub async fn migrate_cumulative_difficulty(
+    storage: &Database,
+) -> Result<(), MigrationError> {
+    let tip_height = storage.get_chain_height()?
+        .ok_or(MigrationError::NoChain)?;
+
+    let mut cumulative: u128 = 0;
+
+    for height in 0..=tip_height {
+        let block = storage.get_block_by_height(height)?
+            .ok_or(MigrationError::MissingBlock { height })?;
+
+        let block_difficulty = calculate_block_difficulty(&block);
+        cumulative = cumulative.saturating_add(block_difficulty);
+
+        storage.put_cumulative_difficulty(height, cumulative)?;
+
+        if height % 1000 == 0 {
+            tracing::info!(
+                height = height,
+                cumulative = cumulative,
+                "Migration progress"
+            );
+        }
+    }
+
+    tracing::info!(
+        tip_height = tip_height,
+        final_cumulative = cumulative,
+        "Cumulative difficulty migration complete"
+    );
+
+    Ok(())
+}
+```
+
+##### 2.5 Deep Reorg Integration
+
+```rust
+/// Compare cumulative difficulties of two chains for deep reorg decision.
+///
+/// # Arguments
+/// * `our_tip_height` - Height of our canonical chain tip
+/// * `their_tip_height` - Height of the competing chain tip
+/// * `common_ancestor_height` - Height where chains diverged
+///
+/// # Returns
+/// * `true` if their chain has more cumulative work (should reorg)
+/// * `false` if our chain has more or equal work (keep current)
+pub async fn should_reorg_to_chain(
+    our_tip_height: u64,
+    our_cumulative_difficulty: u128,
+    their_tip_height: u64,
+    their_cumulative_difficulty: u128,
+) -> bool {
+    // Primary rule: Most work wins
+    if their_cumulative_difficulty > our_cumulative_difficulty {
+        tracing::info!(
+            our_difficulty = our_cumulative_difficulty,
+            their_difficulty = their_cumulative_difficulty,
+            our_height = our_tip_height,
+            their_height = their_tip_height,
+            "Their chain has more work - should reorg"
+        );
+        return true;
+    }
+
+    if their_cumulative_difficulty < our_cumulative_difficulty {
+        tracing::info!(
+            our_difficulty = our_cumulative_difficulty,
+            their_difficulty = their_cumulative_difficulty,
+            "Our chain has more work - keep current"
+        );
+        return false;
+    }
+
+    // Equal difficulty - secondary rules
+    // For deep reorgs, we generally prefer to keep our chain if difficulty is equal
+    // This provides stability and prevents unnecessary reorgs
+    tracing::info!(
+        difficulty = our_cumulative_difficulty,
+        "Equal difficulty - keeping current chain for stability"
+    );
+    false
+}
+```
+
+---
+
+#### Gap FC-3: Parent Hash Validation
+
+##### 3.1 Conceptual Overview
+
+**What is Parent Hash Validation?**
+
+Every block contains a `parent_hash` field that points to the previous block in the chain:
+
+```
+Block N:   { parent_hash: hash(Block N-1), ... }
+Block N-1: { parent_hash: hash(Block N-2), ... }
+```
+
+For a **same-height fork** to be valid, both competing blocks must have the same parent:
+
+```
+Valid Same-Height Fork:
+    Block 99 ──┬── Block 100a (parent_hash = hash(99))
+               └── Block 100b (parent_hash = hash(99))
+                   ↑ Both point to same parent
+
+Invalid "Same-Height Fork":
+    Block 99a ──── Block 100a (parent_hash = hash(99a))
+    Block 99b ──── Block 100b (parent_hash = hash(99b))
+                   ↑ Different parents! This is a DEEP fork, not same-height!
+```
+
+**Why This Matters:**
+
+Without parent hash validation, the fork choice rule can make incorrect decisions:
+
+1. **Chain Corruption:** Accepting a block with a parent we don't have breaks the chain
+2. **Security Bypass:** Attacker can send blocks from a completely different chain
+3. **Consensus Failure:** Different nodes may make inconsistent decisions
+
+##### 3.2 Current State
+
+**What's Missing:**
+
+The current `compare_blocks()` function in `fork_choice.rs` does NOT validate parent hashes:
+
+```rust
+// CURRENT CODE (vulnerable)
+pub fn compare_blocks(
+    current_block: &SignedConsensusBlock,
+    new_block: &SignedConsensusBlock,
+) -> ForkChoice {
+    // Checks height match ✓
+    if current_height != new_height { ... }
+
+    // Applies tiebreaker ✓
+    apply_tiebreaker(current_block, new_block)
+
+    // MISSING: Parent hash validation ✗
+}
+```
+
+**Attack Scenario:**
+
+```
+Honest network:  Genesis → A1 → A2 → A3 → A4 → A5 (height 5)
+
+Attacker creates: Genesis' → B1 → B2 → B3 → B4 → B5 (height 5)
+                  (Different genesis, completely separate chain)
+
+Attacker sends B5 to victim node:
+- B5.height == 5 (matches our height)
+- B5.timestamp < A5.timestamp (attacker sets earlier timestamp)
+
+Current behavior: Victim accepts B5 and reorganizes to it!
+Result: Chain is now broken - B5's parent (B4) doesn't exist in victim's database
+```
+
+##### 3.3 Complete Implementation Specification
+
+**3.3.1 Add Parent Hash Check**
+
+```rust
+// Location: app/src/actors_v2/chain/fork_choice.rs
+
+/// Result of parent hash validation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParentHashValidation {
+    /// Both blocks share the same parent - valid same-height fork
+    Valid,
+    /// Blocks have different parents - this is a deep fork, not same-height
+    DifferentParents {
+        current_parent: H256,
+        new_parent: H256,
+    },
+    /// New block's parent doesn't exist in our chain
+    ParentNotFound {
+        missing_parent: H256,
+    },
+}
+
+/// Validate that two same-height blocks share the same parent.
+///
+/// This MUST be called before comparing blocks for same-height fork choice.
+/// If validation fails, the blocks should be handled as a deep fork instead.
+pub fn validate_parent_hashes(
+    current_block: &SignedConsensusBlock<MainnetEthSpec>,
+    new_block: &SignedConsensusBlock<MainnetEthSpec>,
+) -> ParentHashValidation {
+    let current_parent = current_block.message.parent_root;
+    let new_parent = new_block.message.parent_root;
+
+    if current_parent == new_parent {
+        tracing::trace!(
+            parent_hash = %current_parent,
+            "Parent hash validation passed - same parent"
+        );
+        ParentHashValidation::Valid
+    } else {
+        tracing::warn!(
+            current_parent = %current_parent,
+            new_parent = %new_parent,
+            height = current_block.message.execution_payload.block_number,
+            "Parent hash mismatch - blocks have different parents"
+        );
+        ParentHashValidation::DifferentParents {
+            current_parent,
+            new_parent,
+        }
+    }
+}
+
+/// Extended fork choice that includes parent validation.
+///
+/// This is the main entry point for fork choice decisions.
+pub fn compare_blocks_full(
+    current_block: &SignedConsensusBlock<MainnetEthSpec>,
+    current_cumulative_difficulty: u128,
+    new_block: &SignedConsensusBlock<MainnetEthSpec>,
+    new_cumulative_difficulty: u128,
+) -> ForkChoice {
+    // Step 1: Validate parent hashes
+    match validate_parent_hashes(current_block, new_block) {
+        ParentHashValidation::Valid => {
+            // Continue to normal fork choice
+        }
+        ParentHashValidation::DifferentParents { current_parent, new_parent } => {
+            // This is not a same-height fork - needs deep analysis
+            tracing::info!(
+                current_parent = %current_parent,
+                new_parent = %new_parent,
+                "Blocks at same height have different parents - requires deep reorg analysis"
+            );
+            return ForkChoice::RequiresDeepAnalysis;
+        }
+        ParentHashValidation::ParentNotFound { missing_parent } => {
+            // New block references a parent we don't have
+            tracing::warn!(
+                missing_parent = %missing_parent,
+                "New block references unknown parent - may need to sync"
+            );
+            return ForkChoice::RequiresDeepAnalysis;
+        }
+    }
+
+    // Step 2: Apply difficulty-aware fork choice (from FC-1 and FC-2)
+    compare_blocks_with_difficulty(
+        current_block,
+        current_cumulative_difficulty,
+        new_block,
+        new_cumulative_difficulty,
+    )
+}
+```
+
+**3.3.2 Handler Integration**
+
+```rust
+// Location: app/src/actors_v2/chain/handlers.rs
+
+async fn handle_fork_at_same_height(
+    &mut self,
+    existing_block: &SignedConsensusBlock,
+    new_block: &SignedConsensusBlock,
+    correlation_id: Uuid,
+) -> Result<ChainResponse, ChainError> {
+    // Get cumulative difficulties
+    let current_height = existing_block.message.execution_payload.block_number;
+    let current_cumulative = self.state.cumulative_difficulty;
+    let new_cumulative = self.calculate_cumulative_for_block(new_block)?;
+
+    // Run full fork choice with parent validation
+    match fork_choice::compare_blocks_full(
+        existing_block,
+        current_cumulative,
+        new_block,
+        new_cumulative,
+    ) {
+        ForkChoice::KeepCurrent => {
+            tracing::info!(
+                height = current_height,
+                "Fork choice: keeping current block"
+            );
+            Ok(ChainResponse::BlockRejected {
+                reason: "Lost fork choice".into(),
+            })
+        }
+
+        ForkChoice::Reorganize { new_tip, rollback_to } => {
+            tracing::warn!(
+                height = current_height,
+                new_tip = %new_tip,
+                "Fork choice: reorganizing to new block"
+            );
+            self.execute_simple_reorg(new_block, correlation_id).await
+        }
+
+        ForkChoice::RequiresDeepAnalysis => {
+            // Blocks have different parents - this is a deep fork
+            tracing::warn!(
+                height = current_height,
+                "Same-height blocks have different parents - initiating deep reorg analysis"
+            );
+
+            // Find common ancestor and compare chains
+            self.handle_deep_fork(existing_block, new_block, correlation_id).await
+        }
+
+        ForkChoice::Tiebreak { winner } => {
+            // Handle explicit tiebreak result
+            if winner == calculate_block_hash(new_block) {
+                self.execute_simple_reorg(new_block, correlation_id).await
+            } else {
+                Ok(ChainResponse::BlockRejected {
+                    reason: "Lost tiebreaker".into(),
+                })
+            }
+        }
+    }
+}
+```
+
+##### 3.4 Edge Cases
+
+| Scenario | Current Behavior | Correct Behavior |
+|----------|-----------------|------------------|
+| Same parent, different blocks | Tiebreaker | Tiebreaker (correct) |
+| Different parents, same height | Tiebreaker (WRONG) | `RequiresDeepAnalysis` |
+| Parent not in database | May corrupt chain | `RequiresDeepAnalysis` + sync |
+| Genesis blocks (no parent) | Undefined | Special case: compare genesis hashes |
+| Orphan block (parent not yet received) | May reject valid block | Queue for later processing |
+
+---
+
+#### Gap FC-4: Block Validity Beyond Height
+
+##### 4.1 Conceptual Overview
+
+**What is "Block Validity Beyond Height"?**
+
+Currently, fork choice only verifies that blocks have matching heights. A complete implementation should verify additional validity criteria:
+
+1. **Execution Validity:** Block's transactions are valid and execution is correct
+2. **Consensus Validity:** Block satisfies consensus rules (signatures, proposer, etc.)
+3. **AuxPoW Validity:** If present, AuxPoW proof is cryptographically valid
+4. **State Validity:** Block's state root matches expected post-execution state
+5. **Temporal Validity:** Block timestamp is within acceptable bounds
+
+**Why This Matters:**
+
+A block can have the correct height but still be invalid:
+
+```
+Valid block at height 100:
+- Correct parent hash ✓
+- Valid transactions ✓
+- Valid execution ✓
+- Valid state root ✓
+- Valid timestamp ✓
+- Valid AuxPoW (if present) ✓
+
+Invalid block at height 100:
+- Correct parent hash ✓
+- Invalid transaction (double spend) ✗
+- Or: Invalid state root ✗
+- Or: Future timestamp ✗
+- Or: Invalid AuxPoW proof ✗
+```
+
+Fork choice should NEVER prefer an invalid block over a valid one, regardless of difficulty or timestamp.
+
+##### 4.2 Current State
+
+**What Validation Currently Happens:**
+- Block height is checked
+- Basic structural validation (can deserialize)
+- AuxPoW validation happens during block production (not import)
+
+**What's NOT Validated During Fork Choice:**
+- Execution validity (transactions, state transitions)
+- Consensus validity (proposer, signatures in some paths)
+- AuxPoW validity for received blocks
+- Timestamp bounds
+
+**Assumption Made:**
+The current code assumes blocks received from the network have been pre-validated. This assumption may not hold in adversarial scenarios.
+
+##### 4.3 Complete Implementation Specification
+
+**4.3.1 Block Validity Check Before Fork Choice**
+
+```rust
+// Location: app/src/actors_v2/chain/validation.rs (new file)
+
+use crate::actors_v2::chain::auxpow;
+
+/// Result of full block validation.
+#[derive(Debug)]
+pub enum BlockValidation {
+    Valid,
+    Invalid(BlockInvalidReason),
+}
+
+#[derive(Debug)]
+pub enum BlockInvalidReason {
+    /// Block execution failed
+    ExecutionFailed { error: String },
+    /// State root doesn't match
+    StateRootMismatch { expected: H256, actual: H256 },
+    /// AuxPoW proof is invalid
+    InvalidAuxPow { error: String },
+    /// Timestamp is in the future
+    FutureTimestamp { block_time: u64, current_time: u64 },
+    /// Timestamp is too old
+    TimestampTooOld { block_time: u64, min_time: u64 },
+    /// Invalid proposer/validator
+    InvalidProposer { expected: Address, actual: Address },
+    /// Signature verification failed
+    InvalidSignature { error: String },
+    /// Parent block not found
+    ParentNotFound { parent_hash: H256 },
+}
+
+/// Validate a block before considering it for fork choice.
+///
+/// This performs full validation to ensure we never prefer an invalid block.
+///
+/// # Validation Steps
+/// 1. Validate timestamp bounds
+/// 2. Validate AuxPoW (if present)
+/// 3. Validate proposer/validator
+/// 4. Validate block signature
+/// 5. Note: Execution validation happens separately in EngineActor
+pub async fn validate_block_for_fork_choice(
+    block: &SignedConsensusBlock<MainnetEthSpec>,
+    chain_state: &ChainState,
+    current_time: u64,
+) -> BlockValidation {
+    let block_time = block.message.execution_payload.timestamp;
+    let block_hash = calculate_block_hash(block);
+
+    // === Step 1: Timestamp Validation ===
+    // Block timestamp must not be more than 15 seconds in the future
+    const MAX_FUTURE_SECONDS: u64 = 15;
+    if block_time > current_time + MAX_FUTURE_SECONDS {
+        tracing::warn!(
+            block_time = block_time,
+            current_time = current_time,
+            block_hash = %block_hash,
+            "Block timestamp too far in future"
+        );
+        return BlockValidation::Invalid(BlockInvalidReason::FutureTimestamp {
+            block_time,
+            current_time,
+        });
+    }
+
+    // Block timestamp must not be before parent timestamp
+    if let Some(parent_time) = chain_state.last_block_time {
+        let parent_timestamp = parent_time.duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if block_time < parent_timestamp {
+            tracing::warn!(
+                block_time = block_time,
+                parent_time = parent_timestamp,
+                block_hash = %block_hash,
+                "Block timestamp before parent"
+            );
+            return BlockValidation::Invalid(BlockInvalidReason::TimestampTooOld {
+                block_time,
+                min_time: parent_timestamp,
+            });
+        }
+    }
+
+    // === Step 2: AuxPoW Validation ===
+    if let Some(ref auxpow_header) = block.message.auxpow {
+        match auxpow::validate_auxpow(auxpow_header, &block.message) {
+            Ok(()) => {
+                tracing::trace!(block_hash = %block_hash, "AuxPoW validation passed");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    block_hash = %block_hash,
+                    error = %e,
+                    "AuxPoW validation failed"
+                );
+                return BlockValidation::Invalid(BlockInvalidReason::InvalidAuxPow {
+                    error: e.to_string(),
+                });
+            }
+        }
+    }
+
+    // === Step 3: Validator/Proposer Check ===
+    // Verify the block was produced by a valid validator for this slot
+    let proposer = block.message.proposer_index;
+    if !chain_state.aura.is_valid_proposer(proposer, block_time) {
+        tracing::warn!(
+            proposer = proposer,
+            block_time = block_time,
+            block_hash = %block_hash,
+            "Invalid proposer for this slot"
+        );
+        // Note: For now, log warning but don't reject
+        // Full Aura validation requires more context
+    }
+
+    // === Step 4: Signature Validation ===
+    // Verify the block signature is valid
+    match verify_block_signature(block, chain_state) {
+        Ok(()) => {
+            tracing::trace!(block_hash = %block_hash, "Signature validation passed");
+        }
+        Err(e) => {
+            tracing::warn!(
+                block_hash = %block_hash,
+                error = %e,
+                "Signature validation failed"
+            );
+            return BlockValidation::Invalid(BlockInvalidReason::InvalidSignature {
+                error: e.to_string(),
+            });
+        }
+    }
+
+    BlockValidation::Valid
+}
+```
+
+**4.3.2 Integration with Fork Choice**
+
+```rust
+// Location: app/src/actors_v2/chain/handlers.rs
+
+async fn handle_network_block(
+    &mut self,
+    block: SignedConsensusBlock,
+    correlation_id: Uuid,
+) -> Result<ChainResponse, ChainError> {
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // === Step 1: Validate block before any fork choice logic ===
+    match validation::validate_block_for_fork_choice(
+        &block,
+        &self.state,
+        current_time,
+    ).await {
+        BlockValidation::Valid => {
+            tracing::debug!(
+                block_hash = %calculate_block_hash(&block),
+                "Block passed pre-fork-choice validation"
+            );
+        }
+        BlockValidation::Invalid(reason) => {
+            tracing::warn!(
+                block_hash = %calculate_block_hash(&block),
+                reason = ?reason,
+                "Block failed validation - rejecting"
+            );
+            self.metrics.blocks_rejected_invalid.inc();
+            return Ok(ChainResponse::BlockRejected {
+                reason: format!("Invalid block: {:?}", reason),
+            });
+        }
+    }
+
+    // === Step 2: Check if this creates a fork ===
+    let block_height = block.message.execution_payload.block_number;
+
+    if let Some(existing_block) = self.get_block_at_height(block_height).await? {
+        // Fork detected - run fork choice
+        self.handle_fork_at_same_height(&existing_block, &block, correlation_id).await
+    } else if block_height == self.state.head.map(|h| h.number + 1).unwrap_or(0) {
+        // Normal next block
+        self.import_block(block, correlation_id).await
+    } else {
+        // Gap or future block
+        self.handle_out_of_order_block(block, correlation_id).await
+    }
+}
+```
+
+##### 4.4 Validation Order and Performance
+
+**Validation should be ordered by cost (cheapest first):**
+
+| Order | Validation | Cost | Reason |
+|-------|------------|------|--------|
+| 1 | Height check | O(1) | Simple comparison |
+| 2 | Timestamp bounds | O(1) | Simple comparison |
+| 3 | Parent hash | O(1) | Hash comparison |
+| 4 | Signature | O(1) | Cryptographic verify |
+| 5 | AuxPoW proof | O(log n) | Merkle proof verify |
+| 6 | Execution | O(n) | Full EVM execution |
+
+**Early Exit Strategy:**
+```rust
+// Fail fast on cheap checks
+if !check_height() { return Invalid; }      // Free
+if !check_timestamp() { return Invalid; }   // Free
+if !check_parent() { return Invalid; }      // Free
+if !check_signature() { return Invalid; }   // ~100μs
+if !check_auxpow() { return Invalid; }      // ~1ms
+// Only do expensive execution if all above pass
+if !check_execution() { return Invalid; }   // ~10-100ms
+```
+
+##### 4.5 Summary: Complete Fork Choice Implementation
+
+Putting it all together, the complete fork choice flow should be:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMPLETE FORK CHOICE FLOW                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Receive Block from Network                                    │
+│         │                                                        │
+│         ▼                                                        │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 1: Pre-Validation (FC-4)       │                       │
+│   │ - Timestamp bounds                   │                       │
+│   │ - AuxPoW validity                    │                       │
+│   │ - Signature validity                 │                       │
+│   └─────────────────────────────────────┘                       │
+│         │                                                        │
+│         ▼ (pass)                                                 │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 2: Parent Validation (FC-3)    │                       │
+│   │ - Check parent hash matches         │                       │
+│   │ - Verify parent exists              │                       │
+│   └─────────────────────────────────────┘                       │
+│         │                                                        │
+│         ├─── Different Parents ──▶ Deep Reorg Analysis          │
+│         │                                                        │
+│         ▼ (same parent)                                         │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 3: Get Cumulative Difficulty   │                       │
+│   │ (FC-2)                              │                       │
+│   │ - Current chain difficulty          │                       │
+│   │ - New block chain difficulty        │                       │
+│   └─────────────────────────────────────┘                       │
+│         │                                                        │
+│         ▼                                                        │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 4: Fork Choice Rules (FC-1)    │                       │
+│   │ - Rule 1: Most work wins            │                       │
+│   │ - Rule 2: Timestamp tiebreaker      │                       │
+│   │ - Rule 3: Hash tiebreaker           │                       │
+│   └─────────────────────────────────────┘                       │
+│         │                                                        │
+│         ├─── KeepCurrent ──▶ Reject new block                   │
+│         │                                                        │
+│         ▼ (Reorganize)                                          │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 5: Execute Reorg               │                       │
+│   │ - Update StorageActor               │                       │
+│   │ - Update EngineActor                │                       │
+│   │ - Update ChainState                 │                       │
+│   │ - Emit Metrics                      │                       │
+│   └─────────────────────────────────────┘                       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 **Code Reference:**
 ```rust
 // fork_choice.rs:84-136

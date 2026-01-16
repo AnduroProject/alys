@@ -55,6 +55,7 @@ docker logs alys-node-1 -f
 - **Prometheus**: http://localhost:9092
 - **Node 1 Metrics**: http://localhost:9090/metrics
 - **Node 2 Metrics**: http://localhost:9091/metrics
+- **Node 3 Metrics**: http://localhost:9093/metrics
 
 ---
 
@@ -84,8 +85,7 @@ docker compose -f etc/docker-compose.v2-regtest.yml up -d --build
 docker logs alys-node-1 -f --tail 1000
 docker logs alys-node-2 -f --tail 1000
 # or
-docker compose -f etc/docker-compose.v2-regtest.yml logs alys-node-1 > node1-logs.txt
-docker compose -f etc/docker-compose.v2-regtest.yml logs alys-node-2 > node2-logs.txt
+docker compose -f etc/docker-compose.v2-regtest.yml logs alys-node-1 > node1-logs.txt && docker compose -f etc/docker-compose.v2-regtest.yml logs alys-node-2 > node2-logs.txt
 
 # Stop
 docker compose -f docker-compose.v2-regtest.yml down
