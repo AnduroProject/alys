@@ -1,6 +1,6 @@
 # Chain Reorganization in Alys V2 - Status & Implementation Plan
 
-**Document Version:** 2.1
+**Document Version:** 2.2
 **Date:** January 20, 2026
 **Status:** Living Document
 **Audience:** Engineering Team
@@ -49,7 +49,7 @@ The following **MUST** be implemented before 3+ node deployment:
 
 1. ✅ **AuxPoW finality model:** Soft finality with 6 confirmations (not hard finality)
 2. ✅ **Fork choice rule:** "Most work wins" (cumulative difficulty) as primary rule
-3. ⏳ **Maximum reorg depth:** Pending decision (recommended: 100 with alerts at 10)
+3. ✅ **Maximum reorg depth:** 100 blocks automatic, alerts at 10, operator override for deeper
 4. ⏳ **Deployment timeline:** Pending decision
 
 ---
@@ -3566,13 +3566,11 @@ The remaining 34 hours (SyncActor coordination, non-canonical tracking, comprehe
 | **AuxPoW finality model** | **Option B: Soft Finality** | Hard finality prevents recovery from invalid AuxPoW blocks; soft finality preserves "most work wins" while providing security | 2026-01 |
 | **AuxPoW finality depth** | **6 confirmations** | Mirrors Bitcoin's probabilistic finality; ~1 minute at 10s blocks | 2026-01 |
 | **Fork choice primary rule** | **Most work wins (cumulative difficulty)** | Aligns with PoW security model; timestamp only as tiebreaker | 2026-01 |
+| **Max automatic reorg depth** | **100 blocks (alerts at 10)** | Handles extended outages; deeper reorgs require operator override | 2026-01 |
 
 ### Decisions Pending (Required Before 3+ Node Deployment)
 
-| Decision | Options | Recommendation | Owner | Urgency |
-|----------|---------|----------------|-------|---------|
-| Max automatic reorg depth | 10, 50, 100, unlimited | 100 with alerts at 10 | Team | 🟡 Medium |
-| Deep reorg max depth | 50, 100, 500, unlimited | 100 with operator override | Team | 🟡 Medium |
+*No pending decisions - all required decisions have been made.*
 
 ### Decision: AuxPoW Finality Model ✅ DECIDED
 
@@ -3586,10 +3584,10 @@ pub struct ReorgConfig {
 
     /// Maximum automatic reorg depth
     /// Deeper reorgs require operator approval
-    pub max_automatic_reorg_depth: u64,  // Recommended: 100
+    pub max_automatic_reorg_depth: u64,  // DECIDED: 100
 
     /// Alert threshold for operator notification
-    pub alert_reorg_depth: u64,  // Recommended: 10
+    pub alert_reorg_depth: u64,  // DECIDED: 10
 }
 ```
 
@@ -3668,6 +3666,7 @@ alys-cli dev trigger-reorg --height 100 --depth 5
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 2.2 | 2026-01-20 | Engineering | Consolidated reorg depth settings: max_automatic_reorg_depth=100, alert_reorg_depth=10. Added detailed Story 4.2 specification for non-canonical block tracking. All pending decisions now resolved. |
 | 2.1 | 2026-01-20 | Engineering | **Key decisions made:** (1) AuxPoW soft finality with 6 confirmations, (2) "Most work wins" fork choice rule, (3) Added detailed rationale for soft finality including invalid transaction example |
 | 2.0 | 2026-01 | Engineering | Complete rewrite for 3+ node deployment focus |
 | 1.0 | 2025 | Engineering | Original presentation (2-node regtest focus) |
