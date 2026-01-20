@@ -1,7 +1,7 @@
 # Chain Reorganization in Alys V2 - Status & Implementation Plan
 
-**Document Version:** 2.0
-**Date:** January 2026
+**Document Version:** 2.1
+**Date:** January 20, 2026
 **Status:** Living Document
 **Audience:** Engineering Team
 **Target Deployment:** 3+ Node Networks
@@ -45,12 +45,12 @@ The following **MUST** be implemented before 3+ node deployment:
 4. **Parent hash validation is missing** - could accept invalid same-height forks
 5. **Current implementation is insufficient** for production multi-validator networks
 
-### Critical Questions Requiring Team Decision
+### Key Decisions Made
 
-1. Should AuxPoW blocks be treated as finalized (no reorg past them)?
-2. Should fork choice use "most work wins" or "earliest timestamp wins"?
-3. What's the maximum reorg depth we should allow?
-4. What's the timeline for 3+ node deployment?
+1. ✅ **AuxPoW finality model:** Soft finality with 6 confirmations (not hard finality)
+2. ✅ **Fork choice rule:** "Most work wins" (cumulative difficulty) as primary rule
+3. ⏳ **Maximum reorg depth:** Pending decision (recommended: 100 with alerts at 10)
+4. ⏳ **Deployment timeline:** Pending decision
 
 ---
 
@@ -2638,44 +2638,164 @@ pub struct AuxPowHeader {
 - `parent_block.nonce` - Proof that work was done
 - Can calculate: `difficulty = target_to_difficulty(bits)`
 
+### Design Decisions
+
+#### Decision 1: AuxPoW Finality Model ✅ DECIDED
+
+**Choice: Option B - Soft Finality with Configurable Depth**
+
+```
+SOFT FINALITY MODEL:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Configuration: auxpow_finality_depth = 6
+
+Block 100 (AuxPoW) ──→ 101 ──→ 102 ──→ 103 ──→ 104 ──→ 105 ──→ 106
+                                                               ↑
+                                                          Current tip
+
+Confirmations on Block 100: 6
+Status: "SOFT FINAL" - reorg requires operator override
+```
+
+**What This Means:**
+- AuxPoW blocks *gain* finality over time as more blocks build on top
+- After `auxpow_finality_depth` confirmations (default: 6), block is "soft final"
+- Reorgs past soft-final blocks require explicit operator override
+- Emergency recovery remains possible (attack scenarios, Byzantine validators)
+
+---
+
+##### Why Not Option A (Hard Finality)?
+
+**The Problem:** AuxPoW validation and transaction execution happen at different times:
+
+```
+MERGE-MINING TIMELINE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+t=0: Validator Creates Block
+┌─────────────────────────────────────────────────────────────┐
+│ Block 100 assembled with transactions                        │
+│ Block hash computed, commitment sent to Bitcoin miners       │
+│ NO AuxPoW yet                                                │
+└─────────────────────────────────────────────────────────────┘
+                              │
+           ╔══════════════════╧══════════════════╗
+           ║     ~10 MINUTES PASS (avg)          ║
+           ║     State can change during this!   ║
+           ╚══════════════════╤══════════════════╝
+                              │
+t=10: Bitcoin Block Found
+┌─────────────────────────────────────────────────────────────┐
+│ AuxPoW proof now exists for Block 100                        │
+│ BUT: The transactions may no longer be valid!                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Concrete Example - Double-Spend During Mining Window:**
+
+```
+STARTING STATE (Block 99):
+┌──────────────────────────────────┐
+│ Alice's Balance: 100 ALYS        │
+└──────────────────────────────────┘
+
+t=0: Validator A creates Block 100a
+┌────────────────────────────────────────────────────────┐
+│ Transaction: Alice → Bob (100 ALYS)                   │
+│ Sent to Bitcoin miners for merge-mining               │
+└────────────────────────────────────────────────────────┘
+
+t=1: Validator B creates Block 100b (different fork)
+┌────────────────────────────────────────────────────────┐
+│ Transaction: Alice → Carol (100 ALYS)                 │
+│ Block 100b wins fork choice (earlier timestamp)       │
+│ Alice's 100 ALYS now belongs to Carol                 │
+└────────────────────────────────────────────────────────┘
+
+t=10: AuxPoW arrives for Block 100a
+┌────────────────────────────────────────────────────────┐
+│ Block 100a has strong AuxPoW proof                    │
+│                                                        │
+│ ⚠️ PROBLEM:                                            │
+│ Block 100a's transaction (Alice → Bob) is INVALID!   │
+│ Alice's 100 ALYS was already spent to Carol.          │
+│                                                        │
+│ WITH HARD FINALITY:                                   │
+│ We must accept invalid Block 100a → Consensus failure │
+│                                                        │
+│ WITH SOFT FINALITY:                                   │
+│ Block 100a can be rejected despite AuxPoW ✓           │
+└────────────────────────────────────────────────────────┘
+```
+
+**Key Insight:** AuxPoW proves work was done, but does NOT prove transaction validity.
+
+---
+
+##### Option Comparison
+
+| Criterion | Option A (Hard Finality) | Option B (Soft Finality) |
+|-----------|-------------------------|-------------------------|
+| Invalid transaction handling | ❌ Cannot recover | ✅ Can still reorg if needed |
+| Attack recovery | ❌ No mechanism | ✅ Operator override available |
+| "Most work wins" principle | ❌ Violated | ✅ Mostly preserved |
+| Implementation complexity | Low | Medium |
+| Bitcoin analogy | ❌ Bitcoin has no hard finality | ✅ Matches probabilistic model |
+
+---
+
+##### Why 6 Confirmations?
+
+Mirrors Bitcoin's convention for probabilistic finality:
+- 1 confirmation: 50% chance of natural reorg
+- 3 confirmations: 12.5% chance
+- 6 confirmations: 1.56% chance
+- 100 confirmations: Negligible
+
+For Alys with ~10 second blocks:
+- 6 confirmations = ~1 minute of additional blocks
+- Reasonable assurance while allowing quick attack response
+
+---
+
+##### Soft Finality Decision Flow
+
+```
+INCOMING REORG REQUEST:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Does reorg cross an AuxPoW block?
+   │
+   ├── NO → Apply normal "most work wins" rule
+   │
+   └── YES → Check if AuxPoW block is "soft final"
+       │
+       ├── Confirmations >= auxpow_finality_depth (6)?
+       │   └── YES → REJECT (unless operator override)
+       │             Log: "Cannot reorg past soft-finalized AuxPoW block"
+       │
+       └── NO (fewer than 6 confirmations)
+           └── ALLOW with warning
+               Log: "Reorging past recent AuxPoW block"
+```
+
+---
+
+##### Impact on V2 System Components
+
+| Component | Required Changes |
+|-----------|-----------------|
+| **StorageActor** | Track `has_auxpow`, `last_auxpow_height`, `last_auxpow_confirmations` per block |
+| **ChainActor** | Check soft finality before executing reorg; add `ReorgConfig` |
+| **SyncActor** | Reject sync requests for chains that violate soft finality |
+| **NetworkActor** | Log warning for blocks that would violate finality |
+| **Metrics** | Add `soft_finality_rejections_total`, `finality_override_requests_total` |
+
+---
+
 ### Open Design Questions
-
-#### Question 1: Should AuxPoW blocks be finalized?
-
-**Option A: AuxPoW = Finality**
-```
-Blocks:  [99] → [100] → [101-AuxPoW] → [102] → [103]
-                              ↑
-                    Cannot reorg past this point
-```
-
-**Pros:**
-- Strong security guarantee - Bitcoin-backed finality
-- Prevents deep reorgs that undo merge-mined blocks
-- Simpler mental model for users
-
-**Cons:**
-- Reduces flexibility in adversarial scenarios
-- What if AuxPoW block contains invalid transactions?
-- Could be exploited if AuxPoW generation is cheap
-
-**Option B: AuxPoW = Weight, Not Finality**
-```
-Fork choice considers AuxPoW difficulty as weight:
-- Block with AuxPoW gets difficulty bonus
-- But can still be reorged if competing chain has more total work
-```
-
-**Pros:**
-- More flexible consensus
-- Aligns with "most work wins" principle
-- Can handle edge cases (invalid blocks, attacks)
-
-**Cons:**
-- More complex implementation
-- Users may see AuxPoW blocks reorged (confusing)
-
-**Recommendation:** Option B with configurable "soft finality" depth after AuxPoW
 
 #### Question 2: How should AuxPoW difficulty affect fork choice?
 
@@ -3228,26 +3348,26 @@ The remaining 34 hours (SyncActor coordination, non-canonical tracking, comprehe
 | Deep reorg: intentionally stubbed | Implemented | Deferred for 2-node regtest phase | Pre-2026 |
 | EngineActor sync after reorg | Implemented | Critical for CL/EL consistency | Pre-2026 |
 | **Target: 3+ node networks** | Adopted | Primary deployment target | 2026-01 |
+| **AuxPoW finality model** | **Option B: Soft Finality** | Hard finality prevents recovery from invalid AuxPoW blocks; soft finality preserves "most work wins" while providing security | 2026-01 |
+| **AuxPoW finality depth** | **6 confirmations** | Mirrors Bitcoin's probabilistic finality; ~1 minute at 10s blocks | 2026-01 |
+| **Fork choice primary rule** | **Most work wins (cumulative difficulty)** | Aligns with PoW security model; timestamp only as tiebreaker | 2026-01 |
 
 ### Decisions Pending (Required Before 3+ Node Deployment)
 
 | Decision | Options | Recommendation | Owner | Urgency |
 |----------|---------|----------------|-------|---------|
-| AuxPoW as finality? | A: Yes (hard), B: Weight only | B with soft finality | Team | 🔴 High |
 | Max automatic reorg depth | 10, 50, 100, unlimited | 100 with alerts at 10 | Team | 🟡 Medium |
-| Fork choice primary rule | Timestamp, Difficulty, Height | Difficulty (most work wins) | Team | 🔴 High |
-| AuxPoW finality depth | 3, 6, 12 blocks | 6 blocks (like Bitcoin) | Team | 🟡 Medium |
 | Deep reorg max depth | 50, 100, 500, unlimited | 100 with operator override | Team | 🟡 Medium |
 
-### Decision: AuxPoW Finality Model (Proposed)
+### Decision: AuxPoW Finality Model ✅ DECIDED
 
-**Recommendation:** Soft finality with configurable depth
+**Choice:** Soft finality with configurable depth (Option B)
 
 ```rust
 pub struct ReorgConfig {
     /// Blocks after AuxPoW before considered "soft final"
     /// Reorgs past this point require operator override
-    pub auxpow_finality_depth: u64,  // Recommended: 6
+    pub auxpow_finality_depth: u64,  // DECIDED: 6
 
     /// Maximum automatic reorg depth
     /// Deeper reorgs require operator approval
@@ -3263,8 +3383,13 @@ pub struct ReorgConfig {
 - 6 blocks mirrors Bitcoin's "6 confirmation" standard
 - Allows flexibility for edge cases while providing security guarantees
 - Operator can override in emergency (with audit trail)
+- **Critical:** Hard finality cannot handle AuxPoW blocks with invalid transactions (see Decision 1 in Part 3)
 
-**Team Input Required:** Confirm or modify these defaults before implementation.
+**Implementation Impact:**
+- StorageActor: Track AuxPoW status per block
+- ChainActor: Check soft finality before executing reorg
+- SyncActor: Reject chains violating soft finality
+- Metrics: Add finality-related counters
 
 ---
 
@@ -3328,6 +3453,7 @@ alys-cli dev trigger-reorg --height 100 --depth 5
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| 2.1 | 2026-01-20 | Engineering | **Key decisions made:** (1) AuxPoW soft finality with 6 confirmations, (2) "Most work wins" fork choice rule, (3) Added detailed rationale for soft finality including invalid transaction example |
 | 2.0 | 2026-01 | Engineering | Complete rewrite for 3+ node deployment focus |
 | 1.0 | 2025 | Engineering | Original presentation (2-node regtest focus) |
 
