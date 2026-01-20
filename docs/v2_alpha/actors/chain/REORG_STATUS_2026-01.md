@@ -794,52 +794,7 @@ async fn import_block(
 }
 ```
 
-##### 2.4 Migration Strategy
-
-For existing chains that don't have cumulative difficulty stored:
-
-```rust
-/// Migrate an existing chain to include cumulative difficulty.
-///
-/// This should be run once during upgrade. It walks the chain from genesis
-/// to tip, calculating and storing cumulative difficulty at each height.
-pub async fn migrate_cumulative_difficulty(
-    storage: &Database,
-) -> Result<(), MigrationError> {
-    let tip_height = storage.get_chain_height()?
-        .ok_or(MigrationError::NoChain)?;
-
-    let mut cumulative: u128 = 0;
-
-    for height in 0..=tip_height {
-        let block = storage.get_block_by_height(height)?
-            .ok_or(MigrationError::MissingBlock { height })?;
-
-        let block_difficulty = calculate_block_difficulty(&block);
-        cumulative = cumulative.saturating_add(block_difficulty);
-
-        storage.put_cumulative_difficulty(height, cumulative)?;
-
-        if height % 1000 == 0 {
-            tracing::info!(
-                height = height,
-                cumulative = cumulative,
-                "Migration progress"
-            );
-        }
-    }
-
-    tracing::info!(
-        tip_height = tip_height,
-        final_cumulative = cumulative,
-        "Cumulative difficulty migration complete"
-    );
-
-    Ok(())
-}
-```
-
-##### 2.5 Deep Reorg Integration
+##### 2.4 Deep Reorg Integration
 
 ```rust
 /// Compare cumulative difficulties of two chains for deep reorg decision.
@@ -967,58 +922,308 @@ Result: Chain is now broken - B5's parent (B4) doesn't exist in victim's databas
 
 ##### 3.3 Complete Implementation Specification
 
-**3.3.1 Add Parent Hash Check**
+**3.3.1 ParentHashValidation Enum Definition**
 
 ```rust
 // Location: app/src/actors_v2/chain/fork_choice.rs
 
-/// Result of parent hash validation.
+/// Result of validating parent hashes between two competing same-height blocks.
+///
+/// When we receive a block at the same height as our current tip, we must verify
+/// that both blocks have the SAME parent before running fork choice. If they have
+/// different parents, this isn't a simple same-height fork - it's a deeper divergence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParentHashValidation {
-    /// Both blocks share the same parent - valid same-height fork
+    /// Both blocks share the same parent - this is a valid same-height fork.
+    /// Fork choice can proceed with tiebreaker rules.
     Valid,
-    /// Blocks have different parents - this is a deep fork, not same-height
+
+    /// Blocks have different parents despite being at the same height.
+    /// This indicates chains diverged earlier - requires deep reorg analysis.
     DifferentParents {
         current_parent: H256,
         new_parent: H256,
     },
-    /// New block's parent doesn't exist in our chain
+
+    /// The new block references a parent hash we don't have in our database.
+    /// Either we're missing blocks or this block is from a completely different chain.
     ParentNotFound {
         missing_parent: H256,
     },
 }
+```
+
+---
+
+**Variant 1: `Valid`**
+
+**Meaning:** Both blocks extend from the same parent. This is a true same-height fork caused by two validators producing blocks simultaneously.
+
+*Example Scenario:*
+```
+Timeline:
+  t=0:  Block 99 is canonical on all nodes
+  t=1:  Validator A produces Block 100a
+  t=1:  Validator B produces Block 100b (simultaneously)
+  t=2:  Your node has 100a, receives 100b from network
+```
+
+*Your Node's View:*
+```
+YOUR LOCAL CHAIN:
+
+    ┌──────────┐      ┌───────────┐
+    │ Block 99 │─────▶│ Block 100a│  ◀── Your canonical tip
+    │ hash: 0x99│      │ hash: 0xAA│
+    └──────────┘      │ parent: 0x99│
+                      └───────────┘
+```
+
+*Block Received from Network:*
+```
+INCOMING BLOCK:
+
+    ┌───────────┐
+    │ Block 100b│  ◀── Received from peer
+    │ hash: 0xBB│
+    │ parent: 0x99│  ◀── SAME parent as 100a!
+    └───────────┘
+```
+
+*Validation Result:*
+```rust
+validate_parent_hashes(&block_100a, &block_100b, &storage).await
+// Returns: ParentHashValidation::Valid
+//
+// Because:
+//   block_100a.parent_root = 0x99
+//   block_100b.parent_root = 0x99
+//   They match! This is a valid same-height fork.
+```
+
+*What Happens Next:* Fork choice proceeds with tiebreaker (difficulty → timestamp → hash). One block becomes canonical, other becomes orphan.
+
+---
+
+**Variant 2: `DifferentParents`**
+
+**Meaning:** The blocks are at the same height but extend from different parents. This means the chains diverged **earlier than this height** - it's a deep fork masquerading as a same-height fork.
+
+*Example Scenario:*
+```
+Timeline:
+  t=0:  Network partition occurs
+  t=1:  Partition A: Block 99a is produced
+  t=1:  Partition B: Block 99b is produced (different from 99a!)
+  t=2:  Partition A: Block 100a (child of 99a)
+  t=2:  Partition B: Block 100b (child of 99b)
+  t=3:  Partition heals, your node receives 100b
+```
+
+*Your Node's View:*
+```
+YOUR LOCAL CHAIN:
+
+    ┌──────────┐      ┌───────────┐      ┌───────────┐
+    │ Block 98 │─────▶│ Block 99a │─────▶│ Block 100a│  ◀── Your canonical tip
+    │ hash: 0x98│      │ hash: 0x9A│      │ hash: 0xAA│
+    └──────────┘      └───────────┘      │ parent: 0x9A│
+                                         └───────────┘
+```
+
+*Block Received from Network:*
+```
+INCOMING BLOCK:
+
+    ┌───────────┐
+    │ Block 100b│  ◀── Received from peer
+    │ hash: 0xBB│
+    │ parent: 0x9B│  ◀── DIFFERENT parent! Points to Block 99b
+    └───────────┘
+
+    You don't have Block 99b (hash: 0x9B) - it was produced
+    on the other partition
+```
+
+*The Full Picture (actual chain structure):*
+```
+                         ┌───────────┐      ┌───────────┐
+                    ┌───▶│ Block 99a │─────▶│ Block 100a│  ◀── Your chain
+    ┌──────────┐    │    │ hash: 0x9A│      │ parent: 0x9A│
+    │ Block 98 │────┤    └───────────┘      └───────────┘
+    │ hash: 0x98│    │
+    └──────────┘    │    ┌───────────┐      ┌───────────┐
+                    └───▶│ Block 99b │─────▶│ Block 100b│  ◀── Their chain
+                         │ hash: 0x9B│      │ parent: 0x9B│
+                         └───────────┘      └───────────┘
+
+    Fork point is Block 98, NOT Block 99!
+```
+
+*Validation Result:*
+```rust
+validate_parent_hashes(&block_100a, &block_100b, &storage).await
+// Returns: ParentHashValidation::DifferentParents {
+//     current_parent: 0x9A,  // Your block's parent
+//     new_parent: 0x9B,      // Their block's parent
+// }
+//
+// Because:
+//   block_100a.parent_root = 0x9A
+//   block_100b.parent_root = 0x9B
+//   They DON'T match! This is NOT a simple same-height fork.
+```
+
+*What Happens Next:* Cannot use simple fork choice - must find common ancestor (Block 98), compare cumulative difficulty of both chains, and execute deep reorg if their chain has more work.
+
+---
+
+**Variant 3: `ParentNotFound`**
+
+**Meaning:** The new block references a parent hash that doesn't exist in your database at all. This could mean:
+- You're missing blocks (need to sync)
+- The block is from a completely different/invalid chain
+- Malicious actor sending garbage
+
+*Example Scenario:*
+```
+Timeline:
+  t=0:  Your node is at Block 95 (behind the network)
+  t=1:  You receive Block 100 directly (skipping 96-99)
+```
+
+*Your Node's View:*
+```
+YOUR LOCAL CHAIN (incomplete):
+
+    ┌──────────┐      ┌──────────┐
+    │ Block 94 │─────▶│ Block 95 │  ◀── Your tip (you're behind!)
+    │ hash: 0x94│      │ hash: 0x95│
+    └──────────┘      └──────────┘
+
+    You're missing blocks 96, 97, 98, 99
+```
+
+*Block Received from Network:*
+```
+INCOMING BLOCK:
+
+    ┌───────────┐
+    │ Block 100 │  ◀── Received from peer
+    │ hash: 0xAA│
+    │ parent: 0x99│  ◀── Points to Block 99... which you don't have!
+    └───────────┘
+```
+
+*What You're Missing:*
+```
+THE FULL CHAIN (you're missing the middle):
+
+    Block 95 ──?──▶ Block 96 ──▶ Block 97 ──▶ Block 98 ──▶ Block 99 ──▶ Block 100
+    (you have)      (missing)    (missing)    (missing)    (missing)    (received)
+```
+
+*Validation Result:*
+```rust
+// When validating, we check if we have the parent of the new block
+let parent_exists = storage.get_block_by_hash(block_100.parent_root)?;
+
+if parent_exists.is_none() {
+    // Returns: ParentHashValidation::ParentNotFound {
+    //     missing_parent: 0x99
+    // }
+}
+```
+
+*What Happens Next:* Queue block for later, request missing blocks (96-99) from network via SyncActor, then process once complete chain is available.
+
+---
+
+**ParentHashValidation Summary Table**
+
+| Variant | Your Chain | Incoming Block | Meaning | Action |
+|---------|-----------|----------------|---------|--------|
+| `Valid` | `...→99→100a` | `100b (parent=99)` | True same-height fork | Run fork choice tiebreaker |
+| `DifferentParents` | `...→99a→100a` | `100b (parent=99b)` | Deep fork (diverged earlier) | Find common ancestor, deep reorg |
+| `ParentNotFound` | `...→95` | `100 (parent=99)` | Missing blocks | Sync first, then process |
+
+---
+
+**3.3.2 Complete Validation Function**
+
+```rust
+// Location: app/src/actors_v2/chain/fork_choice.rs
 
 /// Validate that two same-height blocks share the same parent.
 ///
-/// This MUST be called before comparing blocks for same-height fork choice.
-/// If validation fails, the blocks should be handled as a deep fork instead.
-pub fn validate_parent_hashes(
+/// # Arguments
+/// * `current_block` - Block currently in our canonical chain
+/// * `new_block` - Block received from the network
+/// * `storage` - Database for looking up parent blocks
+///
+/// # Returns
+/// * `Valid` - Blocks share parent, can proceed with fork choice
+/// * `DifferentParents` - Chains diverged earlier, need deep analysis
+/// * `ParentNotFound` - Missing the new block's parent, need to sync
+pub async fn validate_parent_hashes(
     current_block: &SignedConsensusBlock<MainnetEthSpec>,
     new_block: &SignedConsensusBlock<MainnetEthSpec>,
+    storage: &Database,
 ) -> ParentHashValidation {
     let current_parent = current_block.message.parent_root;
     let new_parent = new_block.message.parent_root;
 
+    // Fast path: parents match
     if current_parent == new_parent {
         tracing::trace!(
-            parent_hash = %current_parent,
-            "Parent hash validation passed - same parent"
-        );
-        ParentHashValidation::Valid
-    } else {
-        tracing::warn!(
-            current_parent = %current_parent,
-            new_parent = %new_parent,
+            parent = %current_parent,
             height = current_block.message.execution_payload.block_number,
-            "Parent hash mismatch - blocks have different parents"
+            "Parent validation passed - valid same-height fork"
         );
-        ParentHashValidation::DifferentParents {
-            current_parent,
-            new_parent,
+        return ParentHashValidation::Valid;
+    }
+
+    // Parents don't match - check if we have the new block's parent
+    match storage.get_block_by_hash(new_parent) {
+        Ok(Some(_)) => {
+            // We have both parents, they're just different
+            // This means chains diverged before this height
+            tracing::warn!(
+                current_parent = %current_parent,
+                new_parent = %new_parent,
+                height = current_block.message.execution_payload.block_number,
+                "Same-height blocks have different parents - deep fork detected"
+            );
+            ParentHashValidation::DifferentParents {
+                current_parent,
+                new_parent,
+            }
+        }
+        Ok(None) => {
+            // We don't have the new block's parent at all
+            tracing::info!(
+                missing_parent = %new_parent,
+                our_parent = %current_parent,
+                "New block references unknown parent - may need sync"
+            );
+            ParentHashValidation::ParentNotFound {
+                missing_parent: new_parent,
+            }
+        }
+        Err(e) => {
+            // Database error - treat as parent not found
+            tracing::error!(error = %e, "Database error during parent lookup");
+            ParentHashValidation::ParentNotFound {
+                missing_parent: new_parent,
+            }
         }
     }
 }
+```
 
+**3.3.3 Fork Choice Integration**
+
+```rust
 /// Extended fork choice that includes parent validation.
 ///
 /// This is the main entry point for fork choice decisions.
@@ -1136,8 +1341,626 @@ async fn handle_fork_at_same_height(
 | Same parent, different blocks | Tiebreaker | Tiebreaker (correct) |
 | Different parents, same height | Tiebreaker (WRONG) | `RequiresDeepAnalysis` |
 | Parent not in database | May corrupt chain | `RequiresDeepAnalysis` + sync |
-| Genesis blocks (no parent) | Undefined | Special case: compare genesis hashes |
-| Orphan block (parent not yet received) | May reject valid block | Queue for later processing |
+
+---
+
+##### 3.5 RequiresDeepAnalysis: Complete End-to-End Walkthrough
+
+When `ForkChoice::RequiresDeepAnalysis` is returned, simple same-height fork choice **cannot** be used because:
+1. The blocks have **different parents** (chains diverged earlier)
+2. The incoming block's parent is **not in our database** (we're missing blocks)
+
+This signals: *"We can't just compare two blocks - we need to analyze entire chain segments."*
+
+The following walkthrough demonstrates the complete flow from your node's perspective during a network partition heal scenario.
+
+---
+
+**Step 1: Initial State - Network Partition Occurs**
+
+```
+NETWORK STATE BEFORE PARTITION:
+
+All nodes agree on this chain:
+    Block 95 → Block 96 → Block 97
+                              ↑
+                         All nodes here
+
+TIME: t=0 - Network splits into two partitions
+
+┌─────────────────────────────────┐    ┌─────────────────────────────────┐
+│      PARTITION A (Your Node)    │    │      PARTITION B (Other Nodes)   │
+│                                 │    │                                 │
+│  Validators: Alice, Bob         │    │  Validators: Carol, Dave        │
+│  Your node is here              │    │  Cannot communicate with you    │
+└─────────────────────────────────┘    └─────────────────────────────────┘
+```
+
+---
+
+**Step 2: Both Partitions Produce Blocks Independently**
+
+```
+TIME: t=1 to t=4 - Each partition extends its own chain
+
+YOUR NODE'S VIEW (Partition A):
+
+    Block 97 → Block 98a → Block 99a → Block 100a → Block 101a
+               (Alice)     (Bob)       (Alice)      (Bob)
+                                                      ↑
+                                              Your canonical tip
+
+PARTITION B's VIEW (unknown to you):
+
+    Block 97 → Block 98b → Block 99b → Block 100b → Block 101b → Block 102b
+               (Carol)     (Dave)      (Carol)      (Dave)       (Carol)
+                                                                    ↑
+                                                            Their canonical tip
+```
+
+---
+
+**Step 3: Partition Heals - You Receive a Block**
+
+```
+TIME: t=5 - Network partition heals, you receive Block 102b from a peer
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         YOUR NODE RECEIVES MESSAGE                        │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   NetworkActor receives gossip:                                          │
+│                                                                           │
+│   GossipMessage::NewBlock {                                              │
+│       block: Block 102b,                                                 │
+│       sender: peer_id_from_partition_b,                                  │
+│   }                                                                       │
+│                                                                           │
+│   Block 102b details:                                                    │
+│   - height: 102                                                          │
+│   - hash: 0x102B                                                         │
+│   - parent_hash: 0x101B  ← Points to Block 101b                         │
+│   - cumulative_difficulty: 6,500,000                                     │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 4: ChainActor Receives Block for Processing**
+
+```rust
+// NetworkActor forwards to ChainActor
+chain_actor.send(ChainMessage::ImportBlock {
+    block: block_102b,
+    source: BlockSource::Gossip,
+    correlation_id: uuid!("..."),
+}).await;
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      CHAINACTOR: handle_network_block()                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Received block:                                                        │
+│   - Block 102b (height 102, parent 0x101B)                               │
+│                                                                           │
+│   Your current state:                                                    │
+│   - Canonical tip: Block 101a (height 101)                               │
+│   - Cumulative difficulty: 5,000,000                                     │
+│                                                                           │
+│   First observation: Block is AHEAD of us (102 > 101)                    │
+│   This is NOT a same-height fork!                                        │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 5: Check If Parent Exists**
+
+```rust
+// ChainActor checks if we have the parent of this block
+let parent_hash = block_102b.message.parent_root; // 0x101B
+
+let parent_exists = self.storage_actor
+    .send(StorageMessage::GetBlockByHash { hash: parent_hash })
+    .await??;
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      STORAGE LOOKUP: Parent Block                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Query: GetBlockByHash(0x101B)                                          │
+│   Result: None  ← We don't have Block 101b!                              │
+│                                                                           │
+│   Your database contains:                                                │
+│   - Block 97  (hash: 0x97)                                               │
+│   - Block 98a (hash: 0x98A, parent: 0x97)                                │
+│   - Block 99a (hash: 0x99A, parent: 0x98A)                               │
+│   - Block 100a (hash: 0x100A, parent: 0x99A)                             │
+│   - Block 101a (hash: 0x101A, parent: 0x100A)                            │
+│                                                                           │
+│   Block 101b (hash: 0x101B) is NOT in your database!                     │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 6: Fork Choice Returns `RequiresDeepAnalysis`**
+
+```rust
+// Since we can't find the parent, this triggers deep analysis
+let fork_choice_result = ForkChoice::RequiresDeepAnalysis;
+
+tracing::info!(
+    received_block = %block_102b.hash(),
+    received_height = 102,
+    missing_parent = %"0x101B",
+    our_tip_height = 101,
+    "Block references unknown parent - initiating deep analysis"
+);
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      DECISION: RequiresDeepAnalysis                       │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Why deep analysis?                                                     │
+│                                                                           │
+│   1. Block 102b's parent (0x101B) is not in our database                 │
+│   2. This means we're missing part of their chain                        │
+│   3. We need to:                                                         │
+│      a) Fetch the missing blocks                                         │
+│      b) Find where our chains diverged (common ancestor)                 │
+│      c) Compare total work of both chains                                │
+│      d) Decide whether to reorg                                          │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 7: Request Missing Blocks from Network**
+
+```rust
+// ChainActor asks SyncActor to fetch missing chain segment
+self.sync_actor.send(SyncMessage::RequestAncestors {
+    tip_block: block_102b.clone(),
+    tip_hash: block_102b.hash(),
+    from_peer: peer_id,
+    correlation_id,
+}).await?;
+
+// Also queue the received block for later processing
+self.pending_blocks.insert(block_102b.hash(), block_102b);
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      SYNCACTOR: Fetch Missing Chain                       │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   SyncActor sends request to peer:                                       │
+│                                                                           │
+│   NetworkMessage::GetBlocksByRange {                                     │
+│       start_hash: 0x102B,      // Start from their tip                   │
+│       direction: Backwards,    // Walk backwards to find common ancestor │
+│       max_blocks: 100,                                                   │
+│   }                                                                       │
+│                                                                           │
+│   Peer responds with blocks (newest to oldest):                          │
+│   - Block 102b (already have)                                            │
+│   - Block 101b (NEW)                                                     │
+│   - Block 100b (NEW)                                                     │
+│   - Block 99b (NEW)                                                      │
+│   - Block 98b (NEW)                                                      │
+│   - Block 97 (FOUND! This is our common ancestor)                        │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 8: Find Common Ancestor**
+
+```rust
+async fn find_common_ancestor(
+    our_chain: &[BlockRef],
+    their_chain: &[Block],
+    storage: &Database,
+) -> Result<u64, ChainError> {
+    // Walk backwards through their chain until we find a block we have
+    for block in their_chain.iter().rev() {
+        let hash = block.hash();
+        if let Some(_) = storage.get_block_by_hash(hash).await? {
+            return Ok(block.height());
+        }
+    }
+    Err(ChainError::NoCommonAncestor)
+}
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      FINDING COMMON ANCESTOR                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Walking backwards through their chain:                                 │
+│                                                                           │
+│   Check Block 102b (0x102B): Not in our DB                               │
+│   Check Block 101b (0x101B): Not in our DB                               │
+│   Check Block 100b (0x100B): Not in our DB                               │
+│   Check Block 99b (0x99B): Not in our DB                                 │
+│   Check Block 98b (0x98B): Not in our DB                                 │
+│   Check Block 97 (0x97): ✓ FOUND! We have this block!                    │
+│                                                                           │
+│   Common ancestor: Block 97 (height 97)                                  │
+│                                                                           │
+│   Visual:                                                                │
+│                    COMMON                                                │
+│                   ANCESTOR                                               │
+│                      ↓                                                   │
+│   ... → Block 97 ─┬─→ Block 98a → 99a → 100a → 101a  (Our chain)        │
+│                   │                                                      │
+│                   └─→ Block 98b → 99b → 100b → 101b → 102b (Their chain)│
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 9: Calculate Cumulative Difficulty for Both Chains**
+
+```rust
+// Calculate difficulty for our chain (from common ancestor to our tip)
+let our_difficulty = calculate_chain_difficulty(
+    from_height: 97,  // common ancestor
+    to_height: 101,   // our tip
+    chain: OurCanonical,
+);
+
+// Calculate difficulty for their chain (from common ancestor to their tip)
+let their_difficulty = calculate_chain_difficulty(
+    from_height: 97,  // common ancestor
+    to_height: 102,   // their tip
+    chain: their_blocks,
+);
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      COMPARING CHAIN DIFFICULTIES                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   OUR CHAIN (97 → 101a):                                                 │
+│   ┌─────────┬────────────┬────────────────────┐                          │
+│   │ Block   │ Has AuxPoW │ Difficulty         │                          │
+│   ├─────────┼────────────┼────────────────────┤                          │
+│   │ 97      │ Yes        │ 1,000,000 (shared) │                          │
+│   │ 98a     │ No         │ 1 (base)           │                          │
+│   │ 99a     │ Yes        │ 1,200,000          │                          │
+│   │ 100a    │ No         │ 1 (base)           │                          │
+│   │ 101a    │ Yes        │ 1,100,000          │                          │
+│   ├─────────┼────────────┼────────────────────┤                          │
+│   │ TOTAL   │            │ 3,300,003          │                          │
+│   └─────────┴────────────┴────────────────────┘                          │
+│                                                                           │
+│   THEIR CHAIN (97 → 102b):                                               │
+│   ┌─────────┬────────────┬────────────────────┐                          │
+│   │ Block   │ Has AuxPoW │ Difficulty         │                          │
+│   ├─────────┼────────────┼────────────────────┤                          │
+│   │ 97      │ Yes        │ 1,000,000 (shared) │                          │
+│   │ 98b     │ Yes        │ 1,300,000          │                          │
+│   │ 99b     │ No         │ 1 (base)           │                          │
+│   │ 100b    │ Yes        │ 1,400,000          │                          │
+│   │ 101b    │ Yes        │ 1,500,000          │                          │
+│   │ 102b    │ No         │ 1 (base)           │                          │
+│   ├─────────┼────────────┼────────────────────┤                          │
+│   │ TOTAL   │            │ 5,200,002          │                          │
+│   └─────────┴────────────┴────────────────────┘                          │
+│                                                                           │
+│   COMPARISON: 5,200,002 > 3,300,003                                      │
+│   DECISION: Their chain has MORE WORK → We should REORG                  │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 10: Execute Deep Reorganization - Phase 1: Rollback**
+
+```rust
+async fn execute_deep_reorg(
+    &mut self,
+    common_ancestor_height: u64,
+    new_chain: Vec<SignedConsensusBlock>,
+    correlation_id: Uuid,
+) -> Result<ReorganizationResult, ChainError> {
+    let our_tip_height = self.state.head.unwrap().number;
+
+    tracing::warn!(
+        common_ancestor = common_ancestor_height,
+        our_tip = our_tip_height,
+        their_tip = new_chain.last().unwrap().height(),
+        rollback_depth = our_tip_height - common_ancestor_height,
+        "Executing deep chain reorganization"
+    );
+
+    // Phase 1: Rollback our chain
+    // Phase 2: Apply their chain
+    // Phase 3: Update engine and state
+}
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      PHASE 1: ROLLBACK OUR CHAIN                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Rolling back blocks 101a → 100a → 99a → 98a (4 blocks)                 │
+│                                                                           │
+│   For each block (newest to oldest):                                     │
+│                                                                           │
+│   Step 1.1: Rollback Block 101a                                          │
+│   - Mark as non-canonical in storage                                     │
+│   - Notify EngineActor to revert execution state                         │
+│   - Update cumulative difficulty                                         │
+│                                                                           │
+│   Step 1.2: Rollback Block 100a                                          │
+│   - Mark as non-canonical                                                │
+│   - Revert execution state                                               │
+│                                                                           │
+│   Step 1.3: Rollback Block 99a                                           │
+│   - Mark as non-canonical                                                │
+│   - Revert execution state                                               │
+│                                                                           │
+│   Step 1.4: Rollback Block 98a                                           │
+│   - Mark as non-canonical                                                │
+│   - Revert execution state                                               │
+│                                                                           │
+│   Chain state after rollback:                                            │
+│                                                                           │
+│   ... → Block 96 → Block 97  ← New temporary tip                         │
+│                        ↓                                                 │
+│              (orphaned) 98a → 99a → 100a → 101a                          │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 11: Execute Deep Reorganization - Phase 2: Apply New Chain**
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      PHASE 2: APPLY THEIR CHAIN                           │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   Applying blocks 98b → 99b → 100b → 101b → 102b (5 blocks)              │
+│                                                                           │
+│   For each block (oldest to newest):                                     │
+│                                                                           │
+│   Step 2.1: Apply Block 98b                                              │
+│   ┌────────────────────────────────────────────────────────────────┐     │
+│   │ storage.store_block(block_98b, canonical: true)                │     │
+│   │ engine.send(NewPayload { block_98b.execution_payload })        │     │
+│   │ → PayloadStatus::Valid ✓                                       │     │
+│   │ Update cumulative_difficulty += 1,300,000                      │     │
+│   └────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│   Step 2.2: Apply Block 99b                                              │
+│   ┌────────────────────────────────────────────────────────────────┐     │
+│   │ storage.store_block(block_99b, canonical: true)                │     │
+│   │ engine.send(NewPayload { block_99b.execution_payload })        │     │
+│   │ → PayloadStatus::Valid ✓                                       │     │
+│   │ Update cumulative_difficulty += 1                              │     │
+│   └────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│   Step 2.3: Apply Block 100b                                             │
+│   ┌────────────────────────────────────────────────────────────────┐     │
+│   │ storage.store_block(block_100b, canonical: true)               │     │
+│   │ engine.send(NewPayload { block_100b.execution_payload })       │     │
+│   │ → PayloadStatus::Valid ✓                                       │     │
+│   │ Update cumulative_difficulty += 1,400,000                      │     │
+│   └────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│   Step 2.4: Apply Block 101b                                             │
+│   ┌────────────────────────────────────────────────────────────────┐     │
+│   │ storage.store_block(block_101b, canonical: true)               │     │
+│   │ engine.send(NewPayload { block_101b.execution_payload })       │     │
+│   │ → PayloadStatus::Valid ✓                                       │     │
+│   │ Update cumulative_difficulty += 1,500,000                      │     │
+│   └────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│   Step 2.5: Apply Block 102b                                             │
+│   ┌────────────────────────────────────────────────────────────────┐     │
+│   │ storage.store_block(block_102b, canonical: true)               │     │
+│   │ engine.send(NewPayload { block_102b.execution_payload })       │     │
+│   │ → PayloadStatus::Valid ✓                                       │     │
+│   │ Update cumulative_difficulty += 1                              │     │
+│   └────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 12: Sync Execution Layer Fork Choice**
+
+```rust
+// Tell Reth about the new canonical chain
+self.engine_actor.send(EngineMessage::UpdateForkChoice {
+    head_hash: block_102b.execution_hash(),      // New tip
+    safe_hash: block_102b.execution_hash(),      // Safe head
+    finalized_hash: block_97.execution_hash(),   // Finalized at common ancestor
+    correlation_id: Some(correlation_id),
+}).await??;
+```
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      PHASE 3: SYNC EXECUTION LAYER                        │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   EngineActor → Reth (Engine API):                                       │
+│                                                                           │
+│   engine_forkchoiceUpdatedV3({                                           │
+│       forkchoiceState: {                                                 │
+│           headBlockHash: "0x102B_exec",      // Block 102b               │
+│           safeBlockHash: "0x102B_exec",                                  │
+│           finalizedBlockHash: "0x97_exec",   // Common ancestor          │
+│       },                                                                 │
+│       payloadAttributes: null,               // Not building new block   │
+│   })                                                                     │
+│                                                                           │
+│   Reth response: { payloadStatus: "VALID", payloadId: null }             │
+│                                                                           │
+│   ✓ Execution layer now tracks same chain as consensus layer             │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Step 13: Final State After Reorg**
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      YOUR NODE'S FINAL STATE                              │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   NEW CANONICAL CHAIN:                                                   │
+│                                                                           │
+│   ...→ Block 97 → Block 98b → Block 99b → Block 100b → Block 101b → Block 102b
+│                                                                       ↑   │
+│                                                              Your new tip │
+│                                                                           │
+│   ORPHANED BLOCKS (still in database, marked non-canonical):             │
+│                                                                           │
+│              Block 98a → Block 99a → Block 100a → Block 101a             │
+│                                                                           │
+│   ChainState:                                                            │
+│   - head: BlockRef { height: 102, hash: 0x102B }                         │
+│   - cumulative_difficulty: 5,200,002                                     │
+│   - last_block_time: timestamp of Block 102b                             │
+│                                                                           │
+│   Metrics emitted:                                                       │
+│   - alys_chain_reorganizations_total: +1                                 │
+│   - alys_chain_reorganization_depth: 4 (blocks rolled back)              │
+│   - alys_chain_deep_reorg_total: +1                                      │
+│                                                                           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Complete Handler Code**
+
+```rust
+/// Handle the RequiresDeepAnalysis fork choice result
+async fn handle_deep_analysis(
+    &mut self,
+    received_block: SignedConsensusBlock,
+    correlation_id: Uuid,
+) -> Result<ChainResponse, ChainError> {
+
+    // Step 1: Queue the received block
+    self.pending_blocks.insert(received_block.hash(), received_block.clone());
+
+    // Step 2: Request missing ancestors from network
+    let missing_chain = self.sync_actor
+        .send(SyncMessage::RequestAncestors {
+            tip: received_block.clone(),
+            correlation_id,
+        })
+        .await??;
+
+    // Step 3: Find common ancestor
+    let common_ancestor = find_common_ancestor(&missing_chain, &self.storage).await?;
+
+    // Step 4: Calculate difficulties
+    let our_difficulty = self.get_cumulative_difficulty_at(self.state.head.unwrap().number)?;
+    let their_difficulty = calculate_chain_difficulty(&missing_chain)?;
+
+    // Step 5: Compare and decide
+    if their_difficulty <= our_difficulty {
+        tracing::info!(
+            our_difficulty = our_difficulty,
+            their_difficulty = their_difficulty,
+            "Their chain has less/equal work - keeping current chain"
+        );
+        return Ok(ChainResponse::BlockRejected {
+            reason: "Competing chain has less cumulative work".into(),
+        });
+    }
+
+    // Step 6: Execute deep reorg
+    tracing::warn!(
+        our_difficulty = our_difficulty,
+        their_difficulty = their_difficulty,
+        reorg_depth = self.state.head.unwrap().number - common_ancestor,
+        "Their chain has more work - executing deep reorg"
+    );
+
+    let result = self.execute_deep_reorg(
+        common_ancestor,
+        missing_chain,
+        correlation_id,
+    ).await?;
+
+    // Step 7: Return success
+    Ok(ChainResponse::ReorganizationComplete {
+        old_tip: result.old_tip,
+        new_tip: result.new_tip,
+        blocks_rolled_back: result.rollback_count,
+        blocks_applied: result.apply_count,
+    })
+}
+```
+
+---
+
+**Decision Tree Summary**
+
+```
+                    Receive Block from Network
+                              │
+                              ▼
+                    ┌─────────────────────┐
+                    │ Do we have parent?  │
+                    └─────────────────────┘
+                         /          \
+                       Yes           No
+                        │             │
+                        ▼             ▼
+              ┌──────────────┐   RequiresDeepAnalysis
+              │ Same height  │   (fetch missing blocks)
+              │ as our tip?  │         │
+              └──────────────┘         │
+                 /        \            │
+               Yes         No          │
+                │           │          │
+                ▼           ▼          │
+         Same parent?   Future/Past    │
+            /    \        block        │
+          Yes     No        │          │
+           │       │        │          │
+           ▼       ▼        ▼          ▼
+        Simple   RequiresDeepAnalysis ◄─┘
+      Fork Choice  (different parents)
+           │               │
+           ▼               ▼
+    Tiebreaker rules   Find common ancestor
+    (difficulty →      Compare chain weights
+     timestamp →       Execute deep reorg
+     hash)             if their chain wins
+```
 
 ---
 
@@ -1180,19 +2003,88 @@ Fork choice should NEVER prefer an invalid block over a valid one, regardless of
 
 ##### 4.2 Current State
 
-**What Validation Currently Happens:**
-- Block height is checked
-- Basic structural validation (can deserialize)
-- AuxPoW validation happens during block production (not import)
+**What Validation Currently Happens in V2 ChainActor:**
 
-**What's NOT Validated During Fork Choice:**
-- Execution validity (transactions, state transitions)
-- Consensus validity (proposer, signatures in some paths)
-- AuxPoW validity for received blocks
-- Timestamp bounds
+The V2 ChainActor (`handlers.rs`) does have execution validation implemented:
+
+```rust
+// handlers.rs:1254-1306
+// Step 3: Execution payload validation via EngineActor
+if let Some(ref engine_actor) = engine_actor {
+    let msg = EngineMessage::ValidatePayload {
+        payload: block.message.execution_payload.clone(),
+        correlation_id: Some(correlation_id),
+    };
+    match engine_actor.send(msg).await {
+        Ok(Ok(EngineResponse::PayloadValid { is_valid: true, .. })) => { /* continue */ }
+        Ok(Ok(EngineResponse::PayloadValid { is_valid: false, .. })) => {
+            return Err(ChainError::InvalidBlock("Execution payload validation failed"));
+        }
+    }
+}
+```
+
+**However, there is a critical flow problem:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              CURRENT V2 ImportBlock FLOW (PROBLEM)               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Step 1.9: Fork Detection (line 1004)                          │
+│        │                                                         │
+│        ├─── Fork detected? ────────────────────┐                │
+│        │         │                             │                │
+│        │         ▼                             │                │
+│        │    Fork Choice (line 1044)            │                │
+│        │         │                             │                │
+│        │         ├── KeepCurrent → Return      │                │
+│        │         │                             │                │
+│        │         └── Reorganize                │                │
+│        │              │                        │                │
+│        │              ▼                        │                │
+│        │         Execute Reorg (line 1095)     │                │
+│        │              │                        │                │
+│        │              ▼                        │                │
+│        │         Return (line 1187) ◄──────────┤ ⚠️ SKIPS       │
+│        │                                       │    Steps 2-3!  │
+│        │                                       │                │
+│   No fork (line 1205) ◄────────────────────────┘                │
+│        │                                                         │
+│        ▼                                                         │
+│   Step 2: Aura Validation (line 1237)                           │
+│        │                                                         │
+│        ▼                                                         │
+│   Step 3: Execution Validation (line 1254) ◄── Only for no-fork │
+│        │                                                         │
+│        ▼                                                         │
+│   Step 4+: Storage, commit, etc.                                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The Gap:**
+
+| Scenario | Execution Validation? | Impact |
+|----------|----------------------|--------|
+| Normal import (no fork) | ✅ Yes (Step 3) | Correct |
+| Fork → KeepCurrent | ❌ Skipped | Minor (block rejected) |
+| Fork → Reorganize | ❌ **SKIPPED** | **CRITICAL: Unvalidated block becomes canonical!** |
+
+When `ForkChoice::Reorganize` is returned:
+1. `reorganize_to_new_tip()` executes (stores new block as canonical)
+2. `EngineMessage::UpdateForkChoice` syncs execution layer
+3. Code returns at line 1187 **WITHOUT** execution validation
+
+**This means an invalid block could win fork choice and become canonical without EVM execution validation!**
+
+**What's Still NOT Validated During Fork Choice:**
+- ❌ Execution validity on reorg path (CRITICAL GAP)
+- ❌ Timestamp bounds checks
+- ❌ AuxPoW validity for received blocks (only validated during production)
 
 **Assumption Made:**
-The current code assumes blocks received from the network have been pre-validated. This assumption may not hold in adversarial scenarios.
+The current code assumes blocks that win fork choice are valid. This assumption is dangerous in adversarial scenarios.
 
 ##### 4.3 Complete Implementation Specification
 
@@ -1468,15 +2360,120 @@ Putting it all together, the complete fork choice flow should be:
 │         │                                                        │
 │         ▼ (Reorganize)                                          │
 │   ┌─────────────────────────────────────┐                       │
-│   │ STEP 5: Execute Reorg               │                       │
+│   │ STEP 5: Execution Validation        │  ◄── CRITICAL!        │
+│   │ - EngineMessage::ValidatePayload    │      Must happen      │
+│   │ - Verify EVM execution is valid     │      BEFORE reorg     │
+│   │ - Reject if invalid (keep current)  │                       │
+│   └─────────────────────────────────────┘                       │
+│         │                                                        │
+│         ├─── Invalid ──▶ Reject (keep current block)            │
+│         │                                                        │
+│         ▼ (Valid)                                                │
+│   ┌─────────────────────────────────────┐                       │
+│   │ STEP 6: Execute Reorg               │                       │
 │   │ - Update StorageActor               │                       │
-│   │ - Update EngineActor                │                       │
+│   │ - Update EngineActor fork choice    │                       │
 │   │ - Update ChainState                 │                       │
 │   │ - Emit Metrics                      │                       │
 │   └─────────────────────────────────────┘                       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+##### 4.6 Required Fix: Execution Validation Before Reorg
+
+The reorg path in `handlers.rs` must validate the winning block BEFORE executing the reorganization:
+
+```rust
+// handlers.rs - FIX for ForkChoice::Reorganize path (around line 1095)
+
+ForkChoice::Reorganize { new_tip, rollback_to } => {
+    warn!(
+        correlation_id = %correlation_id,
+        existing_hash = %existing_hash,
+        new_hash = %block_hash,
+        "Fork choice: new block wins - validating before reorganization"
+    );
+
+    // ════════════════════════════════════════════════════════════════
+    // CRITICAL FIX: Validate execution payload BEFORE executing reorg
+    // ════════════════════════════════════════════════════════════════
+    if let Some(ref engine_actor) = engine_actor {
+        let validate_msg = EngineMessage::ValidatePayload {
+            payload: ExecutionPayload::Capella(block.message.execution_payload.clone()),
+            correlation_id: Some(correlation_id),
+        };
+
+        match engine_actor.send(validate_msg).await {
+            Ok(Ok(EngineResponse::PayloadValid { is_valid: true, validation_time })) => {
+                debug!(
+                    correlation_id = %correlation_id,
+                    block_hash = %block_hash,
+                    validation_time_ms = validation_time.as_millis(),
+                    "Winning block passed execution validation - proceeding with reorg"
+                );
+            }
+            Ok(Ok(EngineResponse::PayloadValid { is_valid: false, .. })) => {
+                // Block won fork choice but failed execution validation!
+                // Reject the block and keep current chain
+                error!(
+                    correlation_id = %correlation_id,
+                    block_hash = %block_hash,
+                    "CRITICAL: Block won fork choice but FAILED execution validation - rejecting"
+                );
+                self.metrics.blocks_rejected_invalid_execution.inc();
+                return Ok(ChainResponse::BlockRejected {
+                    reason: "Block failed execution validation despite winning fork choice".into(),
+                });
+            }
+            Ok(Err(e)) => {
+                error!(
+                    correlation_id = %correlation_id,
+                    error = ?e,
+                    "Engine error during pre-reorg validation - rejecting block"
+                );
+                return Err(ChainError::Engine(format!("Pre-reorg validation failed: {}", e)));
+            }
+            Err(e) => {
+                error!(
+                    correlation_id = %correlation_id,
+                    error = ?e,
+                    "Communication error with EngineActor - rejecting block"
+                );
+                return Err(ChainError::NetworkError(format!("Engine communication failed: {}", e)));
+            }
+        }
+    } else {
+        warn!(
+            correlation_id = %correlation_id,
+            "EngineActor not available - UNSAFE: proceeding with reorg without execution validation"
+        );
+    }
+
+    // NOW safe to execute the reorganization
+    let reorg_result = reorganize_to_new_tip(
+        &block,
+        block_height,
+        storage_actor,
+        correlation_id,
+    ).await?;
+
+    // ... rest of reorg handling ...
+}
+```
+
+**Why This Fix Is Critical:**
+
+| Without Fix | With Fix |
+|-------------|----------|
+| Attacker sends block with valid timestamp but invalid txs | Block validated before becoming canonical |
+| Block wins fork choice (earlier timestamp) | If validation fails, current block kept |
+| Invalid block becomes canonical | Only valid blocks can win reorg |
+| Chain state corrupted | Chain integrity preserved |
+
+**Metrics to Add:**
+- `blocks_rejected_invalid_execution` - Blocks that won fork choice but failed execution
+- `reorg_execution_validation_time` - Time spent validating winning blocks
 
 ---
 
