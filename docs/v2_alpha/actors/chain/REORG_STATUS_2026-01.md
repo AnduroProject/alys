@@ -3255,13 +3255,228 @@ fn validate_reorg_safety(
 
 #### Story 4.2: Non-Canonical Block Tracking (6 hours)
 
+**Overview:**
+
+When a chain reorganization occurs, blocks that were previously canonical become **orphaned**. Currently, these blocks exist in the database but there's no way to distinguish them from canonical blocks or query them efficiently.
+
+```
+AFTER REORG:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Block 99 → Block 100b → Block 101b → Block 102b  ← New canonical tip
+              │
+              └── Block 100a → Block 101a → Block 102a  ← ORPHANED
+                      ↑
+                  Where are these blocks?
+                  How do we know they're orphaned?
+```
+
 **Tasks:**
 - [ ] Add `CANONICAL_BLOCKS` column family
-- [ ] Store `Vec<(hash, is_canonical)>` per height
-- [ ] Implement `MarkNonCanonical` message
+- [ ] Define `BlockCanonicalStatus` struct
+- [ ] Implement `StoreBlockWithTracking` message
+- [ ] Implement `MarkBlockNonCanonical` / `MarkBlockCanonical` messages
 - [ ] Implement `GetAllBlocksAtHeight` query
-- [ ] Migration for existing data
+- [ ] Implement `GetReorgHistory` query
 - [ ] Unit tests
+
+---
+
+##### 4.2.1 Current Storage Schema (The Problem)
+
+```
+CURRENT STORAGE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BLOCKS column family:
+┌────────────────────────────────────────────────────────────────┐
+│ Key: block_hash          │ Value: serialized block            │
+├──────────────────────────┼─────────────────────────────────────┤
+│ 0x100A (Block 100a)      │ { height: 100, txs: [...], ... }   │
+│ 0x100B (Block 100b)      │ { height: 100, txs: [...], ... }   │
+└──────────────────────────┴─────────────────────────────────────┘
+
+BLOCK_HEIGHTS column family:
+┌────────────────────────────────────────────────────────────────┐
+│ Key: height (u64)        │ Value: block_hash (canonical only) │
+├──────────────────────────┼─────────────────────────────────────┤
+│ 100                      │ 0x100B  ← Only the canonical block │
+└──────────────────────────┴─────────────────────────────────────┘
+
+PROBLEM: We can't distinguish orphaned blocks from canonical blocks!
+- Block 100a exists in BLOCKS but there's no record it's orphaned
+- We can only get Block 100a if we know its exact hash
+- No way to query "all blocks at height 100"
+```
+
+---
+
+##### 4.2.2 Proposed Storage Schema
+
+```
+PROPOSED STORAGE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BLOCKS column family: (unchanged)
+BLOCK_HEIGHTS column family: (unchanged - still points to canonical)
+
+NEW: CANONICAL_BLOCKS column family:
+┌────────────────────────────────────────────────────────────────┐
+│ Key: height (u64)        │ Value: Vec<BlockCanonicalStatus>   │
+├──────────────────────────┼─────────────────────────────────────┤
+│ 100                      │ [                                   │
+│                          │   { hash: 0x100B, is_canonical: true },  │
+│                          │   { hash: 0x100A, is_canonical: false }, │
+│                          │ ]                                   │
+└──────────────────────────┴─────────────────────────────────────┘
+
+Benefits:
+✅ Can query "all blocks at height X"
+✅ Can identify which blocks are orphaned
+✅ Full reorg history preserved
+✅ Enables forensics and debugging
+```
+
+---
+
+##### 4.2.3 Implementation Specification
+
+**Storage Schema:**
+
+```rust
+// Location: app/src/actors_v2/storage/database.rs
+
+/// Column family for tracking all blocks at each height and their canonical status.
+pub const CANONICAL_BLOCKS: &str = "canonical_blocks";
+
+/// Represents a block's canonical status at a specific height.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockCanonicalStatus {
+    /// The block hash
+    pub hash: H256,
+
+    /// Whether this block is currently canonical
+    pub is_canonical: bool,
+
+    /// When this block was first stored (Unix timestamp)
+    pub stored_at: u64,
+
+    /// When this block's canonical status last changed
+    pub status_changed_at: Option<u64>,
+
+    /// Number of times this block's status has changed
+    /// 0 = never changed, 1+ = reorged
+    pub status_change_count: u32,
+}
+```
+
+**New Storage Messages:**
+
+```rust
+// Location: app/src/actors_v2/storage/messages.rs
+
+/// Mark a block as non-canonical (orphaned).
+#[derive(Debug, Clone)]
+pub struct MarkBlockNonCanonical {
+    pub height: u64,
+    pub hash: H256,
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Mark a block as canonical.
+#[derive(Debug, Clone)]
+pub struct MarkBlockCanonical {
+    pub height: u64,
+    pub hash: H256,
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Query all blocks at a specific height.
+#[derive(Debug, Clone)]
+pub struct GetAllBlocksAtHeight {
+    pub height: u64,
+}
+
+/// Response containing all blocks at a height.
+#[derive(Debug, Clone)]
+pub struct AllBlocksAtHeightResponse {
+    pub height: u64,
+    pub blocks: Vec<BlockCanonicalStatus>,
+    pub canonical_hash: Option<H256>,
+}
+
+/// Query reorg history for a specific height range.
+#[derive(Debug, Clone)]
+pub struct GetReorgHistory {
+    pub from_height: u64,
+    pub to_height: u64,
+}
+
+/// Response containing blocks that were reorged in the range.
+#[derive(Debug, Clone)]
+pub struct ReorgHistoryResponse {
+    pub orphaned_blocks: Vec<(u64, H256)>,  // (height, hash)
+    pub reorg_count: u32,
+}
+```
+
+---
+
+##### 4.2.4 Use Cases
+
+**1. Debugging Reorg Issues:**
+
+```rust
+// Query: "What blocks exist at height 12345?"
+let response = storage_actor.send(GetAllBlocksAtHeight { height: 12345 }).await?;
+
+// Response shows:
+// - Block 0xABC is canonical (became canonical after reorg)
+// - Block 0xDEF is orphaned (was orphaned by reorg)
+// - Timestamps show when reorg occurred
+```
+
+**2. Monitoring Reorg Frequency:**
+
+```rust
+// Alert: "Are we seeing too many reorgs?"
+let history = storage_actor.send(GetReorgHistory {
+    from_height: current_height - 1000,
+    to_height: current_height,
+}).await?;
+
+if history.reorg_count > 10 {
+    tracing::warn!("High reorg frequency detected");
+}
+```
+
+**3. Recovering Orphaned Transactions:**
+
+```rust
+// A transaction was in an orphaned block - find it
+let blocks = storage_actor.send(GetAllBlocksAtHeight { height }).await?;
+
+for block_status in blocks.blocks.iter().filter(|b| !b.is_canonical) {
+    let block = storage_actor.send(GetBlockByHash { hash: block_status.hash }).await?;
+    if block.contains_transaction(tx_hash) {
+        // Found it! Inform user to resubmit
+    }
+}
+```
+
+---
+
+##### 4.2.5 Summary
+
+| Aspect | Details |
+|--------|---------|
+| **Priority** | 🟢 Low - Nice to have for production |
+| **Estimated Effort** | 6 hours |
+| **Dependencies** | None (can be implemented independently) |
+| **Risk** | Low - additive change, doesn't modify critical paths |
+| **Value** | Debugging, forensics, monitoring |
+
+---
 
 #### Story 4.3: Enhanced Metrics & Alerting (4 hours)
 
