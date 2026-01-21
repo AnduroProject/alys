@@ -552,7 +552,7 @@ impl ChainActor {
 
         if let Some(ref storage_actor) = self.storage_actor {
             let current_height = self.state.get_height();
-            let current_cumulative_difficulty = self.state.get_cumulative_difficulty();
+            let current_cumulative_difficulty = self.state.get_cumulative_difficulty().await;
 
             // Call the reorganization module
             let result = super::reorganization::reorganize_to_new_tip(
@@ -564,13 +564,33 @@ impl ChainActor {
             )
             .await?;
 
+            // Update ChainState with new cumulative difficulty after successful reorg
+            self.state
+                .set_cumulative_difficulty(result.new_cumulative_difficulty)
+                .await;
+
+            // Cache the new tip's cumulative difficulty
+            self.state
+                .cache_difficulty(result.new_tip_height, result.new_cumulative_difficulty)
+                .await;
+
+            // For deep reorgs, invalidate cache entries above reorg height
+            if result.is_deep_reorg {
+                // Clear entries above the common ancestor (rolled back blocks)
+                // The rollback_difficulty method handles this
+                self.state
+                    .rollback_difficulty(result.reorg_height, result.new_cumulative_difficulty)
+                    .await;
+            }
+
             info!(
                 correlation_id = %correlation_id,
                 reorg_height = result.reorg_height,
                 blocks_rolled_back = result.blocks_rolled_back,
                 blocks_applied = result.blocks_applied,
                 new_tip = %result.new_tip,
-                "Chain reorganization completed successfully"
+                new_cumulative_difficulty = result.new_cumulative_difficulty,
+                "Chain reorganization completed - ChainState updated"
             );
 
             Ok(result)

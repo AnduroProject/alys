@@ -110,6 +110,32 @@ pub struct BatchWriteMessage {
 }
 
 // =============================================================================
+// CUMULATIVE DIFFICULTY OPERATIONS
+// =============================================================================
+
+/// Message to store cumulative difficulty at a given height
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct PutCumulativeDifficultyMessage {
+    /// Block height
+    pub height: u64,
+    /// Cumulative difficulty at this height
+    pub cumulative_difficulty: u128,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get cumulative difficulty at a given height
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<u128>, StorageError>")]
+pub struct GetCumulativeDifficultyMessage {
+    /// Block height to query
+    pub height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+// =============================================================================
 // RECEIPT OPERATIONS
 // =============================================================================
 

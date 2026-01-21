@@ -276,3 +276,75 @@ impl Handler<SetAccumulatedFeesMessage> for StorageActor {
         })
     }
 }
+
+// =============================================================================
+// CUMULATIVE DIFFICULTY HANDLERS
+// =============================================================================
+
+impl Handler<PutCumulativeDifficultyMessage> for StorageActor {
+    type Result = ResponseFuture<Result<(), StorageError>>;
+
+    fn handle(
+        &mut self,
+        msg: PutCumulativeDifficultyMessage,
+        _: &mut Context<Self>,
+    ) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        debug!(
+            correlation_id = ?correlation_id,
+            height = msg.height,
+            cumulative_difficulty = msg.cumulative_difficulty,
+            "Handling PutCumulativeDifficultyMessage"
+        );
+
+        let database = self.database.clone();
+        let height = msg.height;
+        let cumulative_difficulty = msg.cumulative_difficulty;
+
+        Box::pin(async move {
+            database
+                .put_cumulative_difficulty(height, cumulative_difficulty)
+                .await?;
+
+            debug!(
+                height = height,
+                cumulative_difficulty = cumulative_difficulty,
+                "Stored cumulative difficulty"
+            );
+
+            Ok(())
+        })
+    }
+}
+
+impl Handler<GetCumulativeDifficultyMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Option<u128>, StorageError>>;
+
+    fn handle(
+        &mut self,
+        msg: GetCumulativeDifficultyMessage,
+        _: &mut Context<Self>,
+    ) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        debug!(
+            correlation_id = ?correlation_id,
+            height = msg.height,
+            "Handling GetCumulativeDifficultyMessage"
+        );
+
+        let database = self.database.clone();
+        let height = msg.height;
+
+        Box::pin(async move {
+            let result = database.get_cumulative_difficulty(height).await?;
+
+            debug!(
+                height = height,
+                found = result.is_some(),
+                "Retrieved cumulative difficulty"
+            );
+
+            Ok(result)
+        })
+    }
+}

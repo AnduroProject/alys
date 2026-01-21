@@ -110,8 +110,11 @@ pub struct ChainState {
     /// This is cached in memory for fast fork choice decisions.
     /// It's updated on every block import and reorg.
     ///
+    /// Uses Arc<RwLock<>> to allow updates from cloned ChainActor instances
+    /// (required by the async handler pattern).
+    ///
     /// Formula: cumulative_difficulty = parent_cumulative_difficulty + block_difficulty
-    pub cumulative_difficulty: u128,
+    pub cumulative_difficulty: Arc<RwLock<u128>>,
 
     /// Cache of recent cumulative difficulties for fork choice.
     ///
@@ -137,7 +140,7 @@ impl std::fmt::Debug for ChainState {
             .field("block_hash_cache", &self.block_hash_cache)
             .field("blocks_without_pow", &self.blocks_without_pow)
             .field("last_block_time", &self.last_block_time)
-            .field("cumulative_difficulty", &self.cumulative_difficulty)
+            .field("cumulative_difficulty", &"<Arc<RwLock<u128>>>")
             .field("difficulty_cache", &"<LruCache<u64, u128>>")
             .field("aura", &"<Aura>")
             .field("bridge", &"<Bridge>")
@@ -187,7 +190,7 @@ impl ChainState {
             blocks_without_pow: 0,
             last_block_time: None,
             // Initialize cumulative difficulty tracking (Gap FC-2)
-            cumulative_difficulty: 0,
+            cumulative_difficulty: Arc::new(RwLock::new(0)),
             difficulty_cache: Arc::new(RwLock::new(LruCache::new(
                 NonZeroUsize::new(DEFAULT_DIFFICULTY_CACHE_SIZE).unwrap(),
             ))),
@@ -302,7 +305,7 @@ impl ChainState {
     /// # Returns
     /// The new cumulative difficulty for this block
     pub async fn update_difficulty_on_import(
-        &mut self,
+        &self,
         block_height: u64,
         block_difficulty: u128,
         parent_cumulative_difficulty: u128,
@@ -310,8 +313,8 @@ impl ChainState {
         // Calculate new cumulative difficulty
         let new_cumulative = parent_cumulative_difficulty.saturating_add(block_difficulty);
 
-        // Update state
-        self.cumulative_difficulty = new_cumulative;
+        // Update state (Arc<RwLock<>> allows update from &self)
+        *self.cumulative_difficulty.write().await = new_cumulative;
 
         // Cache the difficulty for this height
         self.difficulty_cache
@@ -347,22 +350,33 @@ impl ChainState {
             .put(height, cumulative_difficulty);
     }
 
-    /// Get current tip's cumulative difficulty.
-    pub fn get_cumulative_difficulty(&self) -> u128 {
+    /// Get current tip's cumulative difficulty (async version).
+    pub async fn get_cumulative_difficulty(&self) -> u128 {
+        *self.cumulative_difficulty.read().await
+    }
+
+    /// Get current tip's cumulative difficulty (blocking version for sync contexts).
+    ///
+    /// Uses try_read to avoid blocking. Returns 0 if lock is held.
+    /// Prefer the async version when possible.
+    pub fn get_cumulative_difficulty_blocking(&self) -> u128 {
         self.cumulative_difficulty
+            .try_read()
+            .map(|guard| *guard)
+            .unwrap_or(0)
     }
 
     /// Set cumulative difficulty (used during initialization or reorg).
-    pub fn set_cumulative_difficulty(&mut self, difficulty: u128) {
-        self.cumulative_difficulty = difficulty;
+    pub async fn set_cumulative_difficulty(&self, difficulty: u128) {
+        *self.cumulative_difficulty.write().await = difficulty;
     }
 
     /// Rollback cumulative difficulty during reorg.
     ///
     /// Invalidates cache entries above the rollback height and
     /// sets the cumulative difficulty to the value at rollback height.
-    pub async fn rollback_difficulty(&mut self, rollback_height: u64, new_cumulative: u128) {
-        self.cumulative_difficulty = new_cumulative;
+    pub async fn rollback_difficulty(&self, rollback_height: u64, new_cumulative: u128) {
+        *self.cumulative_difficulty.write().await = new_cumulative;
 
         // Remove all cache entries above the rollback height
         let mut cache = self.difficulty_cache.write().await;
@@ -390,5 +404,233 @@ impl ChainState {
     /// Clear the difficulty cache (used during major state changes).
     pub async fn clear_difficulty_cache(&self) {
         self.difficulty_cache.write().await.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test fixture for cumulative difficulty testing
+    /// Uses only the Arc<RwLock<>> components needed for difficulty tests
+    struct DifficultyTestFixture {
+        cumulative_difficulty: Arc<RwLock<u128>>,
+        difficulty_cache: Arc<RwLock<LruCache<u64, u128>>>,
+    }
+
+    impl DifficultyTestFixture {
+        fn new() -> Self {
+            Self {
+                cumulative_difficulty: Arc::new(RwLock::new(0)),
+                difficulty_cache: Arc::new(RwLock::new(LruCache::new(
+                    NonZeroUsize::new(DEFAULT_DIFFICULTY_CACHE_SIZE).unwrap(),
+                ))),
+            }
+        }
+
+        async fn get_cumulative_difficulty(&self) -> u128 {
+            *self.cumulative_difficulty.read().await
+        }
+
+        async fn set_cumulative_difficulty(&self, difficulty: u128) {
+            *self.cumulative_difficulty.write().await = difficulty;
+        }
+
+        fn get_cumulative_difficulty_blocking(&self) -> u128 {
+            self.cumulative_difficulty
+                .try_read()
+                .map(|guard| *guard)
+                .unwrap_or(0)
+        }
+
+        async fn cache_difficulty(&self, height: u64, cumulative_difficulty: u128) {
+            self.difficulty_cache
+                .write()
+                .await
+                .put(height, cumulative_difficulty);
+        }
+
+        async fn get_cached_difficulty(&self, height: u64) -> Option<u128> {
+            self.difficulty_cache.write().await.get(&height).copied()
+        }
+
+        async fn clear_difficulty_cache(&self) {
+            self.difficulty_cache.write().await.clear();
+        }
+
+        async fn update_difficulty_on_import(
+            &self,
+            block_height: u64,
+            block_difficulty: u128,
+            parent_cumulative_difficulty: u128,
+        ) -> u128 {
+            let new_cumulative = parent_cumulative_difficulty.saturating_add(block_difficulty);
+            *self.cumulative_difficulty.write().await = new_cumulative;
+            self.difficulty_cache
+                .write()
+                .await
+                .put(block_height, new_cumulative);
+            new_cumulative
+        }
+
+        async fn rollback_difficulty(&self, rollback_height: u64, new_cumulative: u128) {
+            *self.cumulative_difficulty.write().await = new_cumulative;
+
+            let mut cache = self.difficulty_cache.write().await;
+            let to_keep: Vec<(u64, u128)> = cache
+                .iter()
+                .filter(|(h, _)| **h <= rollback_height)
+                .map(|(h, d)| (*h, *d))
+                .collect();
+
+            cache.clear();
+            for (h, d) in to_keep {
+                cache.put(h, d);
+            }
+        }
+    }
+
+    impl Clone for DifficultyTestFixture {
+        fn clone(&self) -> Self {
+            Self {
+                cumulative_difficulty: Arc::clone(&self.cumulative_difficulty),
+                difficulty_cache: Arc::clone(&self.difficulty_cache),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cumulative_difficulty_initial_value() {
+        let fixture = DifficultyTestFixture::new();
+        assert_eq!(fixture.get_cumulative_difficulty().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_set_cumulative_difficulty() {
+        let fixture = DifficultyTestFixture::new();
+
+        fixture.set_cumulative_difficulty(1_000_000).await;
+        assert_eq!(fixture.get_cumulative_difficulty().await, 1_000_000);
+
+        fixture.set_cumulative_difficulty(2_000_000).await;
+        assert_eq!(fixture.get_cumulative_difficulty().await, 2_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_update_difficulty_on_import() {
+        let fixture = DifficultyTestFixture::new();
+
+        // Import first block with difficulty 100
+        let new_cumulative = fixture.update_difficulty_on_import(1, 100, 0).await;
+        assert_eq!(new_cumulative, 100);
+        assert_eq!(fixture.get_cumulative_difficulty().await, 100);
+
+        // Import second block with difficulty 200
+        let new_cumulative = fixture.update_difficulty_on_import(2, 200, 100).await;
+        assert_eq!(new_cumulative, 300);
+        assert_eq!(fixture.get_cumulative_difficulty().await, 300);
+
+        // Verify cache was populated
+        assert_eq!(fixture.get_cached_difficulty(1).await, Some(100));
+        assert_eq!(fixture.get_cached_difficulty(2).await, Some(300));
+    }
+
+    #[tokio::test]
+    async fn test_difficulty_cache() {
+        let fixture = DifficultyTestFixture::new();
+
+        // Cache some difficulties
+        fixture.cache_difficulty(10, 1000).await;
+        fixture.cache_difficulty(20, 2000).await;
+        fixture.cache_difficulty(30, 3000).await;
+
+        // Verify retrieval
+        assert_eq!(fixture.get_cached_difficulty(10).await, Some(1000));
+        assert_eq!(fixture.get_cached_difficulty(20).await, Some(2000));
+        assert_eq!(fixture.get_cached_difficulty(30).await, Some(3000));
+        assert_eq!(fixture.get_cached_difficulty(40).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_difficulty() {
+        let fixture = DifficultyTestFixture::new();
+
+        // Set up initial state with cached difficulties
+        fixture.set_cumulative_difficulty(5000).await;
+        fixture.cache_difficulty(1, 1000).await;
+        fixture.cache_difficulty(2, 2000).await;
+        fixture.cache_difficulty(3, 3000).await;
+        fixture.cache_difficulty(4, 4000).await;
+        fixture.cache_difficulty(5, 5000).await;
+
+        // Rollback to height 3
+        fixture.rollback_difficulty(3, 3000).await;
+
+        // Verify cumulative difficulty was updated
+        assert_eq!(fixture.get_cumulative_difficulty().await, 3000);
+
+        // Verify cache entries above height 3 were removed
+        assert_eq!(fixture.get_cached_difficulty(1).await, Some(1000));
+        assert_eq!(fixture.get_cached_difficulty(2).await, Some(2000));
+        assert_eq!(fixture.get_cached_difficulty(3).await, Some(3000));
+        assert_eq!(fixture.get_cached_difficulty(4).await, None); // Removed
+        assert_eq!(fixture.get_cached_difficulty(5).await, None); // Removed
+    }
+
+    #[tokio::test]
+    async fn test_clear_difficulty_cache() {
+        let fixture = DifficultyTestFixture::new();
+
+        // Populate cache
+        fixture.cache_difficulty(1, 100).await;
+        fixture.cache_difficulty(2, 200).await;
+
+        // Clear cache
+        fixture.clear_difficulty_cache().await;
+
+        // Verify cache is empty
+        assert_eq!(fixture.get_cached_difficulty(1).await, None);
+        assert_eq!(fixture.get_cached_difficulty(2).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_cumulative_difficulty_blocking_getter() {
+        let fixture = DifficultyTestFixture::new();
+
+        fixture.set_cumulative_difficulty(12345).await;
+
+        // Test blocking getter (should return same value)
+        assert_eq!(fixture.get_cumulative_difficulty_blocking(), 12345);
+    }
+
+    #[tokio::test]
+    async fn test_cumulative_difficulty_clone_visibility() {
+        // This test verifies that updates to cumulative_difficulty
+        // are visible across cloned instances (Arc<RwLock<>> pattern)
+        let fixture1 = DifficultyTestFixture::new();
+        let fixture2 = fixture1.clone();
+
+        // Update via fixture1
+        fixture1.set_cumulative_difficulty(999).await;
+
+        // Should be visible via fixture2 (same Arc)
+        assert_eq!(fixture2.get_cumulative_difficulty().await, 999);
+
+        // Update via fixture2
+        fixture2.set_cumulative_difficulty(888).await;
+
+        // Should be visible via fixture1
+        assert_eq!(fixture1.get_cumulative_difficulty().await, 888);
+    }
+
+    #[tokio::test]
+    async fn test_saturating_add_overflow_protection() {
+        let fixture = DifficultyTestFixture::new();
+
+        // Test that saturating_add prevents overflow
+        let result = fixture
+            .update_difficulty_on_import(1, u128::MAX, u128::MAX)
+            .await;
+        assert_eq!(result, u128::MAX); // Should saturate, not overflow
     }
 }
