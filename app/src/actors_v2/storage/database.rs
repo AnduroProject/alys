@@ -48,6 +48,14 @@ pub mod column_families {
     pub const LOGS: &str = "logs";
     pub const METADATA: &str = "metadata";
     pub const CHAIN_HEAD: &str = "chain_head";
+    /// Column family for storing cumulative difficulty per block height.
+    /// Key: block height (u64, big-endian)
+    /// Value: cumulative difficulty (u128, big-endian)
+    pub const CUMULATIVE_DIFFICULTY: &str = "cumulative_difficulty";
+    /// Column family for storing orphaned (non-canonical) blocks.
+    /// Key: block hash
+    /// Value: serialized block
+    pub const ORPHANED_BLOCKS: &str = "orphaned_blocks";
 }
 
 /// Database statistics
@@ -138,6 +146,8 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            column_families::CUMULATIVE_DIFFICULTY,
+            column_families::ORPHANED_BLOCKS,
         ];
 
         cf_names
@@ -180,6 +190,14 @@ impl DatabaseManager {
         cf_map.insert(
             "chain_head".to_string(),
             column_families::CHAIN_HEAD.to_string(),
+        );
+        cf_map.insert(
+            "cumulative_difficulty".to_string(),
+            column_families::CUMULATIVE_DIFFICULTY.to_string(),
+        );
+        cf_map.insert(
+            "orphaned_blocks".to_string(),
+            column_families::ORPHANED_BLOCKS.to_string(),
         );
         cf_map
     }
@@ -330,6 +348,168 @@ impl DatabaseManager {
         }
     }
 
+    // ========================================================================
+    // Cumulative Difficulty Storage (Gap FC-2)
+    // ========================================================================
+
+    /// Store the cumulative difficulty at a given height.
+    ///
+    /// This is the total proof-of-work from genesis to the block at this height.
+    /// Used for "most work wins" fork choice decisions.
+    pub async fn put_cumulative_difficulty(
+        &self,
+        height: u64,
+        cumulative_difficulty: u128,
+    ) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::CUMULATIVE_DIFFICULTY)
+            .ok_or_else(|| {
+                StorageError::Database("CUMULATIVE_DIFFICULTY column family not found".to_string())
+            })?;
+
+        let key = height.to_be_bytes();
+        let value = cumulative_difficulty.to_be_bytes();
+
+        db.put_cf(&cf, key, value).map_err(|e| {
+            StorageError::Database(format!("Failed to store cumulative difficulty: {}", e))
+        })?;
+
+        debug!(
+            height = height,
+            cumulative_difficulty = cumulative_difficulty,
+            "Stored cumulative difficulty"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve the cumulative difficulty at a given height.
+    ///
+    /// Returns None if no difficulty is stored at that height.
+    pub async fn get_cumulative_difficulty(
+        &self,
+        height: u64,
+    ) -> Result<Option<u128>, StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::CUMULATIVE_DIFFICULTY)
+            .ok_or_else(|| {
+                StorageError::Database("CUMULATIVE_DIFFICULTY column family not found".to_string())
+            })?;
+
+        let key = height.to_be_bytes();
+
+        match db.get_cf(&cf, key).map_err(|e| {
+            StorageError::Database(format!("Failed to retrieve cumulative difficulty: {}", e))
+        })? {
+            Some(bytes) => {
+                if bytes.len() != 16 {
+                    return Err(StorageError::Serialization(format!(
+                        "Invalid cumulative difficulty length: {} (expected 16)",
+                        bytes.len()
+                    )));
+                }
+                let arr: [u8; 16] = bytes.as_slice().try_into().map_err(|_| {
+                    StorageError::Serialization("Failed to convert difficulty bytes".to_string())
+                })?;
+                Ok(Some(u128::from_be_bytes(arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get the cumulative difficulty at the chain tip.
+    ///
+    /// Convenience method that combines get_chain_head + get_cumulative_difficulty.
+    pub async fn get_tip_cumulative_difficulty(&self) -> Result<Option<u128>, StorageError> {
+        let head = match self.get_chain_head().await? {
+            Some(h) => h,
+            None => return Ok(None),
+        };
+
+        self.get_cumulative_difficulty(head.number).await
+    }
+
+    // ========================================================================
+    // Orphaned Block Storage
+    // ========================================================================
+
+    /// Store a block as orphaned (non-canonical).
+    ///
+    /// Used when a block loses fork choice but we want to keep it for potential future reorgs.
+    pub async fn put_orphaned_block(&self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::ORPHANED_BLOCKS)
+            .ok_or_else(|| {
+                StorageError::Database("ORPHANED_BLOCKS column family not found".to_string())
+            })?;
+
+        let block_hash = block.message.block_hash().to_block_hash();
+        let key = block_hash.as_bytes();
+        let value =
+            serde_json::to_vec(block).map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        db.put_cf(&cf, key, value).map_err(|e| {
+            StorageError::Database(format!("Failed to store orphaned block: {}", e))
+        })?;
+
+        debug!(
+            block_hash = %block_hash,
+            height = block.message.execution_payload.block_number,
+            "Stored orphaned block"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve an orphaned block by hash.
+    pub async fn get_orphaned_block(
+        &self,
+        block_hash: &Hash256,
+    ) -> Result<Option<AlysConsensusBlock>, StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::ORPHANED_BLOCKS)
+            .ok_or_else(|| {
+                StorageError::Database("ORPHANED_BLOCKS column family not found".to_string())
+            })?;
+
+        let key = block_hash.as_bytes();
+
+        match db.get_cf(&cf, key).map_err(|e| {
+            StorageError::Database(format!("Failed to retrieve orphaned block: {}", e))
+        })? {
+            Some(value) => {
+                let block: AlysConsensusBlock = serde_json::from_slice(&value)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                Ok(Some(block))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete an orphaned block (e.g., when it becomes canonical or is too old).
+    pub async fn delete_orphaned_block(&self, block_hash: &Hash256) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::ORPHANED_BLOCKS)
+            .ok_or_else(|| {
+                StorageError::Database("ORPHANED_BLOCKS column family not found".to_string())
+            })?;
+
+        let key = block_hash.as_bytes();
+
+        db.delete_cf(&cf, key).map_err(|e| {
+            StorageError::Database(format!("Failed to delete orphaned block: {}", e))
+        })?;
+
+        debug!(block_hash = %block_hash, "Deleted orphaned block");
+
+        Ok(())
+    }
+
     /// Execute batch write operations
     pub async fn batch_write(&self, operations: Vec<WriteOperation>) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
@@ -395,6 +575,8 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            column_families::CUMULATIVE_DIFFICULTY,
+            column_families::ORPHANED_BLOCKS,
         ] {
             if let Some(cf) = db.cf_handle(cf_name) {
                 db.compact_range_cf(&cf, None::<&[u8]>, None::<&[u8]>);
@@ -421,6 +603,8 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            column_families::CUMULATIVE_DIFFICULTY,
+            column_families::ORPHANED_BLOCKS,
         ] {
             if let Some(cf) = db.cf_handle(cf_name) {
                 // Get approximate size

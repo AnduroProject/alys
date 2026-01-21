@@ -101,6 +101,8 @@ pub struct ChainMetrics {
     pub import_queue_depth: IntGauge,
     /// Fork choice update failures after reorganization (CRITICAL metric)
     pub fork_choice_failures_after_reorg: IntCounter,
+    /// Deep reorganizations detected (exceeding automatic reorg limit)
+    pub deep_reorgs_detected: IntCounter,
 
     /// Phase 6: Orphan block metrics for node operators
     /// Total orphan blocks detected
@@ -197,6 +199,11 @@ impl ChainMetrics {
             fork_choice_failures_after_reorg: IntCounter::new(
                 "alys_chain_fork_choice_failures_after_reorg_total",
                 "Failed fork choice updates after reorganization",
+            )
+            .unwrap(),
+            deep_reorgs_detected: IntCounter::new(
+                "alys_chain_deep_reorgs_detected_total",
+                "Deep reorganizations detected (exceeding automatic limit)",
             )
             .unwrap(),
             // Phase 6: Orphan block metrics
@@ -421,6 +428,7 @@ impl ChainMetrics {
         registry.register(Box::new(self.reorganization_depth.clone()))?;
         registry.register(Box::new(self.import_queue_depth.clone()))?;
         registry.register(Box::new(self.fork_choice_failures_after_reorg.clone()))?;
+        registry.register(Box::new(self.deep_reorgs_detected.clone()))?;
 
         // Orphan block metrics (Phase 6)
         registry.register(Box::new(self.orphan_blocks_total.clone()))?;

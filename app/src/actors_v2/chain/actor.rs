@@ -552,11 +552,13 @@ impl ChainActor {
 
         if let Some(ref storage_actor) = self.storage_actor {
             let current_height = self.state.get_height();
+            let current_cumulative_difficulty = self.state.get_cumulative_difficulty();
 
             // Call the reorganization module
             let result = super::reorganization::reorganize_to_new_tip(
                 new_tip_block,
                 current_height,
+                current_cumulative_difficulty,
                 storage_actor,
                 correlation_id,
             )

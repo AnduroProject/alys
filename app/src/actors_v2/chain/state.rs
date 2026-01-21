@@ -1,10 +1,18 @@
 //! ChainActor V2 State Management
 //!
-//! Simplified state management derived from chain.rs without complex RwLock patterns
+//! Simplified state management derived from chain.rs without complex RwLock patterns.
+//!
+//! ## Cumulative Difficulty Tracking (Gap FC-2)
+//!
+//! The ChainState now tracks cumulative difficulty for "most work wins" fork choice:
+//! - `cumulative_difficulty`: Total difficulty of the current canonical chain tip
+//! - `difficulty_cache`: LRU cache for recent heights to avoid DB lookups
 
 use bitcoin::{BlockHash, Txid};
 use ethereum_types::{Address, H256};
+use lru::LruCache;
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
@@ -15,6 +23,9 @@ use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::block::AuxPowHeader;
 use crate::block_hash_cache::BlockHashCache;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo};
+
+/// Default size for the difficulty cache (number of heights to cache)
+const DEFAULT_DIFFICULTY_CACHE_SIZE: usize = 256;
 
 /// Mining context for tracking issued AuxPoW work (Priority 3)
 ///
@@ -89,6 +100,26 @@ pub struct ChainState {
     /// Runtime state
     pub blocks_without_pow: u64,
     pub last_block_time: Option<SystemTime>,
+
+    // ========================================================================
+    // Cumulative Difficulty Tracking (Gap FC-2)
+    // ========================================================================
+
+    /// Cumulative difficulty of the current canonical chain tip.
+    ///
+    /// This is cached in memory for fast fork choice decisions.
+    /// It's updated on every block import and reorg.
+    ///
+    /// Formula: cumulative_difficulty = parent_cumulative_difficulty + block_difficulty
+    pub cumulative_difficulty: u128,
+
+    /// Cache of recent cumulative difficulties for fork choice.
+    ///
+    /// Stores the last N heights' cumulative difficulties to avoid
+    /// frequent database lookups during fork detection.
+    ///
+    /// Key: height, Value: cumulative_difficulty
+    pub difficulty_cache: Arc<RwLock<LruCache<u64, u128>>>,
 }
 
 impl std::fmt::Debug for ChainState {
@@ -106,6 +137,8 @@ impl std::fmt::Debug for ChainState {
             .field("block_hash_cache", &self.block_hash_cache)
             .field("blocks_without_pow", &self.blocks_without_pow)
             .field("last_block_time", &self.last_block_time)
+            .field("cumulative_difficulty", &self.cumulative_difficulty)
+            .field("difficulty_cache", &"<LruCache<u64, u128>>")
             .field("aura", &"<Aura>")
             .field("bridge", &"<Bridge>")
             .field("bitcoin_wallet", &"<BitcoinWallet>")
@@ -153,6 +186,11 @@ impl ChainState {
             block_hash_cache: Some(BlockHashCache::new(None)),
             blocks_without_pow: 0,
             last_block_time: None,
+            // Initialize cumulative difficulty tracking (Gap FC-2)
+            cumulative_difficulty: 0,
+            difficulty_cache: Arc::new(RwLock::new(LruCache::new(
+                NonZeroUsize::new(DEFAULT_DIFFICULTY_CACHE_SIZE).unwrap(),
+            ))),
         }
     }
 
@@ -248,5 +286,109 @@ impl ChainState {
 
         let removed_count = initial_count - contexts.len();
         removed_count
+    }
+
+    // ========================================================================
+    // Cumulative Difficulty Management (Gap FC-2)
+    // ========================================================================
+
+    /// Update cumulative difficulty when a new block is imported.
+    ///
+    /// # Arguments
+    /// * `block_height` - Height of the newly imported block
+    /// * `block_difficulty` - Difficulty of the newly imported block
+    /// * `parent_cumulative_difficulty` - Cumulative difficulty of the parent block
+    ///
+    /// # Returns
+    /// The new cumulative difficulty for this block
+    pub async fn update_difficulty_on_import(
+        &mut self,
+        block_height: u64,
+        block_difficulty: u128,
+        parent_cumulative_difficulty: u128,
+    ) -> u128 {
+        // Calculate new cumulative difficulty
+        let new_cumulative = parent_cumulative_difficulty.saturating_add(block_difficulty);
+
+        // Update state
+        self.cumulative_difficulty = new_cumulative;
+
+        // Cache the difficulty for this height
+        self.difficulty_cache
+            .write()
+            .await
+            .put(block_height, new_cumulative);
+
+        tracing::debug!(
+            height = block_height,
+            block_difficulty = block_difficulty,
+            parent_cumulative = parent_cumulative_difficulty,
+            new_cumulative = new_cumulative,
+            "Updated cumulative difficulty"
+        );
+
+        new_cumulative
+    }
+
+    /// Get cumulative difficulty at a specific height from cache.
+    ///
+    /// Returns None if not in cache - caller should fall back to database.
+    pub async fn get_cached_difficulty(&self, height: u64) -> Option<u128> {
+        self.difficulty_cache.write().await.get(&height).copied()
+    }
+
+    /// Cache a cumulative difficulty value.
+    ///
+    /// Used when loading from database to populate cache.
+    pub async fn cache_difficulty(&self, height: u64, cumulative_difficulty: u128) {
+        self.difficulty_cache
+            .write()
+            .await
+            .put(height, cumulative_difficulty);
+    }
+
+    /// Get current tip's cumulative difficulty.
+    pub fn get_cumulative_difficulty(&self) -> u128 {
+        self.cumulative_difficulty
+    }
+
+    /// Set cumulative difficulty (used during initialization or reorg).
+    pub fn set_cumulative_difficulty(&mut self, difficulty: u128) {
+        self.cumulative_difficulty = difficulty;
+    }
+
+    /// Rollback cumulative difficulty during reorg.
+    ///
+    /// Invalidates cache entries above the rollback height and
+    /// sets the cumulative difficulty to the value at rollback height.
+    pub async fn rollback_difficulty(&mut self, rollback_height: u64, new_cumulative: u128) {
+        self.cumulative_difficulty = new_cumulative;
+
+        // Remove all cache entries above the rollback height
+        let mut cache = self.difficulty_cache.write().await;
+
+        // LruCache doesn't have retain, so we need to rebuild
+        // Get all entries below or at rollback height
+        let to_keep: Vec<(u64, u128)> = cache
+            .iter()
+            .filter(|(h, _)| **h <= rollback_height)
+            .map(|(h, d)| (*h, *d))
+            .collect();
+
+        cache.clear();
+        for (h, d) in to_keep {
+            cache.put(h, d);
+        }
+
+        tracing::info!(
+            rollback_height = rollback_height,
+            new_cumulative = new_cumulative,
+            "Rolled back cumulative difficulty"
+        );
+    }
+
+    /// Clear the difficulty cache (used during major state changes).
+    pub async fn clear_difficulty_cache(&self) {
+        self.difficulty_cache.write().await.clear();
     }
 }

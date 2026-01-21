@@ -93,6 +93,12 @@ pub enum ChainError {
         block_height: u64,
     },
 
+    #[error("Reorganization too deep: depth {depth} exceeds maximum allowed {max_allowed}")]
+    ReorgTooDeep { depth: u64, max_allowed: u64 },
+
+    #[error("Reorganization error: {0}")]
+    ReorganizationError(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

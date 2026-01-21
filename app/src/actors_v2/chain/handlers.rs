@@ -1199,6 +1199,30 @@ impl Handler<ChainMessage> for ChainActor {
                                                     }
                                                 }
                                             }
+                                            crate::actors_v2::chain::fork_choice::ForkChoice::RequiresDeepAnalysis => {
+                                                // Deep reorg detected that exceeds automatic limits
+                                                // This requires operator intervention or explicit deep reorg handling
+                                                warn!(
+                                                    correlation_id = %correlation_id,
+                                                    existing_hash = %existing_hash,
+                                                    new_hash = %block_hash,
+                                                    block_height = block_height,
+                                                    "Fork choice: deep reorganization required - exceeds automatic reorg limits. Manual intervention may be needed."
+                                                );
+
+                                                // Record metric for monitoring
+                                                self_clone.metrics.deep_reorgs_detected.inc();
+
+                                                // For now, keep the current chain and log the situation
+                                                // TODO: In future, implement:
+                                                // 1. Store block as orphan for later analysis
+                                                // 2. Operator override mechanism for deep reorgs
+                                                // 3. Notification system for critical events
+
+                                                return Err(ChainError::ReorganizationError(
+                                                    "Deep reorganization required - exceeds automatic limits. Manual intervention needed.".to_string()
+                                                ));
+                                            }
                                         }
                                     }
                                 }
