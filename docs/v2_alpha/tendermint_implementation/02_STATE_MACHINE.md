@@ -1019,6 +1019,7 @@ async fn handle_tendermint_message(
 ### 4.1 Happy Path (No Timeouts)
 
 ```mermaid
+%%{init: {'theme': 'default', 'themeVariables': { 'fontColor': '#000000', 'noteTextColor': '#000000'}}}%%
 sequenceDiagram
     participant Leader as Proposer (V0)
     participant V1 as Validator 1
