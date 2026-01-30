@@ -1011,174 +1011,7 @@ Checkpoint stall       FULL HALT     HALT after    ROUNDS        NO HALT
 
 ---
 
-## Approach 5: AuxPoW-Weighted Validator Voting Power
-
-### Concept
-
-Validators who contribute to merge-mining (by submitting AuxPoW checkpoints) receive temporarily increased voting power. This creates an economic incentive for validators to participate in Bitcoin mining, strengthening the chain's Bitcoin anchoring without mandating it.
-
-### Voting Power Model
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    VOTING POWER FORMULA                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  effective_power = base_power + checkpoint_bonus                 │
-│                                                                 │
-│  base_power:        Fixed per validator (e.g., 100)             │
-│  checkpoint_bonus:  Awarded when validator submits checkpoint   │
-│                     Decays over time (e.g., lasts 1000 blocks)  │
-│                                                                 │
-│  Example with 4 validators:                                     │
-│                                                                 │
-│  Validator A: 100 base + 50 bonus = 150  (submitted checkpoint) │
-│  Validator B: 100 base + 0 bonus  = 100  (no mining)           │
-│  Validator C: 100 base + 50 bonus = 150  (submitted checkpoint) │
-│  Validator D: 100 base + 0 bonus  = 100  (no mining)           │
-│                                                                 │
-│  Total power: 500                                               │
-│  2/3 threshold: 334                                             │
-│                                                                 │
-│  A + C alone: 300 (not enough — still need other validators)   │
-│  A + C + B:   400 (enough ✓)                                   │
-│                                                                 │
-│  Mining validators have MORE influence but cannot dominate.     │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Power Decay Over Time
-
-```mermaid
-graph LR
-    subgraph "Validator A's Voting Power Over Time"
-        H1["Height 500<br/>Submits checkpoint<br/>Power: 150"] --> H2["Height 600<br/>Bonus decaying<br/>Power: 140"]
-        H2 --> H3["Height 800<br/>Bonus decaying<br/>Power: 120"]
-        H3 --> H4["Height 1000<br/>Bonus decaying<br/>Power: 105"]
-        H4 --> H5["Height 1500<br/>Bonus expired<br/>Power: 100"]
-    end
-```
-
-### Implementation
-
-```rust
-pub struct WeightedValidator {
-    pub id: ValidatorId,
-    pub base_power: u64,
-    pub checkpoint_bonus: u64,
-    pub bonus_granted_at: u64,   // Height when bonus was granted
-    pub bonus_duration: u64,      // Blocks until bonus fully decays
-}
-
-impl WeightedValidator {
-    /// Calculate effective power at a given height
-    pub fn effective_power(&self, current_height: u64) -> u64 {
-        let elapsed = current_height.saturating_sub(self.bonus_granted_at);
-
-        if elapsed >= self.bonus_duration || self.checkpoint_bonus == 0 {
-            return self.base_power;
-        }
-
-        // Linear decay
-        let remaining_fraction = (self.bonus_duration - elapsed) as f64
-            / self.bonus_duration as f64;
-        let current_bonus = (self.checkpoint_bonus as f64 * remaining_fraction) as u64;
-
-        self.base_power + current_bonus
-    }
-}
-```
-
-### Checkpoint Competition
-
-Multiple validators may try to submit checkpoints. Only the first valid submission gets the bonus:
-
-```mermaid
-sequenceDiagram
-    participant VA as Validator A<br/>(Mining Pool 1)
-    participant VB as Validator B<br/>(Mining Pool 2)
-    participant C as Chain (Tendermint)
-
-    Note over VA,C: Both validators racing to submit checkpoint
-
-    VA->>VA: Mining pool finds PoW
-    VB->>VB: Mining pool finds PoW
-
-    VA->>C: Submit checkpoint (arrives first)
-    C->>C: Validate ✓
-    C->>C: Grant bonus to Validator A
-
-    VB->>C: Submit checkpoint (arrives second)
-    C->>C: Checkpoint already exists for this range
-    C-->>VB: Rejected (duplicate)
-
-    Note over VA: Validator A gets +50 voting power<br/>for next 1000 blocks
-    Note over VB: Validator B gets nothing
-```
-
-### Proposer Selection Impact
-
-Higher voting power means more frequent proposer selection:
-
-```
-Standard (equal power):
-  Heights: 1→A  2→B  3→C  4→D  5→A  6→B  7→C  8→D  ...
-  Each validator proposes 25% of the time
-
-With bonuses (A and C have 150, B and D have 100):
-  Heights: 1→A  2→A  3→B  4→C  5→C  6→D  7→A  8→A  ...
-  A proposes ~30%, B proposes ~20%, C proposes ~30%, D proposes ~20%
-```
-
-### Risks and Mitigations
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  RISK: Centralization toward mining-capable validators          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  If bonus is too high:                                          │
-│    Mining validators dominate proposer selection                │
-│    Non-mining validators become less relevant                   │
-│    Economic pressure to consolidate around mining pools         │
-│                                                                 │
-│  Mitigation:                                                    │
-│    • Cap bonus at 50% of base power (max 150 vs 100 base)     │
-│    • Ensure 2/3 threshold still requires non-mining validators │
-│    • Decay bonus quickly (500-1000 blocks)                     │
-│    • Limit to 1 bonus per validator per checkpoint interval    │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  RISK: Gaming by submitting weak checkpoints                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Validator mines extremely low-difficulty checkpoint:           │
-│    → Gets bonus cheaply without contributing real security     │
-│                                                                 │
-│  Mitigation:                                                    │
-│    • Enforce minimum difficulty threshold                      │
-│    • Scale bonus by PoW difficulty (harder = bigger bonus)     │
-│    • Only accept checkpoints that meet difficulty target       │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Assessment
-
-| Dimension | Rating | Notes |
-|-----------|--------|-------|
-| Integration tightness | Medium | Affects validator power, not consensus protocol |
-| Implementation complexity | **High** | Dynamic voting power + decay + competition |
-| Liveness risk | Low | No stalls; checkpoints are incentivized, not required |
-| Security guarantee | Variable | Depends on validator participation in mining |
-| Bridge security | Indirect | No guarantee checkpoints exist |
-
-**Best for**: Networks with diverse validator operators where you want market-driven incentives rather than protocol-mandated checkpoints.
-
----
-
-## Approach 6: AuxPoW as Long-Range Attack Protection Only
+## Approach 5: AuxPoW as Long-Range Attack Protection Only
 
 ### Concept
 
@@ -1494,16 +1327,16 @@ Peg-out during pool outage    Tendermint commit (instant)     ~6 seconds
 
 ## Full Comparison Matrix
 
-| | Approach 1 | Approach 2 | Approach 3 | Approach 4 | Approach 5 | Approach 6 | Hybrid (2+4) |
-|---|---|---|---|---|---|---|---|
-| **Summary** | Liveness gate | Epoch-gated | Commit extension | Dual-layer | Weighted power | Sync-only | Best of 2+4 |
-| **Consensus stalls?** | Yes | Yes (grace) | Yes (rounds cycle) | **Never** | Never | Never | **Never** |
-| **Checkpoint guaranteed?** | **Yes** | **Yes** | **Yes** | No (queues ops) | No (incentivized) | No (voluntary) | No (queues ops) |
-| **Bridge impact** | All ops wait | Epoch boundary | In-block proof | Tiered | Indirect | None | **Tiered + epochs** |
-| **Mining pool outage** | **Chain halts** | Chain halts (after grace) | Rounds slow down | Chain fine, ops queue | Chain fine | Chain fine | **Chain fine, ops queue** |
-| **Complexity** | Low | Medium | Medium-High | Medium | **High** | **Low** | Medium |
-| **On-chain UX** | May stall | May stall | May slow | **Always fast** | Always fast | Always fast | **Always fast** |
-| **Long-range protection** | Strong | Strong | Strong | Strong | Variable | **Weakest** | Strong |
+| | Approach 1 | Approach 2 | Approach 3 | Approach 4 | Approach 5 | Hybrid (2+4) |
+|---|---|---|---|---|---|---|
+| **Summary** | Liveness gate | Epoch-gated | Commit extension | Dual-layer | Sync-only | Best of 2+4 |
+| **Consensus stalls?** | Yes | Yes (grace) | Yes (rounds cycle) | **Never** | Never | **Never** |
+| **Checkpoint guaranteed?** | **Yes** | **Yes** | **Yes** | No (queues ops) | No (voluntary) | No (queues ops) |
+| **Bridge impact** | All ops wait | Epoch boundary | In-block proof | Tiered | None | **Tiered + epochs** |
+| **Mining pool outage** | **Chain halts** | Chain halts (after grace) | Rounds slow down | Chain fine, ops queue | Chain fine | **Chain fine, ops queue** |
+| **Complexity** | Low | Medium | Medium-High | Medium | **Low** | Medium |
+| **On-chain UX** | May stall | May stall | May slow | **Always fast** | Always fast | **Always fast** |
+| **Long-range protection** | Strong | Strong | Strong | Strong | **Weakest** | Strong |
 
 ---
 
