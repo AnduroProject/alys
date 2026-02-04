@@ -1,12 +1,20 @@
-# AuxPoW-Tendermint Integration: Exploration of Approaches
+# AuxPoW-Tendermint Integration: Approaches for Miner-Effectuated Peg-Ins
 
 ## Overview
 
-This document explores how AuxPoW (merge-mining) can be integrated with Tendermint consensus at varying levels of tightness. AuxPoW currently serves two roles in Alys: **fork choice weight** (higher cumulative difficulty wins) and **liveness gate** (chain halts after `max_blocks_without_pow` blocks without an AuxPoW proof). Tendermint eliminates the need for fork choice entirely, so AuxPoW must find a new role.
+This document explores how AuxPoW (merge-mining) integrates with Tendermint consensus, accounting for the requirement that **miners effectuate peg-ins**. AuxPoW now serves three distinct roles in Alys:
 
-The question is not *whether* AuxPoW should exist — it should, for Bitcoin-anchored security — but *how tightly* it should be coupled to the consensus protocol.
+1. **Bitcoin Anchoring** — Periodic merge-mining proofs anchor Alys block history in Bitcoin's PoW, providing long-range attack protection and deep finality for bridge operations.
+2. **Liveness Gate** — The chain halts after `max_blocks_without_pow` blocks without a valid AuxPoW proof (currently 50000 on testnet).
+3. **Peg-In Delivery** (NEW) — For AML/MTM legal compliance, miners must monitor Bitcoin for deposits and include peg-in data in their AuxPoW header submissions.
 
-### Current AuxPoW Behavior
+The third role fundamentally changes the integration calculus. Previously, peg-ins arrived via the Bridge (a separate monitoring process) and could be included in any block regardless of AuxPoW status. Now, peg-in delivery is **bound to the AuxPoW submission frequency**, creating a tension between peg-in latency and mining overhead that shapes every approach below.
+
+> **Prerequisites**: See [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md) for detailed explanations of merge-mining mechanics, `createauxblock`/`submitauxblock` protocol, and the end-to-end peg-in lifecycle with code walkthroughs.
+
+---
+
+## Current AuxPoW Behavior
 
 ```
 Block 1     Block 2     Block 3     ...     Block n     Block n+1
@@ -22,423 +30,438 @@ If n reaches max_blocks_without_pow (50000 on testnet):
   → Chain HALTS. No more blocks until AuxPoW is submitted.
 ```
 
-Each approach below reimagines this relationship for a Tendermint world.
+Under the current system, peg-ins flow independently through the Bridge:
+
+```
+Bridge (federation)  →  queued_pegins: BTreeMap<Txid, PegInInfo>  →  Block producer
+                                                                      includes in block
+```
+
+Under the new requirement:
+
+```
+Miner monitors BTC  →  submitauxblock(hash, auxpow, pegins)  →  queued pegins  →  Proposer
+                                                                                    includes in block
+```
 
 ---
 
-## Approach 1: Preserve the Liveness Gate
+## Architectural Foundations (Common to All Approaches)
+
+### Extended AuxPowHeader
+
+Per [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md), the `AuxPowHeader` struct (`block.rs:35`) must be extended to carry peg-in data. This is the primary vehicle for peg-in delivery:
+
+```rust
+pub struct AuxPowHeader {
+    pub range_start: Hash256,
+    pub range_end: Hash256,
+    pub bits: u32,
+    pub chain_id: u32,
+    pub height: u64,
+    pub auxpow: Option<AuxPow>,
+    pub fee_recipient: Address,
+    /// Peg-in transactions attested by this miner (NEW)
+    /// These travel FROM the miner TO the chain via submitauxblock.
+    /// ChainActor validates and queues them, then the proposer converts
+    /// them to EVM Withdrawals in the next block's execution_payload.
+    pub pegins: Vec<PegInInfo>,
+}
+
+/// Peg-in information extracted from Bitcoin transaction
+/// (same as current PegInInfo in federation crate)
+pub struct PegInInfo {
+    pub txid: Txid,              // Bitcoin transaction ID
+    pub block_hash: BlockHash,   // Bitcoin block containing the deposit
+    pub block_height: u32,       // Bitcoin block height
+    pub amount: u64,             // Satoshis deposited
+    pub evm_account: Address,    // Target EVM address (from OP_RETURN)
+}
+```
+
+### Extended Miner Binary
+
+The miner (`crates/miner/src/main.rs`, currently 82 lines) must gain Bitcoin monitoring capabilities that currently live in `crates/federation/src/lib.rs`:
+
+```rust
+// Miner's new main loop (conceptual)
+loop {
+    // 1. Check for new Bitcoin deposits (NEW)
+    let pending_pegins = bitcoin_monitor.get_pending_pegins().await;
+
+    // 2. Get mining work package (existing)
+    let aux_block = rpc_client.create_aux_block(&miner_address).await?;
+
+    // 3. Mine PoW (existing)
+    let auxpow = AuxPow::mine(aux_block.hash, aux_block.target, chain_id).await;
+
+    // 4. Submit with peg-in data (MODIFIED)
+    rpc_client.submit_aux_block(aux_block.hash, auxpow, pending_pegins).await?;
+}
+```
+
+The miner needs access to a Bitcoin RPC endpoint and knowledge of the federation deposit address(es) — the same inputs the Bridge currently uses for `stream_blocks_for_pegins()` and `pegin_info()`.
+
+### Duplicate Peg-In Prevention
+
+Multiple miners monitoring Bitcoin will detect the same deposits. Four layers prevent duplicate processing:
+
+| Layer | Where | Mechanism |
+|-------|-------|-----------|
+| 0. Ingestion filter (NEW) | `handle_submit_auxblock()` | Reject pegins already queued or already in wallet |
+| 1. Queue dedup | `BTreeMap<Txid, PegInInfo>` | Map keyed by txid naturally deduplicates |
+| 2. Producer filter | `fill_pegins()` / `collect_withdrawals()` | Check `wallet.get_tx(txid)` before including in block |
+| 3. Validator verify | `check_withdrawals()` | Reject blocks containing already-processed txids |
+
+Layer 0 is new and addresses the multi-miner scenario:
+
+```rust
+async fn validate_and_queue_pegins(
+    &mut self,
+    pegins: Vec<PegInInfo>,
+) -> Result<usize, ChainError> {
+    let mut queued_count = 0;
+
+    for pegin in pegins {
+        // Skip if already in queue (Layer 1 would also catch this)
+        if self.state.queued_pegins.contains_key(&pegin.txid) {
+            debug!(txid = %pegin.txid, "Peg-in already queued — skipping");
+            continue;
+        }
+
+        // Skip if already processed in a finalized block
+        let wallet = self.bitcoin_wallet.read().await;
+        if wallet.get_tx(&pegin.txid)?.is_some() {
+            debug!(txid = %pegin.txid, "Peg-in already processed — skipping");
+            continue;
+        }
+        drop(wallet);
+
+        // TODO: Verify peg-in against Bitcoin (confirm the deposit exists)
+        // This is approach-dependent — see individual approaches
+
+        self.state.queued_pegins.insert(pegin.txid, pegin);
+        queued_count += 1;
+    }
+
+    Ok(queued_count)
+}
+```
+
+### Peg-In to EVM Withdrawal Conversion
+
+The proposer converts queued peg-ins to EVM withdrawals via `collect_withdrawals()` (`actors_v2/chain/withdrawals.rs:207`). Each `PegInInfo` becomes:
+
+```rust
+Withdrawal {
+    index: withdrawals.len() as u64,
+    validator_index: 0,              // Unused in Alys consensus
+    address: pegin_info.evm_account, // From Bitcoin OP_RETURN
+    amount: ConsensusAmount::from_satoshi(pegin_info.amount).0, // satoshis × 10 = gwei
+}
+```
+
+Geth processes these via the Capella withdrawal mechanism — direct balance credit, no gas, no revert.
+
+### Miner Compensation for Peg-Ins
+
+Miners are compensated for including valid peg-ins with a **percentage of each peg-in amount**. This incentivizes active monitoring and timely inclusion.
+
+```rust
+/// Peg-in compensation parameters (configured in genesis)
+pub struct PegInCompensation {
+    /// Percentage of peg-in amount paid to miner (basis points, e.g., 50 = 0.5%)
+    pub miner_fee_bps: u64,
+    /// Minimum fee in satoshis (floor for small peg-ins)
+    pub min_fee_satoshi: u64,
+    /// Maximum fee in satoshis (cap for large peg-ins)
+    pub max_fee_satoshi: u64,
+}
+
+impl Default for PegInCompensation {
+    fn default() -> Self {
+        Self {
+            miner_fee_bps: 50,          // 0.5% default
+            min_fee_satoshi: 1000,      // 0.00001 BTC minimum
+            max_fee_satoshi: 10_000_000, // 0.1 BTC maximum
+        }
+    }
+}
+
+/// Calculate miner compensation for a peg-in
+fn calculate_miner_fee(amount: u64, params: &PegInCompensation) -> u64 {
+    let fee = (amount * params.miner_fee_bps) / 10_000;
+    fee.clamp(params.min_fee_satoshi, params.max_fee_satoshi)
+}
+```
+
+**Withdrawal Split**: When converting `PegInInfo` to EVM `Withdrawal`, the amount is split:
+
+```rust
+fn pegin_to_withdrawals(
+    pegin: &PegInInfo,
+    miner_address: Address,
+    params: &PegInCompensation,
+) -> Vec<Withdrawal> {
+    let miner_fee = calculate_miner_fee(pegin.amount, params);
+    let user_amount = pegin.amount - miner_fee;
+
+    vec![
+        // User receives peg-in minus fee
+        Withdrawal {
+            index: 0,
+            validator_index: 0,
+            address: pegin.evm_account,
+            amount: ConsensusAmount::from_satoshi(user_amount).0,
+        },
+        // Miner receives fee
+        Withdrawal {
+            index: 1,
+            validator_index: 0,
+            address: miner_address,
+            amount: ConsensusAmount::from_satoshi(miner_fee).0,
+        },
+    ]
+}
+```
+
+**Incentive Alignment**:
+- Miners are incentivized to monitor Bitcoin and include peg-ins promptly
+- Multiple miners competing to include peg-ins improves peg-in latency
+- Fee caps prevent excessive extraction on large peg-ins
+- Fee floor ensures miners are compensated even for small peg-ins
+
+### The Fundamental Tension
+
+Peg-in latency is bounded by how often miners submit AuxPoW headers:
+
+```
+Submission frequency     Peg-in latency     PoW difficulty    Mining overhead
+─────────────────────────────────────────────────────────────────────────────
+Every block (~6s)        ~6 seconds          Very low          Very high
+Every 10 blocks (~1m)    ~1 minute           Low               High
+Every 100 blocks (~10m)  ~10 minutes         Moderate          Moderate
+Every 500 blocks (~50m)  ~50 minutes         High              Low
+```
+
+If a single difficulty target is used, low difficulty means weak security guarantees per submission, while high difficulty means long waits between peg-in deliveries. This tension motivates dual-difficulty designs (Approach 1) and the separation of peg-in delivery from checkpoint anchoring (all approaches).
+
+---
+
+## Approach 1: Decoupled Dual-Difficulty Submissions
 
 ### Concept
 
-The simplest migration: keep the existing `max_blocks_without_pow` rule, but enforce it within the Tendermint propose phase rather than the block import phase.
+Introduce two PoW difficulty targets: a **low "attestation" difficulty** for frequent peg-in delivery, and a **high "checkpoint" difficulty** for Bitcoin anchoring. Both use the same `submitauxblock` RPC. The chain classifies each submission based on which threshold it meets.
 
 ### How It Works
+
+```mermaid
+graph TB
+    subgraph "Miner Submission"
+        M["submitauxblock<br/>(hash, auxpow, pegins)"]
+    end
+
+    M --> D{"PoW difficulty<br/>meets which target?"}
+
+    D -->|"≥ checkpoint_difficulty"| CP["CHECKPOINT<br/>+ peg-in delivery<br/>Bitcoin-grade security"]
+    D -->|"≥ attestation_difficulty<br/>but < checkpoint_difficulty"| AT["ATTESTATION<br/>Peg-in delivery only<br/>Spam prevention"]
+    D -->|"< attestation_difficulty"| REJ["REJECTED<br/>Insufficient PoW"]
+
+    CP --> Q["Queue peg-ins + store checkpoint"]
+    AT --> Q2["Queue peg-ins only"]
+```
+
+### Difficulty Parameters
+
+```rust
+pub struct DualDifficultyConfig {
+    /// Low difficulty — miner should find a solution every ~30-60 seconds
+    /// Purpose: prevent spam, deliver peg-ins
+    pub attestation_bits: u32,
+
+    /// High difficulty — real Bitcoin merge-mining difficulty
+    /// Purpose: Bitcoin anchoring, deep finality
+    pub checkpoint_bits: u32,
+
+    /// Maximum blocks without a high-difficulty checkpoint
+    /// Configurable: can halt chain or just queue bridge ops
+    pub max_blocks_without_checkpoint: u64,
+
+    /// Whether to halt consensus when checkpoint is overdue
+    /// false = dual-layer finality (Approach 3 hybrid)
+    /// true = liveness gate (stronger guarantee)
+    pub halt_on_missing_checkpoint: bool,
+}
+```
+
+### Submission Handler
+
+```rust
+#[derive(Debug, PartialEq)]
+enum SubmissionType {
+    Checkpoint,
+    Attestation,
+}
+
+async fn handle_submit_auxblock(
+    &mut self,
+    aggregate_hash: BlockHash,
+    auxpow: AuxPow,
+    pegins: Vec<PegInInfo>,
+) -> Result<SubmissionResult, ChainError> {
+    // 1. Retrieve mining context
+    let context = self.state.mining_contexts.get(&aggregate_hash)
+        .ok_or(ChainError::UnknownAggregateHash)?;
+
+    // 2. Validate AuxPoW structure (merkle proofs, chain ID)
+    auxpow.check(aggregate_hash, context.chain_id)
+        .map_err(|e| ChainError::AuxPowValidation(format!("{:?}", e)))?;
+
+    // 3. Classify submission by difficulty
+    let checkpoint_target = Target::from_compact(
+        CompactTarget::from_consensus(self.config.checkpoint_bits)
+    );
+    let attestation_target = Target::from_compact(
+        CompactTarget::from_consensus(self.config.attestation_bits)
+    );
+
+    let parent_hash = auxpow.parent_block.block_hash();
+
+    let submission_type = if checkpoint_target.is_met_by(parent_hash) {
+        SubmissionType::Checkpoint
+    } else if attestation_target.is_met_by(parent_hash) {
+        SubmissionType::Attestation
+    } else {
+        return Err(ChainError::InsufficientProofOfWork);
+    };
+
+    // 4. Validate and queue peg-ins (common to both types)
+    let queued_count = self.validate_and_queue_pegins(pegins).await?;
+
+    // 5. Handle checkpoint-specific logic
+    if submission_type == SubmissionType::Checkpoint {
+        let header = AuxPowHeader {
+            range_start: context.start_hash,
+            range_end: context.end_hash,
+            bits: self.config.checkpoint_bits,
+            chain_id: context.chain_id,
+            height: context.height,
+            auxpow: Some(auxpow),
+            fee_recipient: context.miner_address,
+            pegins: vec![], // Pegins from this submission are queued in state.queued_pegins
+                            // (not stored in AuxPowHeader since they become EVM Withdrawals)
+        };
+        self.state.set_queued_pow(header);
+        self.state.blocks_without_pow = 0;
+
+        info!(height = context.height, "Checkpoint submission accepted");
+    } else {
+        info!(pegins = queued_count, "Attestation submission accepted (peg-ins only)");
+    }
+
+    Ok(SubmissionResult { submission_type, pegins_queued: queued_count })
+}
+```
+
+### Consensus Integration
+
+Tendermint treats peg-ins and checkpoints independently:
 
 ```mermaid
 sequenceDiagram
-    participant P as Proposer
+    participant M as Miner(s)
+    participant C as ChainActor
+    participant P as Proposer (Tendermint)
     participant V as Validators
-    participant M as Mining Pool
+    participant E as Engine (Geth)
 
-    Note over P: Height N (checkpoint height)
-    P->>P: Check blocks_since_last_checkpoint
-    alt blocks < max_blocks_without_pow
-        P->>V: Propose block (normal)
-        V->>V: Prevote + Precommit
-        V->>P: Committed
-    else blocks >= max_blocks_without_pow
-        P->>P: REFUSE to propose
-        Note over P,V: Consensus stalls until<br/>checkpoint arrives
-        M->>P: Submit AuxPoW checkpoint
-        P->>P: Counter resets
-        P->>V: Propose block (with checkpoint)
-        V->>V: Prevote + Precommit
-        V->>P: Committed
-    end
+    Note over M: Continuous mining loop
+
+    M->>C: submitauxblock (attestation difficulty)<br/>pegins: [{txid_1, 0.5 BTC}]
+    C->>C: Queue peg-in (txid_1)
+
+    M->>C: submitauxblock (attestation difficulty)<br/>pegins: [{txid_2, 1.0 BTC}]
+    C->>C: Queue peg-in (txid_2)
+
+    Note over P: Height H — proposal turn
+
+    P->>C: Get queued peg-ins
+    C-->>P: [txid_1, txid_2]
+    P->>P: Convert to EVM Withdrawals
+    P->>V: Propose block (with withdrawals)
+    V->>V: Verify withdrawals against Bitcoin
+    V->>P: Prevote + Precommit
+    P->>E: build_block(withdrawals)
+    E->>E: Credit balances
+
+    Note over M: Eventually finds high-difficulty nonce
+
+    M->>C: submitauxblock (checkpoint difficulty)<br/>pegins: [{txid_3, 2.0 BTC}]
+    C->>C: Queue peg-in (txid_3) + store checkpoint
+
+    Note over P: Next block includes checkpoint
 ```
 
-### Proposer Logic
-
-```rust
-impl ChainActor {
-    async fn handle_propose_phase(&self, height: u64, round: u32) -> Result<(), ChainError> {
-        // Check AuxPoW liveness gate BEFORE proposing
-        let blocks_since_checkpoint = height - self.state.last_checkpoint_height;
-
-        if blocks_since_checkpoint >= self.config.max_blocks_without_pow {
-            // Check if we have a pending checkpoint to include
-            if let Some(checkpoint) = self.state.pending_checkpoint.take() {
-                // Include checkpoint in this block's proposal
-                let block = self.build_block_with_checkpoint(height, checkpoint).await?;
-                return self.propose_block(height, round, block).await;
-            }
-
-            // No checkpoint available — refuse to propose
-            warn!(
-                height = height,
-                blocks_since = blocks_since_checkpoint,
-                "Refusing to propose: AuxPoW checkpoint required"
-            );
-            return Ok(()); // Skip proposal, timeout will advance round
-        }
-
-        // Normal proposal
-        let block = self.build_block(height).await?;
-        self.propose_block(height, round, block).await
-    }
-}
-```
-
-### What Happens During a Stall
+### Liveness Behavior
 
 ```
-Height 50000:  Proposer checks → 50000 blocks without checkpoint
-               Proposer refuses to propose
-               Timeout fires → Round 1
+Mining pool active:
+  → Attestations arrive every ~30-60 seconds
+  → Peg-in latency: ~30-60 seconds + next block time
+  → Checkpoints arrive every ~10-50 minutes (depends on difficulty)
+  → Chain never stalls
 
-Height 50000, Round 1:  New proposer also refuses
-                        Timeout fires → Round 2
-
-               ... validators keep cycling through rounds ...
-
-Mining pool submits checkpoint covering blocks 1-50000:
-
-Height 50000, Round R:  Proposer sees pending checkpoint
-                        Proposes block WITH checkpoint
-                        Validators verify checkpoint
-                        Block committed ✓
-                        Counter resets to 0
-```
-
-### Validator Verification
-
-Validators must also enforce the liveness gate when they receive a proposal:
-
-```rust
-fn validate_proposal(&self, proposal: &Proposal) -> Result<(), ChainError> {
-    let blocks_since = proposal.height - self.state.last_checkpoint_height;
-
-    if blocks_since >= self.config.max_blocks_without_pow {
-        // This block MUST include a checkpoint
-        if proposal.block.auxpow_checkpoint.is_none() {
-            return Err(ChainError::MissingRequiredCheckpoint);
-        }
-        // Validate the checkpoint
-        self.verify_checkpoint(proposal.block.auxpow_checkpoint.as_ref().unwrap())?;
-    }
-
-    Ok(())
-}
-```
-
-### Failure Scenario: Mining Pool Goes Offline
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  SCENARIO: Mining pool goes offline at height 49000             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Height 49000:  Last checkpoint submitted                       │
-│  Height 49001-99000:  Normal Tendermint consensus               │
-│  Height 99001: max_blocks_without_pow reached (50000)           │
-│                                                                 │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │  CHAIN IS HALTED                                          │ │
-│  │                                                            │ │
-│  │  All Tendermint validators are healthy.                   │ │
-│  │  All Tendermint validators can communicate.               │ │
-│  │  But NO BLOCKS are produced.                              │ │
-│  │                                                            │ │
-│  │  Chain is waiting for an external system (mining pool)    │ │
-│  │  that has nothing to do with BFT consensus.               │ │
-│  └────────────────────────────────────────────────────────────┘ │
-│                                                                 │
-│  Recovery: Mining pool comes back online, submits checkpoint.   │
-│  Chain resumes at height 99001.                                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+Mining pool offline:
+  → No attestations, no peg-ins (inherent — miners ARE the peg-in channel)
+  → No checkpoints
+  → If halt_on_missing_checkpoint = false:
+      Chain continues, bridge ops queue (dual-layer mode)
+  → If halt_on_missing_checkpoint = true:
+      Chain halts after max_blocks_without_checkpoint (liveness gate mode)
 ```
 
 ### Assessment
 
 | Dimension | Rating | Notes |
 |-----------|--------|-------|
-| Integration tightness | Medium | AuxPoW gates proposer behavior |
-| Implementation complexity | Low | Minimal changes to Tendermint protocol |
-| Liveness risk | **High** | Mining pool outage halts chain |
-| Security guarantee | Strong | Bitcoin PoW required for chain progress |
-| Bridge security | Implicit | Checkpoints guaranteed to exist |
+| Peg-in latency | **Best** (~30-60s) | Low attestation difficulty enables frequent delivery |
+| Bitcoin anchoring | Strong | High-difficulty checkpoints provide real security |
+| Consensus stalls? | **Configurable** | Toggle `halt_on_missing_checkpoint` |
+| Implementation complexity | Medium | Dual difficulty classification, separate queues |
+| Bridge security | Strong | Checkpoints for deep finality, attestations for peg-ins |
 
-**Best for**: Networks that can guarantee mining pool uptime and want the strongest possible assurance that AuxPoW checkpoints exist.
-
----
-
-## Approach 2: AuxPoW-Gated Epochs
-
-### Concept
-
-Tendermint operates in fixed-length "epochs" of `N` blocks. Consensus runs freely within an epoch, but a new epoch **cannot begin** until an AuxPoW checkpoint seals the previous one. This creates predictable Bitcoin anchoring points without blocking every individual proposal.
-
-### Epoch Structure
-
-```mermaid
-graph LR
-    subgraph Epoch 1
-        B1[Block 1] --> B2[Block 2] --> B3[...] --> BN[Block 500]
-    end
-
-    BN -->|"AuxPoW checkpoint<br/>seals epoch 1"| CP1[Checkpoint ✓]
-
-    CP1 --> B501[Block 501]
-
-    subgraph Epoch 2
-        B501 --> B502[Block 502] --> B503[...] --> BN2[Block 1000]
-    end
-
-    BN2 -->|"AuxPoW checkpoint<br/>seals epoch 2"| CP2[Checkpoint ✓]
-```
-
-### How It Works
-
-Within an epoch, Tendermint runs with zero AuxPoW awareness. Blocks are proposed, voted on, and committed at full speed. The AuxPoW interaction only happens at epoch boundaries.
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        EPOCH LIFECYCLE                           │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  PHASE 1: Open Consensus (blocks 1 to N)                        │
-│  ─────────────────────────────────────────                       │
-│  Tendermint runs normally. No AuxPoW checks.                     │
-│  Blocks are finalized instantly via 2/3+ precommits.             │
-│                                                                  │
-│  PHASE 2: Epoch Boundary (block N)                               │
-│  ─────────────────────────────────                               │
-│  Block N is the last block of the epoch.                         │
-│  After committing block N, consensus PAUSES.                     │
-│  A checkpoint covering blocks [last_checkpoint+1 ... N]          │
-│  must be submitted.                                              │
-│                                                                  │
-│  PHASE 3: Checkpoint Submission                                  │
-│  ─────────────────────────────                                   │
-│  Mining pool submits AuxPoW proof for the epoch's block range.   │
-│  All validators verify the checkpoint.                           │
-│  Checkpoint is stored.                                           │
-│                                                                  │
-│  PHASE 4: Epoch Transition                                       │
-│  ─────────────────────────                                       │
-│  New epoch begins at block N+1.                                  │
-│  Consensus resumes.                                              │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### Epoch State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> EpochOpen: Genesis / Epoch start
-
-    EpochOpen --> EpochOpen: Tendermint commit (height < epoch_end)
-    EpochOpen --> EpochSealing: Tendermint commit (height == epoch_end)
-
-    EpochSealing --> EpochSealing: Waiting for AuxPoW checkpoint
-    EpochSealing --> EpochTransition: Valid checkpoint received
-
-    EpochTransition --> EpochOpen: Start new epoch
-
-    note right of EpochOpen: Tendermint runs freely
-    note right of EpochSealing: Consensus paused
-```
-
-### Implementation
-
-```rust
-pub struct EpochManager {
-    /// Number of blocks per epoch
-    pub epoch_length: u64,
-    /// Current epoch number (0-indexed)
-    pub current_epoch: u64,
-    /// First height of current epoch
-    pub epoch_start_height: u64,
-    /// Height of last committed checkpoint
-    pub last_checkpoint_height: u64,
-    /// Grace period: blocks allowed into next epoch while awaiting checkpoint
-    pub grace_blocks: u64,
-}
-
-impl EpochManager {
-    pub fn epoch_end_height(&self) -> u64 {
-        self.epoch_start_height + self.epoch_length - 1
-    }
-
-    pub fn is_epoch_boundary(&self, height: u64) -> bool {
-        height == self.epoch_end_height()
-    }
-
-    pub fn should_pause_consensus(&self, height: u64) -> bool {
-        // Past epoch end AND no checkpoint yet for current epoch
-        height > self.epoch_end_height() + self.grace_blocks
-            && self.last_checkpoint_height < self.epoch_end_height()
-    }
-
-    pub fn seal_epoch(&mut self, checkpoint_height: u64) {
-        self.last_checkpoint_height = checkpoint_height;
-        self.current_epoch += 1;
-        self.epoch_start_height = checkpoint_height + 1;
-    }
-}
-```
-
-### Grace Period: Avoiding Hard Stalls
-
-A strict epoch boundary causes unnecessary stalls. A grace period allows consensus to continue into the next epoch while the mining pool catches up:
-
-```
-Epoch 1: blocks 1-500      Epoch 2: blocks 501-1000
-                    │                   │
-                    ▼                   │
-              Epoch boundary            │
-                    │                   │
-              ┌─────┼──────┐            │
-              │  Grace     │            │
-              │  Period    │            │
-              │  (50 blks) │            │
-              └─────┼──────┘            │
-                    │                   │
-     If checkpoint  │   If no           │
-     arrives within │   checkpoint      │
-     grace:         │   by block 550:   │
-          │         │        │          │
-          ▼         │        ▼          │
-    Continue to     │   PAUSE at 550    │
-    epoch 2         │   Wait for        │
-    seamlessly      │   checkpoint      │
-```
-
-```rust
-/// Check if we can propose at this height
-fn can_propose(&self, height: u64) -> ProposalDecision {
-    let epoch_end = self.epoch_manager.epoch_end_height();
-    let grace_end = epoch_end + self.epoch_manager.grace_blocks;
-
-    if height <= epoch_end {
-        // Within epoch bounds — always allowed
-        ProposalDecision::Allowed
-    } else if height <= grace_end {
-        // In grace period — allowed but warn
-        ProposalDecision::AllowedWithWarning {
-            blocks_past_epoch: height - epoch_end,
-            grace_remaining: grace_end - height,
-        }
-    } else if self.epoch_manager.last_checkpoint_height >= epoch_end {
-        // Checkpoint arrived during grace — transition to new epoch
-        ProposalDecision::Allowed
-    } else {
-        // Past grace, no checkpoint — halt
-        ProposalDecision::Blocked {
-            reason: "Epoch checkpoint required before continuing",
-            waiting_since: epoch_end,
-        }
-    }
-}
-```
-
-### What Validators See
-
-```
-Epoch 1 (blocks 1-500):
-  Height 1:   ✓ Commit (epoch open)
-  Height 2:   ✓ Commit
-  ...
-  Height 499: ✓ Commit
-  Height 500: ✓ Commit — EPOCH BOUNDARY
-
-Grace period (blocks 501-550):
-  Height 501: ⚠ Commit (grace period, 49 blocks remaining)
-  Height 502: ⚠ Commit (grace period, 48 blocks remaining)
-  ...
-
-  Height 520: Mining pool submits checkpoint for blocks 1-500
-              Epoch 1 sealed ✓
-              Epoch 2 begins at 501
-              Grace period ends — back to normal
-
-  Height 521: ✓ Commit (epoch 2 open)
-  ...
-```
-
-### Bridge Integration
-
-Epochs create natural anchor points for bridge operations:
-
-```rust
-impl BridgeActor {
-    async fn process_pegout(&self, request: PegOutRequest) -> Result<(), BridgeError> {
-        let deposit_height = request.deposit_block_height;
-
-        // Find which epoch contains the deposit
-        let deposit_epoch = deposit_height / self.epoch_length;
-
-        // Require that epoch to be sealed (has AuxPoW checkpoint)
-        if !self.epoch_manager.is_epoch_sealed(deposit_epoch) {
-            return Err(BridgeError::EpochNotSealed {
-                epoch: deposit_epoch,
-                deposit_height,
-                message: "Peg-out must wait for epoch checkpoint".to_string(),
-            });
-        }
-
-        // Epoch is sealed — proceed with peg-out
-        self.execute_pegout(request).await
-    }
-}
-```
-
-### Assessment
-
-| Dimension | Rating | Notes |
-|-----------|--------|-------|
-| Integration tightness | Medium-High | Epochs are structurally enforced |
-| Implementation complexity | Medium | New EpochManager + grace period logic |
-| Liveness risk | Medium | Grace period mitigates stalls |
-| Security guarantee | Strong | Every epoch is Bitcoin-anchored |
-| Bridge security | Strong | Epoch sealing gives clear anchor points |
-
-**Best for**: Networks that want predictable checkpoint intervals with minimal impact on normal consensus throughput.
+**Best for**: Networks that want fast peg-in delivery while maintaining strong Bitcoin anchoring, with configurable liveness policy.
 
 ---
 
-## Approach 3: AuxPoW as Commit Extension
+## Approach 2: AuxPoW as Commit Extension
 
 ### Concept
 
-Make AuxPoW a first-class field within the Tendermint data structures. At designated checkpoint heights, the proposer must include a valid AuxPoW proof in the block. Validators reject proposals at checkpoint heights that lack a valid proof.
+Make AuxPoW a first-class field within the Tendermint block structure. At designated checkpoint heights, the proposer must include a valid AuxPoW proof in the block. Between checkpoint heights, miner peg-in submissions are processed continuously. This is the tightest integration — AuxPoW checkpoints are part of the block chain, not a side-channel.
 
 ### Where AuxPoW Lives in the Protocol
 
 ```mermaid
 graph TD
-    subgraph "Standard Tendermint Commit"
+    subgraph "Standard Block (non-checkpoint height)"
         A[Height] --> B[Round]
         B --> C[Block Hash]
-        C --> D[2/3+ Precommit Signatures]
+        C --> D["Execution Payload<br/>+ Peg-In Withdrawals"]
+        D --> E[2/3+ Precommit Signatures]
     end
 
-    subgraph "Extended Commit (every Nth height)"
-        E[Height] --> F[Round]
-        F --> G[Block Hash]
-        G --> H[2/3+ Precommit Signatures]
-        H --> I["AuxPoW Checkpoint ✦ NEW"]
-        I --> J[Checkpoint Range]
-        I --> K[Bitcoin PoW Proof]
-        I --> L[Aggregate Commitment]
+    subgraph "Checkpoint Block (every Nth height)"
+        F[Height] --> G[Round]
+        G --> H[Block Hash]
+        H --> I["Execution Payload<br/>+ Peg-In Withdrawals"]
+        I --> J["AuxPoW Checkpoint ✦"]
+        J --> K[2/3+ Precommit Signatures]
     end
 ```
 
 ### Checkpoint Heights
-
-Not every block includes an AuxPoW. Checkpoint heights are deterministic:
 
 ```rust
 const CHECKPOINT_INTERVAL: u64 = 500;
@@ -450,87 +473,33 @@ fn is_checkpoint_height(height: u64) -> bool {
 // Heights 500, 1000, 1500, 2000, ... are checkpoint heights
 ```
 
-### Protocol Flow at Checkpoint Heights
+### Block Structure
 
-```mermaid
-sequenceDiagram
-    participant P as Proposer
-    participant MP as Mining Pool
-    participant V1 as Validator 1
-    participant V2 as Validator 2
-    participant V3 as Validator 3
-
-    Note over P: Height 500 (checkpoint height)
-
-    P->>MP: Request AuxPoW for blocks 1-500
-    MP-->>P: AuxPoW proof ✓
-
-    P->>P: Build block with AuxPoW checkpoint
-    P->>V1: Proposal (block + checkpoint)
-    P->>V2: Proposal (block + checkpoint)
-    P->>V3: Proposal (block + checkpoint)
-
-    Note over V1,V3: Validators verify BOTH<br/>block validity AND checkpoint validity
-
-    V1->>V1: Verify AuxPoW ✓
-    V2->>V2: Verify AuxPoW ✓
-    V3->>V3: Verify AuxPoW ✓
-
-    V1->>P: Prevote ✓
-    V2->>P: Prevote ✓
-    V3->>P: Prevote ✓
-
-    Note over P: 2/3+ prevotes collected
-
-    V1->>P: Precommit ✓
-    V2->>P: Precommit ✓
-    V3->>P: Precommit ✓
-
-    Note over P: Block 500 committed WITH checkpoint
-```
-
-### Protocol Flow at Normal Heights
-
-```mermaid
-sequenceDiagram
-    participant P as Proposer
-    participant V1 as Validator 1
-    participant V2 as Validator 2
-    participant V3 as Validator 3
-
-    Note over P: Height 501 (normal height)
-
-    P->>P: Build block (no checkpoint needed)
-    P->>V1: Proposal (block only)
-    P->>V2: Proposal (block only)
-    P->>V3: Proposal (block only)
-
-    V1->>P: Prevote ✓
-    V2->>P: Prevote ✓
-    V3->>P: Prevote ✓
-
-    V1->>P: Precommit ✓
-    V2->>P: Precommit ✓
-    V3->>P: Precommit ✓
-
-    Note over P: Block 501 committed (fast, ~6 seconds)
-```
-
-### Extended Block Structure
+Per [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md), peg-ins travel through the AuxPowHeader and become EVM withdrawals in the execution_payload. The block does NOT have a separate `pegins` field.
 
 ```rust
-/// Tendermint block with optional AuxPoW checkpoint
 pub struct TendermintBlock {
     pub height: u64,
     pub round: u32,
     pub parent_hash: Hash256,
+    /// Peg-ins are converted to Withdrawals and included here
+    /// (see execution_payload.withdrawals)
     pub execution_payload: ExecutionPayloadCapella<MainnetEthSpec>,
-    pub pegins: Vec<(Txid, BlockHash)>,
     pub pegout_payment_proposal: Option<BitcoinTransaction>,
     pub finalized_pegouts: Vec<BitcoinTransaction>,
-
-    /// AuxPoW checkpoint — present only at checkpoint heights
+    /// AuxPoW checkpoint — present ONLY at checkpoint heights
     pub auxpow_checkpoint: Option<AuxPowCheckpoint>,
+}
+
+// Flow: Miner submits pegins via AuxPowHeader → ChainActor queues them →
+//       Proposer converts to Withdrawals → included in execution_payload
+//
+// The ConsensusBlock stores (txid, block_hash) pairs to track which Bitcoin
+// deposits have been processed, preventing duplicates:
+pub struct ConsensusBlock {
+    // ... other fields ...
+    /// Bitcoin deposit txids processed in this block (for deduplication)
+    pub processed_pegins: Vec<(Txid, BlockHash)>,
 }
 
 pub struct AuxPowCheckpoint {
@@ -549,43 +518,59 @@ pub struct AuxPowCheckpoint {
 }
 ```
 
-### Proposer Responsibility
+### Protocol Flow at Checkpoint Heights
 
-The proposer for a checkpoint height has extra work:
+```mermaid
+sequenceDiagram
+    participant M as Miner
+    participant P as Proposer
+    participant V1 as Validator 1
+    participant V2 as Validator 2
+    participant V3 as Validator 3
 
-```rust
-impl ChainActor {
-    async fn build_proposal(&self, height: u64) -> Result<TendermintBlock, ChainError> {
-        let block = self.build_execution_block(height).await?;
+    Note over P: Height 500 (checkpoint height)
 
-        let checkpoint = if is_checkpoint_height(height) {
-            // Proposer must provide the AuxPoW checkpoint
-            let range_start = self.state.last_checkpoint_height + 1;
-            let range_end = height;
+    M->>P: Queued checkpoint proof
+    P->>P: Build block with:<br/>- Queued peg-in withdrawals<br/>- AuxPoW checkpoint
 
-            // Option A: Proposer has pre-mined checkpoint ready
-            if let Some(cp) = self.state.pending_checkpoint.take() {
-                if cp.range_end_height == range_end {
-                    Some(cp)
-                } else {
-                    // Stale checkpoint — need fresh one
-                    self.request_checkpoint(range_start, range_end).await.ok()
-                }
-            } else {
-                // Option B: Request from mining pool in real-time
-                self.request_checkpoint(range_start, range_end).await.ok()
-            }
-        } else {
-            None
-        };
+    P->>V1: Proposal (block + checkpoint)
+    P->>V2: Proposal (block + checkpoint)
+    P->>V3: Proposal (block + checkpoint)
 
-        Ok(TendermintBlock {
-            height,
-            auxpow_checkpoint: checkpoint,
-            ..block
-        })
-    }
-}
+    Note over V1,V3: Verify BOTH block + checkpoint
+
+    V1->>P: Prevote ✓
+    V2->>P: Prevote ✓
+    V3->>P: Prevote ✓
+
+    V1->>P: Precommit ✓
+    V2->>P: Precommit ✓
+    V3->>P: Precommit ✓
+
+    Note over P: Block 500 committed WITH checkpoint
+```
+
+### Protocol Flow at Normal Heights
+
+```mermaid
+sequenceDiagram
+    participant M as Miner
+    participant P as Proposer
+    participant V1 as Validator 1
+    participant V2 as Validator 2
+
+    Note over P: Height 501 (normal height)
+
+    M->>P: submitauxblock with peg-ins<br/>(low difficulty acceptable)
+    P->>P: Build block with peg-in withdrawals<br/>(no checkpoint needed)
+
+    P->>V1: Proposal
+    P->>V2: Proposal
+
+    V1->>P: Prevote + Precommit ✓
+    V2->>P: Prevote + Precommit ✓
+
+    Note over P: Block 501 committed (~6 seconds)
 ```
 
 ### What If the Proposer Cannot Provide a Checkpoint?
@@ -607,14 +592,14 @@ Height 500 (checkpoint required):
 
   Round 2:
     Proposer C has a pre-mined checkpoint!
-    → Proposes block WITH checkpoint
+    → Proposes block WITH checkpoint + queued peg-ins
     → Validators verify checkpoint ✓
     → Block committed ✓
 
-  Time elapsed: 2 timeouts × ~6 seconds = ~12 seconds extra latency
+  Extra latency: 2 timeouts × ~6 seconds = ~12 seconds
 ```
 
-This means validators should **pre-mine checkpoints proactively** to minimize delays at checkpoint heights:
+Validators should **pre-mine checkpoints proactively** to minimize delays:
 
 ```rust
 /// Background task that pre-mines checkpoints
@@ -635,18 +620,56 @@ async fn checkpoint_pre_mining_loop(
 
             drop(state); // Release lock
 
-            // Request checkpoint from mining pool (may take minutes)
-            if let Ok(checkpoint) = mining_pool.create_checkpoint(range_start, range_end).await {
+            if let Ok(checkpoint) = mining_pool
+                .create_checkpoint(range_start, range_end).await
+            {
                 let mut state = chain_state.write().await;
                 state.pending_checkpoint = Some(checkpoint);
-                info!(
-                    checkpoint_height = next_checkpoint,
-                    "Pre-mined checkpoint ready"
-                );
+                info!(checkpoint_height = next_checkpoint, "Pre-mined checkpoint ready");
             }
         }
 
         tokio::time::sleep(Duration::from_secs(6)).await;
+    }
+}
+```
+
+### Proposer Responsibility
+
+```rust
+impl ChainActor {
+    async fn build_proposal(&self, height: u64) -> Result<TendermintBlock, ChainError> {
+        // 1. Always collect queued peg-ins for withdrawal conversion
+        let pegin_withdrawals = self.collect_pegin_withdrawals().await?;
+        let block = self.build_execution_block(height, pegin_withdrawals).await?;
+
+        // 2. Checkpoint logic only at checkpoint heights
+        let checkpoint = if is_checkpoint_height(height) {
+            if let Some(cp) = self.state.pending_checkpoint.take() {
+                if cp.range_end_height == height {
+                    Some(cp)
+                } else {
+                    // Stale checkpoint — need fresh one
+                    self.request_checkpoint(
+                        self.state.last_checkpoint_height + 1,
+                        height,
+                    ).await.ok()
+                }
+            } else {
+                self.request_checkpoint(
+                    self.state.last_checkpoint_height + 1,
+                    height,
+                ).await.ok()
+            }
+        } else {
+            None
+        };
+
+        Ok(TendermintBlock {
+            height,
+            auxpow_checkpoint: checkpoint,
+            ..block
+        })
     }
 }
 ```
@@ -657,11 +680,9 @@ async fn checkpoint_pre_mining_loop(
 fn validate_proposal_at_checkpoint_height(
     &self,
     proposal: &Proposal,
-    validator_set: &ValidatorSet,
 ) -> Result<(), ChainError> {
-    // Standard proposal validation
-    self.verify_proposal_signature(proposal, validator_set)?;
-    self.verify_execution_payload(proposal)?;
+    // Standard peg-in withdrawal validation (every block)
+    self.verify_pegin_withdrawals(proposal)?;
 
     // Checkpoint validation (ONLY at checkpoint heights)
     let checkpoint = proposal.block.auxpow_checkpoint.as_ref()
@@ -669,9 +690,8 @@ fn validate_proposal_at_checkpoint_height(
 
     // 1. Verify range covers expected blocks
     let expected_start = self.state.last_checkpoint_height + 1;
-    let expected_end = proposal.height;
     if checkpoint.range_start_height != expected_start
-        || checkpoint.range_end_height != expected_end {
+        || checkpoint.range_end_height != proposal.height {
         return Err(ChainError::InvalidCheckpointRange);
     }
 
@@ -691,7 +711,7 @@ fn validate_proposal_at_checkpoint_height(
         return Err(ChainError::InsufficientProofOfWork);
     }
 
-    // 4. Verify AuxPoW structure (merkle branch, chain ID)
+    // 4. Verify AuxPoW structure
     let commitment_hash = BlockHash::from_byte_array(checkpoint.commitment.0);
     checkpoint.auxpow.check(commitment_hash, checkpoint.chain_id)
         .map_err(|e| ChainError::AuxPowValidation(format!("{:?}", e)))?;
@@ -702,18 +722,18 @@ fn validate_proposal_at_checkpoint_height(
 
 ### SyncActor Benefits
 
-Nodes syncing from genesis automatically receive checkpoints as part of the block data. No separate checkpoint discovery is needed:
+Nodes syncing from genesis receive checkpoints as part of block data — no separate checkpoint discovery protocol needed:
 
 ```
 Syncing node requests blocks 1-1000:
 
-  Block 1:   [payload]
-  Block 2:   [payload]
+  Block 1:    [payload]
+  Block 2:    [payload + peg-in withdrawal]
   ...
-  Block 500: [payload + AuxPoW checkpoint covering 1-500] ← FREE
-  Block 501: [payload]
+  Block 500:  [payload + AuxPoW checkpoint covering 1-500]  ← embedded
+  Block 501:  [payload]
   ...
-  Block 1000: [payload + AuxPoW checkpoint covering 501-1000] ← FREE
+  Block 1000: [payload + AuxPoW checkpoint covering 501-1000] ← embedded
 
   Syncing node verifies each checkpoint as part of block verification.
   No additional checkpoint discovery protocol needed.
@@ -723,21 +743,21 @@ Syncing node requests blocks 1-1000:
 
 | Dimension | Rating | Notes |
 |-----------|--------|-------|
-| Integration tightness | **Highest** | AuxPoW is part of the block structure |
-| Implementation complexity | Medium-High | Proposer pre-mining, extended block format |
-| Liveness risk | Medium | Rounds cycle until a proposer has a checkpoint |
-| Security guarantee | Strong | Every node verifies checkpoints as consensus data |
-| Bridge security | Strong | Checkpoints are in the block chain itself |
+| Peg-in latency | Good (~30-60s) | Peg-ins flow continuously between checkpoints |
+| Bitcoin anchoring | **Strongest** | Checkpoints are IN the block — auditable, verifiable |
+| Consensus stalls? | Yes (rounds cycle at checkpoint heights) | Advances until a proposer has checkpoint |
+| Implementation complexity | Medium-High | Extended block format, pre-mining, validation |
+| Bridge security | **Strongest** | Checkpoints are part of the block chain itself |
 
-**Best for**: Networks that want AuxPoW to be a verifiable, auditable part of the block history rather than a side-channel.
+**Best for**: Networks that want AuxPoW to be a verifiable, auditable part of the block history — checkpoints stored in the chain, not a side-channel.
 
 ---
 
-## Approach 4: Dual-Layer Finality
+## Approach 3: Dual-Layer Finality (Never Stalls)
 
 ### Concept
 
-Create two explicit finality tiers. **Consensus finality** (Tendermint) is instant and handles all normal operations. **Anchor finality** (AuxPoW + Bitcoin) is delayed and required only for high-value or cross-chain operations. Tendermint never stalls waiting for AuxPoW.
+Two explicit finality tiers. **Consensus finality** (Tendermint) is instant and handles all normal operations including peg-in processing. **Anchor finality** (AuxPoW + Bitcoin) is delayed and required only for high-value or cross-chain operations. Tendermint **never stalls** waiting for AuxPoW.
 
 ### Two-Tier Architecture
 
@@ -763,35 +783,9 @@ graph TB
     style A5 fill:#c67600,color:white
 ```
 
-### Finality Tier Assignments
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   OPERATION → FINALITY TIER                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  TIER 1 ONLY (Consensus Finality — instant):                    │
-│  ─────────────────────────────────────────                      │
-│  • EVM transactions between Alys accounts                       │
-│  • Smart contract deployments and calls                         │
-│  • Token transfers within Alys                                  │
-│  • Reading chain state                                          │
-│  • Small peg-ins (below threshold T)                            │
-│                                                                 │
-│  TIER 2 REQUIRED (Anchor Finality — delayed):                   │
-│  ─────────────────────────────────────────                      │
-│  • All peg-outs (releasing Bitcoin)                              │
-│  • Large peg-ins (above threshold T)                             │
-│  • Validator set changes                                        │
-│  • Governance actions (parameter changes)                       │
-│  • Cross-chain proofs (for external verifiers)                  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
 ### Key Property: Tendermint Never Waits
 
-Unlike Approaches 1-3, Tendermint runs completely independently of AuxPoW. Blocks are produced at full speed regardless of checkpoint status:
+Miners submit AuxPoW headers carrying peg-ins at whatever pace they achieve. Peg-ins are queued and included in blocks as soon as a proposer picks them up. Checkpoints accumulate asynchronously and are never required for block production.
 
 ```
 Timeline:
@@ -801,6 +795,8 @@ Tendermint:  1 ─ 2 ─ 3 ─ 4 ─ 5 ─ 6 ─ ... ─ 500 ─ 501 ─ ... ─
              │   │   │   │   │   │         │     │             │
              F   F   F   F   F   F         F     F             F
              (all instantly final)
+
+             Peg-ins included whenever available from miner submissions
 
 AuxPoW:                                    CP1                 CP2
                                            │                   │
@@ -815,6 +811,30 @@ AuxPoW:                                    CP1                 CP2
 
 F = Consensus Finality (instant)
 CP = Checkpoint (AuxPoW submitted)
+```
+
+### Finality Tier Assignments
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   OPERATION → FINALITY TIER                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  TIER 1 ONLY (Consensus Finality — instant):                    │
+│  ─────────────────────────────────────────                      │
+│  • EVM transactions between Alys accounts                       │
+│  • Smart contract deployments and calls                         │
+│  • Token transfers within Alys                                  │
+│  • Peg-ins (miner-attested, processed immediately)              │
+│                                                                 │
+│  TIER 2 REQUIRED (Anchor Finality — delayed):                   │
+│  ─────────────────────────────────────────                      │
+│  • All peg-outs (releasing Bitcoin)                              │
+│  • Validator set changes                                        │
+│  • Governance actions (parameter changes)                       │
+│  • Cross-chain proofs (for external verifiers)                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Finality Status per Block
@@ -846,7 +866,7 @@ pub enum FinalityStatus {
 impl FinalityStatus {
     pub fn meets_tier(&self, required: FinalityTier) -> bool {
         match (required, self) {
-            (FinalityTier::Consensus, _) => true, // All statuses meet Tier 1
+            (FinalityTier::Consensus, _) => true,
             (FinalityTier::Anchored, FinalityStatus::CheckpointAnchored { .. }) => true,
             (FinalityTier::Anchored, FinalityStatus::DeepFinalized { .. }) => true,
             (FinalityTier::Deep, FinalityStatus::DeepFinalized { btc_confirmations, .. }) => {
@@ -858,40 +878,91 @@ impl FinalityStatus {
 }
 ```
 
+### Miner Peg-In Flow
+
+```mermaid
+sequenceDiagram
+    participant M as Miner
+    participant C as ChainActor
+    participant P as Proposer
+    participant E as Engine (Geth)
+
+    M->>C: submitauxblock(hash, auxpow, pegins)
+    C->>C: Validate PoW (any difficulty)
+    C->>C: Queue peg-ins
+    C->>C: If high-difficulty: store as checkpoint
+
+    Note over P: Next proposal turn
+
+    P->>C: Get queued peg-ins
+    C-->>P: [pegin_1, pegin_2]
+    P->>P: Convert to EVM Withdrawals
+    P->>E: build_block(withdrawals)
+    E->>E: Credit balances directly
+    E-->>P: ExecutionPayload
+
+    P->>P: Propose block via Tendermint
+    Note over P: Committed instantly
+```
+
 ### Bridge Operations with Dual Finality
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant B as Bridge
+    participant M as Miner
     participant C as Chain (Tendermint)
     participant CP as Checkpoint Layer
     participant BTC as Bitcoin
 
-    Note over U,BTC: PEG-IN (small amount)
-    U->>BTC: Send BTC to bridge address
-    BTC-->>B: Deposit detected
-    B->>C: Include peg-in in block N
+    Note over U,BTC: PEG-IN
+    U->>BTC: Send BTC to federation address
+    M->>BTC: Detect deposit
+    M->>C: submitauxblock with peg-in
     C->>C: Tendermint commit (instant)
     C-->>U: Funds available on Alys ✓
-    Note over U: ~6 seconds total
+    Note over U: ~30-60 seconds
 
     Note over U,BTC: PEG-OUT
     U->>C: Request peg-out in block M
     C->>C: Tendermint commit (instant)
-    Note over B: Peg-out QUEUED (needs Tier 2)
+    Note over C: Peg-out QUEUED (needs Tier 2)
 
     CP->>CP: Checkpoint covers block M
     CP->>BTC: Submit AuxPoW to Bitcoin
     BTC->>BTC: 6 confirmations (~60 min)
-    BTC-->>B: Checkpoint anchored ✓
+    BTC-->>C: Checkpoint anchored ✓
 
-    B->>BTC: Execute peg-out transaction
+    C->>BTC: Execute peg-out transaction
     BTC-->>U: BTC received ✓
     Note over U: ~60-90 minutes total
 ```
 
-### Tracking Anchor Finality
+### Mining Pool Offline Scenario
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  SCENARIO: Mining pool goes offline                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Tendermint: Continues producing blocks at full speed ✓         │
+│  On-chain operations: Fully functional ✓                        │
+│  Peg-ins: STOP (inherent — miners are the delivery channel)     │
+│  Peg-outs: QUEUED but not processed (awaiting anchor finality)  │
+│  Validator set changes: BLOCKED                                 │
+│                                                                 │
+│  Chain is fully operational for all on-chain activity.           │
+│  Only cross-chain operations are affected.                      │
+│                                                                 │
+│  Recovery: Mining pool returns                                  │
+│            Submits checkpoint covering entire gap                │
+│            Queued peg-outs process                               │
+│            New peg-ins resume                                    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Anchor Finality Tracker
 
 ```rust
 pub struct AnchorFinalityTracker {
@@ -945,414 +1016,165 @@ impl AnchorFinalityTracker {
 }
 ```
 
-### What If Checkpoints Stop Coming?
-
-Unlike Approaches 1-3, the chain does **not halt**. Instead:
+### Latency Comparison Across All Approaches
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  SCENARIO: Mining pool goes offline                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Tendermint: Continues producing blocks at full speed ✓         │
-│                                                                 │
-│  On-chain operations: Fully functional ✓                        │
-│                                                                 │
-│  Peg-ins (small): Still instant ✓                               │
-│                                                                 │
-│  Peg-outs: QUEUED but not processed                             │
-│            Users see "Waiting for anchor finality"              │
-│            Funds are safe, just delayed                         │
-│                                                                 │
-│  Large peg-ins: QUEUED                                          │
-│            Same as peg-outs                                     │
-│                                                                 │
-│  Validator set changes: BLOCKED                                 │
-│            Cannot change validators without anchor              │
-│                                                                 │
-│  Alert: "No checkpoint in N blocks" → Ops team investigates   │
-│                                                                 │
-│  Recovery: Mining pool comes back                               │
-│            Submits checkpoint covering entire gap                │
-│            All queued operations process                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Latency Comparison
-
-```
-Operation              Approach 1    Approach 2    Approach 3    Approach 4
-──────────────────────────────────────────────────────────────────────────
-On-chain transfer      ~6s           ~6s           ~6s           ~6s
-                       (may stall)   (may stall)   (may stall)   (never stalls)
-
-Peg-in (small)         ~6s           ~6s           ~6s           ~6s
-                       (may stall)   (may stall)   (may stall)   (never stalls)
-
-Peg-out                ~6s + CP      ~6s + CP      ~6s + CP      ~6s + CP wait
-                       + BTC confs   + BTC confs   + BTC confs   + BTC confs
-
-Checkpoint stall       FULL HALT     HALT after    ROUNDS        NO HALT
-                                     grace         CYCLE         (just queues)
-```
-
-### Assessment
-
-| Dimension | Rating | Notes |
-|-----------|--------|-------|
-| Integration tightness | Medium | AuxPoW is parallel, not embedded |
-| Implementation complexity | Medium | Finality tracker + operation categorization |
-| Liveness risk | **Lowest** | Tendermint never waits for AuxPoW |
-| Security guarantee | Tiered | Consensus-only vs Bitcoin-anchored |
-| Bridge security | **Strongest** | Explicit tier requirements per operation |
-
-**Best for**: Networks that prioritize uptime and fast UX for on-chain operations while still requiring Bitcoin-level security for cross-chain operations.
-
----
-
-## Approach 5: AuxPoW as Long-Range Attack Protection Only
-
-### Concept
-
-The most minimal integration. AuxPoW serves a single purpose: preventing an attacker who compromises old validator keys from creating a fake alternate history. Checkpoints are verified only during initial sync and peer evaluation, never during normal consensus.
-
-### The Attack It Prevents
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  LONG-RANGE ATTACK SCENARIO                                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Legitimate chain (with checkpoints):                           │
-│                                                                 │
-│  G ─── 100 ─── 200 ─── ... ─── 10000                          │
-│         │              │                │                       │
-│       [CP1]          [CP2]            [CP20]                    │
-│     BTC anchor     BTC anchor       BTC anchor                 │
-│                                                                 │
-│  Attacker (has old validator keys from height 100):             │
-│                                                                 │
-│  G ─── 100' ─── 200' ─── ... ─── 10000'                       │
-│         │                                                       │
-│         └── Signed with compromised old keys                   │
-│             Looks valid (has 2/3+ signatures)                  │
-│             BUT has no AuxPoW checkpoints                      │
-│                                                                 │
-│  New node syncing from scratch:                                │
-│    "I see two chains. Which is real?"                          │
-│    → Chain with AuxPoW checkpoints wins.                       │
-│    → Checkpoints are anchored in Bitcoin (unforgeable).        │
-│    → Attacker would need to also forge Bitcoin PoW.            │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Sync-Time Verification Only
-
-```mermaid
-sequenceDiagram
-    participant N as New Node
-    participant P1 as Peer 1 (honest)
-    participant P2 as Peer 2 (attacker)
-
-    N->>P1: Request chain
-    P1-->>N: Blocks 1-10000 + checkpoints every 500 blocks
-
-    N->>P2: Request chain
-    P2-->>N: Blocks 1-10000 (alternate chain, no checkpoints)
-
-    N->>N: Compare chains
-
-    Note over N: Chain from P1 has 20 AuxPoW checkpoints<br/>anchored in Bitcoin
-
-    Note over N: Chain from P2 has 0 AuxPoW checkpoints<br/>Cannot verify Bitcoin anchoring
-
-    N->>N: Select P1's chain ✓
-    N->>P2: Disconnect (invalid chain)
-```
-
-### Implementation
-
-```rust
-impl SyncActor {
-    /// Verify chain during initial sync
-    async fn verify_synced_chain(
-        &self,
-        blocks: &[SignedBlock],
-        checkpoints: &[AuxPowCheckpoint],
-    ) -> Result<(), SyncError> {
-        let expected_checkpoint_count = blocks.last()
-            .map(|b| b.height / CHECKPOINT_INTERVAL)
-            .unwrap_or(0);
-
-        // Verify we have enough checkpoints
-        if (checkpoints.len() as u64) < expected_checkpoint_count {
-            return Err(SyncError::InsufficientCheckpoints {
-                expected: expected_checkpoint_count,
-                actual: checkpoints.len() as u64,
-            });
-        }
-
-        // Verify each checkpoint
-        for checkpoint in checkpoints {
-            // Verify checkpoint commitment matches actual blocks
-            let actual = self.compute_commitment(
-                blocks,
-                checkpoint.range_start_height,
-                checkpoint.range_end_height,
-            )?;
-
-            if actual != checkpoint.commitment {
-                return Err(SyncError::InvalidCheckpointCommitment);
-            }
-
-            // Verify Bitcoin PoW
-            if !checkpoint.auxpow.check_proof_of_work(
-                CompactTarget::from_consensus(checkpoint.bits)
-            ) {
-                return Err(SyncError::InvalidCheckpointPoW);
-            }
-        }
-
-        Ok(())
-    }
-}
-```
-
-### What Happens During Normal Operation
-
-Nothing. AuxPoW is invisible to running consensus:
-
-```
-Normal operation:
-
-  Height 1:    Tendermint propose/prevote/precommit/commit
-  Height 2:    Tendermint propose/prevote/precommit/commit
-  ...
-  Height 1000: Tendermint propose/prevote/precommit/commit
-
-  (No AuxPoW checks at any point)
-
-  Mining pools submit checkpoints in the background.
-  Checkpoints are stored but not required by consensus.
-  If mining pools go offline:
-    → Chain continues forever
-    → No stalls, no degradation
-    → Long-range attack protection gradually weakens
-    → Alert: "No checkpoint in N blocks"
-```
-
-### The Weakness
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  WEAKNESS: No guarantee checkpoints keep being produced         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  If mining pools stop submitting checkpoints:                   │
-│                                                                 │
-│  • Chain keeps running (good)                                   │
-│  • But gap between last checkpoint and current height grows     │
-│  • Long-range attack window expands                            │
-│  • Bridge operations have no Bitcoin-anchored reference         │
-│                                                                 │
-│  After 1 month without checkpoints:                             │
-│    An attacker with old keys could create a fake chain         │
-│    covering the entire checkpoint-less period.                  │
-│    New nodes would have no way to distinguish real from fake.  │
-│                                                                 │
-│  This approach relies entirely on economic incentives            │
-│  (or social consensus) to keep mining pools engaged.            │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Assessment
-
-| Dimension | Rating | Notes |
-|-----------|--------|-------|
-| Integration tightness | **Lowest** | Only checked during sync |
-| Implementation complexity | **Low** | Sync verification only |
-| Liveness risk | **None** | Tendermint runs with zero AuxPoW awareness |
-| Security guarantee | **Weakest** | Voluntary checkpoints, no enforcement |
-| Bridge security | Weakest | No guarantee checkpoints exist for bridge ops |
-
-**Best for**: Networks that prioritize absolute consensus independence and treat AuxPoW as a pure defense-in-depth measure.
-
----
-
-## Hybrid Approach: Epoch-Gated + Dual-Layer Finality (2 + 4)
-
-### Concept
-
-Combine the structural benefits of Approach 2 (epoch boundaries) with the liveness benefits of Approach 4 (Tendermint never stalls). Epochs exist as a target for checkpoints, but consensus continues even if a checkpoint is late. Bridge operations enforce the tier requirement independently.
-
-### How It Works
-
-```mermaid
-graph TB
-    subgraph "Consensus Layer (never stalls)"
-        CL1["Epoch 1: Blocks 1-500"] --> CL2["Epoch 2: Blocks 501-1000"]
-        CL2 --> CL3["Epoch 3: Blocks 1001-1500"]
-        CL3 --> CL4["..."]
-    end
-
-    subgraph "Checkpoint Layer (best-effort)"
-        CP1["Checkpoint 1<br/>Blocks 1-500<br/>✓ Submitted"] --> CP2["Checkpoint 2<br/>Blocks 501-1000<br/>⏳ Pending"]
-        CP2 --> CP3["Checkpoint 3<br/>Blocks 1001-1500<br/>⏳ Not started"]
-    end
-
-    subgraph "Bridge Layer (enforces finality tier)"
-        B1["Peg-out request at block 300<br/>Needs: Checkpoint 1 ✓<br/>Status: PROCESSABLE"]
-        B2["Peg-out request at block 800<br/>Needs: Checkpoint 2 ⏳<br/>Status: QUEUED"]
-    end
-
-    CL1 -.-> CP1
-    CL2 -.-> CP2
-    CP1 -.-> B1
-    CP2 -.-> B2
-```
-
-### State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> Running: Genesis
-
-    Running --> Running: Tendermint commit (always)
-    Running --> Running: Checkpoint received (update tracker)
-
-    state "Bridge Decision" as BD
-    Running --> BD: Bridge operation requested
-
-    BD --> ProcessOp: Epoch is anchored
-    BD --> QueueOp: Epoch not yet anchored
-
-    QueueOp --> ProcessOp: Checkpoint arrives later
-
-    note right of Running: Tendermint NEVER stops.<br/>Epochs are targets, not gates.
-    note right of QueueOp: Operations queue until<br/>their epoch is anchored.
-```
-
-### Implementation
-
-```rust
-pub struct HybridEpochManager {
-    pub epoch_length: u64,
-
-    /// Tracks which epochs have been sealed by checkpoints
-    pub sealed_epochs: BTreeMap<u64, AnchoredCheckpoint>,
-
-    /// Operations waiting for their epoch to be sealed
-    pub pending_operations: Vec<PendingBridgeOp>,
-}
-
-impl HybridEpochManager {
-    pub fn epoch_for_height(&self, height: u64) -> u64 {
-        height / self.epoch_length
-    }
-
-    pub fn is_epoch_sealed(&self, epoch: u64) -> bool {
-        self.sealed_epochs.contains_key(&epoch)
-    }
-
-    /// Called when a checkpoint arrives (any time, not blocking consensus)
-    pub fn on_checkpoint_received(&mut self, checkpoint: AnchoredCheckpoint) {
-        let epoch = self.epoch_for_height(checkpoint.range_end_height);
-        self.sealed_epochs.insert(epoch, checkpoint);
-
-        // Process any pending operations that were waiting for this epoch
-        let newly_processable: Vec<_> = self.pending_operations
-            .drain_filter(|op| self.is_epoch_sealed(self.epoch_for_height(op.block_height)))
-            .collect();
-
-        for op in newly_processable {
-            // Trigger bridge processing
-            tracing::info!(
-                epoch = epoch,
-                op_height = op.block_height,
-                "Epoch sealed — processing queued bridge operation"
-            );
-        }
-    }
-}
-```
-
-### User Experience
-
-```
-USER ACTION                    WHAT HAPPENS                    LATENCY
+Operation              Approach 1         Approach 2          Approach 3
 ─────────────────────────────────────────────────────────────────────────
+On-chain transfer      ~6s                ~6s                 ~6s
+                       (never stalls      (rounds cycle       (never stalls)
+                        if configured)     at CP heights)
 
-Send tokens on Alys           Tendermint commit               ~6 seconds
-                              (Tier 1 finality)
+Peg-in                 ~30-60s            ~30-60s             ~30-60s
+                       (attestation       (continuous         (whenever
+                        submissions)       flow)               miner submits)
 
-Peg-in 0.01 BTC              Tendermint commit               ~6 seconds
-(small amount)                (Tier 1 finality)
+Peg-out                CP wait            CP wait             CP wait
+                       + BTC confs        + BTC confs         + BTC confs
 
-Peg-out 1.0 BTC              Tendermint commit (instant)     ~6 seconds
-                              + Wait for epoch checkpoint     + 0-50 minutes
-                              + Wait for BTC confirmations    + ~60 minutes
-                              Total:                          ~70-120 minutes
-
-                              User sees:
-                              "Peg-out confirmed. Waiting for
-                               Bitcoin anchor finality.
-                               Estimated: ~90 minutes"
-
-Peg-out during pool outage    Tendermint commit (instant)     ~6 seconds
-                              + Epoch checkpoint: DELAYED     + ???
-
-                              User sees:
-                              "Peg-out confirmed. Waiting for
-                               Bitcoin anchor finality.
-                               Status: Checkpoint pending.
-                               The chain is fully operational."
+Checkpoint stall       Configurable       ROUNDS CYCLE        NO HALT
+                                          (at CP heights)     (just queues)
 ```
 
 ### Assessment
 
 | Dimension | Rating | Notes |
 |-----------|--------|-------|
-| Integration tightness | Medium-High | Epochs + finality tiers |
-| Implementation complexity | Medium | Epoch manager + finality tracker + bridge queue |
-| Liveness risk | **Lowest** | Tendermint never stalls |
-| Security guarantee | Strong | Tiered with epoch structure |
-| Bridge security | **Strongest** | Explicit tier per operation + epoch anchoring |
+| Peg-in latency | Good (~30-60s) | Processed as soon as miner submits |
+| Bitcoin anchoring | Good | Async checkpoints, not structurally enforced |
+| Consensus stalls? | **Never** | Tendermint runs independently of AuxPoW |
+| Implementation complexity | Medium | Finality tracker + tier enforcement |
+| Bridge security | Strong | Explicit tier requirements per operation |
 
-**Best for**: Production networks that need both reliability (no stalls) and strong security (Bitcoin anchoring for cross-chain ops).
+**Best for**: Networks that prioritize uptime above all else — the chain never halts regardless of mining pool status.
 
 ---
 
 ## Full Comparison Matrix
 
-| | Approach 1 | Approach 2 | Approach 3 | Approach 4 | Approach 5 | Hybrid (2+4) |
-|---|---|---|---|---|---|---|
-| **Summary** | Liveness gate | Epoch-gated | Commit extension | Dual-layer | Sync-only | Best of 2+4 |
-| **Consensus stalls?** | Yes | Yes (grace) | Yes (rounds cycle) | **Never** | Never | **Never** |
-| **Checkpoint guaranteed?** | **Yes** | **Yes** | **Yes** | No (queues ops) | No (voluntary) | No (queues ops) |
-| **Bridge impact** | All ops wait | Epoch boundary | In-block proof | Tiered | None | **Tiered + epochs** |
-| **Mining pool outage** | **Chain halts** | Chain halts (after grace) | Rounds slow down | Chain fine, ops queue | Chain fine | **Chain fine, ops queue** |
-| **Complexity** | Low | Medium | Medium-High | Medium | **Low** | Medium |
-| **On-chain UX** | May stall | May stall | May slow | **Always fast** | Always fast | **Always fast** |
-| **Long-range protection** | Strong | Strong | Strong | Strong | **Weakest** | Strong |
+| | Approach 1 | Approach 2 | Approach 3 |
+|---|---|---|---|
+| **Summary** | Dual-difficulty | Commit extension | Dual-layer finality |
+| **Peg-in latency** | **~30-60s** | ~30-60s | ~30-60s |
+| **Consensus stalls?** | Configurable | Yes (rounds cycle at CP heights) | **Never** |
+| **Checkpoint guaranteed?** | Configurable | **Yes** (in-block) | No (async) |
+| **Mining pool outage** | Chain fine or halts | Rounds slow at checkpoints | **Chain fine** |
+| **Bridge impact** | Tiered (if configured) | In-block proof | Tiered |
+| **Implementation** | Medium | Medium-High | Medium |
+| **Auditability** | Moderate | **Best** (in-block) | Moderate |
+| **AuxPoW coupling** | Low-Medium | **Highest** | **Lowest** |
+| **Long-range protection** | Strong | **Strongest** | Good (voluntary) |
+| **Peg-in delivery** | Via attestations | Via any submission | Via any submission |
+
+### Cross-Cutting Observation
+
+All three approaches share the same peg-in delivery mechanism: miners submit `AuxPowHeader` with peg-in data via `submitauxblock`, the chain queues the peg-ins, and the next proposer includes them as EVM withdrawals. The approaches differ only in how they handle the *checkpoint* (Bitcoin anchoring) aspect — whether it blocks consensus, how it's structured, and what security guarantees it provides.
+
+The miner-effectuated peg-in requirement makes **PoW difficulty** a critical design parameter. With a single high-difficulty target, miners solve too slowly for responsive peg-in delivery. Approach 1 addresses this head-on with dual difficulty tiers. Approaches 2-3 address it implicitly by accepting any-difficulty submissions for peg-in delivery while imposing high difficulty only on checkpoint proofs.
+
+> **Note**: Epoch-gated checkpoints (fixed checkpoint intervals that could halt the chain) were explicitly rejected because they would limit when miners can submit AuxPoW headers, directly impacting peg-in latency. Since peg-ins travel through AuxPoW headers, any restriction on AuxPoW submission timing is a restriction on peg-in delivery. See [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md) for details.
 
 ---
 
 ## Recommendation
 
-For a production system, the **Hybrid (2+4)** approach provides the best balance:
+For a production Alys network with miner-effectuated peg-ins, we recommend a **Hybrid of Approaches 1 and 3** (Dual-Difficulty + Dual-Layer Finality):
 
-1. **Tendermint never waits** for AuxPoW — on-chain operations are always instant
-2. **Epoch structure** creates predictable checkpoint targets for mining pools
-3. **Bridge operations enforce their own finality tier** — no consensus changes needed
-4. **Mining pool outage** degrades peg-out latency but never halts the chain
-5. **Implementation is modular** — each concern (epochs, finality tracking, bridge queuing) can be built and tested independently
+### Why This Combination
 
-The next step would be to select an approach and create a detailed implementation plan with code examples, storage schema, and integration points.
+1. **Tendermint never waits for AuxPoW** — on-chain operations are always instant (from Approach 3)
+2. **Dual difficulty separates concerns** — low-difficulty attestations for fast peg-in delivery, high-difficulty checkpoints for Bitcoin anchoring (from Approach 1)
+3. **Bridge operations enforce their own finality tier** — peg-outs require anchor finality, peg-ins are processed immediately (from Approach 3)
+4. **Mining pool outage** degrades peg-in delivery but never halts the chain — acceptable since peg-in unavailability is inherent to the miner requirement regardless of approach
+
+### Hybrid Configuration
+
+```rust
+pub struct HybridConfig {
+    /// Low difficulty for peg-in attestations (~30-60s solve time)
+    pub attestation_bits: u32,
+
+    /// High difficulty for Bitcoin-grade checkpoints
+    pub checkpoint_bits: u32,
+
+    /// Target checkpoint interval (advisory, not enforced by consensus)
+    pub target_checkpoint_interval: u64,  // e.g., 500 blocks
+
+    /// Alert threshold: warn if no checkpoint in this many blocks
+    pub checkpoint_alert_threshold: u64,  // e.g., 1000 blocks
+}
+```
+
+### Operational Behavior
+
+```
+Normal operation:
+  Miners submit attestations every ~30-60s → peg-ins delivered
+  Miners submit checkpoints every ~50 minutes → Bitcoin anchoring
+  Tendermint produces blocks every ~6s → instant finality
+  Bridge processes peg-outs after checkpoint anchoring → tiered finality
+
+Mining pool slowdown:
+  Attestations slow → peg-in latency increases (proportionally)
+  Checkpoints delayed → peg-out latency increases
+  Tendermint: unaffected ✓
+  Alert: "Checkpoint overdue"
+
+Mining pool offline:
+  No attestations → no new peg-ins (inherent to miner model)
+  No checkpoints → peg-outs queue indefinitely
+  Tendermint: unaffected ✓
+  Alert: "Mining pool offline — peg-in/out unavailable"
+  On-chain operations: fully functional ✓
+```
+
+### Implementation Phases
+
+The hybrid can be built incrementally:
+
+1. **Phase 1**: Implement extended `AuxPowHeader` with pegins field, dual-difficulty submission handler, and peg-in queue with duplicate prevention
+2. **Phase 2**: Implement anchor finality tracker and tiered bridge operations (peg-out queuing until checkpoint anchored)
+3. **Phase 3**: Add monitoring, alerts, and operational tooling (checkpoint overdue warnings, mining pool health checks)
 
 ---
 
-*Exploration Document Version: 1.0*
-*Last Updated: January 2026*
+## Key Decisions from Miner Peg-In Analysis
+
+Per [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md), the following decisions apply to all approaches:
+
+| Dimension | Decision |
+|-----------|----------|
+| **Who detects peg-ins** | Miner (not Bridge/Federation) |
+| **How peg-ins travel** | Embedded in `AuxPowHeader.pegins` field |
+| **RPC interface** | `submitauxblock(hash, auxpow, pegins)` |
+| **Block storage** | Peg-ins converted to EVM Withdrawals in `execution_payload` |
+| **Deduplication tracking** | `processed_pegins: Vec<(Txid, BlockHash)>` in block |
+| **Miner requirements** | Bitcoin RPC access + federation deposit address(es) |
+| **Validator verification** | Must independently verify peg-ins against Bitcoin |
+| **Latency bound** | Peg-in latency = miner detection + PoW solve time + next block |
+
+### Peg-In Data Flow
+
+```
+1. Miner detects BTC deposit → extracts PegInInfo
+2. Miner submits via submitauxblock(hash, auxpow, pegins)
+3. ChainActor validates PoW + queues pegins in state.queued_pegins
+4. Proposer calls collect_withdrawals() → converts pegins to Withdrawals
+5. Withdrawals included in execution_payload (Capella mechanism)
+6. Geth credits balances directly (no gas, no revert)
+7. Block stores (txid, block_hash) pairs for deduplication
+```
+
+---
+
+## Related Documents
+
+- [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md) — Detailed merge-mining mechanics and peg-in lifecycle
+- [Tendermint Migration Assessment](../TENDERMINT_MIGRATION_ASSESSMENT.md) — High-level analysis
+- [Tendermint Consensus Guide](../TENDERMINT_CONSENSUS_GUIDE.md) — Protocol explanation
+
+---
+
+*Exploration Document Version: 3.0*
+*Last Updated: February 2026*
+*Revised: Removed epoch-gated checkpoints (incompatible with miner-effectuated peg-ins)*

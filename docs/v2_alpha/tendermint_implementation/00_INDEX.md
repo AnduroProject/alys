@@ -24,7 +24,7 @@ This directory contains comprehensive implementation plans for migrating Alys V2
 | 08 | [Timeout Management](08_TIMEOUT_MANAGEMENT.md) | 2-3 days | 02, 04 |
 | 09 | [SyncActor Modifications](09_SYNC_ACTOR.md) | 1-2 weeks | 01, 04, 05 |
 
-### System Integration (Documents 10-15)
+### System Integration (Documents 10-17)
 
 | # | Document | Effort | Dependencies |
 |---|----------|--------|--------------|
@@ -34,6 +34,8 @@ This directory contains comprehensive implementation plans for migrating Alys V2
 | 13 | [Bridge Integration](13_BRIDGE_INTEGRATION.md) | 3-5 days | 07 |
 | 14 | [Genesis & Validator Init](14_GENESIS_AND_VALIDATOR_INIT.md) | 1-2 days | 01 |
 | 15 | [Validation Module](15_VALIDATION_MODULE.md) | 3-5 days | 01, 02, 03 |
+| 16 | [AuxPoW-Tendermint Integration](16_AUXPOW_TENDERMINT_INTEGRATION.md) | 2-3 weeks | 07, 13 |
+| 17 | [Governance Parameters](17_GOVERNANCE_PARAMETERS.md) | 1-2 weeks | 14, 11 |
 
 ---
 
@@ -129,8 +131,9 @@ app/src/actors_v2/chain/tendermint/
 └── handlers.rs               # Handler implementations
 
 app/src/actors_v2/storage/
-├── schema.rs                 # Updated with CF_COMMITS, CF_VALIDATOR_SETS, CF_CHECKPOINTS (11)
-└── messages.rs               # New: StoreCommitMessage, GetCommitMessage, etc.
+├── schema.rs                 # Updated with CF_VALIDATOR_SETS, CF_CHECKPOINTS (11)
+│                             # Note: NO CF_COMMITS - commits are embedded in blocks
+└── messages.rs               # New: GetCommitForHeightMessage, validator set messages, etc.
 
 app/src/actors_v2/rpc/
 └── actor.rs                  # Updated for checkpoint mining API (12)
@@ -145,6 +148,30 @@ app/src/genesis/
 ---
 
 ## Key Concepts
+
+### Block Structure with LastCommit
+
+Following standard Tendermint/CometBFT architecture, **LastCommit is embedded in the block structure**:
+
+```
+Block N:
+├── Header
+│   └── parent_hash: hash(Block N-1)
+├── last_commit: Commit for Block N-1  ← +2/3 precommit signatures
+│   ├── height: N-1
+│   ├── round: R
+│   ├── block_hash: hash(Block N-1)
+│   └── signatures: [CommitSig, CommitSig, ...]
+├── execution_payload: EVM state transition
+└── ... other fields
+```
+
+**Key Insight**: `LoadBlockCommit(height)` returns `Block[height+1].last_commit`
+
+This design ensures:
+- Atomic persistence of block + previous finality proof
+- Light client efficiency (single fetch proves finality)
+- No separate commit storage needed
 
 ### Consensus Flow
 
@@ -171,6 +198,131 @@ Height H, Round R:
 1. **Timeouts**: Ensure progress even with failed proposers
 2. **Round Advancement**: Move to new round if no majority
 3. **Exponential Backoff**: Handle network delays gracefully
+
+### Miner-Effectuated Peg-Ins (AuxPoW)
+
+**Critical Requirement**: For AML/KYC legal compliance, **peg-ins must be effectuated by miners**, not the bridge or federation.
+
+```
+┌─────────────────┐                              ┌─────────────────┐
+│  Bitcoin Chain  │                              │   Alys Chain    │
+│                 │                              │                 │
+│  Deposit to     │      Miner monitors          │                 │
+│  Federation     │ ─────────────────────────►   │                 │
+│  Address        │                              │                 │
+└─────────────────┘                              │                 │
+        │                                        │                 │
+        │ Miner detects peg-in tx                │                 │
+        │ (6+ confirmations)                     │                 │
+        ▼                                        │                 │
+┌─────────────────┐                              │                 │
+│     Miner       │    submitauxblock(           │                 │
+│                 │      block_hash,             │   Block N       │
+│  - Monitors BTC │      auxpow_header,  ──────► │   ├─ AuxPoW     │
+│  - Detects pegins│     pegins[]        )       │   │  └─ pegins  │
+│  - Earns fee    │                              │   └─ EVM tx     │
+└─────────────────┘                              │      (Withdraw) │
+                                                 └─────────────────┘
+```
+
+**Miner Responsibilities:**
+1. Monitor the Bitcoin federation deposit address for incoming transactions
+2. Wait for sufficient confirmations (e.g., 6 blocks)
+3. Include valid peg-in proofs in the `AuxPowHeader.pegins` field
+4. Submit via `submitauxblock(block_hash, auxpow_header, pegins)`
+
+**Miner Compensation:**
+- Miners receive a **percentage of each peg-in amount** as compensation
+- This incentivizes miners to actively monitor and include peg-ins
+- Fee percentage configured in genesis/chain parameters
+
+**Peg-In Flow:**
+1. User deposits BTC to federation address
+2. Miner detects deposit, waits for confirmations
+3. Miner includes peg-in proof in `submitauxblock`
+4. Tendermint proposer includes AuxPoW in block (if valid)
+5. Peg-in becomes EVM `Withdrawal` in `execution_payload`
+6. User receives wrapped BTC on Alys chain
+
+- **See**: `MINER_PEGIN_IMPACT_ANALYSIS.md` for detailed analysis
+- **See**: `16_AUXPOW_TENDERMINT_INTEGRATION.md` for AuxPoW integration
+
+### Validator Set Updates (Governance Client + H+2)
+
+Validator set changes are received from an external **Governance Client** service via gRPC bi-directional stream (similar to AuxPoW submission pattern):
+
+```
+┌─────────────────────┐      gRPC Stream      ┌─────────────────────┐
+│  Governance Client  │ ◄──────────────────► │     ChainActor      │
+│  (External Service) │   ValidatorUpdates    │     (Validator)     │
+└─────────────────────┘                       └─────────────────────┘
+                                                      │
+                                                      ▼
+                                             ┌─────────────────┐
+                                             │ Proposer        │
+                                             │ includes in     │
+                                             │ block at H      │
+                                             └─────────────────┘
+                                                      │
+                                                      ▼
+                                             Activates at H+2
+```
+
+**Flow:**
+1. Governance Client sends `ValidatorUpdate` messages via gRPC stream
+2. ChainActor validates (governance signature) and queues updates
+3. Proposer includes queued updates in block at height H
+4. All validators verify updates when validating the proposal
+5. Updates take effect at block **H+2** (standard Tendermint delay)
+
+- **No epoch-based updates**: Changes take effect at H+2, not at fixed intervals
+- **Power = 0**: Removes a validator from the set
+- **Constraints**: Max validators, max total power, min 4 validators for BFT
+- **See**: `14_GENESIS_AND_VALIDATOR_INIT.md` Section 5 for full implementation details
+
+### Governable Parameters (Governance Client)
+
+Chain parameters can be modified by the federation via the Governance Client gRPC stream. All changes are included in blocks for auditability and verification by late-joining validators and light clients.
+
+**Governable Parameter Categories:**
+
+| Category | Examples | Activation |
+|----------|----------|------------|
+| Peg-In Compensation | `miner_fee_bps`, `min/max_fee_satoshi` | H+1 |
+| Bridge Config | `btc_confirmations`, `min/max_peg_amount`, `federation_members` | H+1 |
+| Checkpoint Config | `attestation_difficulty`, `checkpoint_difficulty`, `max_blocks_without_pow` | H+1 |
+| Consensus Params | `propose_timeout_ms`, `max_validators` | H+1 |
+| Emergency Controls | `chain_paused`, `pegins_paused`, `pegouts_paused` | Immediate (H+0) |
+
+**Unified GovernanceUpdate Type:**
+
+```rust
+pub enum GovernanceUpdate {
+    Validator(ValidatorUpdate),   // H+2 activation
+    Parameter(ParameterUpdate),   // H+1 activation
+    Emergency(EmergencyAction),   // Immediate activation
+}
+```
+
+**Block Structure:**
+
+```
+Block N:
+├── last_commit: Commit for Block N-1
+├── execution_payload
+├── auxpow_checkpoint: Option<AuxPowCheckpoint>
+├── governance_updates: Option<Vec<GovernanceUpdate>>  ← All governance changes
+├── validators_hash
+├── next_validators_hash
+└── params_hash  ← Hash of current chain parameters
+```
+
+**Late-Joiner Support:**
+- Parameter history stored in `CF_PARAMETER_HISTORY` column family
+- Late-joining validators reconstruct parameter state from storage
+- Light clients verify via `params_hash` in block headers
+
+- **See**: `17_GOVERNANCE_PARAMETERS.md` for full implementation details
 
 ---
 
