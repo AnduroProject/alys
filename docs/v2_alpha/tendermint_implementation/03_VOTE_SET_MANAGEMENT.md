@@ -6,9 +6,14 @@ This document provides a comprehensive implementation guide for Tendermint vote 
 
 **Estimated Effort**: 1 week
 **Dependencies**:
-- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Vote, VoteType, ValidatorSet)
+- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`:
+  - Core types: `Vote`, `VoteType`, `ValidatorSet`, `ValidatorId`, `BlockHash`
+  - Commit types: `Commit`, `CommitSig`, `BlockIDFlag`
+  - Type aliases: `Height`, `Round`, `VotingPower`
 **Files to Create**:
 - `app/src/actors_v2/chain/tendermint/vote_set.rs`
+
+**Important Design Note**: VoteSets are created fresh at the start of each height, after any pending governance updates (validator set changes) have been applied. This ensures the VoteSet always references the correct validator set for that height.
 
 ---
 
@@ -74,6 +79,7 @@ For a validator set with total power `P`:
 use super::types::*;
 use super::messages::Vote;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Errors that can occur during vote operations
@@ -108,6 +114,25 @@ pub enum VoteError {
 /// - Voting power tallies per block hash
 /// - Total collected voting power
 /// - Threshold calculations
+///
+/// # Vote Timestamp Requirement
+///
+/// The `Vote` struct (defined in `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`)
+/// must include a `timestamp` field for CommitSig creation:
+///
+/// ```rust,ignore
+/// pub struct Vote {
+///     pub height: Height,
+///     pub round: Round,
+///     pub vote_type: VoteType,
+///     pub block_hash: Option<BlockHash>,
+///     pub validator: ValidatorId,
+///     pub timestamp: u64,  // Unix timestamp when vote was cast
+///     pub signature: BLSSignature,
+/// }
+/// ```
+///
+/// The timestamp is recorded in the CommitSig when building commit proofs.
 ///
 /// # Example
 ///
@@ -414,8 +439,29 @@ impl VoteSet {
     }
 
     /// Get a validator's vote (if any)
-    pub fn get_vote(&self, validator: &ValidatorId) -> Option<&Vote> {
+    pub fn get_vote_by_validator(&self, validator: &ValidatorId) -> Option<&Vote> {
         self.votes.get(validator)
+    }
+
+    /// Get a validator's vote if it matches the specified block_hash
+    ///
+    /// This is used when building CommitSig arrays where we need to check
+    /// if a validator voted for a specific block (or NIL).
+    ///
+    /// # Arguments
+    ///
+    /// * `validator` - The validator to check
+    /// * `block_hash` - The block hash to match (None for NIL votes)
+    ///
+    /// # Returns
+    ///
+    /// The vote if the validator voted for the specified block, None otherwise
+    pub fn get_vote(
+        &self,
+        validator: &ValidatorId,
+        block_hash: Option<BlockHash>,
+    ) -> Option<&Vote> {
+        self.votes.get(validator).filter(|v| v.block_hash == block_hash)
     }
 
     /// Iterate over all votes
@@ -432,12 +478,67 @@ impl VoteSet {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // AGGREGATION
+    // COMMIT PROOF BUILDING
     // ═══════════════════════════════════════════════════════════════════
+
+    /// Build CommitSig array for creating a Commit proof
+    ///
+    /// This is used after 2/3+ precommits to create the finality proof.
+    /// The resulting Vec<CommitSig> has one entry per validator in the
+    /// validator set, in the same order.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_hash` - The block that was committed
+    ///
+    /// # Returns
+    ///
+    /// A Vec<CommitSig> with one entry per validator:
+    /// - `BlockIDFlag::Commit` if they precommitted for this block
+    /// - `BlockIDFlag::Nil` if they precommitted nil
+    /// - `BlockIDFlag::Absent` if they didn't precommit
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let signatures = precommit_set.build_commit_sigs(block_hash);
+    /// let commit = Commit::new(height, round, block_hash, signatures);
+    /// ```
+    pub fn build_commit_sigs(&self, block_hash: BlockHash) -> Vec<CommitSig> {
+        (0..self.validator_set.len())
+            .map(|i| {
+                let validator_id = ValidatorId::new(i as u8);
+
+                // Check if validator precommitted for this block
+                if let Some(vote) = self.get_vote(&validator_id, Some(block_hash)) {
+                    return CommitSig {
+                        block_id_flag: BlockIDFlag::Commit,
+                        validator_address: Some(validator_id),
+                        timestamp: vote.timestamp,
+                        signature: Some(vote.signature.clone()),
+                    };
+                }
+
+                // Check if validator precommitted nil
+                if let Some(vote) = self.get_vote(&validator_id, None) {
+                    return CommitSig {
+                        block_id_flag: BlockIDFlag::Nil,
+                        validator_address: Some(validator_id),
+                        timestamp: vote.timestamp,
+                        signature: Some(vote.signature.clone()),
+                    };
+                }
+
+                // Validator was absent (didn't precommit)
+                CommitSig::absent()
+            })
+            .collect()
+    }
 
     /// Create an aggregate signature from all votes for a specific block
     ///
-    /// This is used to create the Commit proof after 2/3+ precommits.
+    /// This is an alternative to build_commit_sigs() for systems that use
+    /// BLS signature aggregation instead of individual signatures.
     ///
     /// # Returns
     ///
@@ -575,28 +676,51 @@ async fn process_prevotes(
 
 ```rust
 // Example: Creating a Commit after 2/3+ precommits
+//
+// This follows the Tendermint/CometBFT pattern where the Commit contains
+// one CommitSig per validator in the validator set.
 
 fn create_commit(
     vote_set: &VoteSet,
     block_hash: BlockHash,
-) -> Result<Commit, VoteError> {
+) -> Result<Commit, CommitError> {
     // Verify we have 2/3+ for this block
     if !vote_set.has_two_thirds_for(Some(&block_hash)) {
-        panic!("Cannot create commit without 2/3+ precommits");
+        return Err(CommitError::InsufficientVotes {
+            have: vote_set.power_for(Some(&block_hash)),
+            need: vote_set.two_thirds_threshold(),
+        });
     }
 
-    // Aggregate signatures
-    let (aggregate_sig, signers) = vote_set
-        .aggregate_for(block_hash)
-        .expect("Should have votes for block");
+    // Build CommitSig array - one entry per validator
+    let signatures = vote_set.build_commit_sigs(block_hash);
 
-    Ok(Commit {
-        height: vote_set.height,
-        round: vote_set.round,
+    // Create the Commit proof
+    let commit = Commit::new(
+        vote_set.height,
+        vote_set.round,
         block_hash,
-        aggregate_signature: aggregate_sig,
-        signers,
-    })
+        signatures,
+    );
+
+    // Verify the commit has sufficient signatures
+    if !commit.has_sufficient_signatures(vote_set.validator_set.len()) {
+        return Err(CommitError::InsufficientSignatures {
+            have: commit.num_commit_signatures(),
+            need: vote_set.two_thirds_threshold() as usize,
+        });
+    }
+
+    Ok(commit)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CommitError {
+    #[error("Insufficient votes: have {have}, need {need}")]
+    InsufficientVotes { have: VotingPower, need: VotingPower },
+
+    #[error("Insufficient signatures: have {have}, need {need}")]
+    InsufficientSignatures { have: usize, need: usize },
 }
 ```
 
@@ -771,6 +895,7 @@ mod tests {
             vote_type,
             block_hash,
             validator: ValidatorId(validator),
+            timestamp: 1704067200, // Fixed timestamp for deterministic tests
             signature: BLSSignature::empty(),
         }
     }
@@ -879,6 +1004,7 @@ mod tests {
             vote_type: VoteType::Prevote,
             block_hash: Some(BlockHash::repeat_byte(0xAB)),
             validator: ValidatorId(0),
+            timestamp: 1704067200,
             signature: BLSSignature::empty(),
         };
 
@@ -899,6 +1025,69 @@ mod tests {
 
         let (_, signers) = vote_set.aggregate_for(block).unwrap();
         assert_eq!(signers, vec![true, true, true, false]);
+    }
+
+    #[test]
+    fn test_build_commit_sigs() {
+        let set = create_test_validator_set(4);
+        let mut vote_set = VoteSet::new(100, 0, VoteType::Precommit, set);
+
+        let block = BlockHash::repeat_byte(0xAB);
+
+        // V0 and V1 vote for block, V2 votes NIL, V3 is absent
+        vote_set.add_vote(create_test_vote(0, Some(block), VoteType::Precommit)).unwrap();
+        vote_set.add_vote(create_test_vote(1, Some(block), VoteType::Precommit)).unwrap();
+        vote_set.add_vote(create_test_vote(2, None, VoteType::Precommit)).unwrap();
+        // V3 doesn't vote
+
+        let commit_sigs = vote_set.build_commit_sigs(block);
+
+        assert_eq!(commit_sigs.len(), 4);
+
+        // V0: Committed
+        assert_eq!(commit_sigs[0].block_id_flag, BlockIDFlag::Commit);
+        assert_eq!(commit_sigs[0].validator_address, Some(ValidatorId(0)));
+        assert!(commit_sigs[0].signature.is_some());
+
+        // V1: Committed
+        assert_eq!(commit_sigs[1].block_id_flag, BlockIDFlag::Commit);
+        assert_eq!(commit_sigs[1].validator_address, Some(ValidatorId(1)));
+
+        // V2: Voted NIL
+        assert_eq!(commit_sigs[2].block_id_flag, BlockIDFlag::Nil);
+        assert_eq!(commit_sigs[2].validator_address, Some(ValidatorId(2)));
+
+        // V3: Absent
+        assert_eq!(commit_sigs[3].block_id_flag, BlockIDFlag::Absent);
+        assert_eq!(commit_sigs[3].validator_address, None);
+        assert!(commit_sigs[3].signature.is_none());
+    }
+
+    #[test]
+    fn test_get_vote_with_block_hash_filter() {
+        let set = create_test_validator_set(4);
+        let mut vote_set = VoteSet::new(100, 0, VoteType::Prevote, set);
+
+        let block_a = BlockHash::repeat_byte(0xAA);
+        let block_b = BlockHash::repeat_byte(0xBB);
+
+        vote_set.add_vote(create_test_vote(0, Some(block_a), VoteType::Prevote)).unwrap();
+        vote_set.add_vote(create_test_vote(1, None, VoteType::Prevote)).unwrap(); // NIL
+
+        // get_vote with matching block_hash returns the vote
+        assert!(vote_set.get_vote(&ValidatorId(0), Some(block_a)).is_some());
+
+        // get_vote with non-matching block_hash returns None
+        assert!(vote_set.get_vote(&ValidatorId(0), Some(block_b)).is_none());
+        assert!(vote_set.get_vote(&ValidatorId(0), None).is_none());
+
+        // get_vote for NIL voter
+        assert!(vote_set.get_vote(&ValidatorId(1), None).is_some());
+        assert!(vote_set.get_vote(&ValidatorId(1), Some(block_a)).is_none());
+
+        // get_vote_by_validator returns vote regardless of block_hash
+        assert!(vote_set.get_vote_by_validator(&ValidatorId(0)).is_some());
+        assert!(vote_set.get_vote_by_validator(&ValidatorId(1)).is_some());
     }
 
     #[test]
@@ -943,16 +1132,39 @@ mod tests {
 
 ## 6. Checklist
 
+### Core Implementation
 - [ ] Create `vote_set.rs` with `VoteSet` structure
+- [ ] Add `Arc` import for `Arc<ValidatorSet>`
 - [ ] Implement `add_vote()` with validation
 - [ ] Implement threshold queries (`has_two_thirds_any`, `two_thirds_majority`, etc.)
-- [ ] Implement `aggregate_for()` for Commit proof creation
 - [ ] Add `VoteError` enum
+
+### Vote Retrieval
+- [ ] Implement `get_vote_by_validator()` - returns vote regardless of block_hash
+- [ ] Implement `get_vote(validator, block_hash)` - returns vote only if matches
+- [ ] Implement `votes_for(block_hash)` - returns all votes for a block
+- [ ] Implement `iter_votes()` - iterate all votes
+
+### Commit Proof Building
+- [ ] Implement `build_commit_sigs()` - creates `Vec<CommitSig>` for Commit
+- [ ] Implement `aggregate_for()` - alternative BLS aggregation (optional)
+- [ ] Add `CommitError` enum for commit creation failures
+
+### Testing
 - [ ] Write unit tests for threshold calculations
 - [ ] Write unit tests for vote addition edge cases
-- [ ] Write unit tests for aggregation
+- [ ] Write unit tests for `build_commit_sigs()`
+- [ ] Write unit tests for `get_vote()` with block_hash filter
+- [ ] Write unit tests for duplicate/conflicting votes
+
+### Integration
 - [ ] Add metrics integration
-- [ ] Integrate with state machine
+- [ ] Integrate with state machine (02_STATE_MACHINE.md)
+- [ ] Integrate with ChainActor handlers (04_CHAINACTOR_HANDLERS.md)
+
+### Documentation
+- [ ] Ensure Vote struct includes `timestamp` field in doc 01
+- [ ] Document validator set lifecycle (fresh VoteSet per height)
 
 ---
 
@@ -965,5 +1177,6 @@ After completing this implementation:
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
+*Changes: Added build_commit_sigs(), get_vote() with block_hash filter, Vote timestamp requirement, aligned with Commit/CommitSig structure*
