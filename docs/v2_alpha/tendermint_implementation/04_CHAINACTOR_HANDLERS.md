@@ -4,17 +4,25 @@
 
 This document provides a comprehensive implementation guide for modifying the ChainActor handlers to support Tendermint consensus. This is the largest single change and represents the integration point where all Tendermint components come together.
 
+**Key Design Decision**: Following standard Tendermint/CometBFT architecture, **LastCommit is embedded in the block structure**. When a block is committed, the commit proof is cached and embedded in the NEXT block's `last_commit` field. Block N+1.last_commit proves Block N was finalized.
+
 **Estimated Effort**: 3 weeks
 **Dependencies**:
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`
 - `02_STATE_MACHINE.md`
 - `03_VOTE_SET_MANAGEMENT.md`
+- `07_EL_COORDINATION.md` (finalization with embedded commits)
+- `11_STORAGE_SCHEMA_MIGRATION.md` (storage with embedded commits)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (peg-in handling, miner compensation)
+- `17_GOVERNANCE_PARAMETERS.md` (GovernanceUpdate, activation timing)
 **Files to Modify**:
 - `app/src/actors_v2/chain/handlers.rs`
 - `app/src/actors_v2/chain/actor.rs`
 - `app/src/actors_v2/chain/messages.rs`
+- `app/src/actors_v2/chain/withdrawals.rs` (peg-in to EVM conversion)
 **Files to Create**:
 - `app/src/actors_v2/chain/tendermint/handlers.rs`
+- `app/src/actors_v2/chain/tendermint/governance.rs`
 
 ---
 
@@ -133,6 +141,32 @@ pub enum ChainMessage {
         actions: Vec<ConsensusAction>,
         correlation_id: Option<Uuid>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GOVERNANCE MESSAGES (See 17_GOVERNANCE_PARAMETERS.md)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Trigger: Governance client gRPC stream
+    /// Called when: Federation sends validator/parameter/emergency updates
+    /// Activation: Validator=H+2, Parameter=H+1, Emergency=H+0
+    TendermintGovernanceUpdate {
+        update: GovernanceUpdate,
+        correlation_id: Option<Uuid>,
+    },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUXPOW / PEG-IN MESSAGES (See 16_AUXPOW_TENDERMINT_INTEGRATION.md)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Trigger: Miner submits AuxPoW with peg-in data via submitauxblock RPC
+    /// Called when: Miner completes merge-mining work and includes monitored peg-ins
+    TendermintSubmitAuxBlock {
+        hash: H256,
+        auxpow: AuxPow,
+        pegins: Vec<PegInInfo>,
+        fee_recipient: Address,
+        correlation_id: Option<Uuid>,
+    },
 }
 ```
 
@@ -173,6 +207,30 @@ pub enum TendermintActionType {
     RoundAdvanced { new_round: u32 },
     BlockCommitted { block_hash: H256 },
     TimeoutHandled { step: TendermintStep },
+    // Governance actions
+    GovernanceUpdateQueued { update_type: GovernanceUpdateType, effective_height: u64 },
+    GovernanceUpdateApplied { update_type: GovernanceUpdateType },
+    EmergencyActionExecuted { action: EmergencyActionType },
+    // Peg-in actions
+    AuxBlockAccepted { pegins_queued: usize },
+    PegInsIncluded { count: usize, total_amount: u64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceUpdateType {
+    Validator { public_key: PublicKey, power: u64 },
+    Parameter { param: GovernableParam },
+    Emergency,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EmergencyActionType {
+    PausePegIns,
+    ResumePegIns,
+    PausePegOuts,
+    ResumePegOuts,
+    PauseChain,
+    ResumeChain,
 }
 ```
 
@@ -886,7 +944,15 @@ impl ChainActor {
     ///
     /// This is the finalization step. Once committed, the block is
     /// immediately final and cannot be reverted.
-    async fn commit_tendermint_block(&self, block_hash: BlockHash) -> Result<(), ChainError> {
+    ///
+    /// # Embedded LastCommit Design
+    ///
+    /// Following standard Tendermint/CometBFT architecture:
+    /// - The commit proof created here will be embedded in the NEXT block's `last_commit` field
+    /// - Block N+1.last_commit proves Block N was finalized
+    /// - The commit is cached until Block N+1 is proposed
+    ///
+    async fn commit_tendermint_block(&mut self, block_hash: BlockHash) -> Result<(), ChainError> {
         let state = &self.state.tendermint;
         let height = state.height;
         let round = state.round;
@@ -911,25 +977,56 @@ impl ChainActor {
             wal.write(WALEntry::Commit { height, block_hash })?;
         }
 
-        // Create Commit proof from precommits
+        // Create Commit proof from precommits using CommitSig structure
         let commit = {
             let precommits = state.precommits.read().await;
-            let (aggregate_sig, signers) = precommits
-                .aggregate_for(block_hash)
-                .ok_or(ChainError::NoPrecommitsForBlock)?;
+            let validator_set = &state.validator_set;
 
-            Commit {
-                height,
-                round,
-                block_hash,
-                aggregate_signature: aggregate_sig,
-                signers,
-            }
+            // Build CommitSig array - one entry per validator
+            let signatures: Vec<CommitSig> = (0..validator_set.len())
+                .map(|i| {
+                    let validator_id = ValidatorId::new(i as u8);
+                    match precommits.get_vote(&validator_id, Some(block_hash)) {
+                        Some(vote) => CommitSig {
+                            block_id_flag: BlockIDFlag::Commit,
+                            validator_address: Some(validator_id),
+                            timestamp: vote.timestamp,
+                            signature: Some(vote.signature.clone()),
+                        },
+                        None => {
+                            // Check if they voted nil
+                            match precommits.get_vote(&validator_id, None) {
+                                Some(vote) => CommitSig {
+                                    block_id_flag: BlockIDFlag::Nil,
+                                    validator_address: Some(validator_id),
+                                    timestamp: vote.timestamp,
+                                    signature: Some(vote.signature.clone()),
+                                },
+                                None => CommitSig::absent(),
+                            }
+                        }
+                    }
+                })
+                .collect();
+
+            Commit::new(height, round, block_hash, signatures)
         };
 
-        // Execute in EL and store
+        // Verify we have sufficient signatures before proceeding
+        if !commit.has_sufficient_signatures(state.validator_set.len()) {
+            return Err(ChainError::InsufficientCommitSigners {
+                have: commit.num_commit_signatures(),
+                need: state.validator_set.two_thirds_threshold() as usize,
+            });
+        }
+
+        // Execute in EL and store block
+        // The commit will be cached and embedded in the next block's last_commit
         // (See 07_EL_COORDINATION.md for details)
         self.finalize_committed_block(&proposal.block, commit).await?;
+
+        // Apply governance updates that activate at this height
+        self.apply_governance_updates_on_commit(height).await?;
 
         // Advance to next height
         let new_height = height + 1;
@@ -937,6 +1034,577 @@ impl ChainActor {
 
         Ok(())
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GOVERNANCE HANDLERS (See 17_GOVERNANCE_PARAMETERS.md)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Handle governance update from federation gRPC stream
+    ///
+    /// # Activation Timing
+    ///
+    /// - **Validator updates**: H+2 (standard Tendermint delayed validator changes)
+    /// - **Parameter updates**: H+1 (allows propagation before activation)
+    /// - **Emergency actions**: H+0 (immediate effect)
+    ///
+    /// # Flow
+    ///
+    /// ```text
+    /// TendermintGovernanceUpdate(update)
+    ///   ├─ 1. Validate update format and signatures
+    ///   ├─ 2. Calculate effective height
+    ///   ├─ 3. Queue update (idempotent - replaces existing for same key)
+    ///   └─ 4. For emergencies: execute immediately
+    /// ```
+    #[instrument(skip(self, update))]
+    pub async fn handle_governance_update(
+        &self,
+        update: GovernanceUpdate,
+    ) -> Result<ChainResponse, ChainError> {
+        let current_height = self.state.tendermint.height;
+        let effective_height = update.effective_height(current_height);
+
+        info!(
+            current_height,
+            effective_height,
+            update_type = ?update.variant_name(),
+            "Processing governance update"
+        );
+
+        // Validate signatures (federation threshold required)
+        self.validate_governance_signatures(&update)?;
+
+        match &update {
+            GovernanceUpdate::Validator(validator_update) => {
+                // Queue for H+2 activation (idempotent - keyed by public_key)
+                self.state.governance_queue.validators.insert(
+                    validator_update.public_key.clone(),
+                    validator_update.clone(),
+                );
+
+                info!(
+                    public_key = %validator_update.public_key,
+                    power = validator_update.power,
+                    effective_height,
+                    "Validator update queued"
+                );
+
+                Ok(ChainResponse::TendermintAction {
+                    action_type: TendermintActionType::GovernanceUpdateQueued {
+                        update_type: GovernanceUpdateType::Validator {
+                            public_key: validator_update.public_key.clone(),
+                            power: validator_update.power,
+                        },
+                        effective_height,
+                    },
+                    height: current_height,
+                    round: self.state.tendermint.round,
+                })
+            }
+
+            GovernanceUpdate::Parameter(param_update) => {
+                // Queue for H+1 activation (idempotent - keyed by param)
+                self.state.governance_queue.parameters.insert(
+                    param_update.param,
+                    param_update.clone(),
+                );
+
+                info!(
+                    param = ?param_update.param,
+                    effective_height,
+                    "Parameter update queued"
+                );
+
+                Ok(ChainResponse::TendermintAction {
+                    action_type: TendermintActionType::GovernanceUpdateQueued {
+                        update_type: GovernanceUpdateType::Parameter {
+                            param: param_update.param,
+                        },
+                        effective_height,
+                    },
+                    height: current_height,
+                    round: self.state.tendermint.round,
+                })
+            }
+
+            GovernanceUpdate::Emergency(emergency) => {
+                // Execute immediately (H+0)
+                self.execute_emergency_action(emergency).await?;
+
+                Ok(ChainResponse::TendermintAction {
+                    action_type: TendermintActionType::EmergencyActionExecuted {
+                        action: emergency.action_type(),
+                    },
+                    height: current_height,
+                    round: self.state.tendermint.round,
+                })
+            }
+        }
+    }
+
+    /// Apply governance updates that activate at the given height
+    ///
+    /// Called during block commit. Processes:
+    /// - Validator updates where effective_height == height (included at H-2)
+    /// - Parameter updates where effective_height == height (included at H-1)
+    async fn apply_governance_updates_on_commit(&self, height: u64) -> Result<(), ChainError> {
+        // Apply validator updates (H+2 activation)
+        let validator_updates: Vec<_> = self.state.governance_queue.validators
+            .iter()
+            .filter(|(_, update)| update.effective_height(height.saturating_sub(2)) == height)
+            .map(|(_, update)| update.clone())
+            .collect();
+
+        for update in validator_updates {
+            info!(
+                public_key = %update.public_key,
+                power = update.power,
+                height,
+                "Applying validator update"
+            );
+
+            if update.power == 0 {
+                self.state.tendermint.validator_set.remove(&update.public_key);
+            } else {
+                self.state.tendermint.validator_set.upsert(
+                    update.public_key.clone(),
+                    update.power,
+                );
+            }
+
+            // Remove from queue
+            self.state.governance_queue.validators.remove(&update.public_key);
+        }
+
+        // Apply parameter updates (H+1 activation)
+        let param_updates: Vec<_> = self.state.governance_queue.parameters
+            .iter()
+            .filter(|(_, update)| update.effective_height(height.saturating_sub(1)) == height)
+            .map(|(_, update)| update.clone())
+            .collect();
+
+        for update in param_updates {
+            info!(
+                param = ?update.param,
+                height,
+                "Applying parameter update"
+            );
+
+            // Update in-memory parameter state
+            self.state.chain_params.apply_update(&update)?;
+
+            // Persist to CF_PARAMETER_HISTORY for late-joiner reconstruction
+            self.storage_actor.send(StorageMessage::StoreParameterChange {
+                param: update.param,
+                value: update.value.clone(),
+                effective_height: height,
+            }).await?;
+
+            // Remove from queue
+            self.state.governance_queue.parameters.remove(&update.param);
+        }
+
+        Ok(())
+    }
+
+    /// Execute an emergency action immediately
+    async fn execute_emergency_action(
+        &self,
+        emergency: &EmergencyAction,
+    ) -> Result<(), ChainError> {
+        match emergency.action {
+            EmergencyActionKind::PausePegIns => {
+                self.state.chain_params.pegins_paused = true;
+                warn!("EMERGENCY: Peg-ins paused");
+            }
+            EmergencyActionKind::ResumePegIns => {
+                self.state.chain_params.pegins_paused = false;
+                info!("Peg-ins resumed");
+            }
+            EmergencyActionKind::PausePegOuts => {
+                self.state.chain_params.pegouts_paused = true;
+                warn!("EMERGENCY: Peg-outs paused");
+            }
+            EmergencyActionKind::ResumePegOuts => {
+                self.state.chain_params.pegouts_paused = false;
+                info!("Peg-outs resumed");
+            }
+            EmergencyActionKind::PauseChain => {
+                self.state.chain_params.chain_paused = true;
+                error!("EMERGENCY: Chain paused!");
+            }
+            EmergencyActionKind::ResumeChain => {
+                self.state.chain_params.chain_paused = false;
+                warn!("Chain resumed");
+            }
+        }
+
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUXPOW / PEG-IN HANDLERS (See 16_AUXPOW_TENDERMINT_INTEGRATION.md)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Handle AuxPoW submission from miner with peg-in data
+    ///
+    /// # Flow
+    ///
+    /// ```text
+    /// TendermintSubmitAuxBlock(hash, auxpow, pegins, fee_recipient)
+    ///   ├─ 1. Validate AuxPoW proof
+    ///   ├─ 2. Validate and queue peg-ins (dedup against queue + processed)
+    ///   ├─ 3. Store fee_recipient for miner compensation
+    ///   ├─ 4. Reset blocks_without_pow counter
+    ///   └─ 5. Cache AuxPoW for next block proposal
+    /// ```
+    #[instrument(skip(self, auxpow, pegins), fields(
+        hash = %hash,
+        pegin_count = pegins.len()
+    ))]
+    pub async fn handle_submit_auxblock(
+        &self,
+        hash: H256,
+        auxpow: AuxPow,
+        pegins: Vec<PegInInfo>,
+        fee_recipient: Address,
+    ) -> Result<ChainResponse, ChainError> {
+        // 1. Validate AuxPoW proof
+        self.validate_auxpow(&hash, &auxpow)?;
+
+        info!(
+            hash = %hash,
+            fee_recipient = %fee_recipient,
+            pegins = pegins.len(),
+            "Valid AuxPoW submission received"
+        );
+
+        // 2. Validate and queue peg-ins
+        let queued_count = self.validate_and_queue_pegins(pegins, fee_recipient).await?;
+
+        // 3. Reset liveness counter
+        self.state.blocks_without_pow = 0;
+
+        // 4. Cache AuxPoW for embedding in next block
+        self.state.pending_auxpow = Some(PendingAuxPow {
+            hash,
+            auxpow,
+            fee_recipient,
+        });
+
+        Ok(ChainResponse::TendermintAction {
+            action_type: TendermintActionType::AuxBlockAccepted {
+                pegins_queued: queued_count,
+            },
+            height: self.state.tendermint.height,
+            round: self.state.tendermint.round,
+        })
+    }
+
+    /// Validate and queue peg-ins from miner submission
+    ///
+    /// Four-layer deduplication (see 16_AUXPOW_TENDERMINT_INTEGRATION.md):
+    /// - Layer 0: Reject if already queued or processed (here)
+    /// - Layer 1: Queue keyed by txid (natural dedup)
+    /// - Layer 2: Producer filter before block inclusion
+    /// - Layer 3: Validator rejection of duplicates
+    async fn validate_and_queue_pegins(
+        &self,
+        pegins: Vec<PegInInfo>,
+        fee_recipient: Address,
+    ) -> Result<usize, ChainError> {
+        // Check if peg-ins are paused
+        if self.state.chain_params.pegins_paused {
+            warn!("Peg-ins are paused - rejecting submission");
+            return Err(ChainError::PegInsPaused);
+        }
+
+        let mut queued_count = 0;
+
+        for pegin in pegins {
+            // Skip if already in queue
+            if self.state.queued_pegins.contains_key(&pegin.txid) {
+                debug!(txid = %pegin.txid, "Peg-in already queued — skipping");
+                continue;
+            }
+
+            // Skip if already processed in a finalized block
+            let wallet = self.bitcoin_wallet.read().await;
+            if wallet.get_tx(&pegin.txid)?.is_some() {
+                debug!(txid = %pegin.txid, "Peg-in already processed — skipping");
+                continue;
+            }
+            drop(wallet);
+
+            // Validate amount within bounds
+            let min_peg = self.state.chain_params.min_peg_amount;
+            let max_peg = self.state.chain_params.max_peg_amount;
+            if pegin.amount < min_peg || pegin.amount > max_peg {
+                warn!(
+                    txid = %pegin.txid,
+                    amount = pegin.amount,
+                    min = min_peg,
+                    max = max_peg,
+                    "Peg-in amount out of bounds"
+                );
+                continue;
+            }
+
+            // Queue with fee recipient for later compensation
+            self.state.queued_pegins.insert(pegin.txid, QueuedPegIn {
+                info: pegin.clone(),
+                fee_recipient,
+                queued_at_height: self.state.tendermint.height,
+            });
+
+            queued_count += 1;
+            debug!(txid = %pegin.txid, amount = pegin.amount, "Peg-in queued");
+        }
+
+        info!(queued = queued_count, "Peg-ins validated and queued");
+        Ok(queued_count)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BLOCK BUILDING
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Build a consensus block for proposal
+    ///
+    /// # Contents
+    ///
+    /// - Transactions from mempool
+    /// - Peg-in withdrawals (with miner compensation split)
+    /// - Governance updates (pending for this height's inclusion)
+    /// - AuxPoW header (if available)
+    /// - params_hash for light client verification
+    async fn build_consensus_block(&self, height: u64) -> Result<SignedConsensusBlock, ChainError> {
+        let parent_hash = self.state.chain_state.head_hash;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Collect transactions from mempool
+        let transactions = self.collect_transactions().await?;
+
+        // Collect peg-in withdrawals with miner compensation
+        let (withdrawals, pegins_included) = self.collect_pegin_withdrawals().await?;
+
+        // Collect governance updates to include in block
+        let governance_updates = self.collect_governance_updates_for_block()?;
+
+        // Calculate params_hash for light client verification
+        let params_hash = self.state.chain_params.compute_hash();
+
+        // Build block header
+        let header = ConsensusBlockHeader {
+            parent_hash,
+            height,
+            timestamp,
+            proposer: self.state.tendermint.our_validator_id.unwrap(),
+            // LastCommit is embedded from previous block's commit
+            last_commit: self.state.last_commit.clone(),
+            // AuxPoW if available
+            auxpow_header: self.state.pending_auxpow.take().map(|p| p.into_header()),
+            // Governance updates (optional)
+            governance_updates: if governance_updates.is_empty() {
+                None
+            } else {
+                Some(governance_updates)
+            },
+            // Parameter state hash for verification
+            params_hash,
+            // ... other fields
+        };
+
+        // Build execution payload with withdrawals
+        let execution_payload = self.build_execution_payload(
+            &header,
+            transactions,
+            withdrawals,
+        ).await?;
+
+        let block = ConsensusBlock {
+            header,
+            execution_payload,
+        };
+
+        // Sign the block
+        let signature = self.sign_block(&block)?;
+
+        Ok(SignedConsensusBlock {
+            message: block,
+            signature,
+        })
+    }
+
+    /// Collect peg-in withdrawals with miner compensation
+    ///
+    /// Each peg-in becomes TWO withdrawals:
+    /// 1. User receives: amount - miner_fee
+    /// 2. Miner receives: miner_fee
+    async fn collect_pegin_withdrawals(&self) -> Result<(Vec<Withdrawal>, usize), ChainError> {
+        let mut withdrawals = Vec::new();
+        let mut included_count = 0;
+        let params = &self.state.chain_params.pegin_compensation;
+
+        // Take up to MAX_PEGINS_PER_BLOCK from queue
+        const MAX_PEGINS_PER_BLOCK: usize = 16;
+
+        let pegins_to_process: Vec<_> = self.state.queued_pegins
+            .iter()
+            .take(MAX_PEGINS_PER_BLOCK)
+            .map(|(txid, queued)| (txid.clone(), queued.clone()))
+            .collect();
+
+        for (txid, queued) in pegins_to_process {
+            // Calculate miner fee
+            let miner_fee = calculate_miner_fee(queued.info.amount, params);
+            let user_amount = queued.info.amount - miner_fee;
+
+            // User withdrawal
+            withdrawals.push(Withdrawal {
+                index: withdrawals.len() as u64,
+                validator_index: 0,
+                address: queued.info.evm_account,
+                amount: ConsensusAmount::from_satoshi(user_amount).0,
+            });
+
+            // Miner compensation withdrawal
+            withdrawals.push(Withdrawal {
+                index: withdrawals.len() as u64,
+                validator_index: 0,
+                address: queued.fee_recipient,
+                amount: ConsensusAmount::from_satoshi(miner_fee).0,
+            });
+
+            // Remove from queue
+            self.state.queued_pegins.remove(&txid);
+            included_count += 1;
+
+            debug!(
+                txid = %txid,
+                user_amount,
+                miner_fee,
+                "Peg-in converted to withdrawals"
+            );
+        }
+
+        Ok((withdrawals, included_count))
+    }
+
+    /// Collect governance updates to include in block
+    ///
+    /// Includes all pending updates from governance queue.
+    /// Updates are idempotent, so re-including is safe.
+    fn collect_governance_updates_for_block(&self) -> Vec<GovernanceUpdate> {
+        let mut updates = Vec::new();
+
+        // Include pending validator updates
+        for (_, validator_update) in &self.state.governance_queue.validators {
+            updates.push(GovernanceUpdate::Validator(validator_update.clone()));
+        }
+
+        // Include pending parameter updates
+        for (_, param_update) in &self.state.governance_queue.parameters {
+            updates.push(GovernanceUpdate::Parameter(param_update.clone()));
+        }
+
+        // Emergency actions are not queued (immediate execution)
+
+        updates
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BLOCK VALIDATION
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Validate a proposed block's contents
+    ///
+    /// # Validations
+    ///
+    /// 1. Basic structure (height, parent, timestamp)
+    /// 2. params_hash matches current parameter state
+    /// 3. Governance updates are well-formed and signed
+    /// 4. Peg-in withdrawals are valid (not already processed)
+    /// 5. Execution payload is valid
+    async fn validate_proposal_block(&self, block: &ConsensusBlock) -> Result<(), ChainError> {
+        // 1. Basic structure validation
+        if block.header.parent_hash != self.state.chain_state.head_hash {
+            return Err(ChainError::InvalidParentHash {
+                expected: self.state.chain_state.head_hash,
+                actual: block.header.parent_hash,
+            });
+        }
+
+        if block.header.height != self.state.tendermint.height {
+            return Err(ChainError::InvalidHeight {
+                expected: self.state.tendermint.height,
+                actual: block.header.height,
+            });
+        }
+
+        // 2. Validate params_hash
+        let expected_params_hash = self.state.chain_params.compute_hash();
+        if block.header.params_hash != expected_params_hash {
+            return Err(ChainError::InvalidParamsHash {
+                expected: expected_params_hash,
+                actual: block.header.params_hash,
+            });
+        }
+
+        // 3. Validate governance updates
+        if let Some(ref updates) = block.header.governance_updates {
+            for update in updates {
+                self.validate_governance_update_format(update)?;
+            }
+        }
+
+        // 4. Validate withdrawals (peg-ins not already processed)
+        self.validate_withdrawals(&block.execution_payload.withdrawals).await?;
+
+        // 5. Validate execution payload via EL
+        self.validate_execution_payload(&block.execution_payload).await?;
+
+        Ok(())
+    }
+
+    /// Validate withdrawal transactions are not duplicates
+    async fn validate_withdrawals(&self, withdrawals: &[Withdrawal]) -> Result<(), ChainError> {
+        // Withdrawals from peg-ins should not be for already-processed txids
+        // This requires tracking which withdrawals correspond to which peg-ins
+        // Implementation depends on how we encode txid in withdrawal metadata
+        Ok(())
+    }
+
+    /// Validate governance update format (not signatures - those validated on receipt)
+    fn validate_governance_update_format(&self, update: &GovernanceUpdate) -> Result<(), ChainError> {
+        match update {
+            GovernanceUpdate::Validator(v) => {
+                // Power must be reasonable
+                if v.power > 1_000_000 {
+                    return Err(ChainError::InvalidGovernanceUpdate(
+                        "Validator power too high".to_string()
+                    ));
+                }
+            }
+            GovernanceUpdate::Parameter(p) => {
+                // Validate parameter value is within constraints
+                p.validate()?;
+            }
+            GovernanceUpdate::Emergency(_) => {
+                // Emergency actions validated on receipt
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Calculate miner fee for peg-in compensation
+fn calculate_miner_fee(amount: u64, params: &PegInCompensation) -> u64 {
+    let fee = (amount * params.miner_fee_bps) / 10_000;
+    fee.clamp(params.min_fee_satoshi, params.max_fee_satoshi)
 }
 ```
 
@@ -999,6 +1667,28 @@ impl Handler<ChainMessage> for ChainActor {
                 ChainMessage::TendermintExecuteActions { actions, correlation_id } => {
                     actor.execute_consensus_actions(actions).await
                         .map(|_| ChainResponse::Success)
+                }
+
+                // ═══════════════════════════════════════════════════════════
+                // GOVERNANCE HANDLERS
+                // ═══════════════════════════════════════════════════════════
+
+                ChainMessage::TendermintGovernanceUpdate { update, correlation_id } => {
+                    actor.handle_governance_update(update).await
+                }
+
+                // ═══════════════════════════════════════════════════════════
+                // AUXPOW / PEG-IN HANDLERS
+                // ═══════════════════════════════════════════════════════════
+
+                ChainMessage::TendermintSubmitAuxBlock {
+                    hash,
+                    auxpow,
+                    pegins,
+                    fee_recipient,
+                    correlation_id
+                } => {
+                    actor.handle_submit_auxblock(hash, auxpow, pegins, fee_recipient).await
                 }
             }
         })
@@ -1066,8 +1756,81 @@ sequenceDiagram
 
     CA->>TM: 2/3+ precommits for block!
     CA->>WAL: write(Commit)
+    CA->>CA: apply_governance_updates_on_commit(100)
     CA->>Store: StoreBlockMessage
     CA->>CA: handle_tendermint_new_height(101)
+```
+
+### 5.2 Governance Update Flow
+
+```mermaid
+sequenceDiagram
+    participant GC as Governance Client
+    participant CA as ChainActor
+    participant Queue as GovernanceQueue
+    participant Store as StorageActor
+
+    Note over GC,Store: VALIDATOR UPDATE (H+2 activation)
+
+    GC->>CA: TendermintGovernanceUpdate(Validator)
+    CA->>CA: validate_governance_signatures()
+    CA->>Queue: validators.insert(pubkey, update)
+    Note over Queue: Queued for height H+2
+
+    Note over GC,Store: BLOCK H COMMITTED
+
+    CA->>CA: apply_governance_updates_on_commit(H)
+    Note over CA: No validator updates effective at H
+
+    Note over GC,Store: BLOCK H+2 COMMITTED
+
+    CA->>CA: apply_governance_updates_on_commit(H+2)
+    CA->>CA: validator_set.upsert(pubkey, power)
+    CA->>Queue: validators.remove(pubkey)
+    CA->>Store: StoreParameterChange (if param update)
+```
+
+### 5.3 Peg-In Flow (Miner-Effectuated)
+
+```mermaid
+sequenceDiagram
+    participant Miner as Miner
+    participant CA as ChainActor
+    participant Queue as queued_pegins
+    participant Proposer as Proposer (us)
+    participant EL as Execution Layer
+
+    Note over Miner,EL: MINER SUBMITS AUXPOW WITH PEG-INS
+
+    Miner->>CA: TendermintSubmitAuxBlock(hash, auxpow, pegins, fee_recipient)
+    CA->>CA: validate_auxpow()
+    CA->>CA: validate_and_queue_pegins()
+
+    loop For each peg-in
+        CA->>CA: Check not in queue
+        CA->>CA: Check not already processed
+        CA->>CA: Validate amount bounds
+        CA->>Queue: insert(txid, QueuedPegIn)
+    end
+
+    CA->>CA: blocks_without_pow = 0
+    CA->>CA: pending_auxpow = Some(...)
+
+    Note over Miner,EL: PROPOSER BUILDS BLOCK
+
+    Proposer->>CA: build_consensus_block()
+    CA->>CA: collect_pegin_withdrawals()
+
+    loop For each queued peg-in
+        CA->>CA: calculate_miner_fee()
+        CA->>CA: Create user withdrawal (amount - fee)
+        CA->>CA: Create miner withdrawal (fee)
+        CA->>Queue: remove(txid)
+    end
+
+    CA->>EL: ExecutionPayload with withdrawals
+    EL->>EL: Credit user account
+    EL->>EL: Credit miner account
 ```
 
 ---
@@ -1126,6 +1889,232 @@ mod tests {
 
         assert_eq!(vote_target, None); // Should vote NIL
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GOVERNANCE TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_validator_update_queued_for_h_plus_2() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        let update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: create_test_pubkey(),
+            power: 100,
+            governance_signature: create_test_signature(),
+        });
+
+        let result = actor.handle_governance_update(update).await;
+
+        assert!(result.is_ok());
+        assert_eq!(actor.state.governance_queue.validators.len(), 1);
+        // Update should activate at height 102
+    }
+
+    #[tokio::test]
+    async fn test_parameter_update_queued_for_h_plus_1() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        let update = GovernanceUpdate::Parameter(ParameterUpdate {
+            param: GovernableParam::MinerFeeBps,
+            value: ParameterValue::U64(75), // 0.75%
+            governance_signature: create_test_signature(),
+        });
+
+        let result = actor.handle_governance_update(update).await;
+
+        assert!(result.is_ok());
+        assert_eq!(actor.state.governance_queue.parameters.len(), 1);
+        // Update should activate at height 101
+    }
+
+    #[tokio::test]
+    async fn test_emergency_action_immediate() {
+        let actor = setup_test_chain_actor().await;
+        assert!(!actor.state.chain_params.pegins_paused);
+
+        let update = GovernanceUpdate::Emergency(EmergencyAction {
+            action: EmergencyActionKind::PausePegIns,
+            governance_signature: create_test_signature(),
+        });
+
+        let result = actor.handle_governance_update(update).await;
+
+        assert!(result.is_ok());
+        assert!(actor.state.chain_params.pegins_paused);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_validator_update_is_idempotent() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        let pubkey = create_test_pubkey();
+
+        // First update: power = 100
+        let update1 = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: pubkey.clone(),
+            power: 100,
+            governance_signature: create_test_signature(),
+        });
+        actor.handle_governance_update(update1).await.unwrap();
+
+        // Second update for same validator: power = 200
+        let update2 = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: pubkey.clone(),
+            power: 200,
+            governance_signature: create_test_signature(),
+        });
+        actor.handle_governance_update(update2).await.unwrap();
+
+        // Queue should have only one entry (latest wins)
+        assert_eq!(actor.state.governance_queue.validators.len(), 1);
+        assert_eq!(
+            actor.state.governance_queue.validators.get(&pubkey).unwrap().power,
+            200
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PEG-IN TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_pegin_queued_on_auxblock_submit() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        let pegins = vec![PegInInfo {
+            txid: Txid::from_byte_array([0x11; 32]),
+            block_hash: BlockHash::from_byte_array([0x22; 32]),
+            block_height: 800000,
+            amount: 100_000, // 0.001 BTC
+            evm_account: Address::repeat_byte(0x33),
+        }];
+
+        let result = actor.handle_submit_auxblock(
+            H256::repeat_byte(0x44),
+            create_test_auxpow(),
+            pegins,
+            Address::repeat_byte(0x55), // miner address
+        ).await;
+
+        assert!(result.is_ok());
+        assert_eq!(actor.state.queued_pegins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_pegin_rejected() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        let txid = Txid::from_byte_array([0x11; 32]);
+        let pegins = vec![PegInInfo {
+            txid: txid.clone(),
+            block_hash: BlockHash::from_byte_array([0x22; 32]),
+            block_height: 800000,
+            amount: 100_000,
+            evm_account: Address::repeat_byte(0x33),
+        }];
+
+        // First submission
+        actor.handle_submit_auxblock(
+            H256::repeat_byte(0x44),
+            create_test_auxpow(),
+            pegins.clone(),
+            Address::repeat_byte(0x55),
+        ).await.unwrap();
+
+        // Second submission with same txid
+        let result = actor.handle_submit_auxblock(
+            H256::repeat_byte(0x66),
+            create_test_auxpow(),
+            pegins,
+            Address::repeat_byte(0x77),
+        ).await;
+
+        // Should succeed but not queue duplicate
+        assert!(result.is_ok());
+        assert_eq!(actor.state.queued_pegins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_pegin_rejected_when_paused() {
+        let actor = setup_test_chain_actor().await;
+        actor.state.chain_params.pegins_paused = true;
+
+        let pegins = vec![create_test_pegin()];
+
+        let result = actor.handle_submit_auxblock(
+            H256::repeat_byte(0x44),
+            create_test_auxpow(),
+            pegins,
+            Address::repeat_byte(0x55),
+        ).await;
+
+        assert!(matches!(result, Err(ChainError::PegInsPaused)));
+    }
+
+    #[tokio::test]
+    async fn test_miner_compensation_calculation() {
+        let params = PegInCompensation {
+            miner_fee_bps: 50, // 0.5%
+            min_fee_satoshi: 1000,
+            max_fee_satoshi: 10_000_000,
+        };
+
+        // Normal case: 0.5% of 1 BTC = 500,000 sats
+        assert_eq!(calculate_miner_fee(100_000_000, &params), 500_000);
+
+        // Min floor: 0.5% of 10,000 sats = 50 sats, but min is 1000
+        assert_eq!(calculate_miner_fee(10_000, &params), 1000);
+
+        // Max cap: 0.5% of 100 BTC = 50M sats, but max is 10M
+        assert_eq!(calculate_miner_fee(10_000_000_000, &params), 10_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_pegin_withdrawal_split() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        // Queue a peg-in
+        let user_address = Address::repeat_byte(0x11);
+        let miner_address = Address::repeat_byte(0x22);
+        let amount = 100_000_000; // 1 BTC
+
+        actor.state.queued_pegins.insert(
+            Txid::from_byte_array([0x33; 32]),
+            QueuedPegIn {
+                info: PegInInfo {
+                    txid: Txid::from_byte_array([0x33; 32]),
+                    block_hash: BlockHash::from_byte_array([0x44; 32]),
+                    block_height: 800000,
+                    amount,
+                    evm_account: user_address,
+                },
+                fee_recipient: miner_address,
+                queued_at_height: 100,
+            },
+        );
+
+        let (withdrawals, count) = actor.collect_pegin_withdrawals().await.unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(withdrawals.len(), 2); // User + miner
+
+        // User gets amount minus fee
+        assert_eq!(withdrawals[0].address, user_address);
+        // Miner gets fee
+        assert_eq!(withdrawals[1].address, miner_address);
+
+        // Total should equal original amount
+        let user_amount = ConsensusAmount(withdrawals[0].amount).to_satoshi();
+        let miner_amount = ConsensusAmount(withdrawals[1].amount).to_satoshi();
+        assert_eq!(user_amount + miner_amount, amount);
+    }
 }
 ```
 
@@ -1133,6 +2122,7 @@ mod tests {
 
 ## 7. Checklist
 
+### Core Consensus Handlers
 - [ ] Add new message variants to `ChainMessage`
 - [ ] Add new response variants to `ChainResponse`
 - [ ] Create `tendermint/handlers.rs`
@@ -1148,6 +2138,52 @@ mod tests {
 - [ ] Write unit tests for each handler
 - [ ] Write integration test for full consensus round
 
+### Governance Integration (17_GOVERNANCE_PARAMETERS.md)
+- [ ] Add `TendermintGovernanceUpdate` message variant
+- [ ] Implement `handle_governance_update()` handler
+- [ ] Implement `GovernanceQueue` data structure
+- [ ] Implement `apply_governance_updates_on_commit()`
+- [ ] Apply activation timing (H+2 validators, H+1 parameters, H+0 emergencies)
+- [ ] Implement `execute_emergency_action()`
+- [ ] Implement `validate_governance_signatures()`
+- [ ] Implement `params_hash` calculation
+- [ ] Add `params_hash` validation in `validate_proposal_block()`
+- [ ] Write parameter changes to `CF_PARAMETER_HISTORY`
+- [ ] Create `tendermint/governance.rs`
+- [ ] Write unit tests for governance handlers
+- [ ] Write integration test for validator set changes
+- [ ] Write integration test for parameter changes
+
+### Peg-In Integration (16_AUXPOW_TENDERMINT_INTEGRATION.md)
+- [ ] Add `TendermintSubmitAuxBlock` message variant
+- [ ] Implement `handle_submit_auxblock()` handler
+- [ ] Implement `validate_and_queue_pegins()`
+- [ ] Implement `QueuedPegIn` struct with fee_recipient
+- [ ] Implement `collect_pegin_withdrawals()` with compensation split
+- [ ] Implement `calculate_miner_fee()` function
+- [ ] Add peg-in pause check (`pegins_paused`)
+- [ ] Add amount bounds validation (`min_peg_amount`, `max_peg_amount`)
+- [ ] Implement four-layer dedup (Layer 0 in handler)
+- [ ] Update `build_consensus_block()` to include peg-ins
+- [ ] Write unit tests for peg-in handlers
+- [ ] Write integration test for peg-in flow
+- [ ] Write test for miner compensation calculation
+
+### Block Building
+- [ ] Implement `build_consensus_block()` with all components
+- [ ] Include governance updates in block
+- [ ] Include peg-in withdrawals with fee split
+- [ ] Include AuxPoW header when available
+- [ ] Calculate and include `params_hash`
+- [ ] Implement `collect_governance_updates_for_block()`
+
+### Block Validation
+- [ ] Implement `validate_proposal_block()` with all checks
+- [ ] Validate `params_hash` matches expected state
+- [ ] Validate governance update format
+- [ ] Validate withdrawals not duplicates
+- [ ] Implement `validate_governance_update_format()`
+
 ---
 
 ## 8. Next Steps
@@ -1159,5 +2195,6 @@ After completing this implementation:
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
+*Changes: Added governance update handlers, peg-in handlers, block building, and validation*
