@@ -4,12 +4,19 @@
 
 This document provides a comprehensive implementation guide for the Tendermint protocol message types and foundational data structures. These form the communication backbone of the entire consensus system.
 
-**Estimated Effort**: 3-5 days
+**Estimated Effort**: 1 week
 **Dependencies**: None (foundational module)
+**Dependents**: All other Tendermint implementation documents, especially:
+- `04_CHAINACTOR_HANDLERS.md` (uses all types)
+- `14_GENESIS_AND_VALIDATOR_INIT.md` (ValidatorUpdate, GenesisConfig)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (PegInInfo, PegInCompensation)
+- `17_GOVERNANCE_PARAMETERS.md` (GovernanceUpdate, GovernableParam, ChainParams)
 **Files to Create**:
 - `app/src/actors_v2/chain/tendermint/mod.rs`
 - `app/src/actors_v2/chain/tendermint/messages.rs`
 - `app/src/actors_v2/chain/tendermint/types.rs`
+- `app/src/actors_v2/chain/tendermint/governance.rs`
+- `app/src/actors_v2/chain/tendermint/params.rs`
 
 ---
 
@@ -73,8 +80,12 @@ sequenceDiagram
 ```
 app/src/actors_v2/chain/tendermint/
 ├── mod.rs              # Module exports and re-exports
-├── types.rs            # Core types (ValidatorId, BlockHash, etc.)
+├── types.rs            # Core types (ValidatorId, BlockHash, Commit, etc.)
 ├── messages.rs         # All Tendermint protocol messages
+├── governance.rs       # Governance types (GovernanceUpdate, ValidatorUpdate, etc.)
+├── params.rs           # Chain parameters (ChainParams, GovernableParam, etc.)
+├── pegin.rs            # Peg-in types (PegInInfo, PegInCompensation, etc.)
+├── block.rs            # Block structure (ConsensusBlockHeader, etc.)
 ├── state_machine.rs    # Tendermint state (separate implementation plan)
 ├── vote_set.rs         # Vote collection (separate implementation plan)
 ├── timeout.rs          # Timeout management (separate implementation plan)
@@ -132,6 +143,22 @@ pub use types::*;
 pub mod messages;
 pub use messages::*;
 
+// Governance types (GovernanceUpdate, ValidatorUpdate, etc.)
+pub mod governance;
+pub use governance::*;
+
+// Chain parameters (ChainParams, GovernableParam)
+pub mod params;
+pub use params::*;
+
+// Peg-in types (PegInInfo, PegInCompensation)
+pub mod pegin;
+pub use pegin::*;
+
+// Block structure
+pub mod block;
+pub use block::*;
+
 // State machine
 pub mod state_machine;
 pub use state_machine::TendermintState;
@@ -160,6 +187,10 @@ pub use evidence::{Evidence, EquivocationEvidence};
 pub mod prelude {
     pub use super::types::*;
     pub use super::messages::*;
+    pub use super::governance::*;
+    pub use super::params::*;
+    pub use super::pegin::*;
+    pub use super::block::*;
     pub use super::TendermintState;
     pub use super::VoteSet;
     pub use super::TimeoutScheduler;
@@ -319,59 +350,172 @@ pub type Height = u64;
 /// The type allows for future weighted voting if needed.
 pub type VotingPower = u64;
 
-/// Commit proof - aggregated signatures proving 2/3+ precommits
+/// Commit proof - +2/3 precommit signatures proving block finality
 ///
 /// This structure proves that a block was finalized by collecting
 /// the precommit signatures from validators representing >2/3 of
 /// the total voting power.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Storage Location
+///
+/// Following the standard Tendermint/CometBFT pattern, this Commit is stored
+/// in the **next** block's `last_commit` field:
+///
+/// ```text
+/// Block N:
+/// └── last_commit: Commit for Block N-1
+///     ├── height: N-1
+///     ├── round: R
+///     ├── block_hash: hash(Block N-1)
+///     └── signatures: [CommitSig, CommitSig, ...]
+/// ```
+///
+/// This means `LoadBlockCommit(height)` returns `Block[height+1].last_commit`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Commit {
-    /// Height of the committed block
+    /// Height of the committed block (this commit is FOR this height)
     pub height: Height,
 
     /// Round in which the block was committed
     pub round: Round,
 
-    /// Hash of the committed block
+    /// Hash of the committed block (BlockID in Tendermint terms)
     pub block_hash: BlockHash,
 
-    /// Aggregated BLS signature from all precommitters
-    pub aggregate_signature: AggregateSignature,
+    /// Individual commit signatures from validators.
+    /// The array has one entry per validator in the validator set,
+    /// in the same order as the validator set.
+    pub signatures: Vec<CommitSig>,
+}
 
-    /// Bitfield indicating which validators signed
-    /// Bit i is set if validator i precommitted
-    pub signers: Vec<bool>,
+/// Individual validator's commit signature.
+///
+/// Each CommitSig represents how one validator participated in the commit:
+/// - Absent: Validator did not submit a precommit
+/// - Commit: Validator precommitted to the block
+/// - Nil: Validator precommitted nil (voted to skip)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommitSig {
+    /// How this validator participated in the commit
+    pub block_id_flag: BlockIDFlag,
+
+    /// Validator's ID/index (None if absent)
+    pub validator_address: Option<ValidatorId>,
+
+    /// Timestamp of the vote (Unix timestamp)
+    pub timestamp: u64,
+
+    /// BLS signature over the vote (None if absent or voted nil)
+    pub signature: Option<BLSSignature>,
+}
+
+/// Indicates how a validator participated in the commit
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BlockIDFlag {
+    /// Validator was absent (did not submit a precommit)
+    Absent = 0,
+    /// Validator precommitted to the block
+    Commit = 1,
+    /// Validator precommitted nil
+    Nil = 2,
 }
 
 impl Commit {
-    /// Create a new commit from collected precommits
+    /// Create a new commit from collected precommit signatures
     pub fn new(
         height: Height,
         round: Round,
         block_hash: BlockHash,
-        aggregate_signature: AggregateSignature,
-        signers: Vec<bool>,
+        signatures: Vec<CommitSig>,
     ) -> Self {
         Self {
             height,
             round,
             block_hash,
-            aggregate_signature,
-            signers,
+            signatures,
         }
     }
 
-    /// Count the number of validators who signed
-    pub fn num_signers(&self) -> usize {
-        self.signers.iter().filter(|&&s| s).count()
+    /// Count the number of validators who committed to the block
+    pub fn num_commit_signatures(&self) -> usize {
+        self.signatures
+            .iter()
+            .filter(|sig| sig.block_id_flag == BlockIDFlag::Commit)
+            .count()
     }
 
-    /// Check if a specific validator signed
-    pub fn has_signed(&self, validator: ValidatorId) -> bool {
-        self.signers
-            .get(validator.index() as usize)
-            .copied()
-            .unwrap_or(false)
+    /// Check if a specific validator committed to the block
+    pub fn has_committed(&self, validator: ValidatorId) -> bool {
+        self.signatures.iter().any(|sig| {
+            sig.validator_address == Some(validator)
+                && sig.block_id_flag == BlockIDFlag::Commit
+        })
+    }
+
+    /// Verify the commit has sufficient signatures (>2/3)
+    pub fn has_sufficient_signatures(&self, total_validators: usize) -> bool {
+        let threshold = (total_validators * 2 / 3) + 1;
+        self.num_commit_signatures() >= threshold
+    }
+
+    /// Get indices of validators who committed (for signature verification)
+    pub fn get_committer_indices(&self) -> Vec<u8> {
+        self.signatures
+            .iter()
+            .filter_map(|sig| {
+                if sig.block_id_flag == BlockIDFlag::Commit {
+                    sig.validator_address.map(|v| v.index())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get all signatures for aggregate verification
+    pub fn get_signatures_for_verification(&self) -> Vec<&BLSSignature> {
+        self.signatures
+            .iter()
+            .filter_map(|sig| {
+                if sig.block_id_flag == BlockIDFlag::Commit {
+                    sig.signature.as_ref()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl CommitSig {
+    /// Create an absent commit signature (validator didn't vote)
+    pub fn absent() -> Self {
+        Self {
+            block_id_flag: BlockIDFlag::Absent,
+            validator_address: None,
+            timestamp: 0,
+            signature: None,
+        }
+    }
+
+    /// Create a commit signature for a validator who voted for the block
+    pub fn commit(validator: ValidatorId, timestamp: u64, signature: BLSSignature) -> Self {
+        Self {
+            block_id_flag: BlockIDFlag::Commit,
+            validator_address: Some(validator),
+            timestamp,
+            signature: Some(signature),
+        }
+    }
+
+    /// Create a nil commit signature (validator voted nil)
+    pub fn nil(validator: ValidatorId, timestamp: u64, signature: BLSSignature) -> Self {
+        Self {
+            block_id_flag: BlockIDFlag::Nil,
+            validator_address: Some(validator),
+            timestamp,
+            signature: Some(signature),
+        }
     }
 }
 
@@ -508,6 +652,77 @@ impl ValidatorSet {
             .position(|pk| pk == pubkey)
             .map(|i| ValidatorId::new(i as u8))
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DYNAMIC VALIDATOR SET UPDATES (for governance)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Add or update a validator's voting power
+    ///
+    /// Used by governance to apply ValidatorUpdate changes.
+    /// If the validator exists, updates their power.
+    /// If new, appends to the validator set.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Add a new validator with power 1
+    /// validator_set.upsert(new_pubkey, 1);
+    ///
+    /// // Update existing validator's power
+    /// validator_set.upsert(existing_pubkey, 2);
+    /// ```
+    pub fn upsert(&mut self, public_key: PublicKey, power: VotingPower) {
+        if let Some(idx) = self.find_validator(&public_key) {
+            // Update existing validator
+            self.powers[idx.index() as usize] = power;
+        } else {
+            // Add new validator
+            self.validators.push(public_key);
+            self.powers.push(power);
+        }
+        self.recalculate_total_power();
+    }
+
+    /// Remove a validator from the set
+    ///
+    /// Used by governance when a validator's power is set to 0.
+    /// Returns true if the validator was found and removed.
+    ///
+    /// # Warning
+    ///
+    /// Removing validators changes indices! This should only be called
+    /// at height boundaries where a fresh ValidatorId mapping is established.
+    pub fn remove(&mut self, public_key: &PublicKey) -> bool {
+        if let Some(idx) = self.find_validator(public_key) {
+            let index = idx.index() as usize;
+            self.validators.remove(index);
+            self.powers.remove(index);
+            self.recalculate_total_power();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Recalculate total voting power after modifications
+    fn recalculate_total_power(&mut self) {
+        self.total_power = self.powers.iter().sum();
+    }
+
+    /// Apply a batch of validator updates atomically
+    ///
+    /// Updates are applied in order. Power of 0 means removal.
+    /// This is the preferred method for governance changes.
+    pub fn apply_updates(&mut self, updates: &[ValidatorUpdate]) {
+        for update in updates {
+            if update.power == 0 {
+                self.remove(&update.public_key);
+            } else {
+                self.upsert(update.public_key.clone(), update.power);
+            }
+        }
+    }
 }
 
 /// Errors related to validator operations
@@ -579,7 +794,866 @@ mod tests {
 
 ---
 
-## 4. Message Types Implementation (`messages.rs`)
+## 4. Governance Types (`governance.rs`)
+
+### 4.1 GovernanceUpdate Enum
+
+The unified type for all governance-controlled changes. See `17_GOVERNANCE_PARAMETERS.md` for full details.
+
+```rust
+//! Governance types for federation-controlled updates.
+//!
+//! All governance changes flow through the unified GovernanceUpdate enum,
+//! which supports three categories with different activation timing:
+//! - Validator updates: H+2 activation (standard Tendermint)
+//! - Parameter updates: H+1 activation (propagation delay)
+//! - Emergency actions: H+0 activation (immediate)
+
+use super::types::*;
+use serde::{Deserialize, Serialize};
+
+/// Unified type for all governance-controlled changes
+///
+/// Included in blocks for auditability and late-joiner verification.
+/// Updates are idempotent - applying the same update twice is a no-op.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GovernanceUpdate {
+    /// Validator set changes (add/remove/change power)
+    /// Activation: H+2 (standard Tendermint delayed validator changes)
+    Validator(ValidatorUpdate),
+
+    /// Chain parameter changes
+    /// Activation: H+1 (allows propagation before activation)
+    Parameter(ParameterUpdate),
+
+    /// Emergency actions (pause/resume)
+    /// Activation: H+0 (immediate effect)
+    Emergency(EmergencyAction),
+}
+
+impl GovernanceUpdate {
+    /// Get the activation delay (in blocks) for this update type
+    pub fn activation_delay(&self) -> u64 {
+        match self {
+            GovernanceUpdate::Validator(_) => 2,
+            GovernanceUpdate::Parameter(_) => 1,
+            GovernanceUpdate::Emergency(_) => 0,
+        }
+    }
+
+    /// Get the effective height when included at `inclusion_height`
+    pub fn effective_height(&self, inclusion_height: u64) -> u64 {
+        inclusion_height + self.activation_delay()
+    }
+
+    /// Get variant name for logging
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            GovernanceUpdate::Validator(_) => "Validator",
+            GovernanceUpdate::Parameter(_) => "Parameter",
+            GovernanceUpdate::Emergency(_) => "Emergency",
+        }
+    }
+}
+
+/// Validator set change request from governance
+///
+/// # Idempotency
+///
+/// Updates are keyed by `public_key`. If multiple updates arrive for the
+/// same validator, the latest one wins (replaces in queue).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ValidatorUpdate {
+    /// Validator's BLS public key
+    pub public_key: PublicKey,
+
+    /// New voting power (0 = remove from validator set)
+    pub power: VotingPower,
+
+    /// Governance threshold signature proving authorization
+    pub governance_signature: Signature,
+}
+
+impl ValidatorUpdate {
+    /// Check if this update removes the validator
+    pub fn is_removal(&self) -> bool {
+        self.power == 0
+    }
+}
+
+/// Emergency action from governance
+///
+/// Emergency actions take effect immediately (H+0) and are used for
+/// critical situations requiring instant response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmergencyAction {
+    /// The action to take
+    pub action: EmergencyActionKind,
+
+    /// Governance threshold signature proving authorization
+    pub governance_signature: Signature,
+}
+
+/// Types of emergency actions
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EmergencyActionKind {
+    /// Pause peg-in processing (new deposits rejected)
+    PausePegIns,
+    /// Resume peg-in processing
+    ResumePegIns,
+    /// Pause peg-out processing (withdrawals halted)
+    PausePegOuts,
+    /// Resume peg-out processing
+    ResumePegOuts,
+    /// Emergency chain halt (no new blocks)
+    PauseChain,
+    /// Resume chain operation
+    ResumeChain,
+}
+
+impl EmergencyAction {
+    /// Get the action type for logging/metrics
+    pub fn action_type(&self) -> EmergencyActionKind {
+        self.action
+    }
+}
+
+/// Queue of pending governance updates awaiting activation
+///
+/// Updates are keyed to provide idempotency:
+/// - Validators keyed by PublicKey
+/// - Parameters keyed by GovernableParam
+#[derive(Debug, Clone, Default)]
+pub struct GovernanceQueue {
+    /// Pending validator updates (keyed by public key)
+    pub validators: std::collections::HashMap<PublicKey, ValidatorUpdate>,
+
+    /// Pending parameter updates (keyed by parameter)
+    pub parameters: std::collections::HashMap<GovernableParam, ParameterUpdate>,
+}
+
+impl GovernanceQueue {
+    /// Create an empty governance queue
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if queue is empty
+    pub fn is_empty(&self) -> bool {
+        self.validators.is_empty() && self.parameters.is_empty()
+    }
+
+    /// Get total number of pending updates
+    pub fn len(&self) -> usize {
+        self.validators.len() + self.parameters.len()
+    }
+}
+
+#[cfg(test)]
+mod governance_tests {
+    use super::*;
+
+    #[test]
+    fn test_activation_delays() {
+        let validator_update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: PublicKey::default(),
+            power: 1,
+            governance_signature: Signature::empty(),
+        });
+        assert_eq!(validator_update.activation_delay(), 2);
+        assert_eq!(validator_update.effective_height(100), 102);
+
+        // Parameter updates activate at H+1
+        let param_update = GovernanceUpdate::Parameter(ParameterUpdate {
+            param: GovernableParam::MinerFeeBps,
+            value: ParameterValue::U64(50),
+            governance_signature: Signature::empty(),
+        });
+        assert_eq!(param_update.activation_delay(), 1);
+        assert_eq!(param_update.effective_height(100), 101);
+
+        // Emergency actions are immediate
+        let emergency = GovernanceUpdate::Emergency(EmergencyAction {
+            action: EmergencyActionKind::PausePegIns,
+            governance_signature: Signature::empty(),
+        });
+        assert_eq!(emergency.activation_delay(), 0);
+        assert_eq!(emergency.effective_height(100), 100);
+    }
+
+    #[test]
+    fn test_governance_queue_idempotency() {
+        let mut queue = GovernanceQueue::new();
+        let pubkey = PublicKey::default();
+
+        // First update: power = 100
+        queue.validators.insert(pubkey.clone(), ValidatorUpdate {
+            public_key: pubkey.clone(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        // Second update: power = 200 (replaces first)
+        queue.validators.insert(pubkey.clone(), ValidatorUpdate {
+            public_key: pubkey.clone(),
+            power: 200,
+            governance_signature: Signature::empty(),
+        });
+
+        assert_eq!(queue.validators.len(), 1);
+        assert_eq!(queue.validators.get(&pubkey).unwrap().power, 200);
+    }
+}
+```
+
+---
+
+## 5. Chain Parameters (`params.rs`)
+
+### 5.1 GovernableParam Enum
+
+Exhaustive enumeration of all federation-controllable parameters.
+
+```rust
+//! Chain parameters that can be modified by governance.
+//!
+//! All governable parameters are enumerated here with their constraints.
+//! See `17_GOVERNANCE_PARAMETERS.md` for complete documentation.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Enumeration of all governable parameters
+///
+/// Organized into ranges by category:
+/// - 100-199: Peg-in compensation
+/// - 200-299: Bridge configuration
+/// - 300-399: Checkpoint configuration
+/// - 400-499: Consensus parameters
+/// - 500-599: Fee schedule
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[repr(u16)]
+pub enum GovernableParam {
+    // ═══════════════════════════════════════════════════════════════════
+    // Peg-in compensation (100-199)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Miner fee in basis points (50 = 0.5%)
+    MinerFeeBps = 100,
+    /// Minimum fee in satoshis (floor for small peg-ins)
+    MinFeeSatoshi = 101,
+    /// Maximum fee in satoshis (cap for large peg-ins)
+    MaxFeeSatoshi = 102,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Bridge configuration (200-299)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Required Bitcoin confirmations for peg-ins
+    BtcConfirmations = 200,
+    /// Minimum peg-in/out amount in satoshis
+    MinPegAmount = 201,
+    /// Maximum peg-in/out amount in satoshis
+    MaxPegAmount = 202,
+    /// Required federation signatures for peg-outs
+    FederationThreshold = 203,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Checkpoint configuration (300-399)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Minimum blocks between checkpoints
+    MinCheckpointInterval = 300,
+    /// Target checkpoint frequency
+    TargetCheckpointInterval = 301,
+    /// Liveness gate: max blocks without AuxPoW
+    MaxBlocksWithoutPow = 304,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Consensus parameters (400-499)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Proposal timeout in milliseconds
+    ProposeTimeoutMs = 400,
+    /// Prevote timeout in milliseconds
+    PrevoteTimeoutMs = 401,
+    /// Precommit timeout in milliseconds
+    PrecommitTimeoutMs = 402,
+    /// Timeout increase per round in milliseconds
+    TimeoutDeltaMs = 403,
+    /// Maximum validator count
+    MaxValidators = 404,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Fee schedule (500-599)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Minimum EVM base fee in gwei
+    BaseFeeFloor = 500,
+    /// Maximum EVM base fee in gwei
+    BaseFeeCeiling = 501,
+}
+
+impl GovernableParam {
+    /// Convert to bytes for storage key
+    pub fn to_bytes(&self) -> [u8; 2] {
+        (*self as u16).to_be_bytes()
+    }
+
+    /// Parse from bytes
+    pub fn from_bytes(bytes: [u8; 2]) -> Option<Self> {
+        let value = u16::from_be_bytes(bytes);
+        Self::try_from(value).ok()
+    }
+
+    /// Get the category name for this parameter
+    pub fn category(&self) -> &'static str {
+        match *self as u16 {
+            100..=199 => "peg-in-compensation",
+            200..=299 => "bridge-config",
+            300..=399 => "checkpoint-config",
+            400..=499 => "consensus-params",
+            500..=599 => "fee-schedule",
+            _ => "unknown",
+        }
+    }
+}
+
+/// Parameter value types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ParameterValue {
+    U64(u64),
+    U32(u32),
+    Bool(bool),
+    Bytes(Vec<u8>),
+}
+
+/// A parameter update from governance
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParameterUpdate {
+    /// Which parameter to update
+    pub param: GovernableParam,
+
+    /// New value
+    pub value: ParameterValue,
+
+    /// Governance threshold signature
+    pub governance_signature: Signature,
+}
+
+impl ParameterUpdate {
+    /// Validate the parameter value against constraints
+    pub fn validate(&self) -> Result<(), ParameterError> {
+        match self.param {
+            GovernableParam::MinerFeeBps => {
+                if let ParameterValue::U64(v) = &self.value {
+                    if *v > 10000 {
+                        return Err(ParameterError::OutOfRange {
+                            param: self.param,
+                            value: format!("{}", v),
+                            constraint: "0-10000".to_string(),
+                        });
+                    }
+                }
+            }
+            GovernableParam::BtcConfirmations => {
+                if let ParameterValue::U32(v) = &self.value {
+                    if *v < 1 || *v > 100 {
+                        return Err(ParameterError::OutOfRange {
+                            param: self.param,
+                            value: format!("{}", v),
+                            constraint: "1-100".to_string(),
+                        });
+                    }
+                }
+            }
+            // Add more validation as needed
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Current chain parameter state
+///
+/// Holds all governable parameters with their current values.
+/// Initialized from genesis and updated via governance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainParams {
+    // Peg-in compensation
+    pub pegin_compensation: PegInCompensation,
+
+    // Bridge config
+    pub btc_confirmations: u32,
+    pub min_peg_amount: u64,
+    pub max_peg_amount: u64,
+    pub federation_threshold: u32,
+
+    // Consensus params
+    pub propose_timeout_ms: u64,
+    pub prevote_timeout_ms: u64,
+    pub precommit_timeout_ms: u64,
+    pub timeout_delta_ms: u64,
+    pub max_validators: u32,
+
+    // Checkpoint config
+    pub min_checkpoint_interval: u64,
+    pub target_checkpoint_interval: u64,
+    pub max_blocks_without_pow: u64,
+
+    // Fee schedule
+    pub base_fee_floor: u64,
+    pub base_fee_ceiling: u64,
+
+    // Emergency controls
+    pub chain_paused: bool,
+    pub pegins_paused: bool,
+    pub pegouts_paused: bool,
+}
+
+impl ChainParams {
+    /// Compute a hash of the current parameter state
+    ///
+    /// Used in block headers for light client verification.
+    pub fn compute_hash(&self) -> Hash256 {
+        use tiny_keccak::{Hasher, Keccak};
+
+        let serialized = bincode::serialize(self)
+            .expect("ChainParams serialization should not fail");
+
+        let mut hasher = Keccak::v256();
+        hasher.update(&serialized);
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        Hash256::from_slice(&output)
+    }
+
+    /// Apply a parameter update
+    pub fn apply_update(&mut self, update: &ParameterUpdate) -> Result<(), ParameterError> {
+        update.validate()?;
+
+        match update.param {
+            GovernableParam::MinerFeeBps => {
+                if let ParameterValue::U64(v) = update.value {
+                    self.pegin_compensation.miner_fee_bps = v;
+                }
+            }
+            GovernableParam::MinFeeSatoshi => {
+                if let ParameterValue::U64(v) = update.value {
+                    self.pegin_compensation.min_fee_satoshi = v;
+                }
+            }
+            GovernableParam::MaxFeeSatoshi => {
+                if let ParameterValue::U64(v) = update.value {
+                    self.pegin_compensation.max_fee_satoshi = v;
+                }
+            }
+            GovernableParam::BtcConfirmations => {
+                if let ParameterValue::U32(v) = update.value {
+                    self.btc_confirmations = v;
+                }
+            }
+            // ... handle all parameters
+            _ => {}
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for ChainParams {
+    fn default() -> Self {
+        Self {
+            pegin_compensation: PegInCompensation::default(),
+            btc_confirmations: 6,
+            min_peg_amount: 10_000,
+            max_peg_amount: 100_000_000,
+            federation_threshold: 11,
+            propose_timeout_ms: 3000,
+            prevote_timeout_ms: 1000,
+            precommit_timeout_ms: 1000,
+            timeout_delta_ms: 500,
+            max_validators: 15,
+            min_checkpoint_interval: 100,
+            target_checkpoint_interval: 500,
+            max_blocks_without_pow: 50_000,
+            base_fee_floor: 1,
+            base_fee_ceiling: 1000,
+            chain_paused: false,
+            pegins_paused: false,
+            pegouts_paused: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ParameterError {
+    #[error("Parameter {param:?} value {value} out of range: {constraint}")]
+    OutOfRange {
+        param: GovernableParam,
+        value: String,
+        constraint: String,
+    },
+
+    #[error("Invalid parameter value type for {param:?}")]
+    InvalidType { param: GovernableParam },
+}
+```
+
+---
+
+## 6. Peg-In Types (`pegin.rs`)
+
+### 6.1 Peg-In Structures
+
+Types for miner-effectuated peg-ins. See `16_AUXPOW_TENDERMINT_INTEGRATION.md` for full details.
+
+```rust
+//! Peg-in types for Bitcoin deposit processing.
+//!
+//! Miners monitor Bitcoin for deposits and submit them via submitauxblock.
+//! These types define the peg-in data structures and compensation parameters.
+
+use ethereum_types::{Address, H256};
+use serde::{Deserialize, Serialize};
+
+/// Peg-in information extracted from Bitcoin transaction
+///
+/// This data travels FROM the miner TO the chain via submitauxblock.
+/// ChainActor validates and queues them, then the proposer converts
+/// them to EVM Withdrawals in the next block's execution_payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PegInInfo {
+    /// Bitcoin transaction ID
+    pub txid: bitcoin::Txid,
+
+    /// Bitcoin block containing the deposit
+    pub block_hash: bitcoin::BlockHash,
+
+    /// Bitcoin block height
+    pub block_height: u32,
+
+    /// Amount deposited in satoshis
+    pub amount: u64,
+
+    /// Target EVM address (extracted from OP_RETURN)
+    pub evm_account: Address,
+}
+
+/// Queued peg-in with miner fee recipient
+///
+/// When a miner submits a peg-in, we track who should receive
+/// the compensation when the peg-in is included in a block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueuedPegIn {
+    /// The peg-in information
+    pub info: PegInInfo,
+
+    /// Miner address to receive compensation
+    pub fee_recipient: Address,
+
+    /// Height at which this peg-in was queued
+    pub queued_at_height: u64,
+}
+
+/// Peg-in compensation parameters
+///
+/// Configures how miners are compensated for including peg-ins.
+/// These are governable parameters that can be changed by the federation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PegInCompensation {
+    /// Percentage of peg-in amount paid to miner (basis points)
+    /// e.g., 50 = 0.5%
+    pub miner_fee_bps: u64,
+
+    /// Minimum fee in satoshis (floor for small peg-ins)
+    pub min_fee_satoshi: u64,
+
+    /// Maximum fee in satoshis (cap for large peg-ins)
+    pub max_fee_satoshi: u64,
+}
+
+impl Default for PegInCompensation {
+    fn default() -> Self {
+        Self {
+            miner_fee_bps: 50,           // 0.5%
+            min_fee_satoshi: 1_000,      // 0.00001 BTC
+            max_fee_satoshi: 10_000_000, // 0.1 BTC
+        }
+    }
+}
+
+impl PegInCompensation {
+    /// Calculate miner fee for a given peg-in amount
+    ///
+    /// Fee = (amount * miner_fee_bps) / 10000, clamped to [min, max]
+    pub fn calculate_fee(&self, amount: u64) -> u64 {
+        let fee = (amount * self.miner_fee_bps) / 10_000;
+        fee.clamp(self.min_fee_satoshi, self.max_fee_satoshi)
+    }
+}
+
+#[cfg(test)]
+mod pegin_tests {
+    use super::*;
+
+    #[test]
+    fn test_fee_calculation() {
+        let params = PegInCompensation::default();
+
+        // Normal case: 0.5% of 1 BTC = 500,000 sats
+        assert_eq!(params.calculate_fee(100_000_000), 500_000);
+
+        // Min floor: 0.5% of 10,000 sats = 50 sats, but min is 1000
+        assert_eq!(params.calculate_fee(10_000), 1_000);
+
+        // Max cap: 0.5% of 100 BTC = 50M sats, but max is 10M
+        assert_eq!(params.calculate_fee(10_000_000_000), 10_000_000);
+    }
+}
+```
+
+---
+
+## 7. Block Structure (`block.rs`)
+
+### 7.1 ConsensusBlockHeader
+
+Defines the block header structure with Tendermint consensus fields.
+
+```rust
+//! Block structure definitions for Tendermint consensus.
+//!
+//! The block header includes:
+//! - Standard blockchain fields (parent, height, timestamp)
+//! - Tendermint fields (last_commit, proposer)
+//! - Governance fields (governance_updates, params_hash)
+//! - AuxPoW fields (auxpow_header)
+
+use super::types::*;
+use super::governance::GovernanceUpdate;
+use ethereum_types::{Address, H256};
+use serde::{Deserialize, Serialize};
+
+/// Consensus block header with all Tendermint and governance fields
+///
+/// # LastCommit Design
+///
+/// Following standard Tendermint/CometBFT architecture:
+/// - `last_commit` contains the Commit proof for the PREVIOUS block
+/// - Block N+1.last_commit proves Block N was finalized
+/// - Genesis block has last_commit = None
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsensusBlockHeader {
+    /// Hash of the parent block
+    pub parent_hash: BlockHash,
+
+    /// Block height (0-indexed from genesis)
+    pub height: Height,
+
+    /// Unix timestamp (seconds since epoch)
+    pub timestamp: u64,
+
+    /// Validator who proposed this block
+    pub proposer: ValidatorId,
+
+    /// Commit proof for the previous block (embedded)
+    ///
+    /// This is the key Tendermint design: the commit for block N-1
+    /// is embedded in block N's header, proving N-1 was finalized.
+    pub last_commit: Option<Commit>,
+
+    /// State root after executing this block
+    pub state_root: H256,
+
+    /// Transactions root (merkle root of tx list)
+    pub transactions_root: H256,
+
+    /// Receipts root (merkle root of receipts)
+    pub receipts_root: H256,
+
+    /// Governance updates included in this block (optional)
+    ///
+    /// Contains validator updates, parameter changes, and emergency actions
+    /// that were received from the governance client. These are recorded
+    /// for auditability and late-joiner verification.
+    pub governance_updates: Option<Vec<GovernanceUpdate>>,
+
+    /// Hash of current parameter state
+    ///
+    /// Allows light clients to verify parameter state without
+    /// replaying all governance updates from genesis.
+    pub params_hash: Hash256,
+
+    /// AuxPoW header (if this block includes merge-mining proof)
+    pub auxpow_header: Option<AuxPowHeader>,
+
+    /// Extra data (limited to 32 bytes)
+    pub extra_data: Vec<u8>,
+}
+
+impl ConsensusBlockHeader {
+    /// Compute the block hash
+    pub fn hash(&self) -> BlockHash {
+        use tiny_keccak::{Hasher, Keccak};
+
+        let mut hasher = Keccak::v256();
+
+        hasher.update(self.parent_hash.as_bytes());
+        hasher.update(&self.height.to_le_bytes());
+        hasher.update(&self.timestamp.to_le_bytes());
+        hasher.update(&[self.proposer.index()]);
+        hasher.update(self.state_root.as_bytes());
+        hasher.update(self.transactions_root.as_bytes());
+        hasher.update(self.receipts_root.as_bytes());
+        hasher.update(self.params_hash.as_bytes());
+
+        // Include governance_updates hash if present
+        if let Some(ref updates) = self.governance_updates {
+            let updates_hash = hash_governance_updates(updates);
+            hasher.update(updates_hash.as_bytes());
+        }
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        BlockHash::from_slice(&output)
+    }
+
+    /// Check if this block has a last_commit (all blocks except genesis)
+    pub fn has_last_commit(&self) -> bool {
+        self.last_commit.is_some()
+    }
+
+    /// Check if this block includes AuxPoW proof
+    pub fn has_auxpow(&self) -> bool {
+        self.auxpow_header.is_some()
+    }
+
+    /// Check if this block includes governance updates
+    pub fn has_governance_updates(&self) -> bool {
+        self.governance_updates.as_ref().map_or(false, |u| !u.is_empty())
+    }
+}
+
+/// AuxPoW header for merge-mining proof
+///
+/// Extended to include peg-in data submitted by miners.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxPowHeader {
+    /// Start of the block range this AuxPoW covers
+    pub range_start: H256,
+
+    /// End of the block range this AuxPoW covers
+    pub range_end: H256,
+
+    /// Bitcoin difficulty bits
+    pub bits: u32,
+
+    /// Alys chain ID for AuxPoW
+    pub chain_id: u32,
+
+    /// Block height at submission
+    pub height: u64,
+
+    /// The actual AuxPoW proof (None if not yet mined)
+    pub auxpow: Option<AuxPow>,
+
+    /// Miner's address for block reward and peg-in compensation
+    pub fee_recipient: Address,
+}
+
+/// AuxPoW proof structure (Bitcoin merge-mining proof)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxPow {
+    /// Bitcoin coinbase transaction
+    pub coinbase_tx: Vec<u8>,
+
+    /// Merkle branch from coinbase to Bitcoin block root
+    pub coinbase_branch: Vec<H256>,
+
+    /// Index in merkle tree
+    pub coinbase_index: u32,
+
+    /// Merkle branch in auxiliary blockchain
+    pub blockchain_branch: Vec<H256>,
+
+    /// Index in auxiliary merkle tree
+    pub blockchain_index: u32,
+
+    /// Bitcoin block header
+    pub parent_block: Vec<u8>,
+}
+
+/// Pending AuxPoW waiting to be included in next block
+#[derive(Debug, Clone)]
+pub struct PendingAuxPow {
+    /// Hash that was mined
+    pub hash: H256,
+
+    /// The AuxPoW proof
+    pub auxpow: AuxPow,
+
+    /// Miner's fee recipient address
+    pub fee_recipient: Address,
+}
+
+impl PendingAuxPow {
+    /// Convert to AuxPowHeader for block inclusion
+    pub fn into_header(self, range_start: H256, range_end: H256, height: u64) -> AuxPowHeader {
+        AuxPowHeader {
+            range_start,
+            range_end,
+            bits: 0, // Filled from AuxPoW
+            chain_id: 0, // Alys chain ID
+            height,
+            auxpow: Some(self.auxpow),
+            fee_recipient: self.fee_recipient,
+        }
+    }
+}
+
+/// Helper to hash governance updates for block hash computation
+fn hash_governance_updates(updates: &[GovernanceUpdate]) -> Hash256 {
+    use tiny_keccak::{Hasher, Keccak};
+
+    let serialized = bincode::serialize(updates)
+        .expect("GovernanceUpdate serialization should not fail");
+
+    let mut hasher = Keccak::v256();
+    hasher.update(&serialized);
+
+    let mut output = [0u8; 32];
+    hasher.finalize(&mut output);
+    Hash256::from_slice(&output)
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    #[test]
+    fn test_genesis_has_no_last_commit() {
+        let genesis = ConsensusBlockHeader {
+            parent_hash: BlockHash::zero(),
+            height: 0,
+            timestamp: 0,
+            proposer: ValidatorId(0),
+            last_commit: None, // Genesis has no last_commit
+            state_root: H256::zero(),
+            transactions_root: H256::zero(),
+            receipts_root: H256::zero(),
+            governance_updates: None,
+            params_hash: Hash256::zero(),
+            auxpow_header: None,
+            extra_data: vec![],
+        };
+
+        assert!(!genesis.has_last_commit());
+        assert!(!genesis.has_auxpow());
+        assert!(!genesis.has_governance_updates());
+    }
+}
+```
+
+---
+
+## 8. Message Types Implementation (`messages.rs`)
 
 ### 4.1 Complete Implementation
 
@@ -1225,7 +2299,7 @@ mod tests {
 
 ---
 
-## 5. Integration with Existing System
+## 9. Integration with Existing System
 
 ### 5.1 Adding to ChainMessage Enum
 
@@ -1282,7 +2356,7 @@ pub enum TendermintActionType {
 
 ---
 
-## 6. Serialization for Network Transmission
+## 10. Serialization for Network Transmission
 
 ### 6.1 MessagePack Serialization (V0 Compatible)
 
@@ -1315,7 +2389,7 @@ pub enum SerializationError {
 
 ---
 
-## 7. Example: Complete Message Flow
+## 11. Example: Complete Message Flow
 
 ### 7.1 Proposer Creates and Broadcasts Proposal
 
@@ -1442,7 +2516,7 @@ fn determine_prevote(&self, proposal: &Proposal) -> Result<Option<BlockHash>, Ch
 
 ---
 
-## 8. Testing Strategy
+## 12. Testing Strategy
 
 ### 8.1 Unit Tests
 
@@ -1501,21 +2575,78 @@ mod integration_tests {
 
 ---
 
-## 9. Checklist
+## 13. Checklist
 
+### Module Setup
 - [ ] Create `app/src/actors_v2/chain/tendermint/` directory
-- [ ] Implement `mod.rs` with module structure
-- [ ] Implement `types.rs` with core types
-- [ ] Implement `messages.rs` with all message types
+- [ ] Implement `mod.rs` with module structure and exports
+- [ ] Update `Cargo.toml` if new dependencies needed (bitcoin, bincode)
+
+### Core Types (types.rs)
+- [ ] Implement `ValidatorId` with Display trait
+- [ ] Implement `TendermintStep` enum
+- [ ] Implement `VoteType` enum
+- [ ] Implement `Commit` and `CommitSig` structs
+- [ ] Implement `BlockIDFlag` enum
+- [ ] Implement `ValidatorSet` with equal power constructor
+- [ ] Implement `ValidatorSet::upsert()` for dynamic updates
+- [ ] Implement `ValidatorSet::remove()` for validator removal
+- [ ] Implement `ValidatorSet::apply_updates()` for batch updates
+- [ ] Write unit tests for ValidatorSet
+
+### Messages (messages.rs)
+- [ ] Implement `Proposal` with signing root
+- [ ] Implement `Vote` with signing root and signature verification
+- [ ] Implement `Timeout` struct
+- [ ] Implement `TendermintMessage` enum
+- [ ] Implement `EquivocationEvidence` enum
+- [ ] Write unit tests for message serialization
+- [ ] Write unit tests for signature verification
+
+### Governance Types (governance.rs)
+- [ ] Implement `GovernanceUpdate` enum with activation delays
+- [ ] Implement `ValidatorUpdate` struct (without update_id)
+- [ ] Implement `ParameterUpdate` struct
+- [ ] Implement `EmergencyAction` struct
+- [ ] Implement `EmergencyActionKind` enum
+- [ ] Implement `GovernanceQueue` struct
+- [ ] Write unit tests for activation timing
+- [ ] Write unit tests for queue idempotency
+
+### Chain Parameters (params.rs)
+- [ ] Implement `GovernableParam` enum with all parameters
+- [ ] Implement `ParameterValue` enum
+- [ ] Implement `ParameterUpdate::validate()` with constraints
+- [ ] Implement `ChainParams` struct with all fields
+- [ ] Implement `ChainParams::compute_hash()` for params_hash
+- [ ] Implement `ChainParams::apply_update()` for parameter changes
+- [ ] Implement `Default` for `ChainParams` with sensible defaults
+- [ ] Write unit tests for parameter validation
+
+### Peg-In Types (pegin.rs)
+- [ ] Implement `PegInInfo` struct
+- [ ] Implement `QueuedPegIn` struct with fee_recipient
+- [ ] Implement `PegInCompensation` struct
+- [ ] Implement `PegInCompensation::calculate_fee()` with clamping
+- [ ] Write unit tests for fee calculation
+
+### Block Structure (block.rs)
+- [ ] Implement `ConsensusBlockHeader` with all fields
+- [ ] Implement `ConsensusBlockHeader::hash()` computation
+- [ ] Implement `AuxPowHeader` struct with peg-in support
+- [ ] Implement `AuxPow` struct
+- [ ] Implement `PendingAuxPow` struct
+- [ ] Write unit tests for block hashing
+
+### Integration
 - [ ] Add `TendermintConsensus` variant to `ChainMessage`
 - [ ] Add `TendermintAction` variant to `ChainResponse`
-- [ ] Write unit tests for serialization
-- [ ] Write unit tests for signature verification
-- [ ] Update `Cargo.toml` if new dependencies needed
+- [ ] Add governance message variants to `ChainMessage`
+- [ ] Add peg-in message variants to `ChainMessage`
 
 ---
 
-## 10. Next Steps
+## 14. Next Steps
 
 After completing this implementation:
 1. Proceed to **02_STATE_MACHINE.md** - Tendermint State Machine
@@ -1524,5 +2655,6 @@ After completing this implementation:
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
+*Changes: Added governance types, chain parameters, peg-in types, block structure, ValidatorSet dynamic updates*
