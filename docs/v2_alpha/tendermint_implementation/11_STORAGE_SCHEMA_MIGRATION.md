@@ -9,14 +9,32 @@ This document provides a comprehensive implementation guide for migrating the St
 **Estimated Effort**: 1 week
 **Dependencies**:
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit type)
+- `02_STATE_MACHINE.md` (ValidatorSet, Vote types)
 - `06_WAL.md` (WAL storage considerations)
+- `07_EL_COORDINATION.md` (blocks_without_pow tracking)
 - `09_SYNC_ACTOR.md` (Sync storage requirements)
+- `17_GOVERNANCE.md` (Parameter change history)
 **Files to Modify**:
 - `app/src/block.rs` (add LastCommit to ConsensusBlock)
 - `app/src/actors_v2/storage/database.rs`
 - `app/src/actors_v2/storage/actor.rs`
 - `app/src/actors_v2/storage/handlers/block_handlers.rs`
 - `app/src/actors_v2/storage/messages.rs`
+- `app/src/actors_v2/storage/handlers/tendermint_handlers.rs` (new)
+
+---
+
+## Cross-Document Type References
+
+| Type | Source Document | Usage in This Document |
+|------|-----------------|----------------------|
+| `Commit`, `CommitSig`, `BlockIDFlag` | `01_MESSAGE_TYPES.md` | Embedded in ConsensusBlock |
+| `ValidatorSet`, `ValidatorId` | `02_STATE_MACHINE.md` | ValidatorSets column family |
+| `Vote`, `VoteType` | `02_STATE_MACHINE.md` | Commit signature verification |
+| `WalWriter`, `WalEntry` | `06_WAL.md` | WAL-storage coordination |
+| `SyncStatus`, `BlockRange` | `09_SYNC_ACTOR.md` | Batch storage during sync |
+| `AuxPowCheckpoint` | `16_AUXPOW.md` | Checkpoints column family |
+| `GovernanceParameter` | `17_GOVERNANCE.md` | Parameter history storage |
 
 ---
 
@@ -274,9 +292,67 @@ impl SignedConsensusBlock<MainnetEthSpec> {
 
 ---
 
-## 3. Storage Schema Changes
+## 3. Error Types
 
-### 3.1 Column Family Changes
+### 3.1 Tendermint Storage Errors
+
+```rust
+/// Storage errors specific to Tendermint consensus data
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum StorageError {
+    // ... existing variants ...
+
+    #[error("Invalid LastCommit: {0}")]
+    InvalidLastCommit(String),
+
+    #[error("LastCommit height mismatch: expected {expected}, got {actual}")]
+    CommitHeightMismatch { expected: u64, actual: u64 },
+
+    #[error("LastCommit block_hash doesn't match parent_hash at height {0}")]
+    CommitHashMismatch(u64),
+
+    #[error("Missing LastCommit for non-genesis block at height {0}")]
+    MissingLastCommit(u64),
+
+    #[error("Insufficient commit signatures: need {required}, got {actual}")]
+    InsufficientCommitSignatures { required: usize, actual: usize },
+
+    #[error("Missing validator set for height {0}")]
+    MissingValidatorSet(u64),
+
+    #[error("Validator set not found at effective height {0}")]
+    ValidatorSetNotFound(u64),
+
+    #[error("Checkpoint range overlap: existing {existing_start}-{existing_end}, new {new_start}-{new_end}")]
+    CheckpointRangeOverlap {
+        existing_start: u64,
+        existing_end: u64,
+        new_start: u64,
+        new_end: u64,
+    },
+
+    #[error("Parameter history corruption at height {height}: {details}")]
+    ParameterHistoryCorruption { height: u64, details: String },
+
+    #[error("Chain integrity violation at height {height}: {details}")]
+    ChainIntegrityViolation { height: u64, details: String },
+
+    #[error("WAL-storage inconsistency: {0}")]
+    WalStorageInconsistency(String),
+
+    #[error("Block height gap: expected {expected}, got {actual}")]
+    BlockHeightGap { expected: u64, actual: u64 },
+
+    #[error("Batch write failed: {0}")]
+    BatchWriteFailed(String),
+}
+```
+
+---
+
+## 4. Storage Schema Changes
+
+### 4.1 Column Family Changes
 
 | Current Column Family | Action | Notes |
 |-----------------------|--------|-------|
@@ -293,7 +369,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
 | (new) `ValidatorSets` | **Add** | Height-based validator sets (H+2 rule) |
 | (new) `Checkpoints` | **Add** | AuxPoW checkpoint proofs |
 
-### 3.2 Visual Schema Comparison
+### 4.2 Visual Schema Comparison
 
 ```
 CURRENT STORAGE SCHEMA (Aura):
@@ -327,9 +403,9 @@ Note: NO separate Commits column family - commits are embedded in Blocks
 
 ---
 
-## 4. Commit Retrieval Pattern
+## 5. Commit Retrieval Pattern
 
-### 4.1 GetCommit Implementation
+### 5.1 GetCommit Implementation
 
 Since commits are embedded in blocks, retrieving a commit requires fetching the **next** block:
 
@@ -405,7 +481,7 @@ impl DatabaseManager {
 }
 ```
 
-### 4.2 Block Storage with Commit Validation
+### 5.2 Block Storage with Commit Validation
 
 ```rust
 impl DatabaseManager {
@@ -452,7 +528,7 @@ impl DatabaseManager {
 
 ---
 
-## 5. ValidatorSets Column Family
+## 6. ValidatorSets Column Family
 
 Validator sets are stored by **effective height** (the height at which they become active).
 
@@ -461,7 +537,7 @@ Following standard Tendermint, validator updates at block H take effect at block
 - Block H+1 has `next_validators_hash` pointing to new set
 - Block H+2 uses the new validator set (`validators_hash` = new set)
 
-### 5.1 Implementation
+### 6.1 Implementation
 
 ```rust
 /// Column family for validator sets by effective height
@@ -589,11 +665,11 @@ impl DatabaseManager {
 
 ---
 
-## 6. Checkpoints Column Family
+## 7. Checkpoints Column Family
 
 AuxPoW checkpoints anchor block ranges to Bitcoin for additional security.
 
-### 6.1 Implementation
+### 7.1 Implementation
 
 ```rust
 /// Column family for AuxPoW checkpoints
@@ -704,9 +780,9 @@ impl DatabaseManager {
 
 ---
 
-## 7. Storage Messages
+## 8. Storage Messages
 
-### 7.1 Updated Message Types
+### 8.1 Updated Message Types
 
 ```rust
 // In storage/messages.rs
@@ -808,7 +884,7 @@ pub struct GetLatestCheckpointMessage {
 }
 ```
 
-### 7.2 Handler Implementations
+### 8.2 Handler Implementations
 
 ```rust
 // In storage/handlers/tendermint_handlers.rs
@@ -889,11 +965,853 @@ impl Handler<GetLatestCheckpointMessage> for StorageActor {
 }
 ```
 
+### 8.3 Parameter History Messages
+
+```rust
+/// Store a governance parameter update
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct StoreParameterUpdateMessage {
+    /// Parameter identifier
+    pub param_id: GovernanceParameterId,
+    /// Height at which this value became effective
+    pub effective_height: u64,
+    /// The parameter value
+    pub value: GovernanceParameterValue,
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Get parameter value at a specific height
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<Option<GovernanceParameterValue>, StorageError>")]
+pub struct GetParameterAtHeightMessage {
+    pub param_id: GovernanceParameterId,
+    pub height: u64,
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Get full parameter history for a parameter
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<Vec<(u64, GovernanceParameterValue)>, StorageError>")]
+pub struct GetParameterHistoryMessage {
+    pub param_id: GovernanceParameterId,
+    pub correlation_id: Option<Uuid>,
+}
+
+impl Handler<StoreParameterUpdateMessage> for StorageActor {
+    type Result = Result<(), StorageError>;
+
+    fn handle(&mut self, msg: StoreParameterUpdateMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        self.db.put_parameter_update(msg.param_id, msg.effective_height, &msg.value)
+    }
+}
+
+impl Handler<GetParameterAtHeightMessage> for StorageActor {
+    type Result = Result<Option<GovernanceParameterValue>, StorageError>;
+
+    fn handle(&mut self, msg: GetParameterAtHeightMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        self.db.get_parameter_at_height(msg.param_id, msg.height)
+    }
+}
+```
+
 ---
 
-## 8. Column Families to Remove
+## 9. WAL-Storage Coordination
 
-### 8.1 CumulativeDifficulty Removal
+### 9.1 Write Ordering
+
+WAL writes must complete before storage commits to ensure crash safety:
+
+```rust
+impl DatabaseManager {
+    /// Store a finalized block with WAL coordination
+    ///
+    /// The WAL entry for this block should already be written by ChainActor
+    /// before calling this method. Storage commit is the final step.
+    pub fn store_finalized_block_with_wal_check(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+        expected_wal_height: u64,
+    ) -> Result<(), StorageError> {
+        let height = block.message.slot;
+
+        // Verify WAL has entry for this block (crash safety check)
+        // In practice, ChainActor ensures WAL is written first
+        if height != expected_wal_height {
+            return Err(StorageError::WalStorageInconsistency(format!(
+                "Expected WAL height {}, got block height {}",
+                expected_wal_height, height
+            )));
+        }
+
+        // Store the block
+        self.put_block_validated(block)?;
+
+        tracing::debug!(
+            height = height,
+            "Block stored after WAL confirmation"
+        );
+
+        Ok(())
+    }
+}
+```
+
+### 9.2 Crash Recovery: WAL Replay and Storage Verification
+
+```rust
+impl DatabaseManager {
+    /// Verify storage consistency with WAL after crash recovery
+    ///
+    /// Called during startup after WAL replay to ensure storage
+    /// is consistent with the recovered consensus state.
+    pub fn verify_storage_wal_consistency(
+        &self,
+        wal_last_committed_height: u64,
+    ) -> Result<StorageConsistencyResult, StorageError> {
+        let storage_height = self.get_chain_height()?;
+
+        match storage_height.cmp(&wal_last_committed_height) {
+            std::cmp::Ordering::Equal => {
+                // Perfect consistency
+                Ok(StorageConsistencyResult::Consistent)
+            }
+            std::cmp::Ordering::Less => {
+                // WAL has commits that weren't persisted to storage
+                // This can happen if crash occurred after WAL write but before storage commit
+                tracing::warn!(
+                    storage_height = storage_height,
+                    wal_height = wal_last_committed_height,
+                    "Storage behind WAL - blocks need to be re-applied"
+                );
+                Ok(StorageConsistencyResult::StorageBehind {
+                    storage_height,
+                    wal_height: wal_last_committed_height,
+                })
+            }
+            std::cmp::Ordering::Greater => {
+                // Storage ahead of WAL - shouldn't happen with proper ordering
+                tracing::error!(
+                    storage_height = storage_height,
+                    wal_height = wal_last_committed_height,
+                    "Storage ahead of WAL - potential corruption"
+                );
+                Err(StorageError::WalStorageInconsistency(
+                    "Storage height exceeds WAL committed height".to_string()
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum StorageConsistencyResult {
+    /// Storage and WAL are consistent
+    Consistent,
+    /// Storage is behind WAL - needs block replay
+    StorageBehind { storage_height: u64, wal_height: u64 },
+}
+```
+
+---
+
+## 10. Batch Write Operations
+
+### 10.1 Atomic Block Finalization
+
+When finalizing a block, multiple storage operations must be atomic:
+
+```rust
+impl DatabaseManager {
+    /// Atomically store all data for a finalized block
+    ///
+    /// This uses RocksDB WriteBatch to ensure all-or-nothing semantics.
+    /// If any write fails, none are persisted.
+    pub fn finalize_block_atomic(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+        receipts: &[TransactionReceipt],
+        state_updates: &StateUpdates,
+        validator_set_update: Option<(u64, ValidatorSet)>,
+    ) -> Result<(), StorageError> {
+        let mut batch = WriteBatch::default();
+        let height = block.message.slot;
+        let block_hash = block.canonical_root();
+
+        // 1. Block data
+        let block_bytes = serde_json::to_vec(block)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        batch.put_cf(
+            self.cf_handle(CF_BLOCKS)?,
+            block_hash.as_bytes(),
+            &block_bytes,
+        );
+
+        // 2. Height index
+        batch.put_cf(
+            self.cf_handle(CF_BLOCK_HEIGHTS)?,
+            height.to_be_bytes(),
+            block_hash.as_bytes(),
+        );
+
+        // 3. Chain head
+        batch.put_cf(
+            self.cf_handle(CF_CHAIN_HEAD)?,
+            b"head",
+            &serde_json::to_vec(&(height, block_hash))?,
+        );
+
+        // 4. Receipts
+        for receipt in receipts {
+            let receipt_bytes = serde_json::to_vec(receipt)?;
+            batch.put_cf(
+                self.cf_handle(CF_RECEIPTS)?,
+                receipt.transaction_hash.as_bytes(),
+                &receipt_bytes,
+            );
+        }
+
+        // 5. State updates (simplified - actual implementation would be more complex)
+        for (key, value) in state_updates.iter() {
+            batch.put_cf(self.cf_handle(CF_STATE)?, key, value);
+        }
+
+        // 6. Validator set update (if any)
+        if let Some((effective_height, set)) = validator_set_update {
+            let set_bytes = serde_json::to_vec(&set)?;
+            batch.put_cf(
+                self.cf_handle(CF_VALIDATOR_SETS)?,
+                effective_height.to_be_bytes(),
+                &set_bytes,
+            );
+        }
+
+        // Execute atomic write
+        self.db.write(batch)
+            .map_err(|e| StorageError::BatchWriteFailed(e.to_string()))?;
+
+        tracing::debug!(
+            height = height,
+            hash = ?block_hash,
+            "Atomic block finalization complete"
+        );
+
+        STORAGE_BATCH_WRITES.inc();
+
+        Ok(())
+    }
+}
+```
+
+### 10.2 Batch Sync Storage
+
+For syncing, store multiple blocks efficiently:
+
+```rust
+impl DatabaseManager {
+    /// Store a batch of synced blocks atomically
+    ///
+    /// Used during fast sync to efficiently store multiple blocks.
+    /// All blocks must be consecutive in height.
+    pub fn store_synced_blocks_batch(
+        &self,
+        blocks: &[SignedConsensusBlock<MainnetEthSpec>],
+    ) -> Result<(), StorageError> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        // Validate consecutive heights
+        let mut expected_height = blocks[0].message.slot;
+        for block in blocks {
+            if block.message.slot != expected_height {
+                return Err(StorageError::BlockHeightGap {
+                    expected: expected_height,
+                    actual: block.message.slot,
+                });
+            }
+            expected_height += 1;
+        }
+
+        let mut batch = WriteBatch::default();
+
+        for block in blocks {
+            let height = block.message.slot;
+            let block_hash = block.canonical_root();
+
+            // Validate LastCommit
+            if height > 0 && block.message.last_commit.is_none() {
+                return Err(StorageError::MissingLastCommit(height));
+            }
+
+            let block_bytes = serde_json::to_vec(block)?;
+            batch.put_cf(
+                self.cf_handle(CF_BLOCKS)?,
+                block_hash.as_bytes(),
+                &block_bytes,
+            );
+            batch.put_cf(
+                self.cf_handle(CF_BLOCK_HEIGHTS)?,
+                height.to_be_bytes(),
+                block_hash.as_bytes(),
+            );
+        }
+
+        // Update chain head to last block
+        let last_block = blocks.last().unwrap();
+        let last_height = last_block.message.slot;
+        let last_hash = last_block.canonical_root();
+        batch.put_cf(
+            self.cf_handle(CF_CHAIN_HEAD)?,
+            b"head",
+            &serde_json::to_vec(&(last_height, last_hash))?,
+        );
+
+        self.db.write(batch)?;
+
+        tracing::info!(
+            start_height = blocks[0].message.slot,
+            end_height = last_height,
+            count = blocks.len(),
+            "Batch stored synced blocks"
+        );
+
+        STORAGE_SYNC_BATCHES.inc();
+        STORAGE_SYNC_BLOCKS.inc_by(blocks.len() as u64);
+
+        Ok(())
+    }
+}
+```
+
+---
+
+## 11. Sync Actor Integration
+
+### 11.1 SyncActor Storage Calls
+
+```rust
+// In sync actor, when processing synced blocks:
+
+impl SyncActor {
+    /// Store a validated synced block
+    async fn store_synced_block(
+        &self,
+        block: SignedConsensusBlock<MainnetEthSpec>,
+        validator_set: &ValidatorSet,
+    ) -> Result<(), SyncError> {
+        // Verify LastCommit signatures before storage
+        if let Some(ref last_commit) = block.message.last_commit {
+            self.verify_commit_signatures(last_commit, validator_set)?;
+        }
+
+        // Send to storage actor
+        self.storage_actor
+            .send(StoreBlockMessage {
+                block,
+                correlation_id: Some(self.correlation_id),
+            })
+            .await
+            .map_err(|e| SyncError::StorageError(e.to_string()))??;
+
+        Ok(())
+    }
+
+    /// Get validator set for commit verification during sync
+    async fn get_validator_set_for_sync_height(
+        &self,
+        height: u64,
+    ) -> Result<ValidatorSet, SyncError> {
+        self.storage_actor
+            .send(GetValidatorSetForHeightMessage {
+                height,
+                correlation_id: Some(self.correlation_id),
+            })
+            .await
+            .map_err(|e| SyncError::StorageError(e.to_string()))?
+            .map_err(|e| SyncError::StorageError(e.to_string()))?
+            .ok_or(SyncError::MissingValidatorSet(height))
+    }
+}
+```
+
+### 11.2 Commit Signature Verification
+
+```rust
+impl DatabaseManager {
+    /// Verify LastCommit has sufficient valid signatures
+    ///
+    /// This is called by SyncActor before storing synced blocks.
+    /// ChainActor verifies during consensus, but synced blocks need
+    /// verification against the historical validator set.
+    pub fn verify_commit_signatures(
+        &self,
+        commit: &Commit,
+        validator_set: &ValidatorSet,
+    ) -> Result<(), StorageError> {
+        let threshold = validator_set.two_thirds_threshold();
+        let mut valid_signatures = 0;
+
+        for sig in &commit.signatures {
+            if sig.block_id_flag != BlockIDFlag::Commit {
+                continue;
+            }
+
+            let validator_id = sig.validator_address
+                .ok_or_else(|| StorageError::InvalidLastCommit(
+                    "Commit signature missing validator address".to_string()
+                ))?;
+
+            let validator = validator_set.get_by_id(validator_id)
+                .ok_or_else(|| StorageError::InvalidLastCommit(format!(
+                    "Validator {} not in set for height {}",
+                    validator_id, commit.height
+                )))?;
+
+            // Verify signature (simplified - actual implementation uses BLS)
+            if let Some(ref signature) = sig.signature {
+                let signing_root = compute_commit_signing_root(commit);
+                if validator.public_key.verify(signature, &signing_root) {
+                    valid_signatures += 1;
+                }
+            }
+        }
+
+        if valid_signatures < threshold {
+            return Err(StorageError::InsufficientCommitSignatures {
+                required: threshold,
+                actual: valid_signatures,
+            });
+        }
+
+        Ok(())
+    }
+}
+```
+
+---
+
+## 12. Late-Joiner Bootstrap
+
+### 12.1 Trusted State Bootstrap
+
+New nodes need initial state from a trusted source:
+
+```rust
+impl DatabaseManager {
+    /// Bootstrap storage from trusted state snapshot
+    ///
+    /// Used by new nodes joining the network. The snapshot includes:
+    /// - Genesis block and initial validator set
+    /// - Recent blocks with commits
+    /// - Current validator set
+    /// - Recent checkpoints
+    pub fn bootstrap_from_trusted_state(
+        &self,
+        snapshot: TrustedStateSnapshot,
+    ) -> Result<(), StorageError> {
+        tracing::info!(
+            snapshot_height = snapshot.height,
+            validator_count = snapshot.validator_set.len(),
+            "Bootstrapping from trusted state"
+        );
+
+        // 1. Store genesis validator set
+        self.put_validator_set(0, &snapshot.genesis_validator_set)?;
+
+        // 2. Store current validator set
+        self.put_validator_set(
+            snapshot.validator_set_effective_height,
+            &snapshot.validator_set,
+        )?;
+
+        // 3. Store recent blocks (with LastCommits)
+        for block in &snapshot.recent_blocks {
+            self.put_block_validated(block)?;
+        }
+
+        // 4. Store checkpoints
+        for checkpoint in &snapshot.checkpoints {
+            self.put_checkpoint(checkpoint)?;
+        }
+
+        // 5. Store parameter history
+        for (param_id, history) in &snapshot.parameter_history {
+            for (height, value) in history {
+                self.put_parameter_update(*param_id, *height, value)?;
+            }
+        }
+
+        // 6. Update metadata
+        self.put_metadata(b"bootstrap_height", &snapshot.height.to_be_bytes())?;
+        self.put_metadata(b"bootstrap_timestamp", &snapshot.timestamp.to_be_bytes())?;
+
+        STORAGE_BOOTSTRAP_COMPLETE.inc();
+
+        tracing::info!("Bootstrap complete");
+
+        Ok(())
+    }
+}
+
+/// Trusted state snapshot for bootstrapping new nodes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedStateSnapshot {
+    /// Height of the snapshot
+    pub height: u64,
+    /// Timestamp when snapshot was created
+    pub timestamp: u64,
+    /// Genesis validator set
+    pub genesis_validator_set: ValidatorSet,
+    /// Current active validator set
+    pub validator_set: ValidatorSet,
+    /// Height at which current validator set became effective
+    pub validator_set_effective_height: u64,
+    /// Recent blocks (last N blocks with LastCommits)
+    pub recent_blocks: Vec<SignedConsensusBlock<MainnetEthSpec>>,
+    /// Recent checkpoints
+    pub checkpoints: Vec<AuxPowCheckpoint>,
+    /// Parameter change history
+    pub parameter_history: HashMap<GovernanceParameterId, Vec<(u64, GovernanceParameterValue)>>,
+}
+```
+
+---
+
+## 13. Pruning Strategy
+
+### 13.1 Validator Set Pruning
+
+```rust
+impl DatabaseManager {
+    /// Prune old validator sets, keeping minimum history
+    ///
+    /// Keeps:
+    /// - Genesis validator set (always)
+    /// - Last N validator set changes
+    /// - All sets within MIN_VALIDATOR_SET_HISTORY blocks of current height
+    pub fn prune_validator_sets(
+        &self,
+        current_height: u64,
+        keep_last_n_changes: usize,
+        min_history_blocks: u64,
+    ) -> Result<usize, StorageError> {
+        let min_keep_height = current_height.saturating_sub(min_history_blocks);
+        let changes = self.list_validator_set_changes()?;
+
+        if changes.len() <= keep_last_n_changes + 1 {
+            // +1 for genesis, nothing to prune
+            return Ok(0);
+        }
+
+        let mut pruned = 0;
+        let keep_start_idx = changes.len().saturating_sub(keep_last_n_changes);
+
+        for (i, (effective_height, _)) in changes.iter().enumerate() {
+            // Never prune genesis (height 0)
+            if *effective_height == 0 {
+                continue;
+            }
+
+            // Keep recent sets
+            if *effective_height >= min_keep_height {
+                continue;
+            }
+
+            // Keep last N changes
+            if i >= keep_start_idx {
+                continue;
+            }
+
+            // Prune this set
+            self.delete_validator_set(*effective_height)?;
+            pruned += 1;
+        }
+
+        if pruned > 0 {
+            tracing::info!(pruned = pruned, "Pruned old validator sets");
+            STORAGE_VALIDATOR_SETS_PRUNED.inc_by(pruned as u64);
+        }
+
+        Ok(pruned)
+    }
+}
+```
+
+### 13.2 Checkpoint Retention
+
+```rust
+impl DatabaseManager {
+    /// Checkpoints are NOT pruned by default
+    ///
+    /// Checkpoints are essential for:
+    /// - Light client proofs
+    /// - Late-joiner verification
+    /// - Audit trail
+    ///
+    /// Only prune checkpoints if explicitly configured and with extreme caution.
+    pub fn prune_checkpoints(
+        &self,
+        _keep_after_height: u64,
+    ) -> Result<usize, StorageError> {
+        // By default, do not prune checkpoints
+        tracing::warn!("Checkpoint pruning is disabled for safety");
+        Ok(0)
+    }
+}
+```
+
+### 13.3 Parameter History Retention
+
+```rust
+impl DatabaseManager {
+    /// Parameter history is NEVER pruned
+    ///
+    /// All parameter changes must be kept forever because:
+    /// - Late joiners need to reconstruct historical state
+    /// - Audit and compliance requirements
+    /// - Verification of historical blocks
+    pub fn parameter_history_is_immutable() -> bool {
+        true
+    }
+}
+```
+
+---
+
+## 14. Corruption Detection and Recovery
+
+### 14.1 Chain Integrity Verification
+
+```rust
+impl DatabaseManager {
+    /// Verify chain integrity from height A to B
+    ///
+    /// Checks:
+    /// - No height gaps
+    /// - Parent hash linkage
+    /// - LastCommit references correct parent
+    /// - LastCommit has sufficient signatures
+    pub fn verify_chain_integrity(
+        &self,
+        start_height: u64,
+        end_height: u64,
+    ) -> Result<ChainIntegrityResult, StorageError> {
+        let mut issues = Vec::new();
+        let mut prev_hash: Option<Hash256> = None;
+
+        for height in start_height..=end_height {
+            let block = match self.get_block_by_height(height)? {
+                Some(b) => b,
+                None => {
+                    issues.push(IntegrityIssue::MissingBlock { height });
+                    continue;
+                }
+            };
+
+            // Check parent linkage
+            if let Some(expected_parent) = prev_hash {
+                if block.message.parent_hash != expected_parent {
+                    issues.push(IntegrityIssue::ParentHashMismatch {
+                        height,
+                        expected: expected_parent,
+                        actual: block.message.parent_hash,
+                    });
+                }
+            }
+
+            // Check LastCommit (skip genesis)
+            if height > 0 {
+                match &block.message.last_commit {
+                    Some(commit) => {
+                        if commit.height != height - 1 {
+                            issues.push(IntegrityIssue::CommitHeightMismatch {
+                                block_height: height,
+                                commit_height: commit.height,
+                            });
+                        }
+                        if commit.block_hash != block.message.parent_hash {
+                            issues.push(IntegrityIssue::CommitHashMismatch {
+                                height,
+                            });
+                        }
+                    }
+                    None => {
+                        issues.push(IntegrityIssue::MissingCommit { height });
+                    }
+                }
+            }
+
+            prev_hash = Some(block.canonical_root());
+        }
+
+        if issues.is_empty() {
+            Ok(ChainIntegrityResult::Valid)
+        } else {
+            Ok(ChainIntegrityResult::Issues(issues))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ChainIntegrityResult {
+    Valid,
+    Issues(Vec<IntegrityIssue>),
+}
+
+#[derive(Debug)]
+pub enum IntegrityIssue {
+    MissingBlock { height: u64 },
+    ParentHashMismatch { height: u64, expected: Hash256, actual: Hash256 },
+    CommitHeightMismatch { block_height: u64, commit_height: u64 },
+    CommitHashMismatch { height: u64 },
+    MissingCommit { height: u64 },
+}
+```
+
+### 14.2 Recovery from Corruption
+
+```rust
+impl DatabaseManager {
+    /// Attempt to recover from detected corruption
+    ///
+    /// For missing or corrupt blocks, the node must re-sync from peers.
+    /// This method prepares the database for re-sync.
+    pub fn prepare_resync_from_height(
+        &self,
+        height: u64,
+    ) -> Result<(), StorageError> {
+        tracing::warn!(
+            height = height,
+            "Preparing database for re-sync due to corruption"
+        );
+
+        // Delete all blocks from height onwards
+        let chain_height = self.get_chain_height()?;
+        for h in height..=chain_height {
+            if let Some(block) = self.get_block_by_height(h)? {
+                self.delete_block(&block.canonical_root())?;
+                self.delete_block_height(h)?;
+            }
+        }
+
+        // Update chain head to height - 1
+        if height > 0 {
+            if let Some(block) = self.get_block_by_height(height - 1)? {
+                self.put_chain_head(height - 1, &block.canonical_root())?;
+            }
+        }
+
+        STORAGE_RESYNC_PREPARATIONS.inc();
+
+        tracing::info!(
+            new_height = height.saturating_sub(1),
+            "Database prepared for re-sync"
+        );
+
+        Ok(())
+    }
+}
+```
+
+---
+
+## 15. Metrics
+
+### 15.1 Storage Metrics
+
+```rust
+lazy_static! {
+    // Block storage metrics
+    pub static ref STORAGE_BLOCKS_STORED: IntCounter = IntCounter::new(
+        "storage_blocks_stored_total",
+        "Total blocks stored"
+    ).unwrap();
+
+    pub static ref STORAGE_CHAIN_HEIGHT: IntGauge = IntGauge::new(
+        "storage_chain_height",
+        "Current chain height in storage"
+    ).unwrap();
+
+    // Validator set metrics
+    pub static ref STORAGE_VALIDATOR_SET_LOOKUPS: IntCounter = IntCounter::new(
+        "storage_validator_set_lookups_total",
+        "Total validator set lookups"
+    ).unwrap();
+
+    pub static ref STORAGE_VALIDATOR_SETS_STORED: IntCounter = IntCounter::new(
+        "storage_validator_sets_stored_total",
+        "Total validator sets stored"
+    ).unwrap();
+
+    pub static ref STORAGE_VALIDATOR_SETS_PRUNED: IntCounter = IntCounter::new(
+        "storage_validator_sets_pruned_total",
+        "Total validator sets pruned"
+    ).unwrap();
+
+    // Checkpoint metrics
+    pub static ref STORAGE_CHECKPOINT_LOOKUPS: IntCounter = IntCounter::new(
+        "storage_checkpoint_lookups_total",
+        "Total checkpoint lookups"
+    ).unwrap();
+
+    pub static ref STORAGE_CHECKPOINTS_STORED: IntCounter = IntCounter::new(
+        "storage_checkpoints_stored_total",
+        "Total checkpoints stored"
+    ).unwrap();
+
+    // Batch operation metrics
+    pub static ref STORAGE_BATCH_WRITES: IntCounter = IntCounter::new(
+        "storage_batch_writes_total",
+        "Total atomic batch writes"
+    ).unwrap();
+
+    pub static ref STORAGE_SYNC_BATCHES: IntCounter = IntCounter::new(
+        "storage_sync_batches_total",
+        "Total sync block batches stored"
+    ).unwrap();
+
+    pub static ref STORAGE_SYNC_BLOCKS: IntCounter = IntCounter::new(
+        "storage_sync_blocks_total",
+        "Total synced blocks stored"
+    ).unwrap();
+
+    // Bootstrap and recovery metrics
+    pub static ref STORAGE_BOOTSTRAP_COMPLETE: IntCounter = IntCounter::new(
+        "storage_bootstrap_complete_total",
+        "Total bootstrap operations completed"
+    ).unwrap();
+
+    pub static ref STORAGE_RESYNC_PREPARATIONS: IntCounter = IntCounter::new(
+        "storage_resync_preparations_total",
+        "Total re-sync preparations due to corruption"
+    ).unwrap();
+
+    // Parameter history metrics
+    pub static ref STORAGE_PARAMETER_UPDATES: IntCounter = IntCounter::new(
+        "storage_parameter_updates_total",
+        "Total governance parameter updates stored"
+    ).unwrap();
+
+    // Commit verification metrics
+    pub static ref STORAGE_COMMIT_VERIFICATIONS: IntCounter = IntCounter::new(
+        "storage_commit_verifications_total",
+        "Total commit signature verifications"
+    ).unwrap();
+
+    pub static ref STORAGE_COMMIT_VERIFICATION_FAILURES: IntCounter = IntCounter::new(
+        "storage_commit_verification_failures_total",
+        "Total commit signature verification failures"
+    ).unwrap();
+}
+```
+
+---
+
+## 16. Column Families to Remove
+
+### 16.1 CumulativeDifficulty Removal
 
 ```rust
 // REMOVE: No longer needed with Tendermint instant finality
@@ -905,7 +1823,7 @@ pub const CF_CUMULATIVE_DIFFICULTY: &str = "cumulative_difficulty";
 // - compare_chain_difficulty()
 ```
 
-### 8.2 OrphanedBlocks Removal
+### 16.2 OrphanedBlocks Removal
 
 ```rust
 // REMOVE: No orphan blocks with instant finality
@@ -921,9 +1839,9 @@ pub const CF_ORPHANED_BLOCKS: &str = "orphaned_blocks";
 
 ---
 
-## 9. Database Initialization
+## 17. Database Initialization
 
-### 9.1 Column Family Configuration
+### 17.1 Column Family Configuration
 
 ```rust
 // In storage/database.rs
@@ -952,7 +1870,7 @@ pub const COLUMN_FAMILIES: &[&str] = &[
 pub const CF_PARAMETER_HISTORY: &str = "parameter_history";
 ```
 
-### 9.2 Migration Script
+### 17.2 Migration Script
 
 ```rust
 // In storage/migration.rs
@@ -1006,9 +1924,9 @@ pub async fn migrate_to_tendermint_schema(db_path: &Path) -> Result<(), StorageE
 
 ---
 
-## 10. Block Validation Changes
+## 18. Block Validation Changes
 
-### 10.1 Finalized-Only Storage
+### 18.1 Finalized-Only Storage
 
 With Tendermint, all stored blocks are finalized. The storage layer should validate this:
 
@@ -1074,9 +1992,9 @@ impl Handler<StoreBlockMessage> for StorageActor {
 
 ---
 
-## 11. Testing Strategy
+## 19. Testing Strategy
 
-### 11.1 Unit Tests
+### 19.1 Unit Tests
 
 ```rust
 #[cfg(test)]
@@ -1192,7 +2110,7 @@ mod tests {
 
 ---
 
-## 12. Checklist
+## 20. Checklist
 
 ### Block Structure Changes
 - [ ] Add `last_commit: Option<Commit>` to `ConsensusBlock`
@@ -1201,44 +2119,128 @@ mod tests {
 - [ ] Update `genesis()` method
 - [ ] Update block serialization
 
+### Error Types
+- [ ] Add `StorageError::InvalidLastCommit`
+- [ ] Add `StorageError::CommitHeightMismatch`
+- [ ] Add `StorageError::CommitHashMismatch`
+- [ ] Add `StorageError::MissingLastCommit`
+- [ ] Add `StorageError::InsufficientCommitSignatures`
+- [ ] Add `StorageError::MissingValidatorSet`
+- [ ] Add `StorageError::CheckpointRangeOverlap`
+- [ ] Add `StorageError::WalStorageInconsistency`
+- [ ] Add `StorageError::BatchWriteFailed`
+- [ ] Add `StorageError::ChainIntegrityViolation`
+
 ### Storage Schema
 - [ ] Add `CF_VALIDATOR_SETS` column family
 - [ ] Add `CF_CHECKPOINTS` column family
-- [ ] Add `CF_PARAMETER_HISTORY` column family (governance parameter changes)
+- [ ] Add `CF_PARAMETER_HISTORY` column family
 - [ ] Remove `CF_CUMULATIVE_DIFFICULTY` column family
 - [ ] Remove `CF_ORPHANED_BLOCKS` column family
 - [ ] **DO NOT add `CF_COMMITS`** (commits are in blocks)
 
-### Database Methods
+### Commit Retrieval Methods
 - [ ] Implement `get_commit_for_height()` (fetches from next block)
 - [ ] Implement `has_commit_for_height()`
 - [ ] Implement `get_block_with_commit()`
 - [ ] Implement `put_block_validated()` with LastCommit validation
-- [ ] Implement validator set methods
-- [ ] Implement checkpoint methods
+- [ ] Implement `verify_commit_signatures()` for sync verification
+
+### Validator Set Methods
+- [ ] Implement `put_validator_set()`
+- [ ] Implement `get_validator_set_for_height()`
+- [ ] Implement `get_validator_set_at_height()`
+- [ ] Implement `get_current_validator_set()`
+- [ ] Implement `list_validator_set_changes()`
+- [ ] Implement `prune_validator_sets()`
+
+### Checkpoint Methods
+- [ ] Implement `put_checkpoint()`
+- [ ] Implement `get_checkpoint_for_height()`
+- [ ] Implement `get_latest_checkpoint()`
+
+### Parameter History Methods
+- [ ] Implement `put_parameter_update()`
+- [ ] Implement `get_parameter_at_height()`
+- [ ] Implement `get_parameter_history()`
+
+### WAL-Storage Coordination
+- [ ] Implement `store_finalized_block_with_wal_check()`
+- [ ] Implement `verify_storage_wal_consistency()`
+- [ ] Define `StorageConsistencyResult` enum
+
+### Batch Write Operations
+- [ ] Implement `finalize_block_atomic()` with WriteBatch
+- [ ] Implement `store_synced_blocks_batch()`
+
+### Sync Actor Integration
+- [ ] Update SyncActor to use `GetValidatorSetForHeightMessage`
+- [ ] Update SyncActor to verify commit signatures before storage
+- [ ] Implement batch storage for synced block ranges
+
+### Late-Joiner Bootstrap
+- [ ] Define `TrustedStateSnapshot` struct
+- [ ] Implement `bootstrap_from_trusted_state()`
+- [ ] Add bootstrap metadata storage
+
+### Corruption Detection and Recovery
+- [ ] Define `ChainIntegrityResult` and `IntegrityIssue` enums
+- [ ] Implement `verify_chain_integrity()`
+- [ ] Implement `prepare_resync_from_height()`
 
 ### Messages and Handlers
 - [ ] Add `GetCommitForHeightMessage`
 - [ ] Add `GetBlockWithCommitMessage`
-- [ ] Add `StoreValidatorSetMessage`, `GetValidatorSetMessage`
-- [ ] Add `StoreCheckpointMessage`, `GetCheckpointMessage`
-- [ ] Add `StoreParameterUpdateMessage`, `GetParameterAtHeightMessage` (governance params)
+- [ ] Add `StoreValidatorSetMessage`
+- [ ] Add `GetValidatorSetForHeightMessage`
+- [ ] Add `GetCurrentValidatorSetMessage`
+- [ ] Add `ListValidatorSetChangesMessage`
+- [ ] Add `StoreCheckpointMessage`
+- [ ] Add `GetCheckpointForHeightMessage`
+- [ ] Add `GetLatestCheckpointMessage`
+- [ ] Add `StoreParameterUpdateMessage`
+- [ ] Add `GetParameterAtHeightMessage`
+- [ ] Add `GetParameterHistoryMessage`
 - [ ] Implement all handlers
+
+### Metrics
+- [ ] Add `STORAGE_BLOCKS_STORED` counter
+- [ ] Add `STORAGE_CHAIN_HEIGHT` gauge
+- [ ] Add `STORAGE_VALIDATOR_SET_LOOKUPS` counter
+- [ ] Add `STORAGE_VALIDATOR_SETS_STORED` counter
+- [ ] Add `STORAGE_VALIDATOR_SETS_PRUNED` counter
+- [ ] Add `STORAGE_CHECKPOINT_LOOKUPS` counter
+- [ ] Add `STORAGE_CHECKPOINTS_STORED` counter
+- [ ] Add `STORAGE_BATCH_WRITES` counter
+- [ ] Add `STORAGE_SYNC_BATCHES` counter
+- [ ] Add `STORAGE_SYNC_BLOCKS` counter
+- [ ] Add `STORAGE_BOOTSTRAP_COMPLETE` counter
+- [ ] Add `STORAGE_RESYNC_PREPARATIONS` counter
+- [ ] Add `STORAGE_PARAMETER_UPDATES` counter
+- [ ] Add `STORAGE_COMMIT_VERIFICATIONS` counter
+- [ ] Add `STORAGE_COMMIT_VERIFICATION_FAILURES` counter
 
 ### Migration
 - [ ] Implement `migrate_to_tendermint_schema()`
 - [ ] Handle existing blocks without LastCommit
+- [ ] Add schema version metadata
 
 ### Testing
 - [ ] Unit tests for commit retrieval pattern
-- [ ] Unit tests for validator sets
+- [ ] Unit tests for validator sets (height-based lookup)
 - [ ] Unit tests for checkpoints
 - [ ] Unit tests for block validation
+- [ ] Unit tests for parameter history
+- [ ] Unit tests for WAL-storage consistency
+- [ ] Unit tests for batch writes
+- [ ] Unit tests for chain integrity verification
+- [ ] Unit tests for commit signature verification
 - [ ] Migration tests
+- [ ] Bootstrap tests
 
 ---
 
-## 13. Summary
+## 21. Summary
 
 **Key Design Decision**: LastCommit is embedded in the block, not stored separately.
 
@@ -1254,6 +2256,6 @@ This follows the standard Tendermint/CometBFT pattern and ensures atomic persist
 
 ---
 
-*Implementation Plan Version: 2.0*
+*Implementation Plan Version: 3.0*
 *Last Updated: February 2026*
-*Change: Embedded LastCommit in block structure per Tendermint standard*
+*Changes: Added error types, WAL coordination, batch writes, sync integration, bootstrap, pruning, corruption detection, and metrics*

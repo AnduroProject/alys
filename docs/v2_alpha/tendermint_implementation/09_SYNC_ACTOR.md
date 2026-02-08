@@ -4,11 +4,17 @@
 
 This document provides a comprehensive implementation guide for modifying the SyncActor to work with Tendermint consensus. The fundamental change is from probabilistic-finality sync (with fork choice, orphan handling, and reorg support) to instant-finality sync (with commit proof verification and linear block progression).
 
+**Key Design Decision**: Following standard Tendermint/CometBFT architecture, **LastCommit is embedded in the block structure**. Block N contains the commit proof for Block N-1. This affects how sync verifies finality.
+
 **Estimated Effort**: 1-2 weeks
 **Dependencies**:
-- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit type)
-- `04_CHAINACTOR_HANDLERS.md` (Block finalization)
-- `05_NETWORK_LAYER.md` (Commit gossip)
+- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit, CommitSig, BlockIDFlag)
+- `04_CHAINACTOR_HANDLERS.md` (Block finalization, blocks_without_pow)
+- `05_NETWORK_LAYER.md` (Block gossip, peer scoring)
+- `06_WAL.md` (Crash recovery)
+- `07_EL_COORDINATION.md` (execute_synced_block)
+- `11_STORAGE_SCHEMA_MIGRATION.md` (Storage with embedded commits)
+- `17_GOVERNANCE_PARAMETERS.md` (ValidatorSet changes during sync)
 **Files to Modify**:
 - `app/src/actors_v2/network/sync_actor.rs`
 - `app/src/actors_v2/network/messages.rs`
@@ -22,9 +28,78 @@ This document provides a comprehensive implementation guide for modifying the Sy
 
 ---
 
-## 1. Conceptual Change: Probabilistic vs Instant Finality
+## Cross-Document Type References
 
-### 1.1 Current (Aura/PoW) vs Tendermint Sync
+| Type | Defined In | Usage Here |
+|------|-----------|------------|
+| `Commit` | `01_MESSAGE_TYPES` | Embedded in `block.last_commit` |
+| `CommitSig` | `01_MESSAGE_TYPES` | Individual validator signatures |
+| `BlockIDFlag` | `01_MESSAGE_TYPES` | Commit/Nil/Absent status |
+| `SignedConsensusBlock` | `01_MESSAGE_TYPES` | Block structure with last_commit |
+| `ValidatorSet` | `02_STATE_MACHINE` | For commit signature verification |
+| `compute_precommit_signing_root` | `01_MESSAGE_TYPES` | Signing root for verification |
+| `execute_synced_block` | `07_EL_COORDINATION` | EL execution during sync |
+| `blocks_without_pow` | `04_CHAINACTOR_HANDLERS` | Liveness gate counter |
+| `MisbehaviorReason` | `05_NETWORK_LAYER` | Peer scoring/banning |
+| `RecoveredState` | `06_WAL` | Crash recovery |
+
+---
+
+## 1. Understanding Embedded LastCommit for Sync
+
+### 1.1 Block Structure Recap
+
+Each block contains the commit proof for the **previous** block:
+
+```
+Block N:
+├── parent_hash: hash(Block N-1)
+├── slot: N
+├── last_commit: Commit for Block N-1  ← Proves N-1 is final
+│   ├── height: N-1
+│   ├── round: R
+│   ├── block_hash: hash(Block N-1)
+│   └── signatures: [CommitSig, ...]
+├── execution_payload
+└── ... other fields
+```
+
+### 1.2 Finality Verification During Sync
+
+```
+Sync receives blocks in order:
+
+Block 1 (last_commit: None - genesis has no commit)
+Block 2 (last_commit: Commit for Block 1) → Proves Block 1 is final
+Block 3 (last_commit: Commit for Block 2) → Proves Block 2 is final
+Block 4 (last_commit: Commit for Block 3) → Proves Block 3 is final
+...
+Block N (last_commit: Commit for Block N-1) → Proves Block N-1 is final
+
+↳ Block N itself is NOT yet proven final until Block N+1 arrives
+```
+
+### 1.3 Sync Verification Strategy
+
+```mermaid
+graph TB
+    subgraph "Sync Block Verification"
+        A[Receive Block N] --> B{Is N > 1?}
+        B -->|Yes| C[Extract last_commit from Block N]
+        B -->|No| D[Genesis - no commit needed]
+        C --> E[Verify last_commit proves Block N-1]
+        E --> F{Valid?}
+        F -->|Yes| G[Accept Block N, Mark N-1 as finalized]
+        F -->|No| H[Reject Block N, Ban Peer]
+        D --> I[Accept Genesis]
+    end
+```
+
+---
+
+## 2. Conceptual Change: Probabilistic vs Instant Finality
+
+### 2.1 Current (Aura/PoW) vs Tendermint Sync
 
 ```mermaid
 graph TB
@@ -41,78 +116,74 @@ graph TB
         A8 --> A3
     end
 
-    subgraph "TENDERMINT (Commit Proof Sync)"
-        B1[Discover Peers] --> B2[Query Committed Height]
-        B2 --> B3[Request Block + Commit]
-        B3 --> B4[Verify Commit Proof]
+    subgraph "TENDERMINT (Embedded Commit Sync)"
+        B1[Discover Peers] --> B2[Query Tip Height]
+        B2 --> B3[Request Blocks in Order]
+        B3 --> B4[Verify Block N's last_commit proves N-1]
         B4 --> B5{Valid?}
-        B5 -->|Yes| B6[Finalize Block]
+        B5 -->|Yes| B6[Store Block, Finalize Previous]
         B5 -->|No| B7[Reject & Ban Peer]
-        B6 --> B3
+        B6 --> B8{At tip?}
+        B8 -->|No| B3
+        B8 -->|Yes| B9[Synced]
     end
 ```
 
-### 1.2 Key Differences
+### 2.2 Key Differences
 
 | Aspect | Current (Aura) | Tendermint |
 |--------|----------------|------------|
-| Height Discovery | Mode/Median of peer heights | Query committed height with proof |
-| Block Validity | Parent exists, difficulty valid | Commit proof verifies 2/3+ signatures |
+| Height Discovery | Mode/Median of peer heights | Query committed height |
+| Block Validity | Parent exists, difficulty valid | Block's last_commit proves parent |
+| Commit Storage | N/A | Embedded in next block |
 | Orphan Handling | Cache orphans, request parents | Not needed - blocks are final |
 | Fork Choice | Cumulative difficulty | Not needed - single chain |
 | Reorg Support | Yes (complex) | Not needed - no reorgs |
 | State Machine | 8 states | 6 states |
-| Bootstrap Detection | 30s timeout heuristic | Commit proof presence |
 
 ---
 
-## 2. State Machine Simplification
+## 3. State Machine Simplification
 
-### 2.1 Current State Machine (8 States)
+### 3.1 New State Machine (6 States)
 
 ```rust
-// CURRENT: Complex state machine with orphan/fork support
+/// Tendermint sync state machine
 pub enum SyncState {
+    /// Sync not running
     Stopped,
+
+    /// Initializing sync
     Starting,
+
+    /// Waiting for peer connections
     DiscoveringPeers,
-    QueryingNetworkHeight,  // Uses mode/median heuristics
+
+    /// Querying network for committed height
+    QueryingCommittedHeight,
+
+    /// Fetching and verifying blocks
     RequestingBlocks,
-    ProcessingBlocks,       // May produce orphans, trigger reorgs
-    Synced,
-    Error(String),
-}
-```
 
-### 2.2 New State Machine (6 States)
-
-```rust
-// TENDERMINT: Simplified for linear progression
-pub enum SyncState {
-    Stopped,
-    Starting,
-    DiscoveringPeers,
-    QueryingCommittedHeight,  // NEW: Query with commit proof
-    RequestingBlocks,         // Requests (Block, Commit) pairs
+    /// At network tip, monitoring for new blocks
     Synced,
 }
 
 impl SyncState {
-    /// Human-readable description for logging
     pub fn description(&self) -> &'static str {
         match self {
             SyncState::Stopped => "Stopped - Not syncing",
             SyncState::Starting => "Starting - Initializing sync",
             SyncState::DiscoveringPeers => "Discovering Peers - Waiting for connections",
             SyncState::QueryingCommittedHeight => "Querying - Getting network committed height",
-            SyncState::RequestingBlocks => "Requesting - Fetching committed blocks",
+            SyncState::RequestingBlocks => "Requesting - Fetching blocks with embedded commits",
             SyncState::Synced => "Synced - At network tip",
         }
     }
 }
 ```
 
-### 2.3 State Transition Diagram
+### 3.2 State Transition Diagram
 
 ```mermaid
 stateDiagram-v2
@@ -140,39 +211,86 @@ stateDiagram-v2
 
 ---
 
-## 3. Commit Proof Verification
+## 4. Sync Types and Messages
 
-### 3.1 New Types for Sync
+### 4.0 Error Types and Enums
 
 ```rust
 // In network/messages.rs
 
-/// Block with its commit proof for sync
-#[derive(Debug, Clone)]
-pub struct CommittedBlock {
-    /// The consensus block
-    pub block: SignedConsensusBlock<MainnetEthSpec>,
+/// Sync-related errors
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SyncError {
+    /// Sync not started
+    #[error("Sync not started")]
+    NotStarted,
 
-    /// The commit proof (2/3+ validator signatures)
-    pub commit: Commit,
+    /// Commit verification failed
+    #[error("Commit verification failed: {0}")]
+    CommitVerification(String),
+
+    /// Block validation failed
+    #[error("Block validation failed: {0}")]
+    BlockValidation(String),
+
+    /// Request timed out
+    #[error("Request timed out after {0:?}")]
+    RequestTimeout(Duration),
+
+    /// Peer banned or unavailable
+    #[error("Peer unavailable: {0}")]
+    PeerUnavailable(String),
+
+    /// Rate limited by peer
+    #[error("Rate limited by peer {0}")]
+    RateLimited(PeerId),
+
+    /// No peers available for sync
+    #[error("No sync peers available")]
+    NoPeers,
+
+    /// Chain actor error
+    #[error("Chain actor error: {0}")]
+    ChainError(String),
+
+    /// Network error
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    /// ValidatorSet mismatch during sync
+    #[error("ValidatorSet mismatch at height {height}: {reason}")]
+    ValidatorSetMismatch { height: u64, reason: String },
+
+    /// Queue full - backpressure
+    #[error("Block queue full ({size} blocks pending)")]
+    QueueFull { size: usize },
 }
 
-/// Response from committed height query
-#[derive(Debug, Clone)]
-pub struct CommittedHeightResponse {
-    /// The node's latest committed height
-    pub height: u64,
+/// Source of a block being imported
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockSource {
+    /// Block received via sync protocol
+    Sync,
 
-    /// The block hash at that height
-    pub block_hash: BlockHash,
+    /// Block received via gossip (live consensus)
+    Gossip,
 
-    /// The commit proof for that height (enables verification)
-    pub commit: Commit,
+    /// Block produced locally (we are proposer)
+    Local,
+
+    /// Block from WAL recovery
+    Recovery,
 }
+```
 
-/// Block request with commit requirement
+### 4.1 Block Request/Response Types
+
+```rust
+// In network/messages.rs
+
+/// Request for a range of blocks
 #[derive(Debug, Clone)]
-pub struct BlockWithCommitRequest {
+pub struct BlockRangeRequest {
     /// Starting height
     pub start_height: u64,
 
@@ -183,159 +301,288 @@ pub struct BlockWithCommitRequest {
     pub correlation_id: Option<Uuid>,
 }
 
-/// Block response with commits
+/// Response with blocks (each block contains last_commit for previous)
 #[derive(Debug, Clone)]
-pub struct BlockWithCommitResponse {
-    /// Blocks with their commit proofs
-    pub blocks: Vec<CommittedBlock>,
+pub struct BlockRangeResponse {
+    /// Blocks in height order
+    /// Each block.last_commit proves the previous block
+    pub blocks: Vec<SignedConsensusBlock<MainnetEthSpec>>,
 
     /// Correlation ID for request tracking
     pub correlation_id: Option<Uuid>,
 }
+
+/// Response from tip height query
+#[derive(Debug, Clone)]
+pub struct TipHeightResponse {
+    /// The node's current tip height
+    pub height: u64,
+
+    /// The block hash at that height
+    pub block_hash: BlockHash,
+
+    /// Peer ID that responded
+    pub peer_id: PeerId,
+}
 ```
 
-### 3.2 Commit Verification Logic
+### 4.2 Tip Commit Request (for chain tip)
+
+Since Block N's commit is in Block N+1, we need a way to verify the current tip before N+1 exists:
 
 ```rust
-// In sync_actor.rs
+/// Request the current commit for a block (used for chain tip)
+///
+/// This is used when we have Block N but Block N+1 doesn't exist yet.
+/// The commit will be embedded in N+1 once it's produced.
+#[derive(Debug, Clone)]
+pub struct TipCommitRequest {
+    /// Height to get commit for
+    pub height: u64,
 
+    /// Expected block hash
+    pub block_hash: BlockHash,
+}
+
+/// Response with the commit for the tip block
+#[derive(Debug, Clone)]
+pub struct TipCommitResponse {
+    /// The commit proof
+    pub commit: Commit,
+
+    /// Peer that responded
+    pub peer_id: PeerId,
+}
+```
+
+---
+
+## 5. Commit Verification Logic
+
+### 5.1 Verifying Embedded LastCommit
+
+```rust
 impl SyncActor {
-    /// Verify a commit proof for a block
+    /// Verify a block's last_commit proves the previous block was finalized.
     ///
     /// # Verification Steps
     ///
-    /// 1. Check commit height matches block height
-    /// 2. Check commit block_hash matches block hash
+    /// 1. Check last_commit height == block height - 1
+    /// 2. Check last_commit block_hash == block.parent_hash
     /// 3. Verify 2/3+ validators signed
-    /// 4. Verify aggregate signature
+    /// 4. Verify all signatures
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block whose last_commit to verify
+    /// * `parent_hash` - Expected parent hash (should match last_commit.block_hash)
     ///
     /// # Returns
     ///
     /// `Ok(())` if valid, `Err(SyncError)` with reason if invalid
-    fn verify_commit(
+    fn verify_block_last_commit(
         &self,
         block: &SignedConsensusBlock<MainnetEthSpec>,
-        commit: &Commit,
+        parent_hash: BlockHash,
     ) -> Result<(), SyncError> {
-        let block_hash = block.message.hash();
         let height = block.message.slot;
 
-        // 1. Height must match
-        if commit.height != height {
+        // Genesis has no last_commit
+        if height == 0 {
+            if block.message.last_commit.is_some() {
+                return Err(SyncError::CommitVerification(
+                    "Genesis block should not have last_commit".to_string()
+                ));
+            }
+            return Ok(());
+        }
+
+        // All other blocks MUST have last_commit
+        let last_commit = block.message.last_commit.as_ref()
+            .ok_or_else(|| SyncError::CommitVerification(format!(
+                "Block {} missing required last_commit",
+                height
+            )))?;
+
+        // 1. Height must be previous block
+        if last_commit.height != height - 1 {
             return Err(SyncError::CommitVerification(format!(
-                "Commit height {} does not match block height {}",
-                commit.height, height
+                "last_commit height {} does not match expected {}",
+                last_commit.height, height - 1
             )));
         }
 
-        // 2. Block hash must match
-        if commit.block_hash != block_hash {
+        // 2. Block hash must match parent
+        if last_commit.block_hash != parent_hash {
             return Err(SyncError::CommitVerification(format!(
-                "Commit block_hash {:?} does not match block hash {:?}",
-                commit.block_hash, block_hash
+                "last_commit block_hash {:?} does not match parent {:?}",
+                last_commit.block_hash, parent_hash
             )));
         }
 
-        // 3. Check 2/3+ threshold
-        let num_signers = commit.num_signers();
-        let threshold = self.validator_set.two_thirds_threshold();
+        // 3. Verify signatures
+        self.verify_commit_signatures(last_commit)?;
 
-        if num_signers < threshold {
+        tracing::debug!(
+            block_height = height,
+            commit_for_height = last_commit.height,
+            signers = last_commit.num_commit_signatures(),
+            "Block's last_commit verified successfully"
+        );
+
+        Ok(())
+    }
+
+    /// Verify a commit has sufficient valid signatures
+    fn verify_commit_signatures(&self, commit: &Commit) -> Result<(), SyncError> {
+        let validator_set = &self.validator_set;
+
+        // Check 2/3+ threshold
+        let num_commit_sigs = commit.num_commit_signatures();
+        let threshold = validator_set.two_thirds_threshold() as usize;
+
+        if num_commit_sigs < threshold {
             return Err(SyncError::CommitVerification(format!(
                 "Insufficient signers: {} < {} required",
-                num_signers, threshold
+                num_commit_sigs, threshold
             )));
         }
 
-        // 4. Verify aggregate signature
-        let signing_keys = self.collect_signer_keys(commit)?;
+        // Verify each signature
         let signing_root = compute_precommit_signing_root(
             commit.height,
             commit.round,
             commit.block_hash,
         );
 
-        if !commit.aggregate_signature.verify(&signing_keys, signing_root) {
-            return Err(SyncError::CommitVerification(
-                "Invalid aggregate signature".to_string()
-            ));
-        }
+        for commit_sig in &commit.signatures {
+            if commit_sig.block_id_flag != BlockIDFlag::Commit {
+                continue; // Skip absent/nil
+            }
 
-        tracing::debug!(
-            height = height,
-            signers = num_signers,
-            threshold = threshold,
-            "Commit proof verified successfully"
-        );
+            let validator_id = commit_sig.validator_address
+                .ok_or_else(|| SyncError::CommitVerification(
+                    "Commit signature missing validator address".to_string()
+                ))?;
+
+            let signature = commit_sig.signature.as_ref()
+                .ok_or_else(|| SyncError::CommitVerification(
+                    "Commit signature missing signature".to_string()
+                ))?;
+
+            let pubkey = validator_set.get_public_key(&validator_id)
+                .map_err(|e| SyncError::CommitVerification(e.to_string()))?;
+
+            if !signature.verify(pubkey, signing_root) {
+                return Err(SyncError::CommitVerification(format!(
+                    "Invalid signature from validator {}",
+                    validator_id
+                )));
+            }
+        }
 
         Ok(())
-    }
-
-    /// Collect public keys of signers from commit
-    fn collect_signer_keys(&self, commit: &Commit) -> Result<Vec<PublicKey>, SyncError> {
-        let keys: Vec<_> = commit.signers.iter()
-            .enumerate()
-            .filter(|(_, &signed)| signed)
-            .filter_map(|(i, _)| {
-                self.validator_set
-                    .get_public_key(&ValidatorId(i as u8))
-                    .ok()
-                    .cloned()
-            })
-            .collect();
-
-        if keys.len() != commit.num_signers() {
-            return Err(SyncError::CommitVerification(
-                "Could not resolve all signer public keys".to_string()
-            ));
-        }
-
-        Ok(keys)
     }
 }
 ```
 
+### 5.2 Handling ValidatorSet Changes During Sync
+
+During long sync operations, the validator set may change (see doc 17 for governance with H+2 activation). The SyncActor must use the correct validator set for each height:
+
+```rust
+impl SyncActor {
+    /// Get the validator set that was active at a given height
+    ///
+    /// ValidatorSet changes are activated at H+2, so:
+    /// - GovernanceUpdate at height H activates new set at H+2
+    /// - We need to look up which set was active at the commit height
+    async fn get_validator_set_for_height(
+        &self,
+        height: u64,
+    ) -> Result<Arc<ValidatorSet>, SyncError> {
+        // Query storage for the validator set active at this height
+        let storage = self.storage_actor.as_ref()
+            .ok_or(SyncError::NetworkError("Storage not available".to_string()))?;
+
+        let validator_set = storage.send(GetValidatorSetAtHeight {
+            height,
+            correlation_id: None,
+        }).await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?
+            .map_err(|e| SyncError::ValidatorSetMismatch {
+                height,
+                reason: e.to_string(),
+            })?;
+
+        Ok(Arc::new(validator_set))
+    }
+
+    /// Verify block's last_commit using the correct validator set for that height
+    async fn verify_block_last_commit_with_height_lookup(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+        parent_hash: BlockHash,
+    ) -> Result<(), SyncError> {
+        let height = block.message.slot;
+
+        // Genesis has no last_commit
+        if height == 0 {
+            return Ok(());
+        }
+
+        let last_commit = block.message.last_commit.as_ref()
+            .ok_or_else(|| SyncError::CommitVerification(
+                format!("Block {} missing last_commit", height)
+            ))?;
+
+        // Get the validator set that was active when the parent was committed
+        // This is the set that signed the commit
+        let validator_set = self.get_validator_set_for_height(last_commit.height).await?;
+
+        // Verify using the correct validator set
+        self.verify_commit_signatures_with_set(&validator_set, last_commit)?;
+
+        // Verify commit matches parent
+        if last_commit.block_hash != parent_hash {
+            return Err(SyncError::CommitVerification(
+                "last_commit block_hash doesn't match parent".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+}
+```
+
+**Key Points:**
+- Commits are signed by the validator set active at the commit height
+- When syncing across governance updates, the validator set changes
+- Must look up the historical validator set for each commit verification
+- Storage keeps validator sets indexed by activation height (see doc 11)
+
 ---
 
-## 4. Updated SyncActorState
+## 6. Updated SyncActorState
 
-### 4.1 Fields to Remove
+### 6.1 Fields to Remove
 
 ```rust
 // REMOVE from SyncActorState:
 
 // Orphan-related (not needed with instant finality)
-// - observed_height field (from ChainStatus)
 // - orphan_count tracking
 
 // Fork-choice related (not needed)
 // - Any cumulative difficulty tracking
 // - Best chain comparisons
 
-// Height discovery heuristics (replaced by commit proofs)
+// Height discovery heuristics (replaced by simple queries)
 // - observed_peer_heights: Vec<u64>  // Used for mode calculation
 // - Mode/median calculations
 ```
 
-### 4.2 Fields to Add
-
-```rust
-// ADD to SyncActorState:
-
-/// Validator set for commit verification (updated per epoch)
-validator_set: ValidatorSet,
-
-/// Latest verified committed height from network
-committed_network_height: u64,
-
-/// Commit proof for the latest committed height (for verification)
-latest_network_commit: Option<Commit>,
-
-/// Pending block requests with commit requirement
-pending_block_commits: HashMap<String, PendingBlockRequest>,
-```
-
-### 4.3 Updated SyncActorState Structure
+### 6.2 Updated SyncActorState Structure
 
 ```rust
 /// Mutable state for Tendermint-compatible SyncActor
@@ -344,14 +591,19 @@ struct SyncActorState {
     /// Current sync state
     sync_state: SyncState,
 
-    /// Current committed height (our chain tip)
+    /// Current height (our chain tip)
     current_height: u64,
 
-    /// Target committed height (network tip with proof)
+    /// Target height (network tip)
     target_height: u64,
 
     /// Running state
     is_running: bool,
+
+    // === Finality Tracking ===
+    /// Last height for which we have verified finality
+    /// (We have block N+1 whose last_commit proves block N)
+    last_finalized_height: u64,
 
     // === Peer Management ===
     /// Available sync peers
@@ -361,49 +613,205 @@ struct SyncActorState {
     peer_selection_index: usize,
 
     // === Request Tracking ===
-    /// Active block+commit requests
-    active_requests: HashMap<String, BlockCommitRequestInfo>,
+    /// Active block requests
+    active_requests: HashMap<String, BlockRequestInfo>,
 
-    /// Block queue (now includes commit proofs)
-    block_queue: VecDeque<CommittedBlock>,
+    /// Block queue
+    block_queue: VecDeque<SignedConsensusBlock<MainnetEthSpec>>,
 
     // === Metrics ===
-    /// Sync metrics
-    metrics: SyncMetrics,
+    sync_metrics: SyncMetrics,
 
     // === Timing ===
-    /// Timestamp when current sync_state was entered
     state_entered_at: SystemTime,
-
-    /// Last sync completion time (for cooldown)
     last_sync_completed_at: Option<Instant>,
 
     // === Active Monitoring ===
-    /// Timestamped peer height observations
-    peer_height_observations: Vec<PeerHeightObservation>,
-
-    /// Consecutive checks showing node is behind
     consecutive_behind_checks: u32,
+
+    // === Backpressure ===
+    /// Maximum blocks to queue before applying backpressure
+    max_queue_size: usize,
+
+    // === Rate Limiting ===
+    /// Requests sent to each peer in current window
+    peer_request_counts: HashMap<PeerId, u32>,
+
+    /// Last rate limit window reset
+    rate_limit_window_start: Instant,
+}
+
+impl SyncActorState {
+    /// Check if we can accept more blocks (backpressure)
+    fn can_accept_blocks(&self) -> bool {
+        self.block_queue.len() < self.max_queue_size
+    }
+
+    /// Check if we can send request to peer (rate limiting)
+    fn can_request_from_peer(&mut self, peer_id: &PeerId) -> bool {
+        const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
+        const MAX_REQUESTS_PER_WINDOW: u32 = 50;
+
+        // Reset window if expired
+        if self.rate_limit_window_start.elapsed() > RATE_LIMIT_WINDOW {
+            self.peer_request_counts.clear();
+            self.rate_limit_window_start = Instant::now();
+        }
+
+        let count = self.peer_request_counts.entry(peer_id.clone()).or_insert(0);
+        if *count >= MAX_REQUESTS_PER_WINDOW {
+            return false;
+        }
+
+        *count += 1;
+        true
+    }
+}
+```
+
+### 6.3 Request Timeout Handling
+
+```rust
+/// Information about an active block request
+#[derive(Debug, Clone)]
+pub struct BlockRequestInfo {
+    pub request_id: String,
+    pub start_height: u64,
+    pub count: u32,
+    pub peer_id: PeerId,
+    pub requested_at: SystemTime,
+    pub timeout: Duration,
+}
+
+impl SyncActor {
+    /// Check for timed out requests and retry or fail
+    fn check_request_timeouts(&mut self) {
+        const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+        let mut timed_out = Vec::new();
+        let now = SystemTime::now();
+
+        {
+            let s = self.state.read().unwrap();
+            for (request_id, info) in &s.active_requests {
+                if let Ok(elapsed) = now.duration_since(info.requested_at) {
+                    if elapsed > info.timeout.max(DEFAULT_TIMEOUT) {
+                        timed_out.push((request_id.clone(), info.clone()));
+                    }
+                }
+            }
+        }
+
+        for (request_id, info) in timed_out {
+            tracing::warn!(
+                request_id = %request_id,
+                peer = %info.peer_id,
+                start_height = info.start_height,
+                "Block request timed out"
+            );
+
+            SYNC_REQUEST_TIMEOUTS.inc();
+
+            // Remove from active requests
+            {
+                let mut s = self.state.write().unwrap();
+                s.active_requests.remove(&request_id);
+            }
+
+            // Retry with different peer
+            self.retry_block_request(info.start_height, info.count);
+        }
+    }
+
+    /// Retry a failed block request with a different peer
+    fn retry_block_request(&self, start_height: u64, count: u32) {
+        let state = Arc::clone(&self.state);
+        let network_actor = self.network_actor.clone();
+
+        tokio::spawn(async move {
+            let peer_id = {
+                let mut s = state.write().unwrap();
+                s.select_sync_peer()
+            };
+
+            if let Some(network) = network_actor {
+                let _ = network.send(NetworkMessage::RequestBlocks {
+                    start_height,
+                    count,
+                    peer_id,
+                    correlation_id: Some(Uuid::new_v4()),
+                }).await;
+            }
+        });
+    }
+}
+```
+
+### 6.4 Backpressure Handling
+
+When blocks arrive faster than we can process them:
+
+```rust
+impl SyncActor {
+    /// Handle incoming blocks with backpressure
+    async fn handle_blocks_with_backpressure(
+        &self,
+        blocks: Vec<SignedConsensusBlock<MainnetEthSpec>>,
+        peer_id: PeerId,
+    ) -> Result<(), SyncError> {
+        let mut s = self.state.write().unwrap();
+
+        // Check if queue is full
+        if !s.can_accept_blocks() {
+            tracing::warn!(
+                queue_size = s.block_queue.len(),
+                max_size = s.max_queue_size,
+                "Block queue full - applying backpressure"
+            );
+            SYNC_BACKPRESSURE_EVENTS.inc();
+            return Err(SyncError::QueueFull { size: s.block_queue.len() });
+        }
+
+        // Add blocks to queue
+        for block in blocks {
+            s.block_queue.push_back(block);
+        }
+
+        SYNC_QUEUE_SIZE.set(s.block_queue.len() as i64);
+
+        Ok(())
+    }
+
+    /// Process blocks from queue (called periodically)
+    async fn process_block_queue(&self) {
+        loop {
+            let block = {
+                let mut s = self.state.write().unwrap();
+                s.block_queue.pop_front()
+            };
+
+            match block {
+                Some(block) => {
+                    if let Err(e) = self.import_block(block).await {
+                        tracing::error!(error = ?e, "Failed to import queued block");
+                    }
+                }
+                None => break, // Queue empty
+            }
+        }
+    }
 }
 ```
 
 ---
 
-## 5. Message Handler Modifications
+## 7. Message Handler Modifications
 
-### 5.1 StartSync Handler
+### 7.1 StartSync Handler
 
 ```rust
-// BEFORE: Complex mode/median discovery
-SyncMessage::StartSync { start_height, target_height } => {
-    // ... discover peers ...
-    // ... transition to QueryingNetworkHeight ...
-    // Uses mode/median of peer heights
-}
-
-// AFTER: Commit-proof based discovery
 SyncMessage::StartSync { start_height } => {
-    let state = std::sync::Arc::clone(&self.state);
+    let state = Arc::clone(&self.state);
     let network_actor = self.network_actor.clone();
 
     ctx.spawn(async move {
@@ -417,6 +825,7 @@ SyncMessage::StartSync { start_height } => {
 
         // Initialize state
         s.current_height = start_height;
+        s.last_finalized_height = if start_height > 0 { start_height - 1 } else { 0 };
         s.is_running = true;
         s.transition_to_state(SyncState::Starting);
 
@@ -426,14 +835,14 @@ SyncMessage::StartSync { start_height } => {
             return;
         }
 
-        // Have peers - query committed height with proof
+        // Have peers - query tip height
         s.transition_to_state(SyncState::QueryingCommittedHeight);
 
         drop(s);
 
-        // Query network for committed height
+        // Query network for tip height
         if let Some(network) = network_actor {
-            let _ = network.send(NetworkMessage::QueryCommittedHeight).await;
+            let _ = network.send(NetworkMessage::QueryTipHeight).await;
         }
     }.into_actor(self));
 
@@ -441,40 +850,27 @@ SyncMessage::StartSync { start_height } => {
 }
 ```
 
-### 5.2 New QueryCommittedHeight Handler
+### 7.2 HandleTipHeightResponse Handler
 
 ```rust
-SyncMessage::ReportCommittedHeight { height, block_hash, commit } => {
-    // Received committed height with proof from a peer
-    let state = std::sync::Arc::clone(&self.state);
-    let validator_set = self.validator_set.clone();
+SyncMessage::ReportTipHeight { height, block_hash, peer_id } => {
+    let state = Arc::clone(&self.state);
 
     ctx.spawn(async move {
-        // 1. Verify the commit proof
-        if let Err(e) = Self::verify_commit_static(&validator_set, height, block_hash, &commit) {
-            tracing::warn!(
-                peer = %peer_id,
-                height = height,
-                error = %e,
-                "Invalid committed height proof - ignoring"
-            );
-            return;
-        }
-
         let mut s = state.write().unwrap();
 
-        // 2. Update target if this is higher than known
+        // Update target if this is higher
         if height > s.target_height {
             tracing::info!(
                 previous_target = s.target_height,
                 new_target = height,
-                "Discovered higher committed height with valid proof"
+                peer = %peer_id,
+                "Discovered higher tip"
             );
 
             s.target_height = height;
-            s.latest_network_commit = Some(commit);
 
-            // 3. Transition to requesting if behind
+            // Transition to requesting if behind
             if s.sync_state == SyncState::QueryingCommittedHeight {
                 if s.current_height < height {
                     s.transition_to_state(SyncState::RequestingBlocks);
@@ -490,14 +886,13 @@ SyncMessage::ReportCommittedHeight { height, block_hash, commit } => {
 }
 ```
 
-### 5.3 RequestBlocks with Commit Requirement
+### 7.3 RequestBlocks Handler
 
 ```rust
 SyncMessage::RequestBlocks { start_height, count, peer_id } => {
-    let state = std::sync::Arc::clone(&self.state);
+    let state = Arc::clone(&self.state);
     let network_actor = self.network_actor.clone();
 
-    // Create request tracking
     let (is_running, target_peer, request_id) = {
         let mut s = self.state.write().unwrap();
 
@@ -508,7 +903,7 @@ SyncMessage::RequestBlocks { start_height, count, peer_id } => {
         let target_peer = peer_id.unwrap_or_else(|| s.select_sync_peer());
         let request_id = Uuid::new_v4().to_string();
 
-        s.active_requests.insert(request_id.clone(), BlockCommitRequestInfo {
+        s.active_requests.insert(request_id.clone(), BlockRequestInfo {
             request_id: request_id.clone(),
             start_height,
             count,
@@ -522,8 +917,7 @@ SyncMessage::RequestBlocks { start_height, count, peer_id } => {
     // Send request to NetworkActor
     if let Some(network) = network_actor {
         ctx.spawn(async move {
-            // CRITICAL: Request blocks WITH commit proofs
-            if let Err(e) = network.send(NetworkMessage::RequestBlocksWithCommit {
+            if let Err(e) = network.send(NetworkMessage::RequestBlocks {
                 start_height,
                 count,
                 peer_id: target_peer.clone(),
@@ -532,7 +926,7 @@ SyncMessage::RequestBlocks { start_height, count, peer_id } => {
                 tracing::error!(
                     request_id = %request_id,
                     error = %e,
-                    "Failed to request blocks with commits"
+                    "Failed to request blocks"
                 );
 
                 let mut s = state.write().unwrap();
@@ -545,78 +939,90 @@ SyncMessage::RequestBlocks { start_height, count, peer_id } => {
 }
 ```
 
-### 5.4 HandleBlockResponse with Commit Verification
+### 7.4 HandleBlockResponse with Embedded Commit Verification
 
 ```rust
-SyncMessage::HandleBlockWithCommitResponse { blocks, request_id, peer_id } => {
+SyncMessage::HandleBlockResponse { blocks, request_id, peer_id } => {
     tracing::info!(
         block_count = blocks.len(),
         request_id = %request_id,
         peer = %peer_id,
-        "Received blocks with commit proofs"
+        "Received blocks for sync"
     );
 
-    let state = std::sync::Arc::clone(&self.state);
+    let state = Arc::clone(&self.state);
     let chain_actor = self.chain_actor.clone();
     let validator_set = self.validator_set.clone();
 
     ctx.spawn(async move {
-        // Process each block with its commit
-        for committed_block in blocks {
-            let block = &committed_block.block;
-            let commit = &committed_block.commit;
-            let height = block.message.slot;
+        // Process each block in order
+        let mut last_verified_hash: Option<BlockHash> = None;
 
-            // 1. Verify commit proof BEFORE importing
-            if let Err(e) = Self::verify_commit_static(
+        for block in blocks {
+            let height = block.message.slot;
+            let block_hash = block.canonical_root();
+            let parent_hash = block.message.parent_hash;
+
+            // 1. Verify block's last_commit proves the parent
+            // Note: ValidatorSet may change across heights - see section 5.2
+            if let Err(e) = Self::verify_block_last_commit_static(
                 &validator_set,
-                height,
-                block.message.hash(),
-                commit
+                &block,
+                parent_hash,
             ) {
                 tracing::error!(
                     height = height,
                     peer = %peer_id,
                     error = %e,
-                    "Invalid commit proof - rejecting block and banning peer"
+                    "Block's last_commit verification failed - rejecting and banning peer"
                 );
 
-                // TODO: Ban peer for sending invalid commit
+                // Ban peer for providing invalid block (see doc 05 peer scoring)
+                if let Some(network) = &network_actor {
+                    let _ = network.send(NetworkMessage::ReportMisbehavior {
+                        peer_id: peer_id.clone(),
+                        reason: MisbehaviorReason::InvalidBlock,
+                        ban_duration: Some(Duration::from_secs(3600)),
+                    }).await;
+                }
+                SYNC_INVALID_BLOCKS.inc();
                 break;
             }
 
-            // 2. Import verified block to ChainActor
+            // 2. Import block via ChainActor's execute_synced_block
+            // This handles EL execution and blocks_without_pow tracking (doc 07)
             if let Some(chain) = &chain_actor {
-                match chain.send(ChainMessage::ImportFinalizedBlock {
+                match chain.send(ChainMessage::ExecuteSyncedBlock {
                     block: block.clone(),
-                    commit: commit.clone(),
-                    source: BlockSource::Sync,
+                    correlation_id: None,
                 }).await {
                     Ok(Ok(_)) => {
                         tracing::debug!(
                             height = height,
-                            "Successfully imported finalized block"
+                            "Successfully imported synced block"
                         );
 
-                        // Update current height
+                        // Update state
                         let mut s = state.write().unwrap();
                         if height > s.current_height {
                             s.current_height = height;
                         }
+
+                        // The previous block is now proven final
+                        // (this block's last_commit proves it)
+                        if height > 1 && height - 1 > s.last_finalized_height {
+                            s.last_finalized_height = height - 1;
+                        }
+
+                        last_verified_hash = Some(block_hash);
+                        SYNC_BLOCKS_IMPORTED.inc();
                     }
                     Ok(Err(e)) => {
-                        tracing::error!(
-                            height = height,
-                            error = ?e,
-                            "Failed to import block"
-                        );
+                        tracing::error!(height = height, error = ?e, "Failed to import block");
+                        SYNC_IMPORT_FAILURES.inc();
                     }
                     Err(e) => {
-                        tracing::error!(
-                            height = height,
-                            error = %e,
-                            "ChainActor mailbox error"
-                        );
+                        tracing::error!(height = height, error = %e, "ChainActor mailbox error");
                     }
                 }
             }
@@ -626,6 +1032,13 @@ SyncMessage::HandleBlockWithCommitResponse { blocks, request_id, peer_id } => {
         {
             let mut s = state.write().unwrap();
             s.active_requests.remove(&request_id);
+
+            // Check if we've reached the target
+            if s.current_height >= s.target_height {
+                s.transition_to_state(SyncState::Synced);
+                s.is_running = false;
+                tracing::info!(height = s.current_height, "Sync completed");
+            }
         }
     }.into_actor(self));
 
@@ -635,9 +1048,121 @@ SyncMessage::HandleBlockWithCommitResponse { blocks, request_id, peer_id } => {
 
 ---
 
-## 6. Code Removal
+## 8. ChainActor Handler: ImportBlock (Tendermint Version)
 
-### 6.1 Files to Delete Entirely
+### 8.1 Updated ImportBlock Handler
+
+With embedded LastCommit, the import logic changes:
+
+```rust
+// In chain/handlers.rs
+
+ChainMessage::ImportBlock { block, source } => {
+    let height = block.message.slot;
+    let block_hash = block.canonical_root();
+    let parent_hash = block.message.parent_hash;
+
+    tracing::info!(
+        height = height,
+        block_hash = ?block_hash,
+        source = ?source,
+        has_last_commit = block.message.last_commit.is_some(),
+        "Importing block"
+    );
+
+    // 1. For non-genesis, verify last_commit proves parent
+    if height > 0 {
+        let last_commit = block.message.last_commit.as_ref()
+            .ok_or_else(|| ChainError::MissingLastCommit(height))?;
+
+        // Verify last_commit is for the parent
+        if last_commit.height != height - 1 {
+            return Err(ChainError::InvalidLastCommit(format!(
+                "last_commit height {} doesn't match expected {}",
+                last_commit.height, height - 1
+            )));
+        }
+
+        if last_commit.block_hash != parent_hash {
+            return Err(ChainError::InvalidLastCommit(format!(
+                "last_commit block_hash doesn't match parent_hash"
+            )));
+        }
+
+        // Verify commit signatures
+        self.validate_commit_signatures(last_commit)?;
+    }
+
+    // 2. Verify parent exists
+    if height > 0 && !self.storage.has_block(&parent_hash).await? {
+        return Err(ChainError::MissingParent(parent_hash));
+    }
+
+    // 3. Execute in EL
+    let engine = self.engine_actor.as_ref()
+        .ok_or(ChainError::EngineActorNotSet)?;
+
+    let execute_result = engine.send(ExecuteBlockMessage {
+        execution_payload: block.message.execution_payload.clone(),
+        parent_hash: block.message.execution_payload.parent_hash,
+        correlation_id: None,
+    }).await
+        .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+        .map_err(|e| ChainError::ExecutionLayerError(e.to_string()))?;
+
+    if execute_result.status != PayloadStatus::Valid {
+        return Err(ChainError::ExecutionFailed(format!(
+            "Invalid payload: {:?}",
+            execute_result.status
+        )));
+    }
+
+    // 4. Store block (commit is embedded in block.last_commit)
+    let storage = self.storage_actor.as_ref()
+        .ok_or(ChainError::StorageActorNotSet)?;
+
+    storage.send(StoreBlockMessage {
+        block: block.clone(),
+        correlation_id: None,
+    }).await
+        .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+        .map_err(|e| ChainError::Storage(e.to_string()))?;
+
+    // 5. Update chain head
+    self.state.head = Some(BlockRef {
+        hash: block_hash,
+        height,
+        execution_hash: execute_result.block_hash,
+    });
+
+    // 6. The previous block is now finalized (this block proves it)
+    if height > 0 {
+        // Mark previous block as finalized in EL
+        let _ = engine.send(SetFinalizedMessage {
+            block_hash: parent_hash,
+            correlation_id: None,
+        }).await;
+
+        tracing::info!(
+            finalized_height = height - 1,
+            finalized_hash = ?parent_hash,
+            "Previous block finalized via embedded last_commit"
+        );
+    }
+
+    // 7. Metrics
+    TENDERMINT_BLOCKS_IMPORTED.inc();
+    TENDERMINT_BLOCK_HEIGHT.set(height as i64);
+
+    Ok(ChainResponse::BlockImported { height, hash: block_hash })
+}
+```
+
+---
+
+## 9. Code Removal
+
+### 9.1 Files to Delete Entirely
 
 ```bash
 # These files are for probabilistic finality - not needed with Tendermint
@@ -646,21 +1171,19 @@ rm app/src/actors_v2/chain/reorganization.rs   # ~623 lines
 rm app/src/actors_v2/chain/orphan_cache.rs     # ~300 lines
 ```
 
-### 6.2 Code to Remove from SyncActor
+### 9.2 Code to Remove from SyncActor
 
 ```rust
-// REMOVE: Mode/median height calculation (lines 328-405)
-// These heuristics are for probabilistic systems without proofs
-
+// REMOVE: Mode/median height calculation
 fn calculate_mode(heights: &[u64]) -> u64 { ... }  // REMOVE
 fn calculate_median_height(...) -> Option<u64> { ... }  // REMOVE
 
 // REMOVE: observed_peer_heights collection
-// REMOVE: Mode-based height discovery in ReportPeerHeights
-// REMOVE: Bootstrap timeout for genesis (commit proofs handle this)
+// REMOVE: Mode-based height discovery
+// REMOVE: Orphan handling
 ```
 
-### 6.3 Code to Remove from ChainActor
+### 9.3 Code to Remove from ChainActor
 
 ```rust
 // In chain/handlers.rs, REMOVE:
@@ -676,244 +1199,112 @@ fn reorganize_to_new_tip(...) { ... }   // REMOVE
 // Orphan caching
 fn cache_orphan_block(...) { ... }  // REMOVE
 fn process_orphan_queue(...) { ... }  // REMOVE
-
-// In chain/state.rs, REMOVE:
-pub observed_height: u64,       // From ChainStatus
-pub orphan_count: usize,        // From ChainStatus
-// Any cumulative_difficulty tracking
 ```
 
 ---
 
-## 7. New ChainActor Handler: ImportFinalizedBlock
+## 10. Network Protocol Changes
 
-### 7.1 Message Definition
+### 10.1 Updated Network Messages
 
 ```rust
-// In chain/messages.rs
+// In network/messages.rs
 
-/// Import a finalized block with its commit proof
-///
-/// Unlike ImportBlock (for probabilistic systems), this message:
-/// 1. Requires a valid commit proof
-/// 2. Does not trigger fork choice
-/// 3. Does not handle orphans
-/// 4. Is immediately final
-#[derive(Debug, Clone)]
-pub enum ChainMessage {
+pub enum NetworkMessage {
     // ... existing messages ...
 
-    /// Import a block that has been finalized through Tendermint consensus
-    ImportFinalizedBlock {
-        /// The block to import
-        block: SignedConsensusBlock<MainnetEthSpec>,
+    /// Query a peer for their tip height
+    QueryTipHeight,
 
-        /// The commit proof (2/3+ validator signatures)
+    /// Response with tip height
+    TipHeightResponse {
+        height: u64,
+        block_hash: BlockHash,
+    },
+
+    /// Request blocks (blocks include embedded last_commit)
+    RequestBlocks {
+        start_height: u64,
+        count: u32,
+        peer_id: PeerId,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Response with blocks
+    BlocksResponse {
+        blocks: Vec<SignedConsensusBlock<MainnetEthSpec>>,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Request current commit for tip (before next block exists)
+    RequestTipCommit {
+        height: u64,
+        block_hash: BlockHash,
+    },
+
+    /// Response with tip commit
+    TipCommitResponse {
         commit: Commit,
-
-        /// Source of the block (Sync, Gossip, etc.)
-        source: BlockSource,
     },
 }
 ```
 
-### 7.2 Handler Implementation
+### 10.2 Commit Retrieval Pattern
+
+Since commits are embedded in blocks, retrieving a commit works as follows:
 
 ```rust
-// In chain/handlers.rs
+impl ChainActor {
+    /// Get the commit that finalized a block at the given height.
+    ///
+    /// Returns Block[height+1].last_commit
+    pub async fn get_commit_for_height(&self, height: u64) -> Result<Option<Commit>, ChainError> {
+        // Genesis has no commit
+        if height == 0 {
+            return Ok(None);
+        }
 
-ChainMessage::ImportFinalizedBlock { block, commit, source } => {
-    let height = block.message.slot;
-    let block_hash = block.message.hash();
+        // Get the NEXT block which contains the commit for this height
+        let next_block = self.storage.get_block_by_height(height + 1).await?;
 
-    tracing::info!(
-        height = height,
-        block_hash = ?block_hash,
-        source = ?source,
-        signers = commit.num_signers(),
-        "Importing finalized block"
-    );
-
-    // 1. Verify commit proof (defense in depth - sync already verified)
-    if let Err(e) = self.validate_commit(&commit, block_hash) {
-        return Err(ChainError::InvalidCommit(e.to_string()));
+        match next_block {
+            Some(block) => Ok(block.message.last_commit),
+            None => Ok(None), // Next block doesn't exist yet
+        }
     }
-
-    // 2. Verify parent exists (linear chain requirement)
-    let parent_hash = block.message.parent_root;
-    if !self.storage.has_block(&parent_hash).await? {
-        return Err(ChainError::MissingParent(parent_hash));
-    }
-
-    // 3. Execute in EL
-    let engine = self.engine_actor.as_ref()
-        .ok_or(ChainError::EngineActorNotSet)?;
-
-    let execute_result = engine.send(ExecuteBlockMessage {
-        execution_payload: block.message.execution_payload.clone(),
-        finalized: true,
-        parent_hash: block.message.execution_payload.parent_hash,
-        correlation_id: None,
-    }).await
-        .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
-        .map_err(|e| ChainError::ExecutionLayerError(e.to_string()))?;
-
-    if execute_result.status != PayloadStatus::Valid {
-        return Err(ChainError::ExecutionFailed(format!(
-            "Invalid payload: {:?}",
-            execute_result.status
-        )));
-    }
-
-    // 4. Store block and commit
-    let storage = self.storage_actor.as_ref()
-        .ok_or(ChainError::StorageActorNotSet)?;
-
-    storage.send(StoreBlockMessage {
-        block: SignedConsensusBlock::from_commit(block.message.clone(), commit.clone()),
-        canonical: true,
-        finalized: true,
-        correlation_id: None,
-    }).await
-        .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
-        .map_err(|e| ChainError::Storage(e.to_string()))?;
-
-    storage.send(StoreCommitMessage {
-        height,
-        commit: commit.clone(),
-        correlation_id: None,
-    }).await
-        .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
-        .map_err(|e| ChainError::Storage(e.to_string()))?;
-
-    // 5. Update chain head
-    self.state.head = Some(BlockRef {
-        hash: block_hash,
-        height,
-        execution_hash: execute_result.block_hash,
-    });
-
-    // 6. Notify SyncActor of new height
-    if let Some(sync) = &self.sync_actor {
-        let _ = sync.send(SyncMessage::UpdateCurrentHeight { height }).await;
-    }
-
-    // 7. Metrics
-    TENDERMINT_BLOCKS_IMPORTED.inc();
-    TENDERMINT_BLOCK_HEIGHT.set(height as i64);
-
-    Ok(ChainResponse::BlockImported { height, hash: block_hash })
 }
 ```
 
 ---
 
-## 8. State Sync (New Capability)
+## 11. Active Monitoring
 
-### 8.1 Overview
-
-With Tendermint's instant finality, state sync becomes viable. Nodes can sync state directly from a recent finalized block rather than replaying all blocks.
-
-### 8.2 State Sync Flow
-
-```mermaid
-sequenceDiagram
-    participant N as New Node
-    participant P as Peer
-    participant EL as Execution Layer
-
-    N->>P: QueryStateSnapshot(target_height)
-    P-->>N: StateSnapshot { height, state_root, commit, chunks[] }
-
-    N->>N: Verify commit proof for height
-    N->>N: Download state chunks
-    N->>N: Reconstruct Merkle trie
-    N->>N: Verify state_root matches
-
-    N->>EL: ImportState(state_root, state_data)
-    N->>N: Set head = target_height
-
-    Note over N: Continue from tip via block sync
-```
-
-### 8.3 State Sync Types
+### 11.1 Simplified Monitoring with Embedded Commits
 
 ```rust
-// In sync/state_sync.rs (new file)
-
-/// State snapshot metadata
-#[derive(Debug, Clone)]
-pub struct StateSnapshotInfo {
-    /// Height of the snapshot
-    pub height: u64,
-
-    /// Execution layer state root
-    pub state_root: Hash256,
-
-    /// Commit proof for this height
-    pub commit: Commit,
-
-    /// Number of state chunks
-    pub num_chunks: u32,
-
-    /// Total state size in bytes
-    pub total_size: u64,
-}
-
-/// Request for state snapshot
-#[derive(Debug, Clone)]
-pub struct StateSnapshotRequest {
-    /// Target height (0 = latest)
-    pub height: Option<u64>,
-
-    /// Minimum trust period (height must be within this)
-    pub min_trust_height: u64,
-}
-
-/// State chunk for transfer
-#[derive(Debug, Clone)]
-pub struct StateChunk {
-    /// Chunk index
-    pub index: u32,
-
-    /// Chunk data (portion of state trie)
-    pub data: Vec<u8>,
-
-    /// Proof that chunk belongs to state_root
-    pub proof: Vec<Hash256>,
-}
-```
-
-### 8.4 State Sync Handler
-
-```rust
-// In sync_actor.rs
-
-SyncMessage::StartStateSync { target_height } => {
-    // State sync is only available with Tendermint (instant finality)
-    // 1. Query peers for state snapshots
-    // 2. Verify commit proof for snapshot height
-    // 3. Download and verify state chunks
-    // 4. Import state to EL
-    // 5. Resume block sync from snapshot height
-
-    let state = std::sync::Arc::clone(&self.state);
-    let network_actor = self.network_actor.clone();
+SyncMessage::ReportTipHeight { height, block_hash, peer_id } => {
+    let state = Arc::clone(&self.state);
 
     ctx.spawn(async move {
         let mut s = state.write().unwrap();
-        s.transition_to_state(SyncState::StateSync);
-        drop(s);
 
-        // 1. Query for snapshots
-        if let Some(network) = &network_actor {
-            let _ = network.send(NetworkMessage::QueryStateSnapshots {
-                target_height,
-                min_trust_height: 0, // Accept any height for now
-            }).await;
+        // Simple comparison
+        if height > s.current_height + self.config.resync_threshold {
+            if s.consecutive_behind_checks >= 2 {
+                tracing::warn!(
+                    current = s.current_height,
+                    network = height,
+                    "Fell behind network tip - triggering resync"
+                );
+                s.is_running = true;
+                s.target_height = height;
+                s.transition_to_state(SyncState::RequestingBlocks);
+            } else {
+                s.consecutive_behind_checks += 1;
+            }
+        } else {
+            s.consecutive_behind_checks = 0;
         }
-
-        // State sync continues via HandleStateSnapshot message
     }.into_actor(self));
 
     Ok(SyncResponse::Started)
@@ -922,210 +1313,193 @@ SyncMessage::StartStateSync { target_height } => {
 
 ---
 
-## 9. Network Protocol Changes
-
-### 9.1 New Network Messages
+## 12. Metrics
 
 ```rust
-// In network/messages.rs
+use prometheus::{IntCounter, IntGauge, Histogram, HistogramOpts, IntCounterVec, Opts};
 
-pub enum NetworkMessage {
-    // ... existing messages ...
+lazy_static! {
+    /// Blocks imported during sync
+    static ref SYNC_BLOCKS_IMPORTED: IntCounter = IntCounter::new(
+        "sync_blocks_imported_total",
+        "Total blocks imported during sync"
+    ).unwrap();
 
-    /// Query a peer for their committed height with proof
-    QueryCommittedHeight,
+    /// Current sync height
+    static ref SYNC_CURRENT_HEIGHT: IntGauge = IntGauge::new(
+        "sync_current_height",
+        "Current sync height"
+    ).unwrap();
 
-    /// Response with committed height and proof
-    CommittedHeightResponse {
-        height: u64,
-        block_hash: BlockHash,
-        commit: Commit,
-    },
+    /// Target sync height
+    static ref SYNC_TARGET_HEIGHT: IntGauge = IntGauge::new(
+        "sync_target_height",
+        "Target sync height"
+    ).unwrap();
 
-    /// Request blocks with their commit proofs
-    RequestBlocksWithCommit {
-        start_height: u64,
-        count: u32,
-        peer_id: PeerId,
-        correlation_id: Option<Uuid>,
-    },
+    /// Sync progress (0.0 to 1.0)
+    static ref SYNC_PROGRESS: Gauge = Gauge::new(
+        "sync_progress",
+        "Sync progress as fraction (0.0 to 1.0)"
+    ).unwrap();
 
-    /// Response with blocks and commits
-    BlocksWithCommitResponse {
-        blocks: Vec<CommittedBlock>,
-        correlation_id: Option<Uuid>,
-    },
+    /// Invalid blocks received
+    static ref SYNC_INVALID_BLOCKS: IntCounter = IntCounter::new(
+        "sync_invalid_blocks_total",
+        "Blocks rejected due to invalid last_commit"
+    ).unwrap();
 
-    /// Query for state snapshots (state sync)
-    QueryStateSnapshots {
-        target_height: Option<u64>,
-        min_trust_height: u64,
-    },
+    /// Import failures
+    static ref SYNC_IMPORT_FAILURES: IntCounter = IntCounter::new(
+        "sync_import_failures_total",
+        "Blocks that failed to import"
+    ).unwrap();
 
-    /// State snapshot info response
-    StateSnapshotResponse(StateSnapshotInfo),
+    /// Request timeouts
+    static ref SYNC_REQUEST_TIMEOUTS: IntCounter = IntCounter::new(
+        "sync_request_timeouts_total",
+        "Block requests that timed out"
+    ).unwrap();
 
-    /// Request state chunk
-    RequestStateChunk {
-        height: u64,
-        chunk_index: u32,
-    },
+    /// Backpressure events
+    static ref SYNC_BACKPRESSURE_EVENTS: IntCounter = IntCounter::new(
+        "sync_backpressure_events_total",
+        "Times backpressure was applied due to full queue"
+    ).unwrap();
 
-    /// State chunk response
-    StateChunkResponse(StateChunk),
-}
-```
+    /// Block queue size
+    static ref SYNC_QUEUE_SIZE: IntGauge = IntGauge::new(
+        "sync_queue_size",
+        "Current size of block processing queue"
+    ).unwrap();
 
-### 9.2 Wire Protocol
+    /// Blocks per second during sync
+    static ref SYNC_BLOCKS_PER_SECOND: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "sync_blocks_per_second",
+            "Block import rate during sync"
+        )
+    ).unwrap();
 
-```rust
-// In network/protocol.rs
+    /// Peer performance (blocks received per peer)
+    static ref SYNC_PEER_BLOCKS: IntCounterVec = IntCounterVec::new(
+        Opts::new("sync_peer_blocks_total", "Blocks received per peer"),
+        &["peer_id"]
+    ).unwrap();
 
-/// Tendermint sync wire messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TendermintSyncWire {
-    /// Query committed height
-    QueryCommittedHeight,
-
-    /// Committed height response
-    CommittedHeight {
-        height: u64,
-        block_hash: [u8; 32],
-        commit_bytes: Vec<u8>,  // SSZ-encoded Commit
-    },
-
-    /// Request blocks with commits
-    RequestBlocksWithCommit {
-        start_height: u64,
-        count: u32,
-        request_id: [u8; 16],  // UUID bytes
-    },
-
-    /// Blocks with commits response
-    BlocksWithCommit {
-        blocks: Vec<CommittedBlockWire>,
-        request_id: [u8; 16],
-    },
+    /// Sync state transitions
+    static ref SYNC_STATE_TRANSITIONS: IntCounterVec = IntCounterVec::new(
+        Opts::new("sync_state_transitions_total", "Sync state transitions"),
+        &["from_state", "to_state"]
+    ).unwrap();
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommittedBlockWire {
-    /// SSZ-encoded block
-    pub block_bytes: Vec<u8>,
+impl SyncActorState {
+    /// Update metrics when state changes
+    fn transition_to_state(&mut self, new_state: SyncState) {
+        SYNC_STATE_TRANSITIONS
+            .with_label_values(&[
+                &format!("{:?}", self.sync_state),
+                &format!("{:?}", new_state),
+            ])
+            .inc();
 
-    /// SSZ-encoded commit
-    pub commit_bytes: Vec<u8>,
-}
-```
+        self.sync_state = new_state;
+        self.state_entered_at = SystemTime::now();
 
----
-
-## 10. Active Monitoring Simplification
-
-### 10.1 Current (Complex)
-
-```rust
-// CURRENT: Uses mode/median heuristics, complex gap detection
-let network_height = match Self::calculate_median_height(
-    &s.peer_height_observations,
-    max_age,
-    self.config.min_peer_quorum,
-) { ... }
-```
-
-### 10.2 Tendermint (Simple)
-
-```rust
-// TENDERMINT: Just verify commit proofs
-SyncMessage::ReportCommittedHeight { height, block_hash, commit } => {
-    // Verify the commit proof
-    if let Err(e) = self.verify_commit_static(&self.validator_set, height, block_hash, &commit) {
-        tracing::debug!(height = height, "Invalid commit proof in monitoring");
-        return Ok(SyncResponse::Started);
-    }
-
-    let mut s = self.state.write().unwrap();
-
-    // Simple comparison - no heuristics needed
-    if height > s.current_height + self.config.resync_threshold {
-        if s.consecutive_behind_checks >= 2 {
-            tracing::warn!(
-                current = s.current_height,
-                network = height,
-                "Fell behind committed height - triggering resync"
-            );
-            s.is_running = true;
-            s.target_height = height;
-            s.transition_to_state(SyncState::RequestingBlocks);
-        } else {
-            s.consecutive_behind_checks += 1;
+        // Update progress metric
+        if self.target_height > 0 {
+            let progress = self.current_height as f64 / self.target_height as f64;
+            SYNC_PROGRESS.set(progress.min(1.0));
         }
-    } else {
-        s.consecutive_behind_checks = 0;
     }
-
-    Ok(SyncResponse::Started)
 }
 ```
 
 ---
 
-## 11. Configuration Changes
+## 13. Crash Recovery
 
-### 11.1 Fields to Remove
+When the node crashes during sync, we recover using stored state and WAL (see doc 06).
+
+### 13.1 Recovery Flow
 
 ```rust
-// REMOVE from SyncConfig:
-pub peer_height_max_age_secs: u64,  // Not needed - commit proofs are self-validating
-pub min_peer_quorum: usize,          // Not needed - one valid commit is enough
+impl SyncActor {
+    /// Recover sync state after crash
+    ///
+    /// Called during startup after WAL replay.
+    pub async fn recover_sync_state(&mut self) -> Result<(), SyncError> {
+        // 1. Get current chain head from storage
+        let storage = self.storage_actor.as_ref()
+            .ok_or(SyncError::NetworkError("Storage not available".to_string()))?;
+
+        let head = storage.send(GetChainHead { correlation_id: None })
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+
+        let current_height = head.map(|h| h.height).unwrap_or(0);
+
+        tracing::info!(
+            recovered_height = current_height,
+            "Recovering sync state after restart"
+        );
+
+        // 2. Initialize state from recovered height
+        {
+            let mut s = self.state.write().unwrap();
+            s.current_height = current_height;
+            s.last_finalized_height = if current_height > 0 { current_height - 1 } else { 0 };
+            s.sync_state = SyncState::Stopped;
+            s.active_requests.clear();
+            s.block_queue.clear();
+        }
+
+        // 3. Sync will be restarted by external trigger (e.g., peer discovery)
+        // Don't auto-start here - let normal startup flow handle it
+
+        Ok(())
+    }
+}
 ```
 
-### 11.2 Updated Configuration
+### 13.2 Handling Partial Block Imports
+
+If crash occurred mid-import:
+- Storage may have block but EL may not
+- WAL ensures we don't lose consensus votes
+- Re-execute blocks from last known good state
 
 ```rust
-/// Tendermint sync configuration
-#[derive(Debug, Clone)]
-pub struct SyncConfig {
-    // === Block Fetching ===
-    /// Maximum blocks per request
-    pub max_blocks_per_request: u32,
+impl SyncActor {
+    /// Verify storage and EL are in sync after recovery
+    async fn verify_storage_el_consistency(&self) -> Result<(), SyncError> {
+        let storage_head = self.get_storage_head().await?;
+        let el_head = self.get_el_head().await?;
 
-    /// Maximum concurrent block requests
-    pub max_concurrent_requests: usize,
+        if storage_head.height != el_head.height {
+            tracing::warn!(
+                storage_height = storage_head.height,
+                el_height = el_head.height,
+                "Storage/EL height mismatch - re-executing blocks"
+            );
 
-    /// Request timeout
-    pub sync_timeout: Duration,
+            // Re-execute blocks from EL head to storage head
+            for height in (el_head.height + 1)..=storage_head.height {
+                let block = self.get_block_by_height(height).await?;
+                self.execute_block_in_el(&block).await?;
+            }
+        }
 
-    // === Peer Management ===
-    /// Maximum sync peers
-    pub max_sync_peers: usize,
-
-    /// Peer height poll interval (for monitoring)
-    pub peer_height_poll_interval_secs: u64,
-
-    // === Re-sync Triggers ===
-    /// Height gap that triggers re-sync
-    pub resync_threshold: u64,
-
-    /// Cooldown after sync before allowing re-sync
-    pub sync_cooldown_secs: u64,
-
-    // === State Sync (new) ===
-    /// Enable state sync for fast bootstrap
-    pub enable_state_sync: bool,
-
-    /// Minimum height for state sync (security parameter)
-    pub state_sync_min_trust_height: u64,
-
-    // === Storage ===
-    /// Data directory for checkpoints
-    pub data_dir: PathBuf,
+        Ok(())
+    }
 }
 ```
 
 ---
 
-## 12. Testing Strategy
+## 14. Testing Strategy
 
 ### 12.1 Unit Tests
 
@@ -1135,86 +1509,94 @@ mod tendermint_sync_tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_commit_verification_valid() {
+    async fn test_block_last_commit_verification_valid() {
         let validator_set = create_test_validator_set(15);
-        let block = create_test_block(100);
-        let commit = create_valid_commit(&block, &validator_set, 11); // 11/15 = 73%
+
+        // Create block 1 with valid last_commit for genesis
+        let genesis = create_genesis_block();
+        let commit_for_genesis = create_valid_commit(0, genesis.canonical_root(), &validator_set, 11);
+        let block1 = create_block_with_last_commit(1, genesis.canonical_root(), Some(commit_for_genesis));
 
         let actor = create_test_sync_actor(validator_set);
-        let result = actor.verify_commit(&block, &commit);
+        let result = actor.verify_block_last_commit(&block1, genesis.canonical_root());
 
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_commit_verification_insufficient_signers() {
+    async fn test_block_last_commit_wrong_height() {
         let validator_set = create_test_validator_set(15);
-        let block = create_test_block(100);
-        let commit = create_valid_commit(&block, &validator_set, 9); // 9/15 = 60% < 67%
+        let genesis = create_genesis_block();
+
+        // Create commit for wrong height (2 instead of 0)
+        let wrong_commit = create_valid_commit(2, genesis.canonical_root(), &validator_set, 11);
+        let block1 = create_block_with_last_commit(1, genesis.canonical_root(), Some(wrong_commit));
 
         let actor = create_test_sync_actor(validator_set);
-        let result = actor.verify_commit(&block, &commit);
+        let result = actor.verify_block_last_commit(&block1, genesis.canonical_root());
 
         assert!(matches!(result, Err(SyncError::CommitVerification(_))));
     }
 
     #[tokio::test]
-    async fn test_commit_verification_wrong_block_hash() {
+    async fn test_block_missing_last_commit() {
         let validator_set = create_test_validator_set(15);
-        let block = create_test_block(100);
-        let wrong_block = create_test_block(101);
-        let commit = create_valid_commit(&wrong_block, &validator_set, 11);
+        let genesis = create_genesis_block();
+
+        // Block 1 without last_commit (invalid)
+        let block1 = create_block_with_last_commit(1, genesis.canonical_root(), None);
 
         let actor = create_test_sync_actor(validator_set);
-        let result = actor.verify_commit(&block, &commit);
+        let result = actor.verify_block_last_commit(&block1, genesis.canonical_root());
 
         assert!(matches!(result, Err(SyncError::CommitVerification(_))));
     }
 
     #[tokio::test]
-    async fn test_sync_state_transitions() {
-        let actor = create_test_sync_actor_with_peers(vec!["peer1".to_string()]);
+    async fn test_genesis_no_last_commit() {
+        let validator_set = create_test_validator_set(15);
+        let genesis = create_genesis_block(); // last_commit = None
 
-        // Start sync
-        actor.handle(SyncMessage::StartSync { start_height: 0 }, &mut ctx).unwrap();
+        let actor = create_test_sync_actor(validator_set);
+        let result = actor.verify_block_last_commit(&genesis, BlockHash::zero());
 
-        // Should transition to QueryingCommittedHeight (have peers)
-        let state = actor.state.read().unwrap();
-        assert_eq!(state.sync_state, SyncState::QueryingCommittedHeight);
+        assert!(result.is_ok()); // Genesis doesn't need last_commit
     }
 
     #[tokio::test]
-    async fn test_import_finalized_block() {
+    async fn test_sync_imports_blocks_with_embedded_commits() {
         let actor = setup_full_test_actor().await;
-        let block = create_test_block(1);
-        let commit = create_valid_commit(&block, 11);
 
-        let result = actor.handle(SyncMessage::HandleBlockWithCommitResponse {
-            blocks: vec![CommittedBlock { block, commit }],
+        let genesis = create_genesis_block();
+        let commit0 = create_valid_commit(0, genesis.canonical_root(), 11);
+        let block1 = create_block_with_last_commit(1, genesis.canonical_root(), Some(commit0));
+
+        let result = actor.handle(SyncMessage::HandleBlockResponse {
+            blocks: vec![genesis, block1],
             request_id: "test".to_string(),
             peer_id: "peer1".to_string(),
         }, &mut ctx);
 
         assert!(result.is_ok());
 
-        // Verify block was imported
         let state = actor.state.read().unwrap();
         assert_eq!(state.current_height, 1);
+        assert_eq!(state.last_finalized_height, 0); // Block 1's commit proves block 0
     }
 }
 ```
 
-### 12.2 Integration Tests
+### 14.2 Integration Tests
 
 ```rust
 #[tokio::test]
-async fn test_full_sync_flow_with_commits() {
+async fn test_full_sync_with_embedded_commits() {
     // 1. Setup 4-node network with Tendermint
     let nodes = setup_tendermint_testnet(4).await;
 
-    // 2. Produce 10 blocks with commits
+    // 2. Produce 10 blocks (each contains last_commit for previous)
     for _ in 0..10 {
-        produce_and_commit_block(&nodes).await;
+        produce_block(&nodes).await;
     }
 
     // 3. Start new node that needs to sync
@@ -1228,141 +1610,139 @@ async fn test_full_sync_flow_with_commits() {
     // 5. Wait for sync completion
     tokio::time::sleep(Duration::from_secs(10)).await;
 
-    // 6. Verify new node has all blocks with commits
-    for height in 1..=10 {
+    // 6. Verify new node has all blocks
+    for height in 0..=10 {
         let block = new_node.storage.get_block_by_height(height).await.unwrap();
         assert!(block.is_some());
 
-        let commit = new_node.storage.get_commit(height).await.unwrap();
-        assert!(commit.is_some());
-        assert!(commit.unwrap().num_signers() >= 11); // 2/3+ of 15
+        // Verify last_commit is present (except genesis)
+        if height > 0 {
+            assert!(block.unwrap().message.last_commit.is_some());
+        }
+    }
+
+    // 7. Verify commits can be retrieved via next block
+    for height in 0..10 {
+        let commit = new_node.chain.get_commit_for_height(height).await.unwrap();
+        if height == 0 {
+            assert!(commit.is_none()); // Genesis has no commit
+        } else {
+            assert!(commit.is_some());
+            assert_eq!(commit.unwrap().height, height);
+        }
     }
 }
-
-#[tokio::test]
-async fn test_active_monitoring_triggers_resync() {
-    // 1. Setup synced node
-    let node = setup_synced_node(100).await;
-
-    // 2. Simulate network advancing while node is offline
-    // (node.current_height = 100, network = 150)
-
-    // 3. Report higher committed height
-    node.sync_actor.send(SyncMessage::ReportCommittedHeight {
-        height: 150,
-        block_hash: Hash256::random(),
-        commit: create_valid_commit_for_height(150),
-    }).await.unwrap();
-
-    // Wait for consecutive check
-    tokio::time::sleep(Duration::from_secs(35)).await;
-
-    // 4. Report again
-    node.sync_actor.send(SyncMessage::ReportCommittedHeight {
-        height: 155,
-        block_hash: Hash256::random(),
-        commit: create_valid_commit_for_height(155),
-    }).await.unwrap();
-
-    // 5. Verify resync triggered
-    let state = node.sync_actor.state.read().unwrap();
-    assert_eq!(state.sync_state, SyncState::RequestingBlocks);
-}
 ```
 
 ---
 
-## 13. Migration Strategy
+## 15. Checklist
 
-### 13.1 Feature Flag Approach
+### Error Types and Enums
+- [ ] Define complete `SyncError` enum
+- [ ] Define `BlockSource` enum
+- [ ] Add error variants for timeout, rate limit, backpressure
 
-```rust
-// In Cargo.toml
-[features]
-tendermint = []
+### Sync Types
+- [ ] Update `BlockRangeRequest` / `BlockRangeResponse` (blocks include last_commit)
+- [ ] Add `TipCommitRequest` / `TipCommitResponse` for chain tip
+- [ ] Remove `CommittedBlock` wrapper (not needed - commit is in block)
+- [ ] Add `BlockRequestInfo` with timeout tracking
 
-// In sync_actor.rs
-#[cfg(feature = "tendermint")]
-mod tendermint_sync;
+### Commit Verification
+- [ ] Implement `verify_block_last_commit` (verifies block.last_commit)
+- [ ] Implement `verify_commit_signatures`
+- [ ] Implement `get_validator_set_for_height` for governance changes
+- [ ] Handle ValidatorSet changes across sync range (doc 17)
 
-#[cfg(not(feature = "tendermint"))]
-mod probabilistic_sync;
-
-#[cfg(feature = "tendermint")]
-pub use tendermint_sync::SyncActor;
-
-#[cfg(not(feature = "tendermint"))]
-pub use probabilistic_sync::SyncActor;
-```
-
-### 13.2 Gradual Migration Steps
-
-1. **Phase 1**: Add commit verification alongside existing sync
-2. **Phase 2**: Add `ImportFinalizedBlock` handler to ChainActor
-3. **Phase 3**: Remove fork choice/orphan code (behind feature flag)
-4. **Phase 4**: Simplify state machine
-5. **Phase 5**: Add state sync support
-6. **Phase 6**: Remove feature flag, delete old code
-
----
-
-## 14. Checklist
-
-- [ ] Define `CommittedBlock`, `CommittedHeightResponse` types
-- [ ] Implement `verify_commit` in SyncActor
+### State Machine
 - [ ] Simplify `SyncState` enum (8 → 6 states)
 - [ ] Update `SyncActorState` fields
-- [ ] Implement `QueryCommittedHeight` handler
-- [ ] Implement `RequestBlocksWithCommit` handler
-- [ ] Implement `HandleBlockWithCommitResponse` handler
-- [ ] Add `ImportFinalizedBlock` to ChainActor
-- [ ] Remove `fork_choice.rs` (behind feature flag)
-- [ ] Remove `reorganization.rs` (behind feature flag)
-- [ ] Remove `orphan_cache.rs` (behind feature flag)
+- [ ] Add `last_finalized_height` tracking
+- [ ] Add `block_queue` for backpressure
+- [ ] Add `peer_request_counts` for rate limiting
+
+### Handlers
+- [ ] Update `StartSync` handler
+- [ ] Update `HandleBlockResponse` to use `ExecuteSyncedBlock` (doc 07)
+- [ ] Update `ImportBlock` in ChainActor for embedded commit
+- [ ] Remove separate commit storage calls
+- [ ] Add peer banning on invalid blocks (doc 05 integration)
+
+### Request Management
+- [ ] Implement request timeout handling
+- [ ] Implement retry logic with different peers
+- [ ] Implement rate limiting per peer
+- [ ] Implement backpressure handling
+
+### Code Removal
+- [ ] Remove `fork_choice.rs`
+- [ ] Remove `reorganization.rs`
+- [ ] Remove `orphan_cache.rs`
 - [ ] Remove mode/median calculations
-- [ ] Update `SyncConfig` structure
-- [ ] Add network wire protocol for commits
-- [ ] Implement active monitoring with commit verification
-- [ ] Add state sync types and handlers (optional)
-- [ ] Write unit tests for commit verification
-- [ ] Write integration tests for full sync flow
-- [ ] Update documentation
+- [ ] Remove separate `StoreCommitMessage` usage
+
+### Network Protocol
+- [ ] Update block request/response (blocks include last_commit)
+- [ ] Add tip commit request for chain tip verification
+- [ ] Add `ReportMisbehavior` message integration
+
+### Metrics
+- [ ] Add `SYNC_BLOCKS_IMPORTED` counter
+- [ ] Add `SYNC_CURRENT_HEIGHT` / `SYNC_TARGET_HEIGHT` gauges
+- [ ] Add `SYNC_PROGRESS` gauge
+- [ ] Add `SYNC_INVALID_BLOCKS` / `SYNC_IMPORT_FAILURES` counters
+- [ ] Add `SYNC_REQUEST_TIMEOUTS` counter
+- [ ] Add `SYNC_BACKPRESSURE_EVENTS` counter
+- [ ] Add `SYNC_QUEUE_SIZE` gauge
+- [ ] Add `SYNC_BLOCKS_PER_SECOND` histogram
+
+### Crash Recovery
+- [ ] Implement `recover_sync_state` for startup
+- [ ] Implement `verify_storage_el_consistency`
+- [ ] Handle partial block imports
+
+### Testing
+- [ ] Unit tests for embedded last_commit verification
+- [ ] Unit tests for genesis handling (no last_commit)
+- [ ] Unit tests for request timeout handling
+- [ ] Unit tests for rate limiting
+- [ ] Unit tests for backpressure
+- [ ] Integration tests for full sync flow
+- [ ] Tests for commit retrieval via next block
+- [ ] Tests for ValidatorSet changes during sync
+- [ ] Tests for crash recovery
 
 ---
 
-## 15. Metrics
+## 16. Summary
 
-```rust
-lazy_static! {
-    /// Blocks synced via Tendermint sync
-    static ref TENDERMINT_SYNC_BLOCKS: IntCounter = IntCounter::new(
-        "tendermint_sync_blocks_total",
-        "Total blocks synced with commit proofs"
-    ).unwrap();
+**Key Changes from Embedded LastCommit Design:**
 
-    /// Invalid commit proofs received
-    static ref TENDERMINT_SYNC_INVALID_COMMITS: IntCounter = IntCounter::new(
-        "tendermint_sync_invalid_commits_total",
-        "Commit proofs that failed verification"
-    ).unwrap();
+| Aspect | Previous Design | Embedded LastCommit Design |
+|--------|-----------------|---------------------------|
+| Commit location | Separate storage | `Block[N].last_commit` (for N-1) |
+| Sync verification | Verify commit separately | Verify `block.last_commit` |
+| Storage | `StoreCommitMessage` | Commits stored with blocks |
+| Retrieval | Direct commit lookup | Fetch `Block[N+1].last_commit` |
+| Genesis | Commit = None in storage | `last_commit = None` in block |
+| Chain tip | Commit exists separately | May need tip commit request |
 
-    /// Sync state gauge (0=Stopped, 1=Starting, etc.)
-    static ref TENDERMINT_SYNC_STATE: IntGauge = IntGauge::new(
-        "tendermint_sync_state",
-        "Current sync state"
-    ).unwrap();
-
-    /// Time to sync to network tip
-    static ref TENDERMINT_SYNC_DURATION: Histogram = Histogram::with_opts(
-        HistogramOpts::new(
-            "tendermint_sync_duration_seconds",
-            "Time to complete sync"
-        )
-    ).unwrap();
-}
-```
+This follows the standard Tendermint/CometBFT pattern where each block carries the proof of finality for its parent.
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.1*
+*Last Updated: February 2026*
+*Changes:*
+- *Added cross-document type references*
+- *Added complete SyncError enum and BlockSource enum*
+- *Added ValidatorSet change handling during sync (doc 17 integration)*
+- *Added peer banning integration (doc 05)*
+- *Added request timeout handling with retry logic*
+- *Added rate limiting per peer*
+- *Added backpressure handling for block queue*
+- *Added comprehensive metrics section*
+- *Added crash recovery section (doc 06 integration)*
+- *Updated HandleBlockResponse to use ExecuteSyncedBlock (doc 07)*
+- *Expanded checklist with all new items*

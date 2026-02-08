@@ -24,6 +24,40 @@ This document provides a comprehensive implementation guide for modifying the Ch
 - `app/src/actors_v2/chain/tendermint/handlers.rs`
 - `app/src/actors_v2/chain/tendermint/governance.rs`
 
+**Cross-Document Type References**:
+- `QueuedPegIn`, `PendingAuxPow` → Defined in `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`
+- `ConsensusAmount` → Already exists in `app/src/engine.rs`
+- `schedule_timeout()` → Defined in `08_TIMEOUT_MANAGEMENT.md`
+- `finalize_committed_block()` → Defined in `07_EL_COORDINATION.md`
+- `check_for_equivocation()` → Defined in `15_VALIDATION_MODULE.md`
+- `broadcast_tendermint_message()` → Defined in `05_NETWORK_LAYER.md`
+- AuxPoW validation → Already exists in `app/src/actors_v2/chain/auxpow.rs`
+- `blocks_without_pow` counter → Managed in `app/src/actors_v2/chain/auxpow.rs`
+
+**Required ChainError Variants** (add to `app/src/actors_v2/chain/error.rs`):
+```rust
+// Tendermint-specific errors
+NotValidator,                              // Node is not a validator
+NotProposer,                               // Not the designated proposer for this round
+InvalidProposer { expected: ValidatorId, actual: ValidatorId },
+InvalidProposalSignature,
+InvalidVoteSignature,
+InvalidProposal(String),
+InvalidVote(String),
+NoProposalToCommit,
+BlockHashMismatch { expected: BlockHash, actual: BlockHash },
+InsufficientCommitSigners { have: usize, need: usize },
+InvalidParentHash { expected: H256, actual: H256 },
+InvalidHeight { expected: u64, actual: u64 },
+InvalidParamsHash { expected: H256, actual: H256 },
+InvalidGovernanceUpdate(String),
+PegInsPaused,
+LivenessGateTriggered { blocks_without_pow: u64, max_allowed: u64 },
+MissingLastCommit,
+InvalidLastCommit { expected: BlockHash, actual: BlockHash },
+ParamsHashMismatch,
+```
+
 ---
 
 ## 1. Current vs New Handler Architecture
@@ -1028,6 +1062,21 @@ impl ChainActor {
         // Apply governance updates that activate at this height
         self.apply_governance_updates_on_commit(height).await?;
 
+        // Update blocks_without_pow counter for liveness tracking
+        // (See 16_AUXPOW_TENDERMINT_INTEGRATION.md for liveness gate details)
+        if proposal.block.header.auxpow_header.is_some() {
+            self.state.blocks_without_pow = 0;
+        } else {
+            self.state.blocks_without_pow += 1;
+            if self.state.blocks_without_pow >= self.state.chain_params.max_blocks_without_pow {
+                warn!(
+                    blocks_without_pow = self.state.blocks_without_pow,
+                    max = self.state.chain_params.max_blocks_without_pow,
+                    "Approaching liveness gate - peg-ins will pause without AuxPoW"
+                );
+            }
+        }
+
         // Advance to next height
         let new_height = height + 1;
         self.handle_tendermint_new_height(new_height).await?;
@@ -1313,10 +1362,24 @@ impl ChainActor {
         pegins: Vec<PegInInfo>,
         fee_recipient: Address,
     ) -> Result<usize, ChainError> {
-        // Check if peg-ins are paused
+        // Check if peg-ins are paused (explicit pause via emergency action)
         if self.state.chain_params.pegins_paused {
             warn!("Peg-ins are paused - rejecting submission");
             return Err(ChainError::PegInsPaused);
+        }
+
+        // Check liveness gate (implicit pause via lack of AuxPoW)
+        // See 16_AUXPOW_TENDERMINT_INTEGRATION.md for details
+        if self.state.blocks_without_pow >= self.state.chain_params.max_blocks_without_pow {
+            warn!(
+                blocks_without_pow = self.state.blocks_without_pow,
+                max = self.state.chain_params.max_blocks_without_pow,
+                "Liveness gate triggered - peg-ins paused until AuxPoW received"
+            );
+            return Err(ChainError::LivenessGateTriggered {
+                blocks_without_pow: self.state.blocks_without_pow,
+                max_allowed: self.state.chain_params.max_blocks_without_pow,
+            });
         }
 
         let mut queued_count = 0;
@@ -1835,7 +1898,116 @@ sequenceDiagram
 
 ---
 
-## 6. Testing Strategy
+## 6. Sync and Catch-Up Behavior
+
+### 6.1 Late-Joiner Consensus Entry
+
+When a node joins mid-height or falls behind, the handler logic must account for catching up:
+
+```rust
+/// Check if we're in sync before participating in consensus
+fn can_participate_in_consensus(&self) -> bool {
+    // Must have latest block
+    let local_height = self.state.chain_state.head_height;
+    let consensus_height = self.state.tendermint.height;
+
+    // Allow participation if within acceptable range
+    // (1 block behind is OK - we might receive committed block any moment)
+    consensus_height.saturating_sub(1) <= local_height
+}
+
+/// Handle receiving a vote for a future height (indicates we're behind)
+pub async fn handle_future_vote(&self, vote: Vote) -> Result<(), ChainError> {
+    if vote.height > self.state.tendermint.height {
+        info!(
+            local_height = self.state.tendermint.height,
+            vote_height = vote.height,
+            "Received vote for future height - triggering sync"
+        );
+        // Notify SyncActor to request blocks
+        self.sync_actor.send(SyncMessage::RequestBlocksFrom {
+            start_height: self.state.chain_state.head_height + 1,
+            target_height: vote.height,
+        }).await?;
+    }
+    Ok(())
+}
+```
+
+### 6.2 Commit Proof Reconstruction
+
+Late joiners receiving blocks must verify the embedded `last_commit`:
+
+```rust
+/// Validate block's last_commit field during sync
+async fn validate_sync_block(&self, block: &ConsensusBlock) -> Result<(), ChainError> {
+    if block.header.height == 0 {
+        // Genesis has no last_commit
+        return Ok(());
+    }
+
+    let last_commit = block.header.last_commit.as_ref()
+        .ok_or(ChainError::MissingLastCommit)?;
+
+    // Verify last_commit proves the previous block
+    let prev_block_hash = block.header.parent_hash;
+    if last_commit.block_hash != prev_block_hash {
+        return Err(ChainError::InvalidLastCommit {
+            expected: prev_block_hash,
+            actual: last_commit.block_hash,
+        });
+    }
+
+    // Verify 2/3+ signatures from validator set at that height
+    // (Must use historical validator set, not current)
+    let historical_val_set = self.get_validator_set_at_height(block.header.height - 1).await?;
+    if !last_commit.has_sufficient_signatures(historical_val_set.len()) {
+        return Err(ChainError::InsufficientCommitSigners {
+            have: last_commit.num_commit_signatures(),
+            need: historical_val_set.two_thirds_threshold() as usize,
+        });
+    }
+
+    Ok(())
+}
+```
+
+### 6.3 Parameter State Recovery
+
+Late joiners must reconstruct parameter state from `CF_PARAMETER_HISTORY`:
+
+```rust
+/// Recover parameter state for a late-joining node
+async fn recover_parameter_state(&self, target_height: u64) -> Result<ChainParams, ChainError> {
+    // Start with genesis parameters
+    let mut params = ChainParams::genesis();
+
+    // Apply all parameter changes up to target height
+    let changes = self.storage_actor.send(StorageMessage::GetParameterHistory {
+        from_height: 0,
+        to_height: target_height,
+    }).await?;
+
+    for change in changes {
+        params.apply_update(&change)?;
+    }
+
+    // Verify params_hash matches block at target_height
+    let block = self.storage_actor.send(StorageMessage::GetBlockByHeight {
+        height: target_height,
+    }).await?;
+
+    if params.compute_hash() != block.header.params_hash {
+        return Err(ChainError::ParamsHashMismatch);
+    }
+
+    Ok(params)
+}
+```
+
+---
+
+## 7. Testing Strategy
 
 ### 6.1 Unit Tests for Handlers
 
@@ -2058,6 +2230,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pegin_rejected_when_liveness_gate_triggered() {
+        let actor = setup_test_chain_actor().await;
+        actor.state.chain_params.max_blocks_without_pow = 100;
+        actor.state.blocks_without_pow = 100; // At limit
+
+        let pegins = vec![create_test_pegin()];
+
+        let result = actor.handle_submit_auxblock(
+            H256::repeat_byte(0x44),
+            create_test_auxpow(),
+            pegins,
+            Address::repeat_byte(0x55),
+        ).await;
+
+        assert!(matches!(
+            result,
+            Err(ChainError::LivenessGateTriggered { blocks_without_pow: 100, max_allowed: 100 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_blocks_without_pow_incremented_on_commit_without_auxpow() {
+        let actor = setup_test_chain_actor().await;
+        actor.handle_tendermint_new_height(100).await.unwrap();
+
+        // Create and commit a block WITHOUT AuxPoW
+        let block_without_auxpow = create_test_block_without_auxpow(100);
+        // Simulate commit path...
+        // After commit, blocks_without_pow should increment
+        assert_eq!(actor.state.blocks_without_pow, 1);
+    }
+
+    #[tokio::test]
+    async fn test_blocks_without_pow_reset_on_commit_with_auxpow() {
+        let actor = setup_test_chain_actor().await;
+        actor.state.blocks_without_pow = 50; // Start with count
+
+        // Create and commit a block WITH AuxPoW
+        let block_with_auxpow = create_test_block_with_auxpow(100);
+        // Simulate commit path...
+        // After commit, blocks_without_pow should reset
+        assert_eq!(actor.state.blocks_without_pow, 0);
+    }
+
+    #[tokio::test]
     async fn test_miner_compensation_calculation() {
         let params = PegInCompensation {
             miner_fee_bps: 50, // 0.5%
@@ -2120,11 +2337,12 @@ mod tests {
 
 ---
 
-## 7. Checklist
+## 8. Checklist
 
 ### Core Consensus Handlers
 - [ ] Add new message variants to `ChainMessage`
 - [ ] Add new response variants to `ChainResponse`
+- [ ] Add Tendermint-specific `ChainError` variants (see "Required ChainError Variants" above)
 - [ ] Create `tendermint/handlers.rs`
 - [ ] Implement `handle_tendermint_new_height`
 - [ ] Implement `handle_tendermint_propose`
@@ -2138,6 +2356,16 @@ mod tests {
 - [ ] Write unit tests for each handler
 - [ ] Write integration test for full consensus round
 
+### Helper Methods to Implement
+These methods are referenced in handlers but need implementation:
+- [ ] `get_validator_keypair()` → Retrieve this node's validator signing keypair
+- [ ] `sign_proposal(block, height, round)` → Sign proposal message with validator key
+- [ ] `sign_block(block)` → Sign consensus block (distinct from proposal signature)
+- [ ] `collect_transactions()` → Gather transactions from mempool for block building
+- [ ] `build_execution_payload(header, txs, withdrawals)` → Build EL payload (see `07_EL_COORDINATION.md`)
+- [ ] `validate_execution_payload(payload)` → Validate EL payload via Engine API
+- [ ] `validate_auxpow(hash, auxpow)` → AuxPoW validation (already in `auxpow.rs`)
+
 ### Governance Integration (17_GOVERNANCE_PARAMETERS.md)
 - [ ] Add `TendermintGovernanceUpdate` message variant
 - [ ] Implement `handle_governance_update()` handler
@@ -2145,8 +2373,8 @@ mod tests {
 - [ ] Implement `apply_governance_updates_on_commit()`
 - [ ] Apply activation timing (H+2 validators, H+1 parameters, H+0 emergencies)
 - [ ] Implement `execute_emergency_action()`
-- [ ] Implement `validate_governance_signatures()`
-- [ ] Implement `params_hash` calculation
+- [ ] Implement `validate_governance_signatures()` → Verify federation threshold signatures
+- [ ] Implement `params_hash` calculation in `ChainParams::compute_hash()`
 - [ ] Add `params_hash` validation in `validate_proposal_block()`
 - [ ] Write parameter changes to `CF_PARAMETER_HISTORY`
 - [ ] Create `tendermint/governance.rs`
@@ -2162,12 +2390,15 @@ mod tests {
 - [ ] Implement `collect_pegin_withdrawals()` with compensation split
 - [ ] Implement `calculate_miner_fee()` function
 - [ ] Add peg-in pause check (`pegins_paused`)
+- [ ] Add liveness gate check (`blocks_without_pow >= max_blocks_without_pow`)
 - [ ] Add amount bounds validation (`min_peg_amount`, `max_peg_amount`)
 - [ ] Implement four-layer dedup (Layer 0 in handler)
 - [ ] Update `build_consensus_block()` to include peg-ins
+- [ ] Track `blocks_without_pow` counter in `commit_tendermint_block()`
 - [ ] Write unit tests for peg-in handlers
 - [ ] Write integration test for peg-in flow
 - [ ] Write test for miner compensation calculation
+- [ ] Write test for liveness gate behavior
 
 ### Block Building
 - [ ] Implement `build_consensus_block()` with all components
@@ -2176,6 +2407,7 @@ mod tests {
 - [ ] Include AuxPoW header when available
 - [ ] Calculate and include `params_hash`
 - [ ] Implement `collect_governance_updates_for_block()`
+- [ ] Embed `last_commit` from previous block's cached commit
 
 ### Block Validation
 - [ ] Implement `validate_proposal_block()` with all checks
@@ -2183,10 +2415,18 @@ mod tests {
 - [ ] Validate governance update format
 - [ ] Validate withdrawals not duplicates
 - [ ] Implement `validate_governance_update_format()`
+- [ ] Validate `last_commit` has sufficient signatures for previous block
+
+### Sync/Catch-Up Support
+- [ ] Implement `can_participate_in_consensus()` check
+- [ ] Implement `handle_future_vote()` for triggering sync
+- [ ] Implement `validate_sync_block()` for verifying `last_commit` during sync
+- [ ] Implement `recover_parameter_state()` for late-joiner parameter reconstruction
+- [ ] Implement `get_validator_set_at_height()` for historical validator set lookup
 
 ---
 
-## 8. Next Steps
+## 9. Next Steps
 
 After completing this implementation:
 1. Proceed to **05_NETWORK_LAYER.md** - Network message routing
@@ -2195,6 +2435,7 @@ After completing this implementation:
 
 ---
 
-*Implementation Plan Version: 2.0*
+*Implementation Plan Version: 2.1*
 *Last Updated: February 2026*
-*Changes: Added governance update handlers, peg-in handlers, block building, and validation*
+*Changes in 2.1: Added cross-document references, ChainError variants, liveness gate logic, sync/catch-up section, expanded checklist*
+*Changes in 2.0: Added governance update handlers, peg-in handlers, block building, and validation*

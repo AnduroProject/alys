@@ -4,14 +4,37 @@
 
 This document provides a comprehensive implementation guide for coordinating between Tendermint consensus (CL) and the Execution Layer (EL). This replaces the current `fork_choice_updated` pattern with a simpler direct execution model appropriate for Tendermint's instant finality.
 
+**Key Design Decision**: Following standard Tendermint/CometBFT architecture, **LastCommit is embedded in the block structure**. Block N contains the commit proof for Block N-1. The EL coordination handles block execution and finalization based on this embedded commit model.
+
 **Estimated Effort**: 1 week
 **Dependencies**:
-- `02_STATE_MACHINE.md`
-- `04_CHAINACTOR_HANDLERS.md`
+- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit, CommitSig, BlockIDFlag)
+- `02_STATE_MACHINE.md` (TendermintState)
+- `04_CHAINACTOR_HANDLERS.md` (blocks_without_pow, liveness gate)
+- `11_STORAGE_SCHEMA_MIGRATION.md` (embedded LastCommit design)
+- `13_BRIDGE_INTEGRATION.md` (withdrawals/peg-in conversion)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (peg-in to withdrawal flow)
 **Files to Modify**:
 - `app/src/actors_v2/chain/handlers.rs`
 - `app/src/actors_v2/engine/messages.rs`
 - `app/src/actors_v2/engine/actor.rs`
+- `app/src/actors_v2/engine/error.rs`
+- `app/src/actors_v2/chain/error.rs`
+
+---
+
+## Cross-Document Type References
+
+| Type | Defined In | Usage Here |
+|------|-----------|------------|
+| `Commit` | `01_MESSAGE_TYPES` | Commit proof for finalized blocks |
+| `CommitSig` | `01_MESSAGE_TYPES` | Individual validator signatures in commit |
+| `BlockIDFlag` | `01_MESSAGE_TYPES` | Commit/Nil/Absent status per validator |
+| `TendermintState` | `02_STATE_MACHINE` | Contains `pending_commit`, `validator_set` |
+| `ValidatorSet` | `02_STATE_MACHINE` | For signature verification |
+| `ConsensusBlock` | `01_MESSAGE_TYPES` | Block structure with `last_commit` field |
+| `ExecutionPayloadCapella` | External (lighthouse) | EL payload format |
+| `Withdrawal` | `13_BRIDGE_INTEGRATION` | Peg-in tokens in execution payload |
 
 ---
 
@@ -33,7 +56,22 @@ graph LR
     end
 ```
 
-### 1.2 Key Differences
+### 1.2 Block Structure with Embedded LastCommit
+
+```
+Block N (being finalized):
+├── parent_hash: hash(Block N-1)
+├── slot: N
+├── last_commit: Commit for Block N-1  ← Proves N-1 is final
+│   ├── height: N-1
+│   ├── round: R
+│   ├── block_hash: hash(Block N-1)
+│   └── signatures: [CommitSig, ...]
+├── execution_payload
+└── ... other fields
+```
+
+### 1.3 Key Differences
 
 | Aspect | Current (Aura) | Tendermint |
 |--------|----------------|------------|
@@ -41,6 +79,7 @@ graph LR
 | Fork choice | Cumulative difficulty | Not needed |
 | EL notification | `fork_choice_updated` | Direct execution |
 | Head/Safe/Finalized | Three separate values | All same value |
+| Commit storage | N/A | Embedded in next block |
 
 ---
 
@@ -101,7 +140,40 @@ pub enum PayloadStatus {
 }
 ```
 
-### 2.2 Handler Implementation
+### 2.2 EngineError Variants for Tendermint
+
+Add these variants to `engine/error.rs`:
+
+```rust
+// In engine/error.rs - add to existing EngineError enum
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum EngineError {
+    // ... existing variants ...
+
+    /// Parent block not found in EL
+    #[error("Unknown parent block: {0:?}")]
+    UnknownParent(ExecutionBlockHash),
+
+    /// Payload validation/execution failed
+    #[error("Invalid payload: {0}")]
+    InvalidPayload(String),
+
+    /// Unexpected status from EL
+    #[error("Unexpected payload status: {0:?}")]
+    UnexpectedStatus(PayloadStatus),
+
+    /// EL communication timeout
+    #[error("EL request timed out after {0:?}")]
+    RequestTimeout(std::time::Duration),
+
+    /// EL returned error during execution
+    #[error("Execution failed: {0}")]
+    ExecutionFailed(String),
+}
+```
+
+### 2.3 Handler Implementation
 
 ```rust
 // In engine/actor.rs
@@ -147,11 +219,136 @@ impl Handler<ExecuteBlockMessage> for EngineActor {
 }
 ```
 
+### 2.4 ChainError Variants for EL Coordination
+
+Add these variants to `chain/error.rs`:
+
+```rust
+// In chain/error.rs - add to existing ChainError enum
+
+#[derive(Debug, Error)]
+pub enum ChainError {
+    // ... existing variants ...
+
+    /// EngineActor address not configured
+    #[error("EngineActor not set")]
+    EngineActorNotSet,
+
+    /// Commit hash doesn't match expected block
+    #[error("Commit hash mismatch: expected {expected:?}, got {actual:?}")]
+    CommitHashMismatch {
+        expected: BlockHash,
+        actual: BlockHash,
+    },
+
+    /// Not enough validators signed the commit
+    #[error("Insufficient commit signers: have {have}, need {need}")]
+    InsufficientCommitSigners {
+        have: usize,
+        need: usize,
+    },
+
+    /// Invalid signature in commit
+    #[error("Invalid commit signature")]
+    InvalidCommitSignature,
+
+    /// EL execution failed
+    #[error("Execution failed: {0}")]
+    ExecutionFailed(String),
+
+    /// EL returned error
+    #[error("Execution layer error: {0}")]
+    ExecutionLayerError(String),
+
+    /// EL request timed out
+    #[error("EL timeout after {0:?}")]
+    ElTimeout(std::time::Duration),
+}
+```
+
+### 2.5 EL Timeout Handling
+
+EL communication may timeout during block finalization. Handle gracefully:
+
+```rust
+impl ChainActor {
+    /// Execute block with timeout and retry
+    async fn execute_with_timeout(
+        &self,
+        msg: ExecuteBlockMessage,
+    ) -> Result<ExecuteBlockResponse, ChainError> {
+        let engine = self.engine_actor.as_ref()
+            .ok_or(ChainError::EngineActorNotSet)?;
+
+        const EL_TIMEOUT: Duration = Duration::from_secs(30);
+        const MAX_RETRIES: u32 = 3;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            match tokio::time::timeout(
+                EL_TIMEOUT,
+                engine.send(msg.clone())
+            ).await {
+                Ok(Ok(Ok(response))) => return Ok(response),
+                Ok(Ok(Err(engine_err))) => {
+                    // EL returned an error - don't retry for invalid payloads
+                    match &engine_err {
+                        EngineError::InvalidPayload(_) => {
+                            return Err(ChainError::ExecutionLayerError(engine_err.to_string()));
+                        }
+                        _ => {
+                            warn!(attempt, error = ?engine_err, "EL error, retrying");
+                            last_error = Some(ChainError::ExecutionLayerError(engine_err.to_string()));
+                        }
+                    }
+                }
+                Ok(Err(mailbox_err)) => {
+                    return Err(ChainError::ActorMailbox(mailbox_err.to_string()));
+                }
+                Err(_timeout) => {
+                    warn!(attempt, "EL request timed out, retrying");
+                    last_error = Some(ChainError::ElTimeout(EL_TIMEOUT));
+                    EL_TIMEOUTS.inc();
+                }
+            }
+
+            // Exponential backoff before retry
+            tokio::time::sleep(Duration::from_millis(100 * 2u64.pow(attempt))).await;
+        }
+
+        Err(last_error.unwrap_or(ChainError::ElTimeout(EL_TIMEOUT)))
+    }
+}
+```
+
+**Consensus Implications of EL Timeout:**
+- During proposal: Skip this round, let next proposer try
+- During finalization: Block consensus until EL responds or timeout
+- Critical: Never commit a block without successful EL execution
+
 ---
 
 ## 3. Block Finalization Flow
 
-### 3.1 Complete Commit Flow
+### 3.1 Understanding Finality with Embedded LastCommit
+
+When we finalize Block N, the commit proof for N will be embedded in Block N+1:
+
+```
+Timeline:
+  Block N produced → Validators precommit → Commit(N) created
+                                                   ↓
+  Block N+1 proposed ← includes Commit(N) as last_commit ←─┘
+```
+
+The `finalize_committed_block` function:
+1. Receives the block and its commit (collected from precommits)
+2. Executes the block in EL
+3. Stores the block
+4. The commit will be embedded in the NEXT block's `last_commit` field
+
+### 3.2 Complete Commit Flow
 
 ```rust
 // In chain/handlers.rs
@@ -169,22 +366,31 @@ impl ChainActor {
     ///   ├─ 1. Validate commit proof
     ///   ├─ 2. Execute block in EL
     ///   ├─ 3. Store block in consensus storage
-    ///   ├─ 4. Store commit proof
-    ///   ├─ 5. Update chain head
-    ///   └─ 6. Emit events
+    ///   ├─ 4. Update chain head
+    ///   ├─ 5. Cache commit for next block's last_commit
+    ///   ├─ 6. Update blocks_without_pow liveness gate
+    ///   └─ 7. Emit metrics/events
     /// ```
+    ///
+    /// # Note on Commit Storage
+    ///
+    /// The commit is NOT stored separately. Instead:
+    /// - The commit is cached in memory
+    /// - When Block N+1 is proposed, it includes this commit as `last_commit`
+    /// - The commit is persisted as part of Block N+1
+    ///
     pub async fn finalize_committed_block(
-        &self,
+        &mut self,
         block: &ConsensusBlock<MainnetEthSpec>,
         commit: Commit,
     ) -> Result<(), ChainError> {
-        let height = block.slot; // slot == height in Tendermint mode
+        let height = block.slot;
         let block_hash = block.hash();
 
         info!(
             height,
             block_hash = ?block_hash,
-            signers = commit.num_signers(),
+            commit_signers = commit.num_commit_signatures(),
             "Finalizing committed block"
         );
 
@@ -214,28 +420,18 @@ impl ChainActor {
         }
 
         // 3. Store consensus block
+        // Note: The block's own last_commit (if present) proves the PREVIOUS block
         let storage = self.storage_actor.as_ref()
             .ok_or(ChainError::StorageActorNotSet)?;
 
         storage.send(StoreBlockMessage {
-            block: SignedConsensusBlock::from_commit(block.clone(), commit.clone()),
-            canonical: true,
-            finalized: true,
+            block: block.clone().into_signed(), // Block with its own last_commit
             correlation_id: None,
         }).await
             .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
             .map_err(|e| ChainError::Storage(e.to_string()))?;
 
-        // 4. Store commit proof (for light clients and sync)
-        storage.send(StoreCommitMessage {
-            height,
-            commit: commit.clone(),
-            correlation_id: None,
-        }).await
-            .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
-            .map_err(|e| ChainError::Storage(e.to_string()))?;
-
-        // 5. Update chain head
+        // 4. Update chain head
         let block_ref = BlockRef {
             hash: block_hash,
             height,
@@ -252,7 +448,27 @@ impl ChainActor {
         // Update local state
         self.state.head = Some(block_ref);
 
-        // 6. Emit metrics
+        // 5. Cache this commit for embedding in the NEXT block
+        // When we propose Block N+1, we'll include this as last_commit
+        self.state.tendermint.pending_commit = Some(commit.clone());
+
+        // 6. Update blocks_without_pow liveness gate
+        // See doc 04 (ChainActor Handlers) and doc 16 (AuxPoW Integration)
+        if block.auxpow_header.is_some() {
+            // AuxPoW present - reset counter
+            self.state.tendermint.blocks_without_pow = 0;
+            info!(height, "AuxPoW present, liveness gate reset");
+        } else {
+            // No AuxPoW - increment counter
+            self.state.tendermint.blocks_without_pow += 1;
+            debug!(
+                height,
+                blocks_without_pow = self.state.tendermint.blocks_without_pow,
+                "Incremented blocks_without_pow"
+            );
+        }
+
+        // 7. Emit metrics
         TENDERMINT_BLOCKS_COMMITTED.inc();
         TENDERMINT_BLOCK_HEIGHT.set(height as i64);
         TENDERMINT_BLOCK_GAS_USED.observe(execute_result.gas_used as f64);
@@ -268,6 +484,11 @@ impl ChainActor {
     }
 
     /// Validate a commit proof
+    ///
+    /// Verifies that the commit:
+    /// 1. References the correct block hash
+    /// 2. Has 2/3+ validator signatures
+    /// 3. All signatures are valid
     fn validate_commit(&self, commit: &Commit, expected_hash: BlockHash) -> Result<(), ChainError> {
         // 1. Check block hash matches
         if commit.block_hash != expected_hash {
@@ -278,7 +499,7 @@ impl ChainActor {
         }
 
         // 2. Check we have 2/3+ signers
-        let num_signers = commit.num_signers();
+        let num_signers = commit.num_commit_signatures();
         let threshold = self.state.tendermint.validator_set.two_thirds_threshold() as usize;
 
         if num_signers < threshold {
@@ -288,28 +509,183 @@ impl ChainActor {
             });
         }
 
-        // 3. Verify aggregate signature
+        // 3. Verify each signature
         let validator_set = &self.state.tendermint.validator_set;
-        let signing_keys: Vec<_> = commit.signers.iter()
-            .enumerate()
-            .filter(|(_, &signed)| signed)
-            .filter_map(|(i, _)| validator_set.get_public_key(&ValidatorId(i as u8)).ok())
-            .cloned()
-            .collect();
-
-        // Create signing root for verification
         let signing_root = compute_precommit_signing_root(
             commit.height,
             commit.round,
             commit.block_hash,
         );
 
-        // Verify aggregate signature
-        if !commit.aggregate_signature.verify(&signing_keys, signing_root) {
-            return Err(ChainError::InvalidCommitSignature);
+        for commit_sig in &commit.signatures {
+            // Skip absent validators
+            if commit_sig.block_id_flag != BlockIDFlag::Commit {
+                continue;
+            }
+
+            let validator_id = commit_sig.validator_address
+                .ok_or(ChainError::InvalidCommitSignature)?;
+
+            let signature = commit_sig.signature.as_ref()
+                .ok_or(ChainError::InvalidCommitSignature)?;
+
+            let pubkey = validator_set.get_public_key(&validator_id)
+                .map_err(|_| ChainError::InvalidCommitSignature)?;
+
+            if !signature.verify(pubkey, signing_root) {
+                return Err(ChainError::InvalidCommitSignature);
+            }
         }
 
         Ok(())
+    }
+}
+
+/// Compute the signing root for a precommit vote
+///
+/// This is what validators sign when sending a precommit.
+/// Defined in 01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md
+fn compute_precommit_signing_root(
+    height: u64,
+    round: u32,
+    block_hash: BlockHash,
+) -> Hash256 {
+    use sha2::{Sha256, Digest};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"TENDERMINT_PRECOMMIT");
+    hasher.update(height.to_le_bytes());
+    hasher.update(round.to_le_bytes());
+    hasher.update(block_hash.as_bytes());
+
+    Hash256::from_slice(&hasher.finalize())
+}
+```
+
+### 3.3 Block Proposal with Embedded LastCommit
+
+When proposing a new block, embed the cached commit:
+
+```rust
+impl ChainActor {
+    /// Create a new block proposal with embedded last_commit
+    pub async fn create_block_proposal(
+        &mut self,
+        height: u64,
+    ) -> Result<ConsensusBlock<MainnetEthSpec>, ChainError> {
+        // Get execution payload from EL
+        let execution_payload = self.get_execution_payload(height).await?;
+
+        // Get parent hash
+        let parent_hash = self.state.head
+            .as_ref()
+            .map(|h| h.hash)
+            .unwrap_or(Hash256::zero());
+
+        // Get the cached commit for the previous block
+        // This will be embedded as last_commit
+        let last_commit = if height > 0 {
+            self.state.tendermint.pending_commit.take()
+        } else {
+            None // Genesis has no last_commit
+        };
+
+        let block = ConsensusBlock {
+            parent_hash,
+            slot: height,
+            last_commit,  // Embedded commit for previous block
+            auxpow_header: None,
+            execution_payload,
+            pegins: vec![],
+            pegout_payment_proposal: None,
+            finalized_pegouts: vec![],
+        };
+
+        Ok(block)
+    }
+
+    /// Get execution payload from the EL for a new block
+    ///
+    /// This requests the EL to build a payload including:
+    /// - Pending transactions from mempool
+    /// - Withdrawals from peg-in queue (see doc 13, 16)
+    /// - Random value, timestamp, etc.
+    ///
+    /// Integration with Withdrawals (doc 13 BRIDGE_INTEGRATION):
+    /// - Peg-ins are converted to EVM Withdrawals via collect_withdrawals()
+    /// - Subject to liveness gate check (blocks_without_pow < MAX_BLOCKS)
+    async fn get_execution_payload(
+        &self,
+        height: u64,
+    ) -> Result<ExecutionPayloadCapella, ChainError> {
+        let engine = self.engine_actor.as_ref()
+            .ok_or(ChainError::EngineActorNotSet)?;
+
+        // Get parent execution hash
+        let parent_exec_hash = self.state.head
+            .as_ref()
+            .map(|h| h.execution_hash)
+            .unwrap_or_default();
+
+        // Collect withdrawals from peg-in queue
+        // See doc 13 (BRIDGE_INTEGRATION) Section 2.3
+        // See doc 16 (AUXPOW_TENDERMINT_INTEGRATION) for liveness gate
+        let withdrawals = if self.is_liveness_gate_open() {
+            self.collect_pegin_withdrawals().await?
+        } else {
+            warn!(
+                height,
+                blocks_without_pow = self.state.tendermint.blocks_without_pow,
+                "Liveness gate closed, skipping peg-in withdrawals"
+            );
+            vec![]
+        };
+
+        // Request payload from EL
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let payload_attributes = PayloadAttributes {
+            timestamp,
+            prev_randao: self.get_randao_for_height(height),
+            suggested_fee_recipient: self.config.fee_recipient,
+            withdrawals: Some(withdrawals),
+        };
+
+        // Start payload building
+        let payload_id = engine.send(PreparePayloadMessage {
+            parent_hash: parent_exec_hash,
+            payload_attributes,
+            correlation_id: None,
+        }).await
+            .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+            .map_err(|e| ChainError::ExecutionLayerError(e.to_string()))?;
+
+        // Get the built payload
+        let payload = engine.send(GetPayloadMessage {
+            payload_id,
+            correlation_id: None,
+        }).await
+            .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+            .map_err(|e| ChainError::ExecutionLayerError(e.to_string()))?;
+
+        Ok(payload)
+    }
+
+    /// Check if liveness gate allows peg-in processing
+    fn is_liveness_gate_open(&self) -> bool {
+        self.state.tendermint.blocks_without_pow < self.config.max_blocks_without_pow
+    }
+
+    /// Collect pending peg-ins and convert to EVM withdrawals
+    ///
+    /// See doc 13 (BRIDGE_INTEGRATION) Section 2.3 for full implementation
+    async fn collect_pegin_withdrawals(&self) -> Result<Vec<Withdrawal>, ChainError> {
+        // Implementation in chain/withdrawals.rs
+        // Converts PegInInfo -> Withdrawal with miner fee split
+        todo!("See doc 13 for WithdrawalCollector implementation")
     }
 }
 ```
@@ -383,7 +759,8 @@ sequenceDiagram
     CL->>CL: Collect 2/3+ precommits
     CL->>EL: ExecuteBlock(payload, finalized=true)
     Note over EL: head = safe = finalized
-    CL->>ST: Store block (finalized=true)
+    CL->>ST: Store block (with embedded last_commit)
+    Note over ST: Commit stored IN block, not separately
 ```
 
 ### 5.2 State Differences
@@ -394,46 +771,151 @@ sequenceDiagram
 | `safe` | Block with enough votes | Same as head |
 | `finalized` | Block with AuxPoW | Same as head |
 | Tracking needed | All three | Just one |
+| Commit storage | N/A | Embedded in next block |
 
 ---
 
-## 6. Storage Changes
+## 6. Storage Integration
 
-### 6.1 New Storage Messages
+### 6.1 Commit Storage Pattern
+
+Following the embedded LastCommit design from Document 11:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Storage Schema                           │
+├─────────────────────────────────────────────────────────────┤
+│ CF_BLOCKS: Blocks with embedded last_commit                 │
+│   - Block N contains last_commit proving Block N-1          │
+│                                                             │
+│ CF_VALIDATOR_SETS: Height-based validator sets (H+2 rule)   │
+│ CF_CHECKPOINTS: AuxPoW checkpoint proofs                    │
+│                                                             │
+│ NOTE: NO CF_COMMITS - commits are embedded in blocks        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Retrieving Commits
+
+To get the commit for a specific height, fetch the NEXT block:
 
 ```rust
-// In storage/messages.rs
+impl ChainActor {
+    /// Get the commit that finalized a block at the given height.
+    ///
+    /// Returns Block[height+1].last_commit
+    pub async fn get_commit_for_height(&self, height: u64) -> Result<Option<Commit>, ChainError> {
+        // Genesis has no commit
+        if height == 0 {
+            return Ok(None);
+        }
 
-/// Store a commit proof for a height
-#[derive(Debug, Clone, Message)]
-#[rtype(result = "Result<(), StorageError>")]
-pub struct StoreCommitMessage {
-    pub height: u64,
-    pub commit: Commit,
-    pub correlation_id: Option<Uuid>,
-}
+        // Get the NEXT block which contains the commit for this height
+        let storage = self.storage_actor.as_ref()
+            .ok_or(ChainError::StorageActorNotSet)?;
 
-/// Get commit proof for a height
-#[derive(Debug, Clone, Message)]
-#[rtype(result = "Result<Option<Commit>, StorageError>")]
-pub struct GetCommitMessage {
-    pub height: u64,
-    pub correlation_id: Option<Uuid>,
+        let next_block = storage.send(GetBlockByHeightMessage {
+            height: height + 1,
+            correlation_id: None,
+        }).await
+            .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+            .map_err(|e| ChainError::Storage(e.to_string()))?;
+
+        match next_block {
+            Some(block) => Ok(block.message.last_commit),
+            None => Ok(None), // Next block doesn't exist yet
+        }
+    }
 }
 ```
 
-### 6.2 Block Storage Schema
+### 6.3 Block Re-execution During Sync
+
+When the SyncActor catches up with the chain (doc 09), blocks must be re-executed through the EL:
 
 ```rust
-// Storage schema for Tendermint blocks
+impl ChainActor {
+    /// Execute a synced block through the EL
+    ///
+    /// Called by SyncActor when importing historical blocks.
+    /// Similar to finalize_committed_block but:
+    /// - Block already has embedded last_commit (proves previous block)
+    /// - We verify the commit and execute
+    /// - State root is verified after execution
+    pub async fn execute_synced_block(
+        &mut self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Result<(), ChainError> {
+        let height = block.message.slot;
+        let block_hash = block.message.hash();
 
-/// Key-value pairs stored:
-/// - `block:{hash}` -> SignedConsensusBlock (with commit)
-/// - `block_by_height:{height}` -> block_hash
-/// - `commit:{height}` -> Commit proof
-/// - `chain_head` -> BlockRef
-/// - `latest_finalized` -> height (always == chain_head in Tendermint)
+        // 1. Verify last_commit proves the previous block (if not genesis)
+        if height > 1 {
+            if let Some(last_commit) = &block.message.last_commit {
+                // Get the previous block to verify the commit
+                let prev_hash = block.message.parent_hash;
+                self.validate_commit(last_commit, prev_hash)?;
+            } else {
+                return Err(ChainError::InvalidBlock(
+                    format!("Block {} missing last_commit", height)
+                ));
+            }
+        }
+
+        // 2. Execute in EL (idempotent - EL handles already-executed blocks)
+        let execute_result = self.execute_with_timeout(ExecuteBlockMessage {
+            execution_payload: block.message.execution_payload.clone(),
+            finalized: true,
+            parent_hash: block.message.execution_payload.parent_hash.clone(),
+            correlation_id: None,
+        }).await?;
+
+        // 3. Verify state root matches (optional but recommended)
+        // The execution payload contains the expected state_root
+        // EL returns the computed state_root after execution
+        // These should match for valid blocks
+        if execute_result.status != PayloadStatus::Valid {
+            return Err(ChainError::ExecutionFailed(format!(
+                "Synced block {} execution failed: {:?}",
+                height, execute_result.status
+            )));
+        }
+
+        // 4. Store block (already has embedded last_commit)
+        let storage = self.storage_actor.as_ref()
+            .ok_or(ChainError::StorageActorNotSet)?;
+
+        storage.send(StoreBlockMessage {
+            block: block.clone(),
+            correlation_id: None,
+        }).await
+            .map_err(|e| ChainError::ActorMailbox(e.to_string()))?
+            .map_err(|e| ChainError::Storage(e.to_string()))?;
+
+        // 5. Update head
+        let block_ref = BlockRef {
+            hash: block_hash,
+            height,
+            execution_hash: execute_result.block_hash,
+        };
+        self.state.head = Some(block_ref);
+
+        // 6. Update blocks_without_pow
+        if block.message.auxpow_header.is_some() {
+            self.state.tendermint.blocks_without_pow = 0;
+        } else {
+            self.state.tendermint.blocks_without_pow += 1;
+        }
+
+        SYNC_BLOCKS_EXECUTED.inc();
+        debug!(height, "Synced block executed successfully");
+
+        Ok(())
+    }
+}
 ```
+
+**Idempotency Note**: The EL should handle re-execution of already-executed blocks gracefully. If the block was already executed (e.g., during a restart), the EL returns `PayloadStatus::Valid` without re-processing.
 
 ---
 
@@ -469,6 +951,32 @@ lazy_static! {
             "tendermint_commit_latency_seconds",
             "Time from proposal to commit"
         )
+    ).unwrap();
+
+    /// EL request timeouts
+    static ref EL_TIMEOUTS: IntCounter = IntCounter::new(
+        "el_request_timeouts_total",
+        "Number of EL requests that timed out"
+    ).unwrap();
+
+    /// EL execution latency
+    static ref EL_EXECUTION_LATENCY: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "el_execution_latency_seconds",
+            "Time for EL to execute a block"
+        )
+    ).unwrap();
+
+    /// Blocks executed during sync
+    static ref SYNC_BLOCKS_EXECUTED: IntCounter = IntCounter::new(
+        "sync_blocks_executed_total",
+        "Number of blocks executed during sync catchup"
+    ).unwrap();
+
+    /// Blocks without AuxPoW (liveness gate counter)
+    static ref BLOCKS_WITHOUT_POW: IntGauge = IntGauge::new(
+        "blocks_without_pow",
+        "Current blocks since last AuxPoW (liveness gate)"
     ).unwrap();
 }
 ```
@@ -520,21 +1028,179 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_finalization_flow() {
-        let actor = setup_test_chain_actor().await;
+        let mut actor = setup_test_chain_actor().await;
         let block = create_test_block();
         let commit = create_valid_commit(&block);
 
-        let result = actor.finalize_committed_block(&block.message, commit).await;
-
+        let result = actor.finalize_committed_block(&block.message, commit.clone()).await;
         assert!(result.is_ok());
 
         // Verify block is stored
         let stored = actor.storage_actor.as_ref().unwrap()
             .send(GetBlockMessage { hash: block.hash(), correlation_id: None })
             .await.unwrap().unwrap();
-
         assert!(stored.is_some());
+
+        // Verify commit is cached for next block
+        assert!(actor.state.tendermint.pending_commit.is_some());
     }
+
+    #[tokio::test]
+    async fn test_block_proposal_includes_last_commit() {
+        let mut actor = setup_test_chain_actor().await;
+
+        // Finalize block 0
+        let block0 = create_genesis_block();
+        let commit0 = create_valid_commit(&block0);
+        actor.finalize_committed_block(&block0.message, commit0.clone()).await.unwrap();
+
+        // Create proposal for block 1
+        let block1 = actor.create_block_proposal(1).await.unwrap();
+
+        // Block 1 should have last_commit for block 0
+        assert!(block1.last_commit.is_some());
+        let last_commit = block1.last_commit.unwrap();
+        assert_eq!(last_commit.height, 0);
+        assert_eq!(last_commit.block_hash, block0.hash());
+    }
+
+    #[tokio::test]
+    async fn test_get_commit_for_height() {
+        let mut actor = setup_test_chain_actor().await;
+
+        // Finalize blocks 0 and 1
+        let block0 = create_genesis_block();
+        let commit0 = create_valid_commit(&block0);
+        actor.finalize_committed_block(&block0.message, commit0.clone()).await.unwrap();
+
+        let block1 = actor.create_block_proposal(1).await.unwrap();
+        let commit1 = create_valid_commit_for_block(&block1);
+        actor.finalize_committed_block(&block1, commit1.clone()).await.unwrap();
+
+        // Get commit for block 0 (should be in block 1's last_commit)
+        let retrieved = actor.get_commit_for_height(0).await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().height, 0);
+
+        // Get commit for block 1 (next block doesn't exist yet)
+        let tip_commit = actor.get_commit_for_height(1).await.unwrap();
+        assert!(tip_commit.is_none()); // Block 2 doesn't exist
+    }
+}
+```
+
+### 8.1 Testing Helpers
+
+```rust
+// Test utilities for EL coordination tests
+
+/// Create a mock EngineActor for testing
+async fn setup_test_engine() -> Addr<MockEngineActor> {
+    MockEngineActor::new()
+        .with_execution_result(PayloadStatus::Valid)
+        .start()
+}
+
+/// Create a mock ChainActor with initialized TendermintState
+async fn setup_test_chain_actor() -> ChainActor {
+    let mut actor = ChainActor::new_for_test();
+    actor.state.tendermint = TendermintState {
+        validator_set: create_test_validator_set(15),
+        pending_commit: None,
+        blocks_without_pow: 0,
+        current_height: 0,
+        current_round: 0,
+    };
+    actor
+}
+
+/// Create a test block with execution payload
+fn create_test_block() -> ConsensusBlock<MainnetEthSpec> {
+    ConsensusBlock {
+        parent_hash: Hash256::zero(),
+        slot: 1,
+        last_commit: None,
+        auxpow_header: None,
+        execution_payload: create_test_execution_payload(),
+        pegins: vec![],
+        pegout_payment_proposal: None,
+        finalized_pegouts: vec![],
+    }
+}
+
+/// Create genesis block (height 0)
+fn create_genesis_block() -> SignedConsensusBlock<MainnetEthSpec> {
+    SignedConsensusBlock {
+        message: ConsensusBlock {
+            parent_hash: Hash256::zero(),
+            slot: 0,
+            last_commit: None, // Genesis has no last_commit
+            auxpow_header: None,
+            execution_payload: create_genesis_payload(),
+            pegins: vec![],
+            pegout_payment_proposal: None,
+            finalized_pegouts: vec![],
+        },
+        signature: Signature::empty(),
+    }
+}
+
+/// Create a valid commit with the specified number of signers
+fn create_commit_with_signers(num_signers: usize) -> Commit {
+    let validators = create_test_validator_set(15);
+    let mut signatures = Vec::new();
+
+    for i in 0..15 {
+        if i < num_signers {
+            signatures.push(CommitSig {
+                block_id_flag: BlockIDFlag::Commit,
+                validator_address: Some(validators.validators[i].address),
+                timestamp: 0,
+                signature: Some(create_test_signature(i)),
+            });
+        } else {
+            signatures.push(CommitSig {
+                block_id_flag: BlockIDFlag::Absent,
+                validator_address: None,
+                timestamp: 0,
+                signature: None,
+            });
+        }
+    }
+
+    Commit {
+        height: 0,
+        round: 0,
+        block_hash: Hash256::zero(),
+        signatures,
+    }
+}
+
+/// Create a valid commit for a specific block
+fn create_valid_commit(block: &SignedConsensusBlock<MainnetEthSpec>) -> Commit {
+    let mut commit = create_commit_with_signers(11); // 11/15 = 73% > 2/3
+    commit.height = block.message.slot;
+    commit.block_hash = block.message.hash();
+    commit
+}
+
+fn create_valid_commit_for_block(block: &ConsensusBlock<MainnetEthSpec>) -> Commit {
+    let mut commit = create_commit_with_signers(11);
+    commit.height = block.slot;
+    commit.block_hash = block.hash();
+    commit
+}
+
+/// Create a test validator set
+fn create_test_validator_set(size: usize) -> ValidatorSet {
+    // See doc 02 (STATE_MACHINE) for ValidatorSet implementation
+    ValidatorSet::new_for_test(size)
+}
+
+/// Create test execution payload
+fn create_test_execution_payload() -> ExecutionPayloadCapella {
+    // Minimal valid payload for testing
+    ExecutionPayloadCapella::default()
 }
 ```
 
@@ -542,20 +1208,128 @@ mod tests {
 
 ## 9. Checklist
 
+### EL Coordination
 - [ ] Add `ExecuteBlockMessage` to engine messages
+- [ ] Add `ExecuteBlockResponse` and `PayloadStatus` types
 - [ ] Implement `ExecuteBlockMessage` handler in EngineActor
 - [ ] Implement `finalize_committed_block` in ChainActor
-- [ ] Implement `validate_commit` method
-- [ ] Add `StoreCommitMessage` to storage messages
-- [ ] Implement commit storage handler
+- [ ] Implement `validate_commit` method with `CommitSig`/`BlockIDFlag`
+- [ ] Implement `compute_precommit_signing_root` helper
+
+### Error Types
+- [ ] Add `EngineError` variants: `UnknownParent`, `InvalidPayload`, `UnexpectedStatus`, `RequestTimeout`
+- [ ] Add `ChainError` variants: `EngineActorNotSet`, `CommitHashMismatch`, `InsufficientCommitSigners`, `InvalidCommitSignature`, `ExecutionFailed`, `ExecutionLayerError`, `ElTimeout`
+
+### EL Timeout Handling
+- [ ] Implement `execute_with_timeout` with retry logic
+- [ ] Add exponential backoff for transient failures
+- [ ] Add `EL_TIMEOUTS` metric
+
+### Embedded LastCommit Integration
+- [ ] Add `pending_commit` to TendermintState
+- [ ] Implement `create_block_proposal` with embedded `last_commit`
+- [ ] Implement `get_commit_for_height` (fetches from next block)
+- [ ] **DO NOT** add separate commit storage
+
+### Payload Building (doc 13 integration)
+- [ ] Implement `get_execution_payload` method
+- [ ] Add `PreparePayloadMessage` and `GetPayloadMessage` support
+- [ ] Integrate `collect_pegin_withdrawals` for peg-in tokens
+- [ ] Add liveness gate check (`is_liveness_gate_open`)
+
+### Sync Integration (doc 09)
+- [ ] Implement `execute_synced_block` for catch-up
+- [ ] Verify `last_commit` during sync block import
+- [ ] Add `SYNC_BLOCKS_EXECUTED` metric
+
+### Liveness Gate (doc 04, 16)
+- [ ] Track `blocks_without_pow` in `finalize_committed_block`
+- [ ] Track `blocks_without_pow` in `execute_synced_block`
+- [ ] Add `BLOCKS_WITHOUT_POW` metric
+
+### Code Removal
 - [ ] Remove fork choice code (with feature flag)
 - [ ] Remove reorganization code (with feature flag)
+
+### Testing
 - [ ] Add metrics for block finalization
+- [ ] Add testing helpers (`setup_test_engine`, `create_commit_with_signers`, etc.)
 - [ ] Write unit tests for execution
 - [ ] Write unit tests for commit validation
+- [ ] Write unit tests for embedded last_commit
+- [ ] Write unit tests for EL timeout handling
+- [ ] Write unit tests for sync block execution
 - [ ] Write integration test for full flow
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+## 10. Correlation ID Usage
+
+The `correlation_id` field in messages enables distributed tracing across actors:
+
+```rust
+/// When to use correlation IDs:
+
+// 1. User-initiated operations (API calls, RPC requests)
+let correlation_id = Some(Uuid::new_v4());
+engine.send(ExecuteBlockMessage {
+    // ...
+    correlation_id,  // Pass to all downstream calls
+}).await;
+
+// 2. Consensus-initiated operations (proposals, votes)
+// Generate at consensus round start, propagate through all handlers
+let round_correlation_id = Uuid::new_v4();
+
+// 3. Sync operations
+// Generate per sync batch for tracing block downloads
+let sync_batch_id = Uuid::new_v4();
+```
+
+**Logging with Correlation ID:**
+```rust
+use tracing::instrument;
+
+#[instrument(skip(self), fields(correlation_id = ?msg.correlation_id))]
+async fn handle_execute_block(&self, msg: ExecuteBlockMessage) {
+    // All logs in this span include the correlation_id
+    info!("Executing block");
+}
+```
+
+**When to Pass `None`:**
+- Internal housekeeping operations
+- Metrics collection
+- Test code (unless testing tracing)
+
+---
+
+## 11. Summary
+
+**Key Design Decisions:**
+
+| Aspect | Implementation |
+|--------|---------------|
+| Commit storage | Embedded in Block[N+1].last_commit (for Block N) |
+| Pending commit | Cached in `state.tendermint.pending_commit` |
+| Block proposal | Includes cached commit as `last_commit` |
+| Commit retrieval | Fetch Block[height+1].last_commit |
+| Separate commit CF | **NOT USED** - commits are in blocks |
+
+This follows the standard Tendermint/CometBFT pattern and ensures consistency with Document 11 (Storage Schema Migration).
+
+---
+
+*Implementation Plan Version: 2.1*
+*Last Updated: February 2026*
+*Changes:*
+- *Added cross-document type references*
+- *Added EngineError and ChainError variants for EL coordination*
+- *Added EL timeout handling with retry logic*
+- *Added get_execution_payload with withdrawals integration (doc 13, 16)*
+- *Added block re-execution during sync (doc 09)*
+- *Added blocks_without_pow liveness gate tracking (doc 04, 16)*
+- *Added compute_precommit_signing_root helper*
+- *Added correlation ID usage section*
+- *Added testing helpers*
+- *Expanded checklist with new items*

@@ -6,10 +6,30 @@ This document provides a comprehensive implementation guide for Tendermint timeo
 
 **Estimated Effort**: 2-3 days
 **Dependencies**:
-- `02_STATE_MACHINE.md`
-- `04_CHAINACTOR_HANDLERS.md`
+- `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Height, Round, TendermintStep)
+- `02_STATE_MACHINE.md` (ConsensusAction::ScheduleTimeout, ConsensusEvent::Timeout)
+- `04_CHAINACTOR_HANDLERS.md` (ChainMessage::TendermintTimeout)
+- `05_NETWORK_LAYER.md` (timeout gossip topic)
+- `06_WAL.md` (timeout recovery after crash)
+- `10_SLOT_WORKER_TO_TENDERMINT_TIMING.md` (migration from Aura timing)
 **Files to Create**:
 - `app/src/actors_v2/chain/tendermint/timeout.rs`
+**Files to Modify**:
+- `app/src/actors_v2/chain/error.rs` (TimeoutError variants)
+
+---
+
+## Cross-Document Type References
+
+| Type | Defined In | Usage Here |
+|------|-----------|------------|
+| `Height` | `01_MESSAGE_TYPES` (`pub type Height = u64`) | Consensus height for timeout tracking |
+| `Round` | `01_MESSAGE_TYPES` (`pub type Round = u32`) | Round number for backoff calculation |
+| `TendermintStep` | `01_MESSAGE_TYPES` | Propose/Prevote/Precommit/Commit steps |
+| `ConsensusAction::ScheduleTimeout` | `02_STATE_MACHINE` | State machine requests timeout scheduling |
+| `ConsensusEvent::Timeout` | `02_STATE_MACHINE` | Timeout event fed back to state machine |
+| `ChainMessage::TendermintTimeout` | `04_CHAINACTOR_HANDLERS` | Actor message for timeout events |
+| Timeout gossip topic | `05_NETWORK_LAYER` | `/alys/tendermint/timeouts/1` |
 
 ---
 
@@ -117,6 +137,16 @@ impl Default for TimeoutConfig {
 
 impl TimeoutConfig {
     /// Calculate timeout for a step at a given round
+    ///
+    /// # Commit Step
+    ///
+    /// Returns `Duration::ZERO` for `TendermintStep::Commit` because:
+    /// - Commit is not a waiting state - it's the final action
+    /// - Once 2/3+ precommits are collected, commit happens immediately
+    /// - No timeout needed; the block is finalized synchronously
+    ///
+    /// Attempting to schedule a Commit timeout is a logic error and will
+    /// be rejected by `schedule()`.
     pub fn timeout_for(&self, step: TendermintStep, round: u32) -> Duration {
         let base = match step {
             TendermintStep::Propose => self.propose_timeout,
@@ -158,6 +188,22 @@ pub struct TimeoutEvent {
     pub height: Height,
     pub round: Round,
     pub step: TendermintStep,
+}
+
+/// Timeout-related errors
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum TimeoutError {
+    /// Attempted to schedule timeout for invalid step (e.g., Commit)
+    #[error("Cannot schedule timeout for step: {0:?}")]
+    InvalidStep(TendermintStep),
+
+    /// Scheduler channel closed
+    #[error("Timeout event channel closed")]
+    ChannelClosed,
+
+    /// Scheduler not initialized
+    #[error("Timeout scheduler not initialized")]
+    NotInitialized,
 }
 
 /// Manages timeout scheduling for Tendermint consensus
@@ -208,8 +254,19 @@ impl TimeoutScheduler {
     /// Schedule a timeout for a step
     ///
     /// If a timeout for this step already exists, it is cancelled first.
-    pub fn schedule(&mut self, step: TendermintStep) {
-        // Cancel existing timeout for this step
+    ///
+    /// # Errors
+    ///
+    /// Returns `TimeoutError::InvalidStep` if attempting to schedule
+    /// a timeout for `TendermintStep::Commit`.
+    pub fn schedule(&mut self, step: TendermintStep) -> Result<(), TimeoutError> {
+        // Commit step has no timeout - it's a logic error to schedule one
+        if step == TendermintStep::Commit {
+            warn!("Attempted to schedule timeout for Commit step");
+            return Err(TimeoutError::InvalidStep(step));
+        }
+
+        // Cancel existing timeout for this step (prevents duplicates)
         self.cancel_step(step);
 
         // Calculate timeout duration
@@ -258,6 +315,8 @@ impl TimeoutScheduler {
                 }
             }
         });
+
+        Ok(())
     }
 
     /// Cancel timeout for a specific step
@@ -419,6 +478,111 @@ impl ChainActor {
 }
 ```
 
+### 3.3 State Machine Integration
+
+The timeout scheduler connects to the state machine (doc 02) bidirectionally:
+
+```rust
+impl ChainActor {
+    /// Process consensus actions that may involve timeouts
+    ///
+    /// Called after state machine transitions to execute resulting actions.
+    /// See `02_STATE_MACHINE.md` for ConsensusAction definitions.
+    fn process_consensus_actions(&mut self, actions: Vec<ConsensusAction>) {
+        for action in actions {
+            match action {
+                ConsensusAction::ScheduleTimeout(step) => {
+                    // State machine requests a timeout be scheduled
+                    self.schedule_timeout(step);
+                }
+                ConsensusAction::NewRound(round) => {
+                    // Round advancement - cancel old timeouts, update position
+                    self.handle_new_round(round);
+                }
+                // ... other actions (BroadcastVote, Commit, etc.)
+                _ => {}
+            }
+        }
+    }
+
+    /// Handle timeout message from scheduler
+    ///
+    /// Converts TimeoutEvent back to ConsensusEvent for state machine.
+    fn handle_timeout_message(
+        &mut self,
+        height: Height,
+        round: Round,
+        step: TendermintStep,
+    ) -> Result<(), ChainError> {
+        // Verify timeout is for current position (not stale)
+        if height != self.state.tendermint.height || round != self.state.tendermint.round {
+            debug!(
+                event_height = height,
+                event_round = round,
+                current_height = self.state.tendermint.height,
+                current_round = self.state.tendermint.round,
+                "Ignoring stale timeout"
+            );
+            return Ok(());
+        }
+
+        // Record metric
+        TENDERMINT_TIMEOUTS.with_label_values(&[&format!("{:?}", step)]).inc();
+
+        // Feed timeout back to state machine
+        let event = ConsensusEvent::Timeout(step);
+        let actions = self.state.tendermint.state_machine.process_event(event);
+
+        // Execute resulting actions
+        self.process_consensus_actions(actions);
+
+        Ok(())
+    }
+
+    /// Handle round advancement
+    fn handle_new_round(&mut self, new_round: Round) {
+        let height = self.state.tendermint.height;
+
+        info!(height, round = new_round, "Advancing to new round");
+
+        // Update position - this cancels stale timeouts
+        let scheduler = self.timeout_scheduler.clone();
+        tokio::spawn(async move {
+            let mut scheduler = scheduler.write().await;
+            scheduler.set_position(height, new_round);
+        });
+
+        // Update state
+        self.state.tendermint.round = new_round;
+
+        // Schedule propose timeout for new round
+        self.schedule_timeout(TendermintStep::Propose);
+    }
+}
+```
+
+### 3.4 Graceful Shutdown
+
+Cancel all timeouts when the actor is stopping:
+
+```rust
+impl Actor for ChainActor {
+    // ...
+
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        // Cancel all pending timeouts
+        let scheduler = self.timeout_scheduler.clone();
+        tokio::spawn(async move {
+            let mut scheduler = scheduler.write().await;
+            scheduler.cancel_all();
+            info!("Cancelled all pending timeouts on shutdown");
+        });
+
+        Running::Stop
+    }
+}
+```
+
 ---
 
 ## 4. Timeout Flow Examples
@@ -473,7 +637,172 @@ sequenceDiagram
 
 ---
 
-## 5. Metrics
+## 5. Network Layer Integration
+
+Timeout notifications may be shared with peers to help lagging validators catch up. See `05_NETWORK_LAYER.md` for the timeout gossip topic.
+
+### 5.1 Timeout Gossip (Optional)
+
+```rust
+/// Timeout notification for network gossip
+///
+/// Broadcasted on `/alys/tendermint/timeouts/1` topic.
+/// Helps lagging validators know that others have timed out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeoutNotification {
+    pub height: Height,
+    pub round: Round,
+    pub step: TendermintStep,
+    pub validator_id: ValidatorId,
+    pub signature: Signature,
+}
+
+impl ChainActor {
+    /// Optionally broadcast timeout to network
+    ///
+    /// This helps validators who are behind know that others
+    /// have also timed out, aiding in round synchronization.
+    async fn broadcast_timeout_if_needed(
+        &self,
+        step: TendermintStep,
+    ) -> Result<(), ChainError> {
+        // Only broadcast for significant timeouts
+        if step != TendermintStep::Precommit {
+            return Ok(());
+        }
+
+        let notification = TimeoutNotification {
+            height: self.state.tendermint.height,
+            round: self.state.tendermint.round,
+            step,
+            validator_id: self.config.validator_id,
+            signature: self.sign_timeout_notification()?,
+        };
+
+        if let Some(network) = &self.network_actor {
+            network.send(BroadcastTimeoutMessage {
+                notification,
+                correlation_id: None,
+            }).await
+                .map_err(|e| ChainError::ActorMailbox(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Handle received timeout notification from peer
+    fn handle_peer_timeout(&mut self, notification: TimeoutNotification) {
+        // Verify signature
+        if !self.verify_timeout_signature(&notification) {
+            warn!(
+                validator = ?notification.validator_id,
+                "Invalid timeout signature"
+            );
+            return;
+        }
+
+        // Track for round synchronization
+        self.state.tendermint.timeout_votes.record(
+            notification.height,
+            notification.round,
+            notification.step,
+            notification.validator_id,
+        );
+
+        // If we see 2/3+ timeout notifications, we can skip ahead
+        if self.state.tendermint.timeout_votes.has_two_thirds_any(
+            notification.height,
+            notification.round,
+        ) {
+            info!(
+                height = notification.height,
+                round = notification.round,
+                "Received 2/3+ timeout notifications, advancing round"
+            );
+            self.handle_new_round(notification.round + 1);
+        }
+    }
+}
+```
+
+**Note**: Timeout gossip is optional. The primary liveness mechanism is local timeout scheduling. Gossip helps with faster round synchronization in partitioned networks.
+
+---
+
+## 6. WAL Recovery Integration
+
+After a crash, the validator must restore its timeout state. See `06_WAL.md` for WAL details.
+
+### 6.1 Timeout State Recovery
+
+```rust
+impl ChainActor {
+    /// Restore timeout state after crash recovery
+    ///
+    /// Called during WAL replay. We don't log timeout events to WAL
+    /// (they're ephemeral), but we need to restart timeouts based on
+    /// recovered consensus state.
+    fn restore_timeout_state(&mut self, recovered: &RecoveredState) {
+        let height = recovered.height;
+        let round = recovered.round;
+        let step = recovered.step;
+
+        info!(
+            height,
+            round,
+            step = ?step,
+            "Restoring timeout state after recovery"
+        );
+
+        // Update scheduler position
+        let scheduler = self.timeout_scheduler.clone();
+        tokio::spawn(async move {
+            let mut scheduler = scheduler.write().await;
+            scheduler.set_position(height, round);
+        });
+
+        // Schedule appropriate timeout for current step
+        match step {
+            TendermintStep::Propose => {
+                // If we're in Propose, schedule propose timeout
+                // (unless we're the proposer, handled elsewhere)
+                if !self.is_proposer_for_round(height, round) {
+                    self.schedule_timeout(TendermintStep::Propose);
+                }
+            }
+            TendermintStep::Prevote => {
+                // In Prevote, schedule prevote timeout
+                self.schedule_timeout(TendermintStep::Prevote);
+            }
+            TendermintStep::Precommit => {
+                // In Precommit, schedule precommit timeout
+                self.schedule_timeout(TendermintStep::Precommit);
+            }
+            TendermintStep::Commit => {
+                // Commit doesn't need timeout - finalization is synchronous
+            }
+        }
+    }
+}
+```
+
+### 6.2 Design Decision: No WAL for Timeouts
+
+Timeouts are NOT logged to WAL because:
+
+1. **Ephemeral by nature**: Timeouts are process-local timing events, not consensus decisions
+2. **No safety impact**: Missing a timeout on restart just means we wait again
+3. **State machine determines step**: The WAL logs votes/proposals which determine the step; timeout can be re-scheduled based on recovered step
+4. **Simpler recovery**: Fewer WAL entries means faster recovery
+
+Upon restart:
+- WAL is replayed to recover `(height, round, step)`
+- Timeout scheduler is initialized with recovered position
+- Appropriate timeout is scheduled for current step
+
+---
+
+## 7. Metrics
 
 ```rust
 use prometheus::{IntCounterVec, HistogramVec, Opts};
@@ -493,6 +822,24 @@ lazy_static! {
         ),
         &["step", "round"]
     ).unwrap();
+
+    /// Timeouts cancelled before expiry
+    static ref TENDERMINT_TIMEOUTS_CANCELLED: IntCounterVec = IntCounterVec::new(
+        Opts::new("tendermint_timeouts_cancelled_total", "Timeouts cancelled before expiry"),
+        &["step", "reason"]  // reason: "step_change", "round_change", "height_change", "shutdown"
+    ).unwrap();
+
+    /// Current round (for observing round advancement)
+    static ref TENDERMINT_CURRENT_ROUND: IntGauge = IntGauge::new(
+        "tendermint_current_round",
+        "Current consensus round"
+    ).unwrap();
+
+    /// Stale timeout events (received after position advanced)
+    static ref TENDERMINT_STALE_TIMEOUTS: IntCounter = IntCounter::new(
+        "tendermint_stale_timeouts_total",
+        "Timeout events ignored because position advanced"
+    ).unwrap();
 }
 
 impl TimeoutScheduler {
@@ -506,16 +853,16 @@ impl TimeoutScheduler {
             ])
             .observe(duration.as_secs_f64());
 
-        self.schedule(step);
+        let _ = self.schedule(step);  // Updated for Result return type
     }
 }
 ```
 
 ---
 
-## 6. Configuration
+## 8. Configuration
 
-### 6.1 Environment-Based Config
+### 8.1 Environment-Based Config
 
 ```rust
 impl TimeoutConfig {
@@ -570,7 +917,7 @@ impl TimeoutConfig {
 
 ---
 
-## 7. Testing Strategy
+## 9. Testing Strategy
 
 ```rust
 #[cfg(test)]
@@ -588,7 +935,7 @@ mod tests {
 
         let mut scheduler = TimeoutScheduler::new(config, event_tx);
         scheduler.set_position(100, 0);
-        scheduler.schedule(TendermintStep::Propose);
+        scheduler.schedule(TendermintStep::Propose).unwrap();
 
         // Should receive event within 100ms
         let event = timeout(Duration::from_millis(100), event_rx.recv())
@@ -611,7 +958,7 @@ mod tests {
 
         let mut scheduler = TimeoutScheduler::new(config, event_tx);
         scheduler.set_position(100, 0);
-        scheduler.schedule(TendermintStep::Propose);
+        scheduler.schedule(TendermintStep::Propose).unwrap();
 
         // Cancel immediately
         scheduler.cancel_step(TendermintStep::Propose);
@@ -631,11 +978,11 @@ mod tests {
 
         let mut scheduler = TimeoutScheduler::new(config, event_tx);
         scheduler.set_position(100, 0);
-        scheduler.schedule(TendermintStep::Propose);
+        scheduler.schedule(TendermintStep::Propose).unwrap();
 
         // Advance round
         scheduler.set_position(100, 1);
-        scheduler.schedule(TendermintStep::Propose);
+        scheduler.schedule(TendermintStep::Propose).unwrap();
 
         // First event should be cancelled, only get second
         let event = timeout(Duration::from_millis(150), event_rx.recv())
@@ -672,29 +1019,115 @@ mod tests {
         let timeout_100 = config.timeout_for(TendermintStep::Propose, 100);
         assert!(timeout_100 <= config.max_timeout);
     }
+
+    #[tokio::test]
+    async fn test_commit_step_rejected() {
+        let (event_tx, _event_rx) = mpsc::channel(32);
+        let config = TimeoutConfig::default();
+
+        let mut scheduler = TimeoutScheduler::new(config, event_tx);
+        scheduler.set_position(100, 0);
+
+        // Commit step should be rejected
+        let result = scheduler.schedule(TendermintStep::Commit);
+        assert!(matches!(result, Err(TimeoutError::InvalidStep(_))));
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_scheduling_cancels_previous() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let config = TimeoutConfig {
+            propose_timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+
+        let mut scheduler = TimeoutScheduler::new(config, event_tx);
+        scheduler.set_position(100, 0);
+
+        // Schedule twice in quick succession
+        scheduler.schedule(TendermintStep::Propose).unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        scheduler.schedule(TendermintStep::Propose).unwrap();
+
+        // Should only receive ONE event (second scheduling cancels first)
+        let event = timeout(Duration::from_millis(150), event_rx.recv())
+            .await
+            .expect("Timeout waiting for event")
+            .expect("Channel closed");
+
+        assert_eq!(event.step, TendermintStep::Propose);
+
+        // No second event should come
+        let result = timeout(Duration::from_millis(50), event_rx.recv()).await;
+        assert!(result.is_err() || result.unwrap().is_none());
+    }
 }
 ```
 
 ---
 
-## 8. Checklist
+## 10. Checklist
 
+### Core Implementation
 - [ ] Create `tendermint/timeout.rs`
 - [ ] Implement `TimeoutConfig` with defaults
 - [ ] Implement `TimeoutScheduler`
-- [ ] Implement `schedule()` with cancellation
+- [ ] Implement `schedule()` with cancellation and validation
 - [ ] Implement `cancel_step()` and `cancel_all()`
 - [ ] Implement stale timeout cleanup on position change
+- [ ] Add `TimeoutError` enum to error types
+
+### ChainActor Integration
 - [ ] Add scheduler to ChainActor
 - [ ] Implement timeout event processor
-- [ ] Add `schedule_timeout()` calls in handlers
+- [ ] Implement `handle_timeout_message` with state machine integration
+- [ ] Implement `process_consensus_actions` for `ScheduleTimeout` action
+- [ ] Implement `handle_new_round` for round advancement
+- [ ] Add graceful shutdown in `stopping()`
+
+### State Machine Integration (doc 02)
+- [ ] Wire `ConsensusAction::ScheduleTimeout` to `schedule_timeout()`
+- [ ] Wire `TimeoutEvent` to `ConsensusEvent::Timeout`
+- [ ] Handle `ConsensusAction::NewRound` for round transitions
+
+### Network Layer (doc 05, optional)
+- [ ] Implement `TimeoutNotification` message
+- [ ] Implement `broadcast_timeout_if_needed`
+- [ ] Implement `handle_peer_timeout` for received notifications
+- [ ] Add timeout vote tracking for round sync
+
+### WAL Recovery (doc 06)
+- [ ] Implement `restore_timeout_state` for crash recovery
+- [ ] Schedule appropriate timeout based on recovered step
+
+### Configuration
 - [ ] Add environment-based configuration
-- [ ] Add metrics
+- [ ] Add `fast_for_testing()` config
+
+### Metrics
+- [ ] Add `TENDERMINT_TIMEOUTS` counter by step
+- [ ] Add `TENDERMINT_TIMEOUT_DURATION` histogram
+- [ ] Add timeout cancellation counter
+
+### Testing
 - [ ] Write unit tests for scheduling
 - [ ] Write unit tests for cancellation
 - [ ] Write unit tests for backoff
+- [ ] Write unit tests for Commit step rejection
+- [ ] Write unit tests for stale timeout handling
+- [ ] Write integration test for state machine round trip
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
+*Changes:*
+- *Added cross-document type references*
+- *Added TimeoutError enum*
+- *Added Commit step validation in schedule()*
+- *Added state machine integration section (3.3)*
+- *Added graceful shutdown section (3.4)*
+- *Added network layer integration section (5)*
+- *Added WAL recovery integration section (6)*
+- *Renumbered sections for new content*
+- *Expanded checklist with all integration points*

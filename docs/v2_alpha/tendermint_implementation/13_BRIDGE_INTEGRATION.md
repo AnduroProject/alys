@@ -7,12 +7,28 @@ This document provides a comprehensive implementation guide for adapting the Bit
 **Estimated Effort**: 3-5 days
 **Dependencies**:
 - `07_EL_COORDINATION.md` (Block finalization)
+- `11_STORAGE_SCHEMA_MIGRATION.md` (Embedded LastCommit architecture)
 - Section 4.4.2 of TENDERMINT_MIGRATION_ASSESSMENT.md (Bridge Security Integration)
 - `12_RPC_ACTOR_MIGRATION.md` (Checkpoint RPC)
 **Files to Modify**:
 - `app/src/actors_v2/chain/withdrawals.rs`
 - `app/src/bridge/` (various files)
 - `app/src/actors_v2/chain/handlers.rs`
+
+### Embedded LastCommit Architecture
+
+Following standard Tendermint/CometBFT design, commits are embedded in blocks:
+
+```
+Block N:                           Block N+1:
+├── last_commit: Commit for N-1    ├── last_commit: Commit for N  ← Proves Block N is final
+├── execution_payload              │   ├── height: N
+└── ...                            │   ├── signatures: [CommitSig, ...]
+                                   ├── execution_payload
+                                   └── ...
+```
+
+**Key Insight for Bridge**: A block at height H is finalized when Block H+1 exists, because `Block[H+1].last_commit` contains the commit proof for Block H.
 
 ---
 
@@ -106,19 +122,22 @@ impl Bridge {
 
 ### 2.2 New Peg-In Confirmation (Tendermint)
 
+**Finality Detection with Embedded LastCommit**
+
+A block is finalized when the next block exists. This is because:
+- `Block[H+1].last_commit` contains the commit proof for Block H
+- Once Block H+1 is stored, Block H is irreversibly finalized
+
 ```rust
-// NEW: Uses Tendermint commit for instant finality
+// NEW: Uses Tendermint instant finality (embedded LastCommit)
 impl Bridge {
     pub async fn process_pegin(&self, deposit: PegInDeposit) -> Result<(), BridgeError> {
         // 1. Verify Bitcoin transaction
         self.verify_btc_deposit(&deposit)?;
 
-        // 2. Wait for Tendermint commit containing deposit
-        // This is INSTANT once the block is committed
-        let committed_block = self.wait_for_committed_block(&deposit).await?;
-
-        // Verify commit proof
-        self.verify_commit(&committed_block.commit)?;
+        // 2. Wait for block containing deposit to be finalized
+        // A block is finalized when the next block exists (contains commit proof)
+        let (block, block_height) = self.wait_for_finalized_block(&deposit).await?;
 
         // 3. Process peg-in immediately (no AuxPoW wait)
         self.mint_tokens(deposit.recipient, deposit.amount).await?;
@@ -127,35 +146,50 @@ impl Bridge {
             btc_txid = %deposit.btc_txid,
             recipient = %deposit.recipient,
             amount = deposit.amount,
-            height = committed_block.block.message.slot,
+            height = block_height,
             "Peg-in processed with instant finality"
         );
 
         Ok(())
     }
 
-    /// Wait for block with deposit to be committed
-    async fn wait_for_committed_block(
+    /// Wait for block with deposit to be finalized
+    ///
+    /// With embedded LastCommit architecture, a block at height H is finalized
+    /// when Block H+1 exists, because Block[H+1].last_commit proves Block H.
+    async fn wait_for_finalized_block(
         &self,
         deposit: &PegInDeposit,
-    ) -> Result<CommittedBlock, BridgeError> {
+    ) -> Result<(ConsensusBlock, u64), BridgeError> {
         let storage = self.storage_actor.as_ref()
             .ok_or(BridgeError::StorageActorNotSet)?;
 
         loop {
-            // Check if deposit is in a committed block
-            let result = storage.send(GetCommittedBlockForDepositMessage {
+            // Find block containing the deposit
+            let block_result = storage.send(GetBlockForDepositMessage {
                 deposit_id: deposit.id.clone(),
                 correlation_id: None,
             }).await??;
 
-            match result {
-                Some(block) => return Ok(block),
-                None => {
-                    // Wait and retry
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Some((block, height)) = block_result {
+                // Check if next block exists (proves this block is finalized)
+                let next_block = storage.send(GetBlockByHeightMessage {
+                    height: height + 1,
+                    correlation_id: None,
+                }).await??;
+
+                if let Some(next) = next_block {
+                    // Verify the next block contains valid commit for this block
+                    if let Some(last_commit) = &next.last_commit {
+                        if last_commit.height == height && last_commit.block_hash == block.hash() {
+                            return Ok((block, height));
+                        }
+                    }
                 }
             }
+
+            // Wait and retry
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
 }
@@ -228,9 +262,9 @@ impl Bridge {
 // NEW: Uses checkpoint confirmation instead of per-block AuxPoW
 impl Bridge {
     pub async fn process_pegout(&self, request: PegOutRequest) -> Result<(), BridgeError> {
-        // 1. Verify burn transaction is in a committed block
-        let committed_block = self.get_committed_block_for_burn(&request).await?;
-        let burn_height = committed_block.block.message.slot;
+        // 1. Verify burn transaction is in a finalized block
+        // (finalized = next block exists with commit proof in last_commit)
+        let (burn_block, burn_height) = self.wait_for_finalized_burn(&request).await?;
 
         tracing::info!(
             burn_height = burn_height,
@@ -433,10 +467,13 @@ impl FeeDistributor {
     ///
     /// With Tendermint, fees are distributed immediately when the block
     /// is committed (2/3+ precommits). No waiting for AuxPoW.
+    ///
+    /// Note: The commit for block N is passed separately here (before
+    /// being embedded in Block N+1's last_commit field).
     pub fn distribute_on_commit(
         &self,
         block: &SignedConsensusBlock,
-        commit: &Commit,
+        commit: &Commit,  // Commit just collected, before embedding in next block
     ) -> Result<(), FeeError> {
         // 1. Calculate total fees in block
         let total_fees = self.calculate_block_fees(block)?;
@@ -705,12 +742,20 @@ mod tests {
         // Create deposit
         let deposit = create_test_deposit(1_000_000);
 
-        // Commit block containing deposit
-        let block = create_block_with_deposit(&deposit);
-        let commit = create_valid_commit(&block, 11);
-        bridge.on_block_committed(block, commit).await.unwrap();
+        // Create and store block containing deposit at height 10
+        let block_10 = create_block_with_deposit(&deposit, 10);
+        bridge.on_block_stored(block_10.clone(), 10).await.unwrap();
 
-        // Peg-in should be processed immediately
+        // Block is NOT finalized yet (no next block)
+        let status = bridge.get_pegin_status(&deposit.id).await.unwrap();
+        assert!(matches!(status, PeginStatus::Pending { .. }));
+
+        // Create and store block 11 with last_commit for block 10
+        let commit_for_10 = create_valid_commit(&block_10, 11);
+        let block_11 = create_block_with_last_commit(11, commit_for_10);
+        bridge.on_block_stored(block_11, 11).await.unwrap();
+
+        // Now block 10 is finalized - peg-in should be processed
         let status = bridge.get_pegin_status(&deposit.id).await.unwrap();
         assert!(matches!(status, PeginStatus::Minted { .. }));
     }
@@ -743,7 +788,8 @@ mod tests {
 
 ## 11. Checklist
 
-- [ ] Modify peg-in flow to use Tendermint commit (instant)
+- [ ] Modify peg-in flow to use embedded LastCommit finality detection
+- [ ] Implement `wait_for_finalized_block` (checks next block exists with valid last_commit)
 - [ ] Remove AuxPoW wait from peg-in processing
 - [ ] Add checkpoint wait to peg-out flow
 - [ ] Implement `wait_for_checkpoint` method
@@ -755,7 +801,7 @@ mod tests {
 - [ ] Update BridgeConfig with checkpoint settings
 - [ ] Add optimistic peg-out option (optional)
 - [ ] Update bridge metrics
-- [ ] Write unit tests for instant peg-in
+- [ ] Write unit tests for instant peg-in (verify finality via next block's last_commit)
 - [ ] Write unit tests for checkpoint peg-out
 - [ ] Update user documentation with new latency expectations
 

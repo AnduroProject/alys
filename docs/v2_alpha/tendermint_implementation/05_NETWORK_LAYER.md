@@ -8,11 +8,19 @@ This document provides a comprehensive implementation guide for integrating Tend
 **Dependencies**:
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`
 - `04_CHAINACTOR_HANDLERS.md`
+- `09_SYNC_ACTOR.md` (sync protocol messages)
 **Files to Modify**:
 - `app/src/actors_v2/network/messages.rs`
 - `app/src/actors_v2/network/network_actor.rs`
 **Files to Create**:
 - `app/src/actors_v2/network/tendermint.rs`
+
+**Cross-Document Type References**:
+- `TendermintMessage`, `Proposal`, `Vote`, `EquivocationEvidence` → Defined in `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`
+- `BlockRequest`, `BlockResponse` → Defined in `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (TendermintMessage variants)
+- `ChainMessage::TendermintProposal`, `ChainMessage::TendermintVote` → Defined in `04_CHAINACTOR_HANDLERS.md`
+- `ValidatorId`, `BlockHash`, `Commit` → Defined in `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md`
+- Sync messages (`RequestBlocks`, `BlocksResponse`) → Coordinated with `09_SYNC_ACTOR.md`
 
 ---
 
@@ -52,7 +60,32 @@ graph TB
 |-------|---------|--------------|------------|
 | `/alys/tendermint/proposals/1` | Block proposals | `Proposal` | 1/round/validator |
 | `/alys/tendermint/votes/1` | Prevotes & Precommits | `Vote` | 2/round/validator |
+| `/alys/tendermint/timeouts/1` | Timeout notifications | `Timeout` | 1/step/validator |
 | `/alys/tendermint/evidence/1` | Equivocation evidence | `Evidence` | Rare |
+| `/alys/tendermint/newround/1` | Round synchronization | `NewRound` | 1/round/validator |
+
+### 1.3 Gossipsub Configuration
+
+```rust
+/// Gossipsub configuration for Tendermint consensus
+pub fn tendermint_gossipsub_config() -> GossipsubConfig {
+    GossipsubConfigBuilder::default()
+        // Mesh parameters
+        .mesh_n(8)                    // Target mesh size
+        .mesh_n_low(6)                // Minimum before grafting
+        .mesh_n_high(12)              // Maximum before pruning
+        // Message parameters
+        .max_transmit_size(1024 * 1024)  // 1MB max message size (for blocks)
+        .heartbeat_interval(Duration::from_millis(700))
+        .history_length(5)            // Number of heartbeats to retain
+        .history_gossip(3)            // Heartbeats to gossip about
+        // Validation
+        .validate_messages()          // Enable message validation
+        .validation_mode(ValidationMode::Strict)
+        .build()
+        .expect("Valid gossipsub config")
+}
+```
 
 ---
 
@@ -92,10 +125,92 @@ pub enum NetworkMessage {
     SubscribeTendermintTopics {
         correlation_id: Option<Uuid>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SYNC PROTOCOL MESSAGES (See 09_SYNC_ACTOR.md)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Query a peer for their tip height
+    QueryTipHeight {
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Response with tip height
+    TipHeightResponse {
+        height: u64,
+        block_hash: BlockHash,
+        peer_id: PeerId,
+    },
+
+    /// Request blocks for sync (blocks include embedded last_commit)
+    RequestBlocks {
+        start_height: u64,
+        count: u32,
+        peer_id: Option<PeerId>,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Response with blocks
+    BlocksResponse {
+        blocks: Vec<SignedConsensusBlock>,
+        peer_id: PeerId,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Request current commit for tip (before next block exists)
+    RequestTipCommit {
+        height: u64,
+        block_hash: BlockHash,
+        peer_id: PeerId,
+    },
+
+    /// Response with tip commit
+    TipCommitResponse {
+        commit: Commit,
+        peer_id: PeerId,
+    },
+
+    /// Notify network layer of new height (for rate limiter cleanup)
+    TendermintNewHeight {
+        height: u64,
+    },
 }
 ```
 
-### 2.2 Wire Protocol
+### 2.2 Error Types
+
+```rust
+// In network/tendermint.rs
+
+/// Serialization errors for Tendermint wire protocol
+#[derive(Debug, thiserror::Error)]
+pub enum SerializationError {
+    #[error("MessagePack serialization failed: {0}")]
+    MsgPackEncode(#[from] rmp_serde::encode::Error),
+
+    #[error("MessagePack deserialization failed: {0}")]
+    MsgPackDecode(#[from] rmp_serde::decode::Error),
+
+    #[error("Unsupported message type for wire protocol")]
+    UnsupportedMessageType,
+
+    #[error("Invalid wire message version: {0}")]
+    InvalidVersion(u8),
+}
+
+// Add to existing NetworkError enum in network/messages.rs
+impl NetworkError {
+    // Additional variants needed for Tendermint:
+    // Serialization(String),
+    // Deserialization(String),
+    // ActorMailbox(String),
+    // ChainError(String),
+    // RateLimited { validator: ValidatorId, message_type: String },
+    // InvalidMessage(String),
+}
+```
+
+### 2.3 Wire Protocol
 
 ```rust
 // In network/tendermint.rs
@@ -130,6 +245,9 @@ pub enum TendermintWireType {
     Precommit = 2,
     NewRound = 3,
     Evidence = 4,
+    Timeout = 5,
+    BlockRequest = 6,
+    BlockResponse = 7,
 }
 
 impl TendermintWireMessage {
@@ -155,7 +273,15 @@ impl TendermintWireMessage {
             TendermintMessage::NewRound { height, round, highest_known_round } => {
                 (TendermintWireType::NewRound, rmp_serde::to_vec(&(*height, *round, *highest_known_round))?)
             }
-            _ => return Err(SerializationError::UnsupportedMessageType),
+            TendermintMessage::Timeout(t) => {
+                (TendermintWireType::Timeout, rmp_serde::to_vec(t)?)
+            }
+            TendermintMessage::BlockRequest { height } => {
+                (TendermintWireType::BlockRequest, rmp_serde::to_vec(height)?)
+            }
+            TendermintMessage::BlockResponse { block, commit } => {
+                (TendermintWireType::BlockResponse, rmp_serde::to_vec(&(block, commit))?)
+            }
         };
 
         // Generate message ID for deduplication
@@ -193,6 +319,19 @@ impl TendermintWireMessage {
                     round,
                     highest_known_round: highest,
                 })
+            }
+            TendermintWireType::Timeout => {
+                let timeout: Timeout = rmp_serde::from_slice(&self.payload)?;
+                Ok(TendermintMessage::Timeout(timeout))
+            }
+            TendermintWireType::BlockRequest => {
+                let height: u64 = rmp_serde::from_slice(&self.payload)?;
+                Ok(TendermintMessage::BlockRequest { height })
+            }
+            TendermintWireType::BlockResponse => {
+                let (block, commit): (ConsensusBlock, Commit) =
+                    rmp_serde::from_slice(&self.payload)?;
+                Ok(TendermintMessage::BlockResponse { block, commit })
             }
         }
     }
@@ -304,6 +443,21 @@ impl ProposalDedup {
             ProposalDedupResult::New
         }
     }
+
+    /// Cleanup proposals before the given height
+    pub fn cleanup_before_height(&mut self, height: u64) {
+        // LRU cache handles eviction automatically, but we can proactively
+        // remove old entries to free memory
+        let old_keys: Vec<_> = self.seen
+            .iter()
+            .filter(|((h, _, _), _)| *h < height)
+            .map(|(k, _)| *k)
+            .collect();
+
+        for key in old_keys {
+            self.seen.pop(&key);
+        }
+    }
 }
 
 pub enum ProposalDedupResult {
@@ -342,8 +496,14 @@ impl NetworkActor {
         let topic = match &message {
             TendermintMessage::Proposal(_) => TOPIC_TENDERMINT_PROPOSALS,
             TendermintMessage::Vote(_) => TOPIC_TENDERMINT_VOTES,
+            TendermintMessage::Timeout(_) => TOPIC_TENDERMINT_TIMEOUTS,
             TendermintMessage::Evidence(_) => TOPIC_TENDERMINT_EVIDENCE,
-            _ => TOPIC_TENDERMINT_VOTES, // Default for other types
+            TendermintMessage::NewRound { .. } => TOPIC_TENDERMINT_NEWROUND,
+            TendermintMessage::BlockRequest { .. } |
+            TendermintMessage::BlockResponse { .. } => {
+                // Block sync uses request-response, not gossipsub
+                return self.handle_sync_message(message).await;
+            }
         };
 
         // 4. Publish via gossipsub
@@ -400,7 +560,24 @@ impl NetworkActor {
             }
         }
 
-        // 5. Forward to ChainActor
+        // 5. Apply rate limiting
+        match &message {
+            TendermintMessage::Proposal(p) => {
+                if !self.rate_limiter.check_proposal(p) {
+                    self.report_peer_misbehavior(&peer_id, MisbehaviorReason::RateLimitExceeded);
+                    return Ok(());
+                }
+            }
+            TendermintMessage::Vote(v) => {
+                if !self.rate_limiter.check_vote(v) {
+                    self.report_peer_misbehavior(&peer_id, MisbehaviorReason::RateLimitExceeded);
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+
+        // 6. Forward to ChainActor
         if let Some(ref chain_actor) = self.chain_actor {
             let chain_msg = match &message {
                 TendermintMessage::Proposal(p) => ChainMessage::TendermintProposal {
@@ -413,12 +590,33 @@ impl NetworkActor {
                     peer_id: Some(peer_id.to_string()),
                     correlation_id: None,
                 },
+                TendermintMessage::Timeout(t) => ChainMessage::TendermintTimeout {
+                    height: t.height,
+                    round: t.round,
+                    step: t.step,
+                    correlation_id: None,
+                },
+                TendermintMessage::NewRound { height, round, highest_known_round } => {
+                    // NewRound messages are used for view synchronization
+                    // Forward to ChainActor to potentially trigger catch-up
+                    ChainMessage::TendermintNewRoundHint {
+                        height: *height,
+                        round: *round,
+                        highest_known_round: *highest_known_round,
+                        peer_id: Some(peer_id.to_string()),
+                        correlation_id: None,
+                    }
+                }
                 TendermintMessage::Evidence(e) => {
                     // Handle evidence separately
                     self.handle_evidence(e.clone()).await?;
                     return Ok(());
                 }
-                _ => return Ok(()),
+                TendermintMessage::BlockRequest { .. } |
+                TendermintMessage::BlockResponse { .. } => {
+                    // Sync messages handled via request-response protocol
+                    return Ok(());
+                }
             };
 
             chain_actor.send(chain_msg).await
@@ -439,7 +637,9 @@ impl NetworkActor {
 /// Tendermint topic names
 const TOPIC_TENDERMINT_PROPOSALS: &str = "/alys/tendermint/proposals/1";
 const TOPIC_TENDERMINT_VOTES: &str = "/alys/tendermint/votes/1";
+const TOPIC_TENDERMINT_TIMEOUTS: &str = "/alys/tendermint/timeouts/1";
 const TOPIC_TENDERMINT_EVIDENCE: &str = "/alys/tendermint/evidence/1";
+const TOPIC_TENDERMINT_NEWROUND: &str = "/alys/tendermint/newround/1";
 
 impl NetworkActor {
     /// Subscribe to all Tendermint gossipsub topics
@@ -447,7 +647,9 @@ impl NetworkActor {
         let topics = [
             TOPIC_TENDERMINT_PROPOSALS,
             TOPIC_TENDERMINT_VOTES,
+            TOPIC_TENDERMINT_TIMEOUTS,
             TOPIC_TENDERMINT_EVIDENCE,
+            TOPIC_TENDERMINT_NEWROUND,
         ];
 
         for topic in topics {
@@ -468,16 +670,29 @@ impl NetworkActor {
         match topic.as_str() {
             TOPIC_TENDERMINT_PROPOSALS |
             TOPIC_TENDERMINT_VOTES |
-            TOPIC_TENDERMINT_EVIDENCE => {
+            TOPIC_TENDERMINT_TIMEOUTS |
+            TOPIC_TENDERMINT_EVIDENCE |
+            TOPIC_TENDERMINT_NEWROUND => {
                 if let Err(e) = self.on_tendermint_gossip(data, peer_id, &topic).await {
                     warn!(topic, error = %e, "Error processing Tendermint gossip");
                 }
             }
-            // ... handle other topics ...
+            // ... handle other topics (blocks, transactions) ...
             _ => {
                 debug!(topic, "Unknown gossipsub topic");
             }
         }
+    }
+
+    /// Handle new height notification from ChainActor
+    ///
+    /// Called when consensus commits a block and advances to next height.
+    /// Used to cleanup rate limiter and dedup caches.
+    pub fn handle_tendermint_new_height(&mut self, height: u64) {
+        self.rate_limiter.on_new_height(height);
+        // Optionally cleanup old dedup entries
+        self.tendermint_dedup.cleanup();
+        self.proposal_dedup.cleanup_before_height(height.saturating_sub(2));
     }
 }
 ```
@@ -580,9 +795,292 @@ impl TendermintRateLimiter {
 
 ---
 
-## 6. Metrics
+## 6. Evidence Handling
 
-### 6.1 Network Metrics
+### 6.1 Equivocation Evidence Handler
+
+```rust
+// In network/tendermint.rs
+
+impl NetworkActor {
+    /// Handle received equivocation evidence
+    ///
+    /// Evidence is received when a validator is detected double-voting
+    /// or double-proposing. This is forwarded to ChainActor for:
+    /// 1. Verification of the evidence
+    /// 2. Storage in the evidence pool
+    /// 3. Inclusion in a future block for slashing
+    pub async fn handle_evidence(
+        &mut self,
+        evidence: EquivocationEvidence,
+    ) -> Result<(), NetworkError> {
+        info!(
+            validator = %evidence.validator(),
+            height = evidence.height(),
+            evidence_type = ?evidence.evidence_type(),
+            "Received equivocation evidence"
+        );
+
+        // Basic validation before forwarding
+        if !evidence.is_valid_format() {
+            warn!("Malformed evidence received, discarding");
+            return Err(NetworkError::InvalidMessage("Malformed evidence".into()));
+        }
+
+        // Check if evidence is for a recent height (not too old)
+        let current_height = self.get_current_height();
+        let max_evidence_age = self.config.max_evidence_age_blocks;
+        if evidence.height() + max_evidence_age < current_height {
+            debug!(
+                evidence_height = evidence.height(),
+                current_height,
+                max_age = max_evidence_age,
+                "Evidence too old, discarding"
+            );
+            return Ok(());
+        }
+
+        // Forward to ChainActor for verification and storage
+        if let Some(ref chain_actor) = self.chain_actor {
+            chain_actor.send(ChainMessage::TendermintEvidence {
+                evidence: evidence.clone(),
+                peer_id: None,
+                correlation_id: None,
+            }).await
+                .map_err(|e| NetworkError::ActorMailbox(e.to_string()))?
+                .map_err(|e| NetworkError::ChainError(e.to_string()))?;
+        }
+
+        // Broadcast to other peers (they may not have seen it)
+        self.broadcast_evidence(evidence).await?;
+
+        Ok(())
+    }
+
+    /// Broadcast evidence to the network
+    async fn broadcast_evidence(
+        &mut self,
+        evidence: EquivocationEvidence,
+    ) -> Result<(), NetworkError> {
+        let wire_msg = TendermintWireMessage::from_message(
+            &TendermintMessage::Evidence(evidence),
+            self.local_peer_id.to_string(),
+        )?;
+
+        let bytes = rmp_serde::to_vec(&wire_msg)
+            .map_err(|e| NetworkError::Serialization(e.to_string()))?;
+
+        self.publish_to_topic(TOPIC_TENDERMINT_EVIDENCE, bytes).await
+    }
+}
+```
+
+---
+
+## 7. NetworkActor State Initialization
+
+### 7.1 Tendermint-Related Fields
+
+```rust
+// In network/network_actor.rs
+
+/// NetworkActor with Tendermint consensus support
+pub struct NetworkActor {
+    // ═══════════════════════════════════════════════════════════════════
+    // EXISTING FIELDS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Local peer ID
+    local_peer_id: PeerId,
+    /// Swarm for libp2p networking
+    swarm: Swarm<AlysNetworkBehaviour>,
+    /// Configuration
+    config: NetworkConfig,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ACTOR REFERENCES
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// ChainActor for forwarding consensus messages
+    chain_actor: Option<Addr<ChainActor>>,
+    /// SyncActor for block sync coordination
+    sync_actor: Option<Addr<SyncActor>>,
+    /// StorageActor for block retrieval
+    storage_actor: Option<Addr<StorageActor>>,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // TENDERMINT-SPECIFIC FIELDS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Message deduplication cache
+    tendermint_dedup: TendermintMessageDedup,
+    /// Proposal-specific deduplication
+    proposal_dedup: ProposalDedup,
+    /// Rate limiter for consensus messages
+    rate_limiter: TendermintRateLimiter,
+    /// Current consensus height (for filtering old messages)
+    current_height: u64,
+}
+
+impl NetworkActor {
+    /// Create a new NetworkActor with Tendermint support
+    pub fn new(config: NetworkConfig, swarm: Swarm<AlysNetworkBehaviour>) -> Self {
+        Self {
+            local_peer_id: *swarm.local_peer_id(),
+            swarm,
+            config,
+            chain_actor: None,
+            sync_actor: None,
+            storage_actor: None,
+            // Initialize Tendermint components
+            tendermint_dedup: TendermintMessageDedup::new(
+                10_000,  // Capacity for 10k messages
+                Duration::from_secs(120),  // 2 minute TTL
+            ),
+            proposal_dedup: ProposalDedup::new(1_000),  // 1k proposals
+            rate_limiter: TendermintRateLimiter::new(),
+            current_height: 0,
+        }
+    }
+
+    /// Set ChainActor address (called via SetChainActor message)
+    pub fn set_chain_actor(&mut self, addr: Addr<ChainActor>) {
+        self.chain_actor = Some(addr);
+    }
+
+    /// Get current consensus height
+    fn get_current_height(&self) -> u64 {
+        self.current_height
+    }
+}
+```
+
+### 7.2 Handler Registration
+
+```rust
+// Add to the main handler match in network_actor.rs
+
+impl Handler<NetworkMessage> for NetworkActor {
+    type Result = ResponseFuture<Result<NetworkResponse, NetworkError>>;
+
+    fn handle(&mut self, msg: NetworkMessage, ctx: &mut Context<Self>) -> Self::Result {
+        match msg {
+            // ... existing handlers ...
+
+            NetworkMessage::BroadcastTendermint { message, correlation_id } => {
+                let actor = self.clone();
+                Box::pin(async move {
+                    actor.handle_broadcast_tendermint(message).await?;
+                    Ok(NetworkResponse::Broadcasted {
+                        message_id: correlation_id.map(|u| u.to_string()).unwrap_or_default(),
+                    })
+                })
+            }
+
+            NetworkMessage::SubscribeTendermintTopics { correlation_id } => {
+                let actor = self.clone();
+                Box::pin(async move {
+                    actor.subscribe_tendermint_topics().await?;
+                    Ok(NetworkResponse::Started)
+                })
+            }
+
+            NetworkMessage::TendermintNewHeight { height } => {
+                self.handle_tendermint_new_height(height);
+                Box::pin(async { Ok(NetworkResponse::Started) })
+            }
+
+            NetworkMessage::QueryTipHeight { correlation_id } => {
+                // Query all connected peers for their tip height
+                let actor = self.clone();
+                Box::pin(async move {
+                    actor.query_peer_heights().await?;
+                    Ok(NetworkResponse::Started)
+                })
+            }
+
+            NetworkMessage::RequestBlocks { start_height, count, peer_id, correlation_id } => {
+                let actor = self.clone();
+                Box::pin(async move {
+                    let request_id = actor.request_blocks_from_peer(
+                        start_height, count, peer_id
+                    ).await?;
+                    Ok(NetworkResponse::BlocksRequested {
+                        peer_count: 1,
+                        request_id,
+                    })
+                })
+            }
+
+            // ... other handlers ...
+        }
+    }
+}
+```
+
+---
+
+## 8. Peer Scoring
+
+### 8.1 Gossipsub Peer Scoring
+
+```rust
+// In network/tendermint.rs
+
+/// Configure peer scoring for Tendermint message validation
+pub fn tendermint_peer_score_params() -> PeerScoreParams {
+    PeerScoreParams {
+        // Topic-specific scoring
+        topics: hashmap! {
+            TOPIC_TENDERMINT_PROPOSALS.into() => TopicScoreParams {
+                // Penalize invalid proposals heavily
+                invalid_message_deliveries_weight: -100.0,
+                invalid_message_deliveries_decay: 0.5,
+                first_message_deliveries_cap: 10.0,
+                ..Default::default()
+            },
+            TOPIC_TENDERMINT_VOTES.into() => TopicScoreParams {
+                invalid_message_deliveries_weight: -50.0,
+                invalid_message_deliveries_decay: 0.7,
+                first_message_deliveries_cap: 20.0,
+                ..Default::default()
+            },
+            TOPIC_TENDERMINT_EVIDENCE.into() => TopicScoreParams {
+                first_message_deliveries_weight: 10.0,
+                invalid_message_deliveries_weight: -200.0,
+                ..Default::default()
+            },
+        },
+        behaviour_penalty_weight: -10.0,
+        behaviour_penalty_decay: 0.9,
+        ip_colocation_factor_weight: -50.0,
+        ip_colocation_factor_threshold: 3,
+        ..Default::default()
+    }
+}
+
+#[derive(Debug)]
+pub enum MisbehaviorReason {
+    InvalidSignature,
+    Equivocation,
+    RateLimitExceeded,
+    InvalidMessage,
+    OldMessage,
+}
+
+impl NetworkActor {
+    pub fn report_peer_misbehavior(&mut self, peer_id: &PeerId, reason: MisbehaviorReason) {
+        warn!(peer = %peer_id, reason = ?reason, "Reported peer misbehavior");
+        // Apply gossipsub score penalty
+    }
+}
+```
+
+---
+
+## 9. Metrics
+
+### 9.1 Network Metrics
 
 ```rust
 use prometheus::{IntCounterVec, HistogramVec, Opts, Registry};
@@ -619,9 +1117,9 @@ pub fn register_tendermint_network_metrics(registry: &Registry) {
 
 ---
 
-## 7. Complete Flow Example
+## 10. Complete Flow Example
 
-### 7.1 Broadcasting a Proposal
+### 10.1 Broadcasting a Proposal
 
 ```mermaid
 sequenceDiagram
@@ -645,7 +1143,7 @@ sequenceDiagram
     Note over NA: Message already seen
 ```
 
-### 7.2 Receiving a Vote
+### 10.2 Receiving a Vote
 
 ```mermaid
 sequenceDiagram
@@ -674,7 +1172,7 @@ sequenceDiagram
 
 ---
 
-## 8. Testing Strategy
+## 11. Testing Strategy
 
 ```rust
 #[cfg(test)]
@@ -747,23 +1245,100 @@ mod tests {
 
 ---
 
-## 9. Checklist
+## 12. Checklist
 
+### Core Consensus Message Handling
 - [ ] Add `BroadcastTendermint` to `NetworkMessage`
 - [ ] Create `network/tendermint.rs` module
-- [ ] Implement `TendermintWireMessage`
+- [ ] Implement `TendermintWireMessage` with all message types
 - [ ] Implement `TendermintMessageDedup`
 - [ ] Implement `ProposalDedup`
 - [ ] Implement `TendermintRateLimiter`
-- [ ] Add Tendermint topic constants
+- [ ] Add all Tendermint topic constants (proposals, votes, timeouts, evidence, newround)
 - [ ] Implement `subscribe_tendermint_topics()`
 - [ ] Implement `handle_broadcast_tendermint()`
 - [ ] Implement `on_tendermint_gossip()`
-- [ ] Add metrics
-- [ ] Write unit tests
+
+### Error Types
+- [ ] Define `SerializationError` enum
+- [ ] Add Tendermint-specific variants to `NetworkError`
+- [ ] Implement error conversions
+
+### Evidence Handling
+- [ ] Implement `handle_evidence()` handler
+- [ ] Implement `broadcast_evidence()` function
+- [ ] Add evidence age validation
+
+### Sync Protocol Messages
+- [ ] Add `QueryTipHeight` message variant
+- [ ] Add `TipHeightResponse` message variant
+- [ ] Add `RequestBlocks` message variant (coordinate with existing code)
+- [ ] Add `BlocksResponse` message variant
+- [ ] Add `RequestTipCommit` message variant
+- [ ] Add `TipCommitResponse` message variant
+- [ ] Implement sync message handlers
+
+### NetworkActor State
+- [ ] Add `tendermint_dedup` field to NetworkActor
+- [ ] Add `proposal_dedup` field to NetworkActor
+- [ ] Add `rate_limiter` field to NetworkActor
+- [ ] Add `current_height` field to NetworkActor
+- [ ] Implement initialization in `NetworkActor::new()`
+- [ ] Add `TendermintNewHeight` message for height notifications
+
+### Peer Scoring
+- [ ] Implement `tendermint_peer_score_params()`
+- [ ] Implement `report_peer_misbehavior()`
+- [ ] Define `MisbehaviorReason` enum
+- [ ] Configure gossipsub with peer scoring
+
+### Gossipsub Configuration
+- [ ] Implement `tendermint_gossipsub_config()`
+- [ ] Configure mesh parameters
+- [ ] Configure message size limits
+- [ ] Enable message validation
+
+### Metrics
+- [ ] Add `TENDERMINT_MESSAGES_SENT` counter
+- [ ] Add `TENDERMINT_MESSAGES_RECEIVED` counter
+- [ ] Add `TENDERMINT_MESSAGE_LATENCY` histogram
+- [ ] Implement `register_tendermint_network_metrics()`
+
+### Testing
+- [ ] Write unit tests for wire message roundtrip
+- [ ] Write unit tests for deduplication
+- [ ] Write unit tests for rate limiting
+- [ ] Write unit tests for evidence handling
 - [ ] Integration test with multiple peers
+- [ ] Integration test for sync protocol
+
+### Integration with Existing Code
+- [ ] Coordinate with existing `RequestBlocks` in messages.rs
+- [ ] Coordinate with existing `HandleBlockResponse` in messages.rs
+- [ ] Ensure V0 compatibility during transition
+- [ ] Update handler registration in NetworkActor
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+## 13. Integration Notes
+
+### 13.1 Existing Code Compatibility
+
+The current `messages.rs` already defines some sync-related messages. Tendermint integration should:
+
+1. **Extend, don't replace**: Add Tendermint-specific messages alongside existing ones
+2. **Reuse where possible**: The existing `RequestBlocks` and `HandleBlockResponse` can be reused for Tendermint sync
+3. **Namespace separation**: Use `Tendermint*` prefix for consensus-specific messages
+
+### 13.2 V0 Transition
+
+During the migration period:
+- Both V0 (Aura) and V2 (Tendermint) message types will coexist
+- Topic subscription should be conditional based on consensus mode
+- Rate limiting and dedup should only apply to Tendermint messages
+
+---
+
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
+*Changes in 2.0: Added sync protocol messages, error types, evidence handling, NetworkActor state, peer scoring, gossipsub configuration, expanded checklist*

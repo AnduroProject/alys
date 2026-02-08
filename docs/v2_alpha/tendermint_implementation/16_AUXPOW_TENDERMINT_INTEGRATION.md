@@ -1167,6 +1167,154 @@ Per [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md), the follow
 
 ---
 
+## RPC Monitoring Endpoints
+
+In addition to the extended `submitauxblock` RPC, the following new RPC methods provide visibility into Tendermint consensus and checkpoint status.
+
+### `getcheckpointstatus`
+
+Returns current checkpoint and anchoring status.
+
+```rust
+/// Get checkpoint status
+impl GetCheckpointStatusHandler {
+    pub async fn handle(
+        _params: Vec<Value>,
+        chain_actor: Addr<ChainActor>,
+    ) -> Result<Value, RpcError> {
+        let status = chain_actor
+            .send(ChainMessage::GetCheckpointStatus)
+            .await??;
+
+        Ok(json!({
+            "latest_checkpoint": status.latest_checkpoint.map(|cp| json!({
+                "range_start": cp.range_start_height,
+                "range_end": cp.range_end_height,
+                "commitment": hex::encode(cp.commitment),
+                "timestamp": cp.timestamp,
+                "btc_confirmations": cp.btc_confirmations,
+            })),
+            "pending_attestations": status.pending_attestation_count,
+            "blocks_since_checkpoint": status.blocks_since_checkpoint,
+            "queued_pegins": status.queued_pegin_count,
+        }))
+    }
+}
+```
+
+### `getvalidatorstatus`
+
+Returns Tendermint validator information for this node.
+
+```rust
+/// Get Tendermint validator status
+impl GetValidatorStatusHandler {
+    pub async fn handle(
+        _params: Vec<Value>,
+        chain_actor: Addr<ChainActor>,
+    ) -> Result<Value, RpcError> {
+        let status = chain_actor
+            .send(ChainMessage::GetValidatorStatus)
+            .await??;
+
+        Ok(json!({
+            "is_validator": status.is_validator,
+            "validator_id": status.validator_id.map(|id| id.0),
+            "voting_power": status.voting_power,
+            "validator_set_size": status.validator_set_size,
+            "is_proposer_this_height": status.is_proposer_this_height,
+        }))
+    }
+}
+```
+
+### `getconsensusstate`
+
+Returns current Tendermint consensus state (height, round, step).
+
+```rust
+/// Get current Tendermint consensus state
+impl GetConsensusStateHandler {
+    pub async fn handle(
+        _params: Vec<Value>,
+        chain_actor: Addr<ChainActor>,
+    ) -> Result<Value, RpcError> {
+        let state = chain_actor
+            .send(ChainMessage::GetConsensusState)
+            .await??;
+
+        Ok(json!({
+            "height": state.height,
+            "round": state.round,
+            "step": state.step.to_string(),
+            "locked_round": state.locked_round,
+            "locked_block": state.locked_block.map(|h| hex::encode(h)),
+            "prevotes": state.prevote_count,
+            "precommits": state.precommit_count,
+            "proposal_received": state.proposal_received,
+        }))
+    }
+}
+```
+
+### RPC Route Updates
+
+```rust
+impl RpcActor {
+    async fn route_request(req: JsonRpcRequest, state: RpcServerState) -> Result<Value, RpcError> {
+        match req.method.as_str() {
+            // === Mining RPCs (extended for peg-ins) ===
+            "createauxblock" => CreateAuxBlockHandler::handle(req.params, state.chain_actor).await,
+            "submitauxblock" => SubmitAuxBlockHandler::handle(req.params, state.chain_actor).await,
+
+            // === Checkpoint/Consensus Monitoring (new) ===
+            "getcheckpointstatus" => GetCheckpointStatusHandler::handle(req.params, state.chain_actor).await,
+            "getvalidatorstatus" => GetValidatorStatusHandler::handle(req.params, state.chain_actor).await,
+            "getconsensusstate" => GetConsensusStateHandler::handle(req.params, state.chain_actor).await,
+
+            // === Chain Info RPCs (existing) ===
+            "getblockcount" => GetBlockCountHandler::handle(req.params, state.chain_actor).await,
+            "getblockhash" => GetBlockHashHandler::handle(req.params, state.chain_actor).await,
+            "getblock" => GetBlockHandler::handle(req.params, state.chain_actor).await,
+
+            _ => Err(RpcError::MethodNotFound(req.method)),
+        }
+    }
+}
+```
+
+### RPC Metrics
+
+```rust
+lazy_static! {
+    /// Attestation submissions (low difficulty)
+    pub static ref RPC_ATTESTATIONS_SUBMITTED: IntCounter = IntCounter::new(
+        "rpc_attestations_submitted_total",
+        "Low-difficulty attestation submissions via submitauxblock"
+    ).unwrap();
+
+    /// Checkpoint submissions (high difficulty)
+    pub static ref RPC_CHECKPOINTS_SUBMITTED: IntCounter = IntCounter::new(
+        "rpc_checkpoints_submitted_total",
+        "High-difficulty checkpoint submissions via submitauxblock"
+    ).unwrap();
+
+    /// Peg-ins queued via submitauxblock
+    pub static ref RPC_PEGINS_QUEUED: IntCounter = IntCounter::new(
+        "rpc_pegins_queued_total",
+        "Peg-ins queued from submitauxblock submissions"
+    ).unwrap();
+
+    /// Submissions rejected (insufficient PoW)
+    pub static ref RPC_SUBMISSIONS_REJECTED: IntCounter = IntCounter::new(
+        "rpc_submissions_rejected_total",
+        "submitauxblock submissions rejected for insufficient PoW"
+    ).unwrap();
+}
+```
+
+---
+
 ## Related Documents
 
 - [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md) — Detailed merge-mining mechanics and peg-in lifecycle
@@ -1175,6 +1323,6 @@ Per [MINER_PEGIN_IMPACT_ANALYSIS.md](MINER_PEGIN_IMPACT_ANALYSIS.md), the follow
 
 ---
 
-*Exploration Document Version: 3.0*
+*Exploration Document Version: 3.1*
 *Last Updated: February 2026*
-*Revised: Removed epoch-gated checkpoints (incompatible with miner-effectuated peg-ins)*
+*Changes: Added RPC monitoring endpoints (getcheckpointstatus, getvalidatorstatus, getconsensusstate); removed reference to obsolete 12_RPC_ACTOR_MIGRATION.md*

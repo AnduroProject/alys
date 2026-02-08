@@ -1,18 +1,45 @@
 # Implementation Plan: Genesis Format and Validator Initialization
 
+**Version**: 2.0
+**Status**: Updated with comprehensive initialization procedures
+
 ## Overview
 
-This document provides a comprehensive implementation guide for updating the genesis block format and validator set initialization for Tendermint consensus. The key changes involve embedding the initial validator set (with voting power) into genesis and removing Aura-specific authority configuration.
+This document provides a comprehensive implementation guide for updating the genesis block format and validator set initialization for Tendermint consensus. The key changes involve embedding the initial validator set (with voting power) into genesis, removing Aura-specific authority configuration, and properly initializing all Tendermint subsystems.
 
 **Estimated Effort**: 1-2 days
 **Dependencies**:
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (ValidatorSet type, CommitSig)
 - `02_STATE_MACHINE.md` (TendermintState initialization)
-- `11_STORAGE_SCHEMA_MIGRATION.md` (Embedded LastCommit architecture)
+- `06_WAL.md` (WAL initialization)
+- `07_EL_COORDINATION.md` (blocks_without_pow initialization)
+- `10_SLOT_WORKER_TO_TENDERMINT_TIMING.md` (TendermintDriver startup)
+- `11_STORAGE_SCHEMA_MIGRATION.md` (Embedded LastCommit, parameter history)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (Dual-difficulty configuration)
+- `17_GOVERNANCE_PARAMETERS.md` (Governance authority, ChainParameters)
 **Files to Modify**:
 - `app/src/actors_v2/chain/genesis.rs`
 - `app/src/config.rs` or genesis configuration files
 - `app/src/actors_v2/chain/actor.rs`
+
+### Cross-Document Type References
+
+| Type | Defined In | Used For |
+|------|------------|----------|
+| `ValidatorSet` | `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` | Initial validator set from genesis |
+| `Validator` | `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` | Individual validator with power |
+| `ValidatorId` | `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` | Validator identifier (u8) |
+| `CommitSig` | `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` | Genesis commit signatures |
+| `Commit` | `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` | Genesis commit for Block 1's last_commit |
+| `TendermintState` | `02_STATE_MACHINE.md` | State initialization at genesis |
+| `TendermintStep` | `02_STATE_MACHINE.md` | Initial step (NewHeight) |
+| `WalEntry` | `06_WAL.md` | WAL initialization records |
+| `BlocksWithoutPow` | `07_EL_COORDINATION.md` | Liveness gate counter |
+| `TendermintDriver` | `10_SLOT_WORKER_TO_TENDERMINT_TIMING.md` | Driver startup after genesis |
+| `TrustedStateSnapshot` | `11_STORAGE_SCHEMA_MIGRATION.md` | Late-joiner bootstrap |
+| `ChainParameters` | `17_GOVERNANCE_PARAMETERS.md` | Initial chain parameters |
+| `GovernanceAuthority` | `17_GOVERNANCE_PARAMETERS.md` | Governance public key |
+| `GovernanceUpdate` | `17_GOVERNANCE_PARAMETERS.md` | Unified update type |
 
 ### Embedded LastCommit Design
 
@@ -77,8 +104,11 @@ pub struct GenesisConfig {
     /// Execution layer genesis
     pub execution_genesis: ExecutionGenesis,
 
-    /// AuxPoW checkpoint configuration
+    /// AuxPoW checkpoint configuration (including dual-difficulty)
     pub checkpoint_config: CheckpointConfig,
+
+    /// Governance authority public key (for signing governance updates)
+    pub governance_authority: GovernanceAuthority,
 
     /// Bridge configuration
     pub bridge_config: BridgeGenesisConfig,
@@ -173,6 +203,84 @@ impl PegInCompensation {
         fee.clamp(self.min_fee_satoshi, self.max_fee_satoshi)
     }
 }
+
+/// AuxPoW checkpoint configuration with dual-difficulty thresholds
+/// See Document 16 for detailed dual-difficulty design
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointConfig {
+    /// Minimum blocks between checkpoints
+    pub min_checkpoint_interval: u64,
+
+    /// Target blocks between checkpoints
+    pub target_checkpoint_interval: u64,
+
+    /// Minimum difficulty for regular attestations (per-block)
+    /// Lower threshold - provides regular liveness signals
+    pub attestation_difficulty_bits: u32,
+
+    /// Minimum difficulty for checkpoints (anchoring)
+    /// Higher threshold - provides Bitcoin-level security guarantees
+    pub checkpoint_difficulty_bits: u32,
+
+    /// Maximum blocks without any PoW before liveness gate triggers
+    /// See Document 07 for blocks_without_pow coordination
+    pub max_blocks_without_pow: u64,
+}
+
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            min_checkpoint_interval: 100,
+            target_checkpoint_interval: 500,
+            attestation_difficulty_bits: 20,   // ~1 million hashes (frequent)
+            checkpoint_difficulty_bits: 32,     // ~4 billion hashes (Bitcoin-anchored)
+            max_blocks_without_pow: 50,         // Liveness gate threshold
+        }
+    }
+}
+
+impl CheckpointConfig {
+    /// Validate checkpoint configuration
+    pub fn validate(&self) -> Result<(), GenesisError> {
+        if self.min_checkpoint_interval > self.target_checkpoint_interval {
+            return Err(GenesisError::InvalidCheckpointInterval {
+                min: self.min_checkpoint_interval,
+                target: self.target_checkpoint_interval,
+            });
+        }
+
+        if self.attestation_difficulty_bits > self.checkpoint_difficulty_bits {
+            return Err(GenesisError::InvalidDualDifficulty {
+                attestation: self.attestation_difficulty_bits,
+                checkpoint: self.checkpoint_difficulty_bits,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Governance authority configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceAuthority {
+    /// Public key of the governance authority (for signature verification)
+    pub public_key: PublicKey,
+
+    /// Optional multisig configuration (M-of-N)
+    pub multisig: Option<MultisigConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultisigConfig {
+    /// Required signatures (M)
+    pub threshold: u32,
+
+    /// Total signers (N)
+    pub total: u32,
+
+    /// Public keys of all signers
+    pub signers: Vec<PublicKey>,
+}
 ```
 
 ---
@@ -212,7 +320,14 @@ impl PegInCompensation {
   "checkpoint_config": {
     "min_checkpoint_interval": 100,
     "target_checkpoint_interval": 500,
-    "min_checkpoint_difficulty": "0x3b9aca00"
+    "attestation_difficulty_bits": 20,
+    "checkpoint_difficulty_bits": 32,
+    "max_blocks_without_pow": 50
+  },
+
+  "governance_authority": {
+    "public_key": "0xabcdef1234567890...",
+    "multisig": null
   },
 
   "bridge_config": {
@@ -313,6 +428,90 @@ impl GenesisConfig {
         // Proposer = (height + round) % num_validators = 0 % n = 0
         &self.validators[0]
     }
+}
+```
+
+### 2.3 Error Types
+
+```rust
+/// Genesis-related errors
+#[derive(Debug, Error)]
+pub enum GenesisError {
+    #[error("Failed to read genesis file: {0}")]
+    FileRead(String),
+
+    #[error("Failed to parse genesis JSON: {0}")]
+    Parse(String),
+
+    #[error("Insufficient validators: have {have}, need at least {need}")]
+    InsufficientValidators { have: usize, need: usize },
+
+    #[error("Validator at index {index} has zero voting power")]
+    ZeroVotingPower { index: usize },
+
+    #[error("Total voting power would overflow")]
+    VotingPowerOverflow,
+
+    #[error("Invalid 2/3 threshold calculation")]
+    InvalidThreshold,
+
+    #[error("Too many validators: have {have}, max {max}")]
+    TooManyValidators { have: usize, max: usize },
+
+    #[error("Duplicate public key in genesis validators")]
+    DuplicateValidator { public_key: String },
+
+    #[error("Invalid network address for validator {index}: {reason}")]
+    InvalidNetworkAddress { index: usize, reason: String },
+
+    #[error("Genesis timestamp {timestamp} is in the future")]
+    FutureTimestamp { timestamp: u64 },
+
+    #[error("Invalid dual-difficulty configuration: attestation_bits ({attestation}) must be <= checkpoint_bits ({checkpoint})")]
+    InvalidDualDifficulty { attestation: u32, checkpoint: u32 },
+
+    #[error("Missing governance authority public key")]
+    MissingGovernanceAuthority,
+
+    #[error("Invalid checkpoint interval: min ({min}) > target ({target})")]
+    InvalidCheckpointInterval { min: u64, target: u64 },
+
+    #[error("WAL initialization failed: {0}")]
+    WalInitFailed(String),
+
+    #[error("Storage initialization failed: {0}")]
+    StorageInitFailed(String),
+
+    #[error("Node's public key not in genesis validator set")]
+    NotInValidatorSet,
+
+    #[error("Invalid signature from validator {validator}")]
+    InvalidSignature { validator: u8 },
+
+    #[error("Insufficient signatures: have {have} power, need {need}")]
+    InsufficientSignatures { have: u64, need: u64 },
+}
+
+/// Validator update errors
+#[derive(Debug, Error)]
+pub enum ValidatorError {
+    #[error("Cannot remove non-existent validator: {public_key}")]
+    RemoveNonexistent { public_key: String },
+
+    #[error("Would reduce validators below minimum (4 for BFT)")]
+    BelowMinimum,
+
+    #[error("Would exceed maximum validators: {have} > {max}")]
+    ExceedMaximum { have: usize, max: usize },
+
+    #[error("Would exceed maximum total voting power")]
+    PowerOverflow,
+
+    #[error("Invalid governance signature")]
+    InvalidGovernanceSignature,
+
+    #[error("Update references unknown validator")]
+    UnknownValidator,
 }
 ```
 
@@ -581,9 +780,413 @@ impl ChainActor {
 }
 ```
 
+### 4.3 WAL Initialization
+
+The Write-Ahead Log must be initialized before consensus begins. See Document 06 for WAL details.
+
+```rust
+impl ChainActor {
+    /// Initialize WAL for genesis or recovery
+    async fn initialize_wal(&mut self, genesis_config: &GenesisConfig) -> Result<(), ChainError> {
+        let wal_path = self.config.data_dir.join("tendermint_wal");
+
+        // Create WAL directory if needed
+        std::fs::create_dir_all(&wal_path)
+            .map_err(|e| GenesisError::WalInitFailed(e.to_string()))?;
+
+        // Initialize WAL with genesis state
+        self.state.wal = Some(WalWriter::new(
+            wal_path,
+            WalConfig {
+                sync_on_write: true,
+                max_file_size: 64 * 1024 * 1024,  // 64 MB
+            },
+        )?);
+
+        // Write initial WAL entry for genesis
+        if !self.has_genesis().await? {
+            self.state.wal.as_mut().unwrap().write_entry(WalEntry::NewHeight {
+                height: 0,
+                validator_set_hash: genesis_config.to_validator_set().hash(),
+            })?;
+        }
+
+        tracing::info!("WAL initialized at {:?}", wal_path);
+        Ok(())
+    }
+}
+```
+
+### 4.4 blocks_without_pow Initialization
+
+The liveness gate counter must be initialized at genesis. See Document 07 for EL coordination.
+
+```rust
+impl ChainActor {
+    /// Initialize blocks_without_pow counter
+    fn initialize_blocks_without_pow(&mut self, genesis_config: &GenesisConfig) {
+        // Start at 0 - genesis block doesn't count
+        self.state.blocks_without_pow = BlocksWithoutPow::new(
+            genesis_config.checkpoint_config.max_blocks_without_pow,
+        );
+
+        tracing::info!(
+            max_blocks = genesis_config.checkpoint_config.max_blocks_without_pow,
+            "Liveness gate initialized"
+        );
+    }
+}
+```
+
+### 4.5 Observer Mode Initialization
+
+Non-validator nodes should start in observer mode. See Document 10 for TendermintDriver modes.
+
+```rust
+impl ChainActor {
+    /// Determine if this node is a validator or observer
+    fn determine_node_mode(&mut self, genesis_config: &GenesisConfig) -> NodeMode {
+        let our_pubkey = match &self.state.signer {
+            Some(signer) => signer.public_key().clone(),
+            None => {
+                tracing::info!("No signing key configured - starting as observer");
+                return NodeMode::Observer;
+            }
+        };
+
+        // Check if we're in the validator set
+        let is_validator = genesis_config.validators.iter()
+            .any(|v| v.public_key == our_pubkey);
+
+        if is_validator {
+            tracing::info!("Node is a genesis validator");
+            NodeMode::Validator
+        } else {
+            tracing::info!("Node not in validator set - starting as observer");
+            NodeMode::Observer
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeMode {
+    /// Full consensus participant
+    Validator,
+    /// Follows consensus, doesn't vote
+    Observer,
+}
+```
+
+### 4.6 Network Peer Bootstrap
+
+Genesis validators should bootstrap peer connections from genesis configuration.
+
+```rust
+impl ChainActor {
+    /// Bootstrap network connections from genesis validators
+    async fn bootstrap_network_peers(&self, genesis_config: &GenesisConfig) -> Result<(), ChainError> {
+        let network = self.network_actor.as_ref()
+            .ok_or(ChainError::NetworkActorNotSet)?;
+
+        // Connect to all validators with network addresses
+        let peer_addresses: Vec<_> = genesis_config.validators.iter()
+            .filter_map(|v| v.network_address.as_ref())
+            .cloned()
+            .collect();
+
+        if !peer_addresses.is_empty() {
+            network.send(BootstrapPeersMessage {
+                addresses: peer_addresses.clone(),
+                correlation_id: None,
+            }).await??;
+
+            tracing::info!(
+                peers = peer_addresses.len(),
+                "Bootstrapped peer connections from genesis"
+            );
+        }
+
+        Ok(())
+    }
+}
+```
+
+### 4.7 Parameter History Initialization
+
+Initial chain parameters must be stored with their effective height for governance tracking.
+
+```rust
+impl ChainActor {
+    /// Store initial parameters from genesis
+    async fn initialize_parameter_history(&self, genesis_config: &GenesisConfig) -> Result<(), ChainError> {
+        let storage = self.storage_actor.as_ref()
+            .ok_or(ChainError::StorageActorNotSet)?;
+
+        // Convert genesis config to ChainParameters
+        let initial_params = ChainParameters {
+            consensus: genesis_config.consensus_params.clone(),
+            checkpoint: genesis_config.checkpoint_config.clone(),
+            bridge: genesis_config.bridge_config.clone(),
+            pegin_compensation: genesis_config.pegin_compensation.clone(),
+        };
+
+        // Store at height 0
+        storage.send(StoreChainParametersMessage {
+            effective_height: 0,
+            params: initial_params.clone(),
+            correlation_id: None,
+        }).await??;
+
+        // Initialize in-memory state
+        self.state.tendermint.chain_params = initial_params;
+
+        tracing::info!("Initial chain parameters stored");
+        Ok(())
+    }
+}
+```
+
+### 4.8 TendermintDriver Startup
+
+After genesis initialization, the TendermintDriver must be started. See Document 10 for driver details.
+
+```rust
+impl ChainActor {
+    /// Start the TendermintDriver after genesis initialization
+    async fn start_tendermint_driver(&mut self) -> Result<(), ChainError> {
+        let mode = self.state.node_mode.clone();
+
+        // Create driver configuration
+        let driver_config = TendermintDriverConfig {
+            mode,
+            propose_timeout: Duration::from_millis(
+                self.state.consensus_params.propose_timeout_ms
+            ),
+            prevote_timeout: Duration::from_millis(
+                self.state.consensus_params.prevote_timeout_ms
+            ),
+            precommit_timeout: Duration::from_millis(
+                self.state.consensus_params.precommit_timeout_ms
+            ),
+            timeout_delta: Duration::from_millis(
+                self.state.consensus_params.timeout_delta_ms
+            ),
+        };
+
+        // Initialize driver at current height
+        let initial_height = self.state.tendermint.height;
+
+        self.state.driver = Some(TendermintDriver::new(
+            driver_config,
+            initial_height,
+            self.state.tendermint.validator_set.clone(),
+        ));
+
+        tracing::info!(
+            height = initial_height,
+            mode = ?mode,
+            "TendermintDriver started"
+        );
+
+        Ok(())
+    }
+}
+```
+
+### 4.9 Sync Actor Genesis Verification
+
+The SyncActor must verify genesis consistency when joining the network.
+
+```rust
+impl SyncActor {
+    /// Verify genesis matches network consensus
+    async fn verify_genesis_consistency(
+        &self,
+        local_genesis: &GenesisConfig,
+        peer_genesis_hash: Hash256,
+    ) -> Result<(), SyncError> {
+        let local_hash = local_genesis.hash();
+
+        if local_hash != peer_genesis_hash {
+            return Err(SyncError::GenesisMismatch {
+                local: local_hash,
+                peer: peer_genesis_hash,
+            });
+        }
+
+        tracing::debug!("Genesis hash verified: {:?}", local_hash);
+        Ok(())
+    }
+
+    /// Bootstrap late-joiner from trusted state snapshot
+    /// See Document 11 for TrustedStateSnapshot
+    async fn bootstrap_from_snapshot(
+        &mut self,
+        snapshot: TrustedStateSnapshot,
+    ) -> Result<(), SyncError> {
+        // Verify snapshot signatures (2/3+ validator signatures)
+        self.verify_snapshot_signatures(&snapshot)?;
+
+        // Load snapshot state
+        self.chain_actor.send(LoadSnapshotMessage {
+            snapshot,
+            correlation_id: None,
+        }).await??;
+
+        tracing::info!(
+            height = snapshot.height,
+            "Bootstrapped from trusted state snapshot"
+        );
+
+        Ok(())
+    }
+}
+```
+
 ---
 
-## 5. Validator Set Updates (Governance Client Pattern)
+## 5. Genesis Ceremony
+
+The genesis ceremony is an offline coordination process where validators collectively sign the genesis block. This creates the initial commit that will be embedded in Block 1's `last_commit` field.
+
+### 5.1 Ceremony Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    GENESIS CEREMONY                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Coordinator distributes genesis.json to all validators       │
+│                                                                  │
+│  2. Each validator:                                              │
+│     a) Verifies genesis.json (validate())                       │
+│     b) Computes genesis block hash                               │
+│     c) Signs precommit for (height=0, round=0, block_hash)      │
+│     d) Returns CommitSig to coordinator                         │
+│                                                                  │
+│  3. Coordinator:                                                 │
+│     a) Collects all CommitSigs                                  │
+│     b) Verifies 2/3+ voting power signed                        │
+│     c) Creates Commit with all signatures                       │
+│     d) Distributes genesis_commit.json                          │
+│                                                                  │
+│  4. Each validator stores genesis commit as pending_commit       │
+│     (to be embedded in Block 1's last_commit)                   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Ceremony Commands
+
+```rust
+/// CLI command to participate in genesis ceremony
+pub struct GenesisCeremonyCommand {
+    /// Path to genesis.json
+    pub genesis_path: PathBuf,
+    /// Path to validator's private key
+    pub key_path: PathBuf,
+    /// Output path for signature
+    pub output_path: PathBuf,
+}
+
+impl GenesisCeremonyCommand {
+    pub fn execute(&self) -> Result<CommitSig, GenesisError> {
+        // Load and validate genesis
+        let genesis = GenesisConfig::from_file(&self.genesis_path)?;
+
+        // Load signing key
+        let signer = Signer::from_file(&self.key_path)?;
+
+        // Verify we're in the validator set
+        let validator_set = genesis.to_validator_set();
+        let our_validator = validator_set.validators.iter()
+            .find(|v| v.public_key == *signer.public_key())
+            .ok_or(GenesisError::NotInValidatorSet)?;
+
+        // Create genesis block and compute hash
+        let genesis_block = create_unsigned_genesis_block(&genesis)?;
+        let block_hash = genesis_block.hash();
+
+        // Sign precommit for genesis
+        let signing_root = compute_precommit_signing_root(0, 0, block_hash);
+        let signature = signer.sign(&signing_root);
+
+        let commit_sig = CommitSig {
+            block_id_flag: BlockIDFlag::Commit,
+            validator_address: Some(our_validator.id),
+            timestamp: genesis.timestamp,
+            signature: Some(signature),
+        };
+
+        // Write signature to file
+        let json = serde_json::to_string_pretty(&commit_sig)?;
+        std::fs::write(&self.output_path, json)?;
+
+        println!("Genesis signature created: {:?}", self.output_path);
+        Ok(commit_sig)
+    }
+}
+```
+
+### 5.3 Coordinator Aggregation
+
+```rust
+/// Aggregate CommitSigs from all validators
+pub fn aggregate_genesis_signatures(
+    genesis: &GenesisConfig,
+    signature_paths: &[PathBuf],
+) -> Result<Commit, GenesisError> {
+    let validator_set = genesis.to_validator_set();
+    let genesis_block = create_unsigned_genesis_block(genesis)?;
+    let block_hash = genesis_block.hash();
+
+    // Load all signatures
+    let mut signatures: Vec<CommitSig> = vec![CommitSig::absent(); validator_set.len()];
+    let mut total_signed_power = 0u64;
+
+    for path in signature_paths {
+        let json = std::fs::read_to_string(path)?;
+        let sig: CommitSig = serde_json::from_str(&json)?;
+
+        if let Some(validator_id) = sig.validator_address {
+            // Verify signature
+            let validator = &validator_set.validators[validator_id.0 as usize];
+            let signing_root = compute_precommit_signing_root(0, 0, block_hash);
+
+            if let Some(signature) = &sig.signature {
+                if !validator.public_key.verify(&signing_root, signature) {
+                    return Err(GenesisError::InvalidSignature {
+                        validator: validator_id.0,
+                    });
+                }
+            }
+
+            signatures[validator_id.0 as usize] = sig;
+            total_signed_power += validator.power;
+        }
+    }
+
+    // Verify 2/3+ threshold
+    let threshold = validator_set.two_thirds_threshold();
+    if total_signed_power < threshold {
+        return Err(GenesisError::InsufficientSignatures {
+            have: total_signed_power,
+            need: threshold,
+        });
+    }
+
+    Ok(Commit {
+        height: 0,
+        round: 0,
+        block_hash,
+        signatures,
+    })
+}
+```
+
+---
+
+## 6. Validator Set Updates (Governance Client Pattern)
 
 Validator set updates are received from an external **Governance Client** service via a gRPC bi-directional stream. This is similar to how AuxPoW submissions are handled — updates are queued and included in blocks by the proposer.
 
@@ -1120,9 +1723,9 @@ pub struct GovernanceQueue {
 
 ---
 
-## 6. Migration from Aura
+## 7. Migration from Aura
 
-### 6.1 One-Time Migration Script
+### 7.1 One-Time Migration Script
 
 ```rust
 // In migration.rs
@@ -1168,9 +1771,9 @@ pub fn migrate_genesis(
 
 ---
 
-## 7. Testing Strategy
+## 8. Testing Strategy
 
-### 7.1 Unit Tests
+### 8.1 Unit Tests
 
 ```rust
 #[cfg(test)]
@@ -1244,28 +1847,174 @@ mod tests {
 
 ---
 
-## 8. Checklist
+## 9. Metrics
 
-### Genesis
+### 9.1 Genesis Metrics
+
+```rust
+/// Metrics for genesis and initialization
+pub struct GenesisMetrics {
+    /// Time taken to initialize from genesis
+    pub genesis_init_duration_seconds: Histogram,
+    /// Time taken to load from storage (restart)
+    pub state_load_duration_seconds: Histogram,
+    /// Whether node is validator or observer
+    pub node_mode: IntGauge,  // 1 = validator, 0 = observer
+    /// Initial validator count
+    pub genesis_validator_count: IntGauge,
+    /// Initial total voting power
+    pub genesis_total_power: IntGauge,
+}
+```
+
+### 9.2 Validator Set Metrics
+
+```rust
+/// Metrics for validator set changes
+pub struct ValidatorSetMetrics {
+    /// Current validator count
+    pub validator_count: IntGauge,
+    /// Current total voting power
+    pub total_voting_power: IntGauge,
+    /// Pending validator updates (not yet activated)
+    pub pending_updates: IntGauge,
+    /// Validator updates queued from governance
+    pub queued_updates: IntGauge,
+    /// Total validator updates applied
+    pub updates_applied_total: IntCounter,
+    /// Validator additions
+    pub validators_added_total: IntCounter,
+    /// Validator removals
+    pub validators_removed_total: IntCounter,
+    /// Power changes
+    pub power_changes_total: IntCounter,
+    /// Height at which current set became active
+    pub validator_set_active_height: IntGauge,
+}
+```
+
+### 9.3 WAL Metrics
+
+```rust
+/// Metrics for WAL operations during init
+pub struct WalInitMetrics {
+    /// WAL recovery time on restart
+    pub wal_recovery_duration_seconds: Histogram,
+    /// Entries recovered from WAL
+    pub wal_entries_recovered: IntCounter,
+    /// WAL file size
+    pub wal_file_size_bytes: IntGauge,
+}
+```
+
+### 9.4 Prometheus Export
+
+```rust
+/// Register genesis and validator metrics
+pub fn register_genesis_metrics(registry: &Registry) {
+    // Genesis
+    registry.register(Box::new(GENESIS_INIT_DURATION.clone())).unwrap();
+    registry.register(Box::new(STATE_LOAD_DURATION.clone())).unwrap();
+    registry.register(Box::new(NODE_MODE.clone())).unwrap();
+    registry.register(Box::new(GENESIS_VALIDATOR_COUNT.clone())).unwrap();
+    registry.register(Box::new(GENESIS_TOTAL_POWER.clone())).unwrap();
+
+    // Validator set
+    registry.register(Box::new(VALIDATOR_COUNT.clone())).unwrap();
+    registry.register(Box::new(TOTAL_VOTING_POWER.clone())).unwrap();
+    registry.register(Box::new(PENDING_UPDATES.clone())).unwrap();
+    registry.register(Box::new(QUEUED_UPDATES.clone())).unwrap();
+    registry.register(Box::new(UPDATES_APPLIED.clone())).unwrap();
+    registry.register(Box::new(VALIDATORS_ADDED.clone())).unwrap();
+    registry.register(Box::new(VALIDATORS_REMOVED.clone())).unwrap();
+    registry.register(Box::new(POWER_CHANGES.clone())).unwrap();
+
+    // WAL
+    registry.register(Box::new(WAL_RECOVERY_DURATION.clone())).unwrap();
+    registry.register(Box::new(WAL_ENTRIES_RECOVERED.clone())).unwrap();
+    registry.register(Box::new(WAL_FILE_SIZE.clone())).unwrap();
+}
+```
+
+---
+
+## 10. Checklist
+
+### Genesis Types
 - [ ] Define `GenesisValidator` struct
 - [ ] Define `TendermintConsensusParams` struct (no epoch_length)
 - [ ] Define `PegInCompensation` struct (miner_fee_bps, min/max fee)
-- [ ] Update `GenesisConfig` with new fields
-- [ ] Implement `GenesisConfig::validate()`
+- [ ] Define `CheckpointConfig` with dual-difficulty (attestation_bits, checkpoint_bits)
+- [ ] Define `GovernanceAuthority` struct
+- [ ] Define `MultisigConfig` struct (optional)
+- [ ] Update `GenesisConfig` with all new fields
+- [ ] Implement `GenesisConfig::validate()` with all checks
+- [ ] Implement `CheckpointConfig::validate()`
 - [ ] Implement `PegInCompensation::calculate_fee()`
 - [ ] Implement `GenesisConfig::to_validator_set()`
 - [ ] Implement `GenesisConfig::from_file()`
+- [ ] Implement `GenesisConfig::hash()` for consistency verification
+
+### Error Types
+- [ ] Define `GenesisError` enum with all variants
+- [ ] Define `ValidatorError` enum
+- [ ] Add `InvalidDualDifficulty` error
+- [ ] Add `MissingGovernanceAuthority` error
+- [ ] Add `WalInitFailed` error
+- [ ] Add `StorageInitFailed` error
+
+### Genesis Block Creation
 - [ ] Update genesis block creation with `last_commit: None`
 - [ ] Create genesis commit with CommitSig array (for embedding in Block 1)
 - [ ] Cache genesis commit as `pending_commit` for Block 1's last_commit
+- [ ] Verify Block 1 proposal correctly embeds genesis commit in last_commit
+
+### ChainActor Initialization
 - [ ] Update `ChainActor::initialize()` for Tendermint
 - [ ] Implement `load_tendermint_state()` for restart
 - [ ] Store initial validator set in storage (effective_height: 0)
-- [ ] Create migration script from Aura genesis
-- [ ] Update genesis JSON schema documentation
-- [ ] Write unit tests for genesis validation
-- [ ] Write unit tests for validator set conversion
-- [ ] Verify Block 1 proposal correctly embeds genesis commit in last_commit
+- [ ] Initialize `blocks_without_pow` counter
+- [ ] Initialize governance authority from genesis
+- [ ] Initialize chain parameters from genesis
+
+### WAL Initialization
+- [ ] Implement `initialize_wal()` method
+- [ ] Create WAL directory on first run
+- [ ] Write initial `NewHeight` entry for genesis
+- [ ] Handle WAL recovery on restart
+
+### Observer Mode
+- [ ] Implement `determine_node_mode()` method
+- [ ] Define `NodeMode` enum (Validator, Observer)
+- [ ] Configure TendermintDriver for observer mode
+- [ ] Skip vote/proposal generation for observers
+
+### Network Bootstrap
+- [ ] Implement `bootstrap_network_peers()` method
+- [ ] Parse `network_address` from genesis validators
+- [ ] Connect to genesis validators on startup
+
+### Parameter History
+- [ ] Implement `initialize_parameter_history()` method
+- [ ] Store initial `ChainParameters` at height 0
+- [ ] Initialize `chain_params` in TendermintState
+
+### TendermintDriver Startup
+- [ ] Implement `start_tendermint_driver()` method
+- [ ] Create `TendermintDriverConfig` from consensus params
+- [ ] Initialize driver at correct height
+- [ ] Pass validator set to driver
+
+### Genesis Ceremony
+- [ ] Implement `GenesisCeremonyCommand` CLI
+- [ ] Implement `aggregate_genesis_signatures()` function
+- [ ] Verify 2/3+ threshold in aggregation
+- [ ] Output `genesis_commit.json` file
+
+### Sync Actor Integration
+- [ ] Implement `verify_genesis_consistency()` in SyncActor
+- [ ] Implement `bootstrap_from_snapshot()` for late-joiners
+- [ ] Verify snapshot signatures before loading
 
 ### Validator Set Updates (Governance Client Pattern + H+2)
 - [ ] Define `ValidatorUpdate` struct (public_key, power, governance_signature)
@@ -1275,13 +2024,33 @@ mod tests {
 - [ ] Implement `activate_pending_validator_set()` at height start
 - [ ] Add `validators_hash` and `next_validators_hash` to block header
 - [ ] Update storage to use `effective_height` instead of epoch
+
+### Migration
+- [ ] Create migration script from Aura genesis
+- [ ] Map Aura authorities to Tendermint validators with equal power
+- [ ] Update genesis JSON schema documentation
+
+### Metrics
+- [ ] Implement `GenesisMetrics` struct
+- [ ] Implement `ValidatorSetMetrics` struct
+- [ ] Implement `WalInitMetrics` struct
+- [ ] Register all metrics with Prometheus
+
+### Testing
+- [ ] Write unit tests for genesis validation (minimum validators)
+- [ ] Write unit tests for genesis validation (zero power)
+- [ ] Write unit tests for genesis validation (duplicate validators)
+- [ ] Write unit tests for dual-difficulty validation
+- [ ] Write unit tests for validator set conversion
 - [ ] Write unit tests for H+2 delay activation
 - [ ] Write unit tests for validator addition/removal
 - [ ] Write unit tests for idempotent updates (same update applied twice)
+- [ ] Write integration test for genesis ceremony
+- [ ] Write integration test for late-joiner bootstrap
 
 > **Note**: The unified `GovernanceUpdate` enum, `GovernanceQueue`, gRPC service, and handler implementations are defined in `17_GOVERNANCE_PARAMETERS.md`. See that document for complete governance framework including parameter changes and emergency actions.
 
 ---
 
-*Implementation Plan Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Plan Version: 2.0*
+*Last Updated: February 2026*
