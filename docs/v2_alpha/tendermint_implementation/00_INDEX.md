@@ -98,16 +98,16 @@ graph LR
 3. **15 Validation Module** - Replace Aura validation
 4. **10 Timing** - Replace slot worker with TendermintDriver
 5. **13 Bridge Integration** - Instant finality for peg-ins
-6. **12 RPC Migration** - Checkpoint-based mining API
+6. **12 RPC Migration** - AuxPoW submission API
 
 ### Phase 4: Testing & Hardening (3-4 weeks)
 
-1. Unit tests for all components (01-15)
+1. Unit tests for all components (01-17)
 2. Integration tests (4-node testnet)
 3. Adversarial testing (Byzantine scenarios)
 4. Performance benchmarking
 5. Bridge peg-in/peg-out end-to-end testing
-6. Checkpoint anchoring verification
+6. AuxPoW submission verification
 
 ---
 
@@ -131,12 +131,13 @@ app/src/actors_v2/chain/tendermint/
 └── handlers.rs               # Handler implementations
 
 app/src/actors_v2/storage/
-├── schema.rs                 # Updated with CF_VALIDATOR_SETS, CF_CHECKPOINTS (11)
+├── schema.rs                 # Updated with CF_VALIDATOR_SETS, CF_PARAMETER_HISTORY (11)
 │                             # Note: NO CF_COMMITS - commits are embedded in blocks
+│                             # Note: NO CF_CHECKPOINTS - AuxPoW stored per-block (simplified model)
 └── messages.rs               # New: GetCommitForHeightMessage, validator set messages, etc.
 
 app/src/actors_v2/rpc/
-└── actor.rs                  # Updated for checkpoint mining API (12)
+└── actor.rs                  # Updated for AuxPoW submission API (12)
 
 app/src/bridge/
 └── mod.rs                    # Updated for instant finality (13)
@@ -290,9 +291,10 @@ Chain parameters can be modified by the federation via the Governance Client gRP
 |----------|----------|------------|
 | Peg-In Compensation | `miner_fee_bps`, `min/max_fee_satoshi` | H+1 |
 | Bridge Config | `btc_confirmations`, `min/max_peg_amount`, `federation_members` | H+1 |
-| Checkpoint Config | `attestation_difficulty`, `checkpoint_difficulty`, `max_blocks_without_pow` | H+1 |
 | Consensus Params | `propose_timeout_ms`, `max_validators` | H+1 |
 | Emergency Controls | `chain_paused`, `pegins_paused`, `pegouts_paused` | Immediate (H+0) |
+
+**Note**: AuxPoW is optional per-block with no governance parameters (see Document 16).
 
 **Unified GovernanceUpdate Type:**
 
@@ -333,11 +335,11 @@ Block N:
 | Actor | Integration | Document |
 |-------|-------------|----------|
 | **ChainActor** | New Tendermint handlers replace block import | 04, 15 |
-| **StorageActor** | Stores blocks, commits, validator sets, checkpoints | 11 |
+| **StorageActor** | Stores blocks, commits, validator sets, parameter history | 11 |
 | **NetworkActor** | New Gossipsub topics for Tendermint messages | 05 |
 | **EngineActor** | Direct execution instead of fork_choice_updated | 07 |
 | **SyncActor** | Commit-proof verification, simplified state machine | 09 |
-| **RpcActor** | Checkpoint-based mining, validator status RPCs | 12 |
+| **RpcActor** | AuxPoW submission API, validator status RPCs | 12 |
 | **SlotWorker** | Replaced by TendermintDriver (event-driven timing) | 10 |
 | **Bridge** | Instant finality peg-ins, checkpoint-based peg-outs | 13 |
 
@@ -352,7 +354,7 @@ Block N:
 | `state.rs` | Remove difficulty tracking | Validator set tracking |
 | `slot_worker.rs` | Replace with TendermintDriver | Event-driven timing (10) |
 | `common/validation.rs` | Replace Aura validation | Tendermint validation (15) |
-| `auxpow.rs` | Repurpose for checkpointing | Checkpoint layer (not fork choice) |
+| `auxpow.rs` | Repurpose for optional per-block AuxPoW | Miner-effectuated peg-ins (16) |
 
 ---
 
@@ -446,5 +448,16 @@ tendermint_commit_latency_seconds: End-to-end latency
 
 ---
 
-*Implementation Guide Version: 1.0*
-*Last Updated: January 2026*
+*Implementation Guide Version: 1.1*
+*Last Updated: February 2026*
+
+---
+
+### Changelog
+
+**v1.1** (February 2026):
+- Updated for simplified AuxPoW model (per-block optional, no checkpoints/intervals)
+- Removed CF_CHECKPOINTS from storage schema (AuxPoW stored per-block)
+- Removed "Checkpoint Config" from governable parameters
+- Updated terminology: "checkpoint-based mining" → "AuxPoW submission API"
+- See Document 16 for full details on simplified AuxPoW-Tendermint integration

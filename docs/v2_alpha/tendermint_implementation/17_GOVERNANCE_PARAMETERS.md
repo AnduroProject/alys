@@ -62,15 +62,9 @@ Chain parameters set at genesis may need adjustment over time:
 | `federation_threshold` | u32 | 11 | > n/2 | Required federation signatures |
 | `federation_members` | Vec<PubKey> | genesis | len >= threshold | Federation multisig participants |
 
-### 2.3 Checkpoint Configuration
+### 2.3 AuxPoW Configuration
 
-| Parameter | Type | Default | Constraints | Description |
-|-----------|------|---------|-------------|-------------|
-| `min_checkpoint_interval` | u64 | 100 | > 0 | Minimum blocks between checkpoints |
-| `target_checkpoint_interval` | u64 | 500 | >= min | Target checkpoint frequency |
-| `attestation_difficulty` | U256 | low | > 0 | PoW for peg-in attestations |
-| `checkpoint_difficulty` | U256 | high | > attestation | PoW for Bitcoin anchoring |
-| `max_blocks_without_pow` | u64 | 50000 | > 0 | Liveness gate threshold |
+**Note**: With the simplified AuxPoW model (see Document 16), checkpoint intervals, difficulty thresholds, and liveness gates have been removed. AuxPoW is optional per-block with no governance parameters.
 
 ### 2.4 Consensus Parameters
 
@@ -157,12 +151,7 @@ pub enum GovernableParam {
     FederationThreshold = 203,
     FederationMembers = 204,
 
-    // Checkpoint config (300-399)
-    MinCheckpointInterval = 300,
-    TargetCheckpointInterval = 301,
-    AttestationDifficulty = 302,
-    CheckpointDifficulty = 303,
-    MaxBlocksWithoutPow = 304,
+    // NOTE: Checkpoint config (300-399) removed - see Document 16 for simplified AuxPoW model
 
     // Consensus params (400-499)
     ProposeTimeoutMs = 400,
@@ -408,12 +397,7 @@ enum GovernableParam {
     PARAM_FEDERATION_THRESHOLD = 203;
     PARAM_FEDERATION_MEMBERS = 204;
 
-    // Checkpoint config
-    PARAM_MIN_CHECKPOINT_INTERVAL = 300;
-    PARAM_TARGET_CHECKPOINT_INTERVAL = 301;
-    PARAM_ATTESTATION_DIFFICULTY = 302;
-    PARAM_CHECKPOINT_DIFFICULTY = 303;
-    PARAM_MAX_BLOCKS_WITHOUT_POW = 304;
+    // NOTE: Checkpoint config (300-399) removed - simplified AuxPoW model
 
     // Consensus params
     PARAM_PROPOSE_TIMEOUT_MS = 400;
@@ -463,8 +447,7 @@ pub struct ChainParameters {
     /// Bridge configuration
     pub bridge_config: BridgeConfig,
 
-    /// Checkpoint configuration
-    pub checkpoint_config: CheckpointConfig,
+    // NOTE: checkpoint_config removed - see Document 16 for simplified AuxPoW model
 
     /// Consensus parameters
     pub consensus_params: TendermintConsensusParams,
@@ -484,7 +467,7 @@ impl ChainParameters {
         Self {
             pegin_compensation: genesis.pegin_compensation.clone(),
             bridge_config: genesis.bridge_config.clone(),
-            checkpoint_config: genesis.checkpoint_config.clone(),
+            // NOTE: checkpoint_config removed - see Document 16
             consensus_params: genesis.consensus_params.clone(),
             fee_schedule: FeeSchedule::default(),
             chain_paused: false,
@@ -524,22 +507,7 @@ impl ChainParameters {
                 self.bridge_config.federation_members = update.decode_value()?;
             }
 
-            // Checkpoint config
-            GovernableParam::MinCheckpointInterval => {
-                self.checkpoint_config.min_checkpoint_interval = update.decode_value()?;
-            }
-            GovernableParam::TargetCheckpointInterval => {
-                self.checkpoint_config.target_checkpoint_interval = update.decode_value()?;
-            }
-            GovernableParam::AttestationDifficulty => {
-                self.checkpoint_config.attestation_difficulty = update.decode_value()?;
-            }
-            GovernableParam::CheckpointDifficulty => {
-                self.checkpoint_config.checkpoint_difficulty = update.decode_value()?;
-            }
-            GovernableParam::MaxBlocksWithoutPow => {
-                self.checkpoint_config.max_blocks_without_pow = update.decode_value()?;
-            }
+            // NOTE: Checkpoint config cases removed - see Document 16
 
             // Consensus params
             GovernableParam::ProposeTimeoutMs => {
@@ -1463,5 +1431,16 @@ async fn test_late_joiner_param_reconstruction() {
 
 ---
 
-*Implementation Plan Version: 1.0*
+*Implementation Plan Version: 1.1*
 *Last Updated: February 2026*
+
+---
+
+### Changelog
+
+**v1.1** (February 2026):
+- Removed checkpoint configuration from governable parameters (see Document 16 for simplified AuxPoW model)
+- Removed `CheckpointConfig` from `ChainParameters` struct
+- Removed checkpoint-related `GovernableParam` enum variants
+- Removed checkpoint cases from `apply_update()` function
+- Updated protobuf enum to remove checkpoint params

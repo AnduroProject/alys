@@ -11,8 +11,9 @@ This document provides a comprehensive implementation guide for migrating the St
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit type)
 - `02_STATE_MACHINE.md` (ValidatorSet, Vote types)
 - `06_WAL.md` (WAL storage considerations)
-- `07_EL_COORDINATION.md` (blocks_without_pow tracking)
+- `07_EL_COORDINATION.md` (EL block execution)
 - `09_SYNC_ACTOR.md` (Sync storage requirements)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (Optional per-block AuxPoW)
 - `17_GOVERNANCE.md` (Parameter change history)
 **Files to Modify**:
 - `app/src/block.rs` (add LastCommit to ConsensusBlock)
@@ -367,7 +368,7 @@ pub enum StorageError {
 | `OrphanedBlocks` | **Remove** | Not needed (instant finality) |
 | ~~`Commits`~~ | **NOT NEEDED** | Commits are in blocks |
 | (new) `ValidatorSets` | **Add** | Height-based validator sets (H+2 rule) |
-| (new) `Checkpoints` | **Add** | AuxPoW checkpoint proofs |
+| ~~`Checkpoints`~~ | **NOT NEEDED** | AuxPoW stored in block.auxpow_header |
 
 ### 4.2 Visual Schema Comparison
 
@@ -665,118 +666,90 @@ impl DatabaseManager {
 
 ---
 
-## 7. Checkpoints Column Family
+## 7. AuxPoW Storage (Per-Block Optional)
 
-AuxPoW checkpoints anchor block ranges to Bitcoin for additional security.
+AuxPoW is optional per block and stored directly in the block structure. See Document 16 for the simplified model.
 
-### 7.1 Implementation
+### 7.1 Design
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   SIMPLIFIED AUXPOW MODEL                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  • AuxPoW is optional per block                                  │
+│  • Stored in ConsensusBlock.auxpow_header field                  │
+│  • No checkpoint intervals or ranges                             │
+│  • No difficulty thresholds                                      │
+│  • No separate CF_CHECKPOINTS column family needed               │
+│                                                                  │
+│  Block structure:                                                │
+│  ConsensusBlock {                                                │
+│      ...                                                         │
+│      auxpow_header: Option<AuxPowHeader>,  // Optional per block │
+│      ...                                                         │
+│  }                                                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 Querying Blocks with AuxPoW
+
+To find blocks with AuxPoW, query the block storage and check the `auxpow_header` field:
 
 ```rust
-/// Column family for AuxPoW checkpoints
-pub const CF_CHECKPOINTS: &str = "checkpoints";
-
-/// Key format: range_end_height as big-endian u64
-/// Value format: Serialized AuxPowCheckpoint
-
-fn checkpoint_key(range_end_height: u64) -> [u8; 8] {
-    range_end_height.to_be_bytes()
-}
-
-/// AuxPoW checkpoint that anchors a range of Tendermint blocks to Bitcoin
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuxPowCheckpoint {
-    /// First block height covered by this checkpoint
-    pub range_start_height: u64,
-
-    /// Last block height covered by this checkpoint (inclusive)
-    pub range_end_height: u64,
-
-    /// Hash of the block at range_start
-    pub range_start_hash: Hash256,
-
-    /// Hash of the block at range_end
-    pub range_end_hash: Hash256,
-
-    /// The AuxPoW proof anchoring to Bitcoin
-    pub auxpow: AuxPow,
-
-    /// Bitcoin block height where checkpoint was mined
-    pub bitcoin_height: u64,
-
-    /// Timestamp of checkpoint creation
-    pub timestamp: u64,
-}
-
 impl DatabaseManager {
-    /// Store an AuxPoW checkpoint
-    pub fn put_checkpoint(&self, checkpoint: &AuxPowCheckpoint) -> Result<(), StorageError> {
-        let key = checkpoint_key(checkpoint.range_end_height);
-        let value = serde_json::to_vec(checkpoint)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+    /// Get blocks with AuxPoW in a height range (for historical queries)
+    pub fn get_blocks_with_auxpow(
+        &self,
+        start_height: u64,
+        end_height: u64,
+    ) -> Result<Vec<(u64, AuxPowHeader)>, StorageError> {
+        let mut results = Vec::new();
 
-        self.db.put_cf(
-            self.cf_handle(CF_CHECKPOINTS)?,
-            key,
-            value,
-        )?;
-
-        tracing::info!(
-            range_start = checkpoint.range_start_height,
-            range_end = checkpoint.range_end_height,
-            bitcoin_height = checkpoint.bitcoin_height,
-            "Stored AuxPoW checkpoint"
-        );
-
-        Ok(())
-    }
-
-    /// Get checkpoint that covers a given height
-    pub fn get_checkpoint_for_height(&self, height: u64) -> Result<Option<AuxPowCheckpoint>, StorageError> {
-        let cf = self.cf_handle(CF_CHECKPOINTS)?;
-        let mut iter = self.db.raw_iterator_cf(cf);
-
-        // Seek to first checkpoint with range_end >= height
-        iter.seek(checkpoint_key(height));
-
-        while iter.valid() {
-            if let Some(value) = iter.value() {
-                let checkpoint: AuxPowCheckpoint = serde_json::from_slice(value)
-                    .map_err(|e| StorageError::Deserialization(e.to_string()))?;
-
-                // Check if this checkpoint covers the height
-                if checkpoint.range_start_height <= height && checkpoint.range_end_height >= height {
-                    return Ok(Some(checkpoint));
-                }
-
-                // If range_start > height, no checkpoint covers this height
-                if checkpoint.range_start_height > height {
-                    break;
+        for height in start_height..=end_height {
+            if let Some(block) = self.get_block_by_height(height)? {
+                if let Some(auxpow) = block.message.auxpow_header {
+                    results.push((height, auxpow));
                 }
             }
-            iter.next();
         }
 
-        Ok(None)
+        Ok(results)
     }
 
-    /// Get latest checkpoint
-    pub fn get_latest_checkpoint(&self) -> Result<Option<AuxPowCheckpoint>, StorageError> {
-        let cf = self.cf_handle(CF_CHECKPOINTS)?;
-        let mut iter = self.db.raw_iterator_cf(cf);
-        iter.seek_to_last();
+    /// Check if a block has AuxPoW
+    pub fn block_has_auxpow(&self, height: u64) -> Result<bool, StorageError> {
+        if let Some(block) = self.get_block_by_height(height)? {
+            return Ok(block.message.auxpow_header.is_some());
+        }
+        Ok(false)
+    }
 
-        if iter.valid() {
-            if let Some(value) = iter.value() {
-                let checkpoint = serde_json::from_slice(value)
-                    .map_err(|e| StorageError::Deserialization(e.to_string()))?;
-                return Ok(Some(checkpoint));
+    /// Get the latest block with AuxPoW
+    pub fn get_latest_block_with_auxpow(&self) -> Result<Option<(u64, AuxPowHeader)>, StorageError> {
+        let head = self.get_chain_head()?;
+        let Some(head_ref) = head else {
+            return Ok(None);
+        };
+
+        // Scan backwards from head to find most recent block with AuxPoW
+        let mut height = head_ref.height;
+        while height > 0 {
+            if let Some(block) = self.get_block_by_height(height)? {
+                if let Some(auxpow) = block.message.auxpow_header {
+                    return Ok(Some((height, auxpow)));
+                }
             }
+            height -= 1;
         }
 
         Ok(None)
     }
 }
 ```
+
+**Note**: For production systems with many blocks, consider adding an index (bitmap or secondary column family) to efficiently query blocks with AuxPoW without scanning.
 
 ---
 
@@ -860,26 +833,19 @@ pub struct ListValidatorSetChangesMessage {
     pub correlation_id: Option<Uuid>,
 }
 
-/// Store AuxPoW checkpoint
+/// Get blocks with AuxPoW in a range (for historical queries)
 #[derive(Debug, Clone, Message)]
-#[rtype(result = "Result<(), StorageError>")]
-pub struct StoreCheckpointMessage {
-    pub checkpoint: AuxPowCheckpoint,
+#[rtype(result = "Result<Vec<(u64, AuxPowHeader)>, StorageError>")]
+pub struct GetBlocksWithAuxPowMessage {
+    pub start_height: u64,
+    pub end_height: u64,
     pub correlation_id: Option<Uuid>,
 }
 
-/// Get checkpoint for height
+/// Get the latest block with AuxPoW
 #[derive(Debug, Clone, Message)]
-#[rtype(result = "Result<Option<AuxPowCheckpoint>, StorageError>")]
-pub struct GetCheckpointForHeightMessage {
-    pub height: u64,
-    pub correlation_id: Option<Uuid>,
-}
-
-/// Get latest checkpoint
-#[derive(Debug, Clone, Message)]
-#[rtype(result = "Result<Option<AuxPowCheckpoint>, StorageError>")]
-pub struct GetLatestCheckpointMessage {
+#[rtype(result = "Result<Option<(u64, AuxPowHeader)>, StorageError>")]
+pub struct GetLatestBlockWithAuxPowMessage {
     pub correlation_id: Option<Uuid>,
 }
 ```
@@ -940,27 +906,19 @@ impl Handler<ListValidatorSetChangesMessage> for StorageActor {
     }
 }
 
-impl Handler<StoreCheckpointMessage> for StorageActor {
-    type Result = Result<(), StorageError>;
+impl Handler<GetBlocksWithAuxPowMessage> for StorageActor {
+    type Result = Result<Vec<(u64, AuxPowHeader)>, StorageError>;
 
-    fn handle(&mut self, msg: StoreCheckpointMessage, _ctx: &mut Context<Self>) -> Self::Result {
-        self.db.put_checkpoint(&msg.checkpoint)
+    fn handle(&mut self, msg: GetBlocksWithAuxPowMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        self.db.get_blocks_with_auxpow(msg.start_height, msg.end_height)
     }
 }
 
-impl Handler<GetCheckpointForHeightMessage> for StorageActor {
-    type Result = Result<Option<AuxPowCheckpoint>, StorageError>;
+impl Handler<GetLatestBlockWithAuxPowMessage> for StorageActor {
+    type Result = Result<Option<(u64, AuxPowHeader)>, StorageError>;
 
-    fn handle(&mut self, msg: GetCheckpointForHeightMessage, _ctx: &mut Context<Self>) -> Self::Result {
-        self.db.get_checkpoint_for_height(msg.height)
-    }
-}
-
-impl Handler<GetLatestCheckpointMessage> for StorageActor {
-    type Result = Result<Option<AuxPowCheckpoint>, StorageError>;
-
-    fn handle(&mut self, _msg: GetLatestCheckpointMessage, _ctx: &mut Context<Self>) -> Self::Result {
-        self.db.get_latest_checkpoint()
+    fn handle(&mut self, _msg: GetLatestBlockWithAuxPowMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        self.db.get_latest_block_with_auxpow()
     }
 }
 ```
@@ -1404,9 +1362,9 @@ impl DatabaseManager {
     ///
     /// Used by new nodes joining the network. The snapshot includes:
     /// - Genesis block and initial validator set
-    /// - Recent blocks with commits
+    /// - Recent blocks with commits (may optionally include AuxPoW)
     /// - Current validator set
-    /// - Recent checkpoints
+    /// - Parameter change history
     pub fn bootstrap_from_trusted_state(
         &self,
         snapshot: TrustedStateSnapshot,
@@ -1426,24 +1384,19 @@ impl DatabaseManager {
             &snapshot.validator_set,
         )?;
 
-        // 3. Store recent blocks (with LastCommits)
+        // 3. Store recent blocks (with LastCommits, may include AuxPoW)
         for block in &snapshot.recent_blocks {
             self.put_block_validated(block)?;
         }
 
-        // 4. Store checkpoints
-        for checkpoint in &snapshot.checkpoints {
-            self.put_checkpoint(checkpoint)?;
-        }
-
-        // 5. Store parameter history
+        // 4. Store parameter history
         for (param_id, history) in &snapshot.parameter_history {
             for (height, value) in history {
                 self.put_parameter_update(*param_id, *height, value)?;
             }
         }
 
-        // 6. Update metadata
+        // 5. Update metadata
         self.put_metadata(b"bootstrap_height", &snapshot.height.to_be_bytes())?;
         self.put_metadata(b"bootstrap_timestamp", &snapshot.timestamp.to_be_bytes())?;
 
@@ -1469,9 +1422,8 @@ pub struct TrustedStateSnapshot {
     /// Height at which current validator set became effective
     pub validator_set_effective_height: u64,
     /// Recent blocks (last N blocks with LastCommits)
+    /// Note: Blocks may optionally contain AuxPoW in their auxpow_header field
     pub recent_blocks: Vec<SignedConsensusBlock<MainnetEthSpec>>,
-    /// Recent checkpoints
-    pub checkpoints: Vec<AuxPowCheckpoint>,
     /// Parameter change history
     pub parameter_history: HashMap<GovernanceParameterId, Vec<(u64, GovernanceParameterValue)>>,
 }
@@ -1539,28 +1491,9 @@ impl DatabaseManager {
 }
 ```
 
-### 13.2 Checkpoint Retention
+### 13.2 AuxPoW Retention
 
-```rust
-impl DatabaseManager {
-    /// Checkpoints are NOT pruned by default
-    ///
-    /// Checkpoints are essential for:
-    /// - Light client proofs
-    /// - Late-joiner verification
-    /// - Audit trail
-    ///
-    /// Only prune checkpoints if explicitly configured and with extreme caution.
-    pub fn prune_checkpoints(
-        &self,
-        _keep_after_height: u64,
-    ) -> Result<usize, StorageError> {
-        // By default, do not prune checkpoints
-        tracing::warn!("Checkpoint pruning is disabled for safety");
-        Ok(0)
-    }
-}
-```
+**Note**: With the simplified AuxPoW model, there is no separate checkpoint storage. AuxPoW is stored as an optional field in the block structure (`auxpow_header`). Block pruning decisions apply to the entire block including any attached AuxPoW.
 
 ### 13.3 Parameter History Retention
 
@@ -1750,15 +1683,10 @@ lazy_static! {
         "Total validator sets pruned"
     ).unwrap();
 
-    // Checkpoint metrics
-    pub static ref STORAGE_CHECKPOINT_LOOKUPS: IntCounter = IntCounter::new(
-        "storage_checkpoint_lookups_total",
-        "Total checkpoint lookups"
-    ).unwrap();
-
-    pub static ref STORAGE_CHECKPOINTS_STORED: IntCounter = IntCounter::new(
-        "storage_checkpoints_stored_total",
-        "Total checkpoints stored"
+    // AuxPoW query metrics
+    pub static ref STORAGE_AUXPOW_QUERIES: IntCounter = IntCounter::new(
+        "storage_auxpow_queries_total",
+        "Total queries for blocks with AuxPoW"
     ).unwrap();
 
     // Batch operation metrics
@@ -1856,11 +1784,11 @@ pub const COLUMN_FAMILIES: &[&str] = &[
     CF_METADATA,
     CF_CHAIN_HEAD,
     CF_VALIDATOR_SETS,      // NEW: height-based validator sets
-    CF_CHECKPOINTS,         // NEW: AuxPoW checkpoints
     CF_PARAMETER_HISTORY,   // NEW: governance parameter change history (Doc 17)
     // REMOVED: CF_CUMULATIVE_DIFFICULTY
     // REMOVED: CF_ORPHANED_BLOCKS
     // NOT NEEDED: CF_COMMITS (commits are in blocks)
+    // NOT NEEDED: CF_CHECKPOINTS (AuxPoW is in block.auxpow_header)
 ];
 
 /// Column family for governance parameter change history
@@ -1897,7 +1825,7 @@ pub async fn migrate_to_tendermint_schema(db_path: &Path) -> Result<(), StorageE
     }
 
     // 3. Create new column families
-    let new_cfs = [CF_VALIDATOR_SETS, CF_CHECKPOINTS, CF_PARAMETER_HISTORY];
+    let new_cfs = [CF_VALIDATOR_SETS, CF_PARAMETER_HISTORY];
     for cf_name in &new_cfs {
         if db.cf_handle(cf_name).is_none() {
             tracing::info!(cf = cf_name, "Creating new column family");
@@ -2126,18 +2054,18 @@ mod tests {
 - [ ] Add `StorageError::MissingLastCommit`
 - [ ] Add `StorageError::InsufficientCommitSignatures`
 - [ ] Add `StorageError::MissingValidatorSet`
-- [ ] Add `StorageError::CheckpointRangeOverlap`
+- [ ] ~~Add `StorageError::CheckpointRangeOverlap`~~ (not needed - no checkpoint ranges)
 - [ ] Add `StorageError::WalStorageInconsistency`
 - [ ] Add `StorageError::BatchWriteFailed`
 - [ ] Add `StorageError::ChainIntegrityViolation`
 
 ### Storage Schema
 - [ ] Add `CF_VALIDATOR_SETS` column family
-- [ ] Add `CF_CHECKPOINTS` column family
 - [ ] Add `CF_PARAMETER_HISTORY` column family
 - [ ] Remove `CF_CUMULATIVE_DIFFICULTY` column family
 - [ ] Remove `CF_ORPHANED_BLOCKS` column family
 - [ ] **DO NOT add `CF_COMMITS`** (commits are in blocks)
+- [ ] **DO NOT add `CF_CHECKPOINTS`** (AuxPoW is in block.auxpow_header)
 
 ### Commit Retrieval Methods
 - [ ] Implement `get_commit_for_height()` (fetches from next block)
@@ -2154,10 +2082,10 @@ mod tests {
 - [ ] Implement `list_validator_set_changes()`
 - [ ] Implement `prune_validator_sets()`
 
-### Checkpoint Methods
-- [ ] Implement `put_checkpoint()`
-- [ ] Implement `get_checkpoint_for_height()`
-- [ ] Implement `get_latest_checkpoint()`
+### AuxPoW Query Methods
+- [ ] Implement `get_blocks_with_auxpow()` (scan block range for AuxPoW)
+- [ ] Implement `get_latest_block_with_auxpow()`
+- [ ] Implement `block_has_auxpow()`
 
 ### Parameter History Methods
 - [ ] Implement `put_parameter_update()`
@@ -2195,9 +2123,8 @@ mod tests {
 - [ ] Add `GetValidatorSetForHeightMessage`
 - [ ] Add `GetCurrentValidatorSetMessage`
 - [ ] Add `ListValidatorSetChangesMessage`
-- [ ] Add `StoreCheckpointMessage`
-- [ ] Add `GetCheckpointForHeightMessage`
-- [ ] Add `GetLatestCheckpointMessage`
+- [ ] Add `GetBlocksWithAuxPowMessage`
+- [ ] Add `GetLatestBlockWithAuxPowMessage`
 - [ ] Add `StoreParameterUpdateMessage`
 - [ ] Add `GetParameterAtHeightMessage`
 - [ ] Add `GetParameterHistoryMessage`
@@ -2209,8 +2136,7 @@ mod tests {
 - [ ] Add `STORAGE_VALIDATOR_SET_LOOKUPS` counter
 - [ ] Add `STORAGE_VALIDATOR_SETS_STORED` counter
 - [ ] Add `STORAGE_VALIDATOR_SETS_PRUNED` counter
-- [ ] Add `STORAGE_CHECKPOINT_LOOKUPS` counter
-- [ ] Add `STORAGE_CHECKPOINTS_STORED` counter
+- [ ] Add `STORAGE_AUXPOW_QUERIES` counter
 - [ ] Add `STORAGE_BATCH_WRITES` counter
 - [ ] Add `STORAGE_SYNC_BATCHES` counter
 - [ ] Add `STORAGE_SYNC_BLOCKS` counter
@@ -2256,6 +2182,7 @@ This follows the standard Tendermint/CometBFT pattern and ensures atomic persist
 
 ---
 
-*Implementation Plan Version: 3.0*
+*Implementation Plan Version: 3.1*
 *Last Updated: February 2026*
-*Changes: Added error types, WAL coordination, batch writes, sync integration, bootstrap, pruning, corruption detection, and metrics*
+*Changes in v3.1: Simplified to per-block optional AuxPoW model. Removed CF_CHECKPOINTS, checkpoint ranges, and related methods. AuxPoW stored in block.auxpow_header field.*
+*Changes in v3.0: Added error types, WAL coordination, batch writes, sync integration, bootstrap, pruning, corruption detection, and metrics*

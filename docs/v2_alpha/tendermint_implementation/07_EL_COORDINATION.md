@@ -10,7 +10,7 @@ This document provides a comprehensive implementation guide for coordinating bet
 **Dependencies**:
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (Commit, CommitSig, BlockIDFlag)
 - `02_STATE_MACHINE.md` (TendermintState)
-- `04_CHAINACTOR_HANDLERS.md` (blocks_without_pow, liveness gate)
+- `04_CHAINACTOR_HANDLERS.md` (block handling)
 - `11_STORAGE_SCHEMA_MIGRATION.md` (embedded LastCommit design)
 - `13_BRIDGE_INTEGRATION.md` (withdrawals/peg-in conversion)
 - `16_AUXPOW_TENDERMINT_INTEGRATION.md` (peg-in to withdrawal flow)
@@ -368,8 +368,7 @@ impl ChainActor {
     ///   ├─ 3. Store block in consensus storage
     ///   ├─ 4. Update chain head
     ///   ├─ 5. Cache commit for next block's last_commit
-    ///   ├─ 6. Update blocks_without_pow liveness gate
-    ///   └─ 7. Emit metrics/events
+    ///   └─ 6. Emit metrics/events
     /// ```
     ///
     /// # Note on Commit Storage
@@ -452,23 +451,7 @@ impl ChainActor {
         // When we propose Block N+1, we'll include this as last_commit
         self.state.tendermint.pending_commit = Some(commit.clone());
 
-        // 6. Update blocks_without_pow liveness gate
-        // See doc 04 (ChainActor Handlers) and doc 16 (AuxPoW Integration)
-        if block.auxpow_header.is_some() {
-            // AuxPoW present - reset counter
-            self.state.tendermint.blocks_without_pow = 0;
-            info!(height, "AuxPoW present, liveness gate reset");
-        } else {
-            // No AuxPoW - increment counter
-            self.state.tendermint.blocks_without_pow += 1;
-            debug!(
-                height,
-                blocks_without_pow = self.state.tendermint.blocks_without_pow,
-                "Incremented blocks_without_pow"
-            );
-        }
-
-        // 7. Emit metrics
+        // 6. Emit metrics
         TENDERMINT_BLOCKS_COMMITTED.inc();
         TENDERMINT_BLOCK_HEIGHT.set(height as i64);
         TENDERMINT_BLOCK_GAS_USED.observe(execute_result.gas_used as f64);
@@ -613,7 +596,6 @@ impl ChainActor {
     ///
     /// Integration with Withdrawals (doc 13 BRIDGE_INTEGRATION):
     /// - Peg-ins are converted to EVM Withdrawals via collect_withdrawals()
-    /// - Subject to liveness gate check (blocks_without_pow < MAX_BLOCKS)
     async fn get_execution_payload(
         &self,
         height: u64,
@@ -629,17 +611,8 @@ impl ChainActor {
 
         // Collect withdrawals from peg-in queue
         // See doc 13 (BRIDGE_INTEGRATION) Section 2.3
-        // See doc 16 (AUXPOW_TENDERMINT_INTEGRATION) for liveness gate
-        let withdrawals = if self.is_liveness_gate_open() {
-            self.collect_pegin_withdrawals().await?
-        } else {
-            warn!(
-                height,
-                blocks_without_pow = self.state.tendermint.blocks_without_pow,
-                "Liveness gate closed, skipping peg-in withdrawals"
-            );
-            vec![]
-        };
+        // See doc 16 (AUXPOW_TENDERMINT_INTEGRATION) for peg-in flow
+        let withdrawals = self.collect_pegin_withdrawals().await?;
 
         // Request payload from EL
         let timestamp = std::time::SystemTime::now()
@@ -672,11 +645,6 @@ impl ChainActor {
             .map_err(|e| ChainError::ExecutionLayerError(e.to_string()))?;
 
         Ok(payload)
-    }
-
-    /// Check if liveness gate allows peg-in processing
-    fn is_liveness_gate_open(&self) -> bool {
-        self.state.tendermint.blocks_without_pow < self.config.max_blocks_without_pow
     }
 
     /// Collect pending peg-ins and convert to EVM withdrawals
@@ -900,13 +868,6 @@ impl ChainActor {
         };
         self.state.head = Some(block_ref);
 
-        // 6. Update blocks_without_pow
-        if block.message.auxpow_header.is_some() {
-            self.state.tendermint.blocks_without_pow = 0;
-        } else {
-            self.state.tendermint.blocks_without_pow += 1;
-        }
-
         SYNC_BLOCKS_EXECUTED.inc();
         debug!(height, "Synced block executed successfully");
 
@@ -971,12 +932,6 @@ lazy_static! {
     static ref SYNC_BLOCKS_EXECUTED: IntCounter = IntCounter::new(
         "sync_blocks_executed_total",
         "Number of blocks executed during sync catchup"
-    ).unwrap();
-
-    /// Blocks without AuxPoW (liveness gate counter)
-    static ref BLOCKS_WITHOUT_POW: IntGauge = IntGauge::new(
-        "blocks_without_pow",
-        "Current blocks since last AuxPoW (liveness gate)"
     ).unwrap();
 }
 ```
@@ -1235,17 +1190,11 @@ fn create_test_execution_payload() -> ExecutionPayloadCapella {
 - [ ] Implement `get_execution_payload` method
 - [ ] Add `PreparePayloadMessage` and `GetPayloadMessage` support
 - [ ] Integrate `collect_pegin_withdrawals` for peg-in tokens
-- [ ] Add liveness gate check (`is_liveness_gate_open`)
 
 ### Sync Integration (doc 09)
 - [ ] Implement `execute_synced_block` for catch-up
 - [ ] Verify `last_commit` during sync block import
 - [ ] Add `SYNC_BLOCKS_EXECUTED` metric
-
-### Liveness Gate (doc 04, 16)
-- [ ] Track `blocks_without_pow` in `finalize_committed_block`
-- [ ] Track `blocks_without_pow` in `execute_synced_block`
-- [ ] Add `BLOCKS_WITHOUT_POW` metric
 
 ### Code Removal
 - [ ] Remove fork choice code (with feature flag)
@@ -1320,15 +1269,19 @@ This follows the standard Tendermint/CometBFT pattern and ensures consistency wi
 
 ---
 
-*Implementation Plan Version: 2.1*
+*Implementation Plan Version: 2.2*
 *Last Updated: February 2026*
-*Changes:*
+*Changes in v2.2:*
+- *Removed blocks_without_pow liveness gate (simplified AuxPoW model)*
+- *Removed is_liveness_gate_open checks*
+- *Peg-ins are always processed when available*
+
+*Changes in v2.1:*
 - *Added cross-document type references*
 - *Added EngineError and ChainError variants for EL coordination*
 - *Added EL timeout handling with retry logic*
 - *Added get_execution_payload with withdrawals integration (doc 13, 16)*
 - *Added block re-execution during sync (doc 09)*
-- *Added blocks_without_pow liveness gate tracking (doc 04, 16)*
 - *Added compute_precommit_signing_root helper*
 - *Added correlation ID usage section*
 - *Added testing helpers*

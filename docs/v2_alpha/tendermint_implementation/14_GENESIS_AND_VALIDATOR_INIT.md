@@ -12,7 +12,7 @@ This document provides a comprehensive implementation guide for updating the gen
 - `01_MESSAGE_TYPES_AND_PROTOCOL_FOUNDATION.md` (ValidatorSet type, CommitSig)
 - `02_STATE_MACHINE.md` (TendermintState initialization)
 - `06_WAL.md` (WAL initialization)
-- `07_EL_COORDINATION.md` (blocks_without_pow initialization)
+- `07_EL_COORDINATION.md` (EL block execution)
 - `10_SLOT_WORKER_TO_TENDERMINT_TIMING.md` (TendermintDriver startup)
 - `11_STORAGE_SCHEMA_MIGRATION.md` (Embedded LastCommit, parameter history)
 - `16_AUXPOW_TENDERMINT_INTEGRATION.md` (Dual-difficulty configuration)
@@ -103,9 +103,6 @@ pub struct GenesisConfig {
 
     /// Execution layer genesis
     pub execution_genesis: ExecutionGenesis,
-
-    /// AuxPoW checkpoint configuration (including dual-difficulty)
-    pub checkpoint_config: CheckpointConfig,
 
     /// Governance authority public key (for signing governance updates)
     pub governance_authority: GovernanceAuthority,
@@ -204,61 +201,9 @@ impl PegInCompensation {
     }
 }
 
-/// AuxPoW checkpoint configuration with dual-difficulty thresholds
-/// See Document 16 for detailed dual-difficulty design
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckpointConfig {
-    /// Minimum blocks between checkpoints
-    pub min_checkpoint_interval: u64,
-
-    /// Target blocks between checkpoints
-    pub target_checkpoint_interval: u64,
-
-    /// Minimum difficulty for regular attestations (per-block)
-    /// Lower threshold - provides regular liveness signals
-    pub attestation_difficulty_bits: u32,
-
-    /// Minimum difficulty for checkpoints (anchoring)
-    /// Higher threshold - provides Bitcoin-level security guarantees
-    pub checkpoint_difficulty_bits: u32,
-
-    /// Maximum blocks without any PoW before liveness gate triggers
-    /// See Document 07 for blocks_without_pow coordination
-    pub max_blocks_without_pow: u64,
-}
-
-impl Default for CheckpointConfig {
-    fn default() -> Self {
-        Self {
-            min_checkpoint_interval: 100,
-            target_checkpoint_interval: 500,
-            attestation_difficulty_bits: 20,   // ~1 million hashes (frequent)
-            checkpoint_difficulty_bits: 32,     // ~4 billion hashes (Bitcoin-anchored)
-            max_blocks_without_pow: 50,         // Liveness gate threshold
-        }
-    }
-}
-
-impl CheckpointConfig {
-    /// Validate checkpoint configuration
-    pub fn validate(&self) -> Result<(), GenesisError> {
-        if self.min_checkpoint_interval > self.target_checkpoint_interval {
-            return Err(GenesisError::InvalidCheckpointInterval {
-                min: self.min_checkpoint_interval,
-                target: self.target_checkpoint_interval,
-            });
-        }
-
-        if self.attestation_difficulty_bits > self.checkpoint_difficulty_bits {
-            return Err(GenesisError::InvalidDualDifficulty {
-                attestation: self.attestation_difficulty_bits,
-                checkpoint: self.checkpoint_difficulty_bits,
-            });
-        }
-
-        Ok(())
-    }
-}
+/// Note: AuxPoW configuration removed in simplified model.
+/// AuxPoW is optional per-block with no difficulty thresholds or checkpoints.
+/// See Document 16 for the simplified AuxPoW design.
 
 /// Governance authority configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,14 +260,6 @@ pub struct MultisigConfig {
     "precommit_timeout_ms": 1000,
     "timeout_delta_ms": 500,
     "max_validators": 15
-  },
-
-  "checkpoint_config": {
-    "min_checkpoint_interval": 100,
-    "target_checkpoint_interval": 500,
-    "attestation_difficulty_bits": 20,
-    "checkpoint_difficulty_bits": 32,
-    "max_blocks_without_pow": 50
   },
 
   "governance_authority": {
@@ -467,14 +404,10 @@ pub enum GenesisError {
     #[error("Genesis timestamp {timestamp} is in the future")]
     FutureTimestamp { timestamp: u64 },
 
-    #[error("Invalid dual-difficulty configuration: attestation_bits ({attestation}) must be <= checkpoint_bits ({checkpoint})")]
-    InvalidDualDifficulty { attestation: u32, checkpoint: u32 },
 
     #[error("Missing governance authority public key")]
     MissingGovernanceAuthority,
 
-    #[error("Invalid checkpoint interval: min ({min}) > target ({target})")]
-    InvalidCheckpointInterval { min: u64, target: u64 },
 
     #[error("WAL initialization failed: {0}")]
     WalInitFailed(String),
@@ -817,28 +750,7 @@ impl ChainActor {
 }
 ```
 
-### 4.4 blocks_without_pow Initialization
-
-The liveness gate counter must be initialized at genesis. See Document 07 for EL coordination.
-
-```rust
-impl ChainActor {
-    /// Initialize blocks_without_pow counter
-    fn initialize_blocks_without_pow(&mut self, genesis_config: &GenesisConfig) {
-        // Start at 0 - genesis block doesn't count
-        self.state.blocks_without_pow = BlocksWithoutPow::new(
-            genesis_config.checkpoint_config.max_blocks_without_pow,
-        );
-
-        tracing::info!(
-            max_blocks = genesis_config.checkpoint_config.max_blocks_without_pow,
-            "Liveness gate initialized"
-        );
-    }
-}
-```
-
-### 4.5 Observer Mode Initialization
+### 4.4 Observer Mode Initialization
 
 Non-validator nodes should start in observer mode. See Document 10 for TendermintDriver modes.
 
@@ -877,7 +789,7 @@ pub enum NodeMode {
 }
 ```
 
-### 4.6 Network Peer Bootstrap
+### 4.5 Network Peer Bootstrap
 
 Genesis validators should bootstrap peer connections from genesis configuration.
 
@@ -911,7 +823,7 @@ impl ChainActor {
 }
 ```
 
-### 4.7 Parameter History Initialization
+### 4.6 Parameter History Initialization
 
 Initial chain parameters must be stored with their effective height for governance tracking.
 
@@ -946,7 +858,7 @@ impl ChainActor {
 }
 ```
 
-### 4.8 TendermintDriver Startup
+### 4.7 TendermintDriver Startup
 
 After genesis initialization, the TendermintDriver must be started. See Document 10 for driver details.
 
@@ -993,7 +905,7 @@ impl ChainActor {
 }
 ```
 
-### 4.9 Sync Actor Genesis Verification
+### 4.8 Sync Actor Genesis Verification
 
 The SyncActor must verify genesis consistency when joining the network.
 
@@ -1751,8 +1663,8 @@ pub fn migrate_genesis(
         timestamp: aura_genesis.timestamp,
         validators,
         consensus_params: TendermintConsensusParams::default(),
-        checkpoint_config: CheckpointConfig::default(),
         bridge_config: BridgeGenesisConfig::default(),
+        pegin_compensation: PegInCompensation::default(),
         execution_genesis: aura_genesis.execution_genesis.clone(),
     };
 
@@ -1944,12 +1856,12 @@ pub fn register_genesis_metrics(registry: &Registry) {
 - [ ] Define `GenesisValidator` struct
 - [ ] Define `TendermintConsensusParams` struct (no epoch_length)
 - [ ] Define `PegInCompensation` struct (miner_fee_bps, min/max fee)
-- [ ] Define `CheckpointConfig` with dual-difficulty (attestation_bits, checkpoint_bits)
+- [ ] ~~Define `CheckpointConfig`~~ (removed - simplified AuxPoW model)
 - [ ] Define `GovernanceAuthority` struct
 - [ ] Define `MultisigConfig` struct (optional)
 - [ ] Update `GenesisConfig` with all new fields
 - [ ] Implement `GenesisConfig::validate()` with all checks
-- [ ] Implement `CheckpointConfig::validate()`
+- [ ] ~~Implement `CheckpointConfig::validate()`~~ (removed)
 - [ ] Implement `PegInCompensation::calculate_fee()`
 - [ ] Implement `GenesisConfig::to_validator_set()`
 - [ ] Implement `GenesisConfig::from_file()`
@@ -1973,7 +1885,7 @@ pub fn register_genesis_metrics(registry: &Registry) {
 - [ ] Update `ChainActor::initialize()` for Tendermint
 - [ ] Implement `load_tendermint_state()` for restart
 - [ ] Store initial validator set in storage (effective_height: 0)
-- [ ] Initialize `blocks_without_pow` counter
+- [ ] ~~Initialize `blocks_without_pow` counter~~ (removed - no liveness gate)
 - [ ] Initialize governance authority from genesis
 - [ ] Initialize chain parameters from genesis
 
