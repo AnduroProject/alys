@@ -9,6 +9,8 @@ This document provides a comprehensive implementation guide for governance-contr
 - `14_GENESIS_AND_VALIDATOR_INIT.md` (Governance Client stream, ValidatorUpdate)
 - `11_STORAGE_SCHEMA_MIGRATION.md` (Parameter history storage)
 - `04_CHAINACTOR_HANDLERS.md` (Handler integration)
+- `15_VALIDATION_MODULE.md` (Governance validation)
+- `16_AUXPOW_TENDERMINT_INTEGRATION.md` (Block structure, AuxPowHeader)
 **Files to Modify**:
 - `app/src/actors_v2/chain/tendermint/governance.rs` (NEW)
 - `app/src/actors_v2/chain/tendermint/types.rs`
@@ -112,7 +114,8 @@ pub enum GovernanceUpdate {
 
     /// Emergency actions (pause/resume)
     /// Activation: Immediate (H+0)
-    Emergency(EmergencyAction),
+    /// Note: Uses SignedEmergencyAction to preserve signature for auditability
+    Emergency(SignedEmergencyAction),
 }
 
 impl GovernanceUpdate {
@@ -175,6 +178,32 @@ impl GovernableParam {
     pub fn from_bytes(bytes: [u8; 2]) -> Option<Self> {
         let value = u16::from_be_bytes(bytes);
         Self::try_from(value).ok()
+    }
+
+    /// Iterate over all governable parameters
+    /// Used for parameter reconstruction during sync
+    pub fn all() -> impl Iterator<Item = Self> {
+        [
+            // Peg-in compensation
+            Self::MinerFeeBps,
+            Self::MinFeeSatoshi,
+            Self::MaxFeeSatoshi,
+            // Bridge config
+            Self::BtcConfirmations,
+            Self::MinPegAmount,
+            Self::MaxPegAmount,
+            Self::FederationThreshold,
+            Self::FederationMembers,
+            // Consensus params
+            Self::ProposeTimeoutMs,
+            Self::PrevoteTimeoutMs,
+            Self::PrecommitTimeoutMs,
+            Self::TimeoutDeltaMs,
+            Self::MaxValidators,
+            // Fee schedule
+            Self::BaseFeeFloor,
+            Self::BaseFeeCeiling,
+        ].into_iter()
     }
 }
 ```
@@ -259,6 +288,91 @@ pub struct ValidatorUpdate {
 }
 ```
 
+### 3.6 Supporting Structs
+
+```rust
+/// Tendermint consensus timing parameters
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TendermintConsensusParams {
+    /// Proposal timeout in milliseconds (100-60000)
+    pub propose_timeout_ms: u64,
+    /// Prevote timeout in milliseconds (100-60000)
+    pub prevote_timeout_ms: u64,
+    /// Precommit timeout in milliseconds (100-60000)
+    pub precommit_timeout_ms: u64,
+    /// Timeout increase per round in milliseconds (0-10000)
+    pub timeout_delta_ms: u64,
+    /// Maximum number of validators (4-100)
+    pub max_validators: u32,
+}
+
+impl Default for TendermintConsensusParams {
+    fn default() -> Self {
+        Self {
+            propose_timeout_ms: 3000,
+            prevote_timeout_ms: 1000,
+            precommit_timeout_ms: 1000,
+            timeout_delta_ms: 500,
+            max_validators: 15,
+        }
+    }
+}
+
+/// EVM fee schedule parameters
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeeSchedule {
+    /// Minimum EVM base fee (> 0)
+    pub base_fee_floor: u64,
+    /// Maximum EVM base fee (> floor)
+    pub base_fee_ceiling: u64,
+}
+
+impl Default for FeeSchedule {
+    fn default() -> Self {
+        Self {
+            base_fee_floor: 1_000_000_000,      // 1 gwei
+            base_fee_ceiling: 1_000_000_000_000, // 1000 gwei
+        }
+    }
+}
+
+/// Bridge configuration parameters
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BridgeConfig {
+    /// Required Bitcoin confirmations (1-100)
+    pub btc_confirmations: u32,
+    /// Minimum peg-in/out amount in satoshis
+    pub min_peg_amount: u64,
+    /// Maximum peg-in/out amount in satoshis
+    pub max_peg_amount: u64,
+    /// Required federation signatures (> n/2)
+    pub federation_threshold: u32,
+    /// Federation multisig participants
+    pub federation_members: Vec<PublicKey>,
+}
+
+/// Peg-in compensation for miners (from Document 16)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PegInCompensation {
+    /// Percentage of peg-in amount paid to miner (basis points, 0-10000)
+    pub miner_fee_bps: u64,
+    /// Minimum fee in satoshis (floor for small peg-ins)
+    pub min_fee_satoshi: u64,
+    /// Maximum fee in satoshis (cap for large peg-ins)
+    pub max_fee_satoshi: u64,
+}
+
+impl Default for PegInCompensation {
+    fn default() -> Self {
+        Self {
+            miner_fee_bps: 50,           // 0.5%
+            min_fee_satoshi: 1000,       // 0.00001 BTC
+            max_fee_satoshi: 10_000_000, // 0.1 BTC
+        }
+    }
+}
+```
+
 ---
 
 ## 4. Block Structure
@@ -278,8 +392,8 @@ pub struct ConsensusBlock<T: EthSpec> {
     /// EVM execution payload
     pub execution_payload: ExecutionPayloadCapella<T>,
 
-    /// AuxPoW checkpoint with peg-ins (optional)
-    pub auxpow_checkpoint: Option<AuxPowCheckpoint>,
+    /// Optional AuxPoW with peg-ins (see Document 16)
+    pub auxpow: Option<AuxPowHeader>,
 
     /// Governance updates: validator changes, parameter changes, emergency actions
     /// Optional - most blocks have None
@@ -302,6 +416,7 @@ pub struct ConsensusBlock<T: EthSpec> {
 ```rust
 impl ChainParameters {
     /// Compute deterministic hash of all parameters
+    /// Used in block headers for light client verification
     pub fn hash(&self) -> Hash256 {
         let mut hasher = Sha256::new();
 
@@ -314,7 +429,23 @@ impl ChainParameters {
         hasher.update(self.bridge_config.btc_confirmations.to_be_bytes());
         hasher.update(self.bridge_config.min_peg_amount.to_be_bytes());
         hasher.update(self.bridge_config.max_peg_amount.to_be_bytes());
-        // ... other fields
+        hasher.update(self.bridge_config.federation_threshold.to_be_bytes());
+        // Federation members: hash the count and each member's bytes
+        hasher.update((self.bridge_config.federation_members.len() as u32).to_be_bytes());
+        for member in &self.bridge_config.federation_members {
+            hasher.update(member.as_bytes());
+        }
+
+        // Consensus params
+        hasher.update(self.consensus_params.propose_timeout_ms.to_be_bytes());
+        hasher.update(self.consensus_params.prevote_timeout_ms.to_be_bytes());
+        hasher.update(self.consensus_params.precommit_timeout_ms.to_be_bytes());
+        hasher.update(self.consensus_params.timeout_delta_ms.to_be_bytes());
+        hasher.update(self.consensus_params.max_validators.to_be_bytes());
+
+        // Fee schedule
+        hasher.update(self.fee_schedule.base_fee_floor.to_be_bytes());
+        hasher.update(self.fee_schedule.base_fee_ceiling.to_be_bytes());
 
         // Emergency flags
         hasher.update([self.chain_paused as u8]);
@@ -617,9 +748,9 @@ impl GovernanceQueue {
             self.parameters.drain().map(|(_, p)| GovernanceUpdate::Parameter(p))
         );
 
-        // Emergency actions
+        // Emergency actions (preserve full SignedEmergencyAction for auditability)
         updates.extend(
-            self.emergencies.drain(..).map(|e| GovernanceUpdate::Emergency(e.action))
+            self.emergencies.drain(..).map(|e| GovernanceUpdate::Emergency(e))
         );
 
         updates
@@ -779,6 +910,25 @@ impl ChainActor {
                     });
                 }
             }
+            GovernableParam::MinPegAmount => {
+                let value: u64 = update.decode_value()?;
+                if value == 0 {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: "min_peg_amount must be > 0".to_string(),
+                    });
+                }
+            }
+            GovernableParam::MaxPegAmount => {
+                let value: u64 = update.decode_value()?;
+                let min = self.state.tendermint.chain_params.bridge_config.min_peg_amount;
+                if value <= min {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: format!("max_peg_amount must be > min_peg_amount ({})", min),
+                    });
+                }
+            }
             GovernableParam::FederationThreshold => {
                 let value: u32 = update.decode_value()?;
                 let members = self.state.tendermint.chain_params.bridge_config.federation_members.len() as u32;
@@ -786,6 +936,22 @@ impl ChainActor {
                     return Err(ChainError::InvalidParameterValue {
                         param: update.param,
                         reason: format!("federation_threshold must be > n/2 and <= n ({})", members),
+                    });
+                }
+            }
+            GovernableParam::FederationMembers => {
+                let value: Vec<PublicKey> = update.decode_value()?;
+                let threshold = self.state.tendermint.chain_params.bridge_config.federation_threshold;
+                if value.len() < threshold as usize {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: format!("federation_members count ({}) must be >= threshold ({})", value.len(), threshold),
+                    });
+                }
+                if value.is_empty() {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: "federation_members cannot be empty".to_string(),
                     });
                 }
             }
@@ -819,9 +985,36 @@ impl ChainActor {
                     });
                 }
             }
+            GovernableParam::TimeoutDeltaMs => {
+                let value: u64 = update.decode_value()?;
+                if value > 10_000 {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: "timeout_delta_ms must be 0-10000".to_string(),
+                    });
+                }
+            }
 
-            // Other params - add validation as needed
-            _ => {}
+            // Fee schedule
+            GovernableParam::BaseFeeFloor => {
+                let value: u64 = update.decode_value()?;
+                if value == 0 {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: "base_fee_floor must be > 0".to_string(),
+                    });
+                }
+            }
+            GovernableParam::BaseFeeCeiling => {
+                let value: u64 = update.decode_value()?;
+                let floor = self.state.tendermint.chain_params.fee_schedule.base_fee_floor;
+                if value <= floor {
+                    return Err(ChainError::InvalidParameterValue {
+                        param: update.param,
+                        reason: format!("base_fee_ceiling must be > base_fee_floor ({})", floor),
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -864,7 +1057,7 @@ impl ChainActor {
             slot: height,
             last_commit: self.state.tendermint.pending_commit.take(),
             execution_payload,
-            auxpow_checkpoint: self.state.queued_pow.take(),
+            auxpow: self.state.queued_pow.take(),  // Optional AuxPowHeader
             governance_updates,
             validators_hash,
             next_validators_hash,
@@ -935,11 +1128,13 @@ impl ChainActor {
                     // Schedule for H+1
                     self.schedule_parameter_update(height, pu).await?;
                 }
-                GovernanceUpdate::Emergency(_) => {
-                    // Already applied immediately, just log for auditability
+                GovernanceUpdate::Emergency(sea) => {
+                    // Already applied immediately, log for auditability
+                    // Signature preserved in block for verification
                     tracing::info!(
                         height = height,
-                        "Emergency action recorded in block"
+                        action = ?sea.action,
+                        "Emergency action recorded in block (signature preserved)"
                     );
                 }
             }
@@ -1377,20 +1572,27 @@ async fn test_late_joiner_param_reconstruction() {
 ## 11. Checklist
 
 ### Types & Messages
-- [ ] Define `GovernanceUpdate` enum
+- [ ] Define `GovernanceUpdate` enum (uses `SignedEmergencyAction` for auditability)
 - [ ] Define `GovernableParam` enum with all parameters
+- [ ] Implement `GovernableParam::all()` iterator
 - [ ] Define `ParameterUpdate` struct
 - [ ] Define `EmergencyAction` enum
 - [ ] Define `SignedEmergencyAction` struct
 - [ ] Update gRPC proto with new message types
 - [ ] Implement `GovernanceUpdate::activation_delay()`
 
+### Supporting Structs
+- [ ] Define `TendermintConsensusParams` struct with defaults
+- [ ] Define `FeeSchedule` struct with defaults
+- [ ] Define `BridgeConfig` struct
+- [ ] Define `PegInCompensation` struct with defaults
+
 ### State Management
 - [ ] Define `ChainParameters` struct
 - [ ] Implement `ChainParameters::from_genesis()`
-- [ ] Implement `ChainParameters::apply_update()`
+- [ ] Implement `ChainParameters::apply_update()` for all params
 - [ ] Implement `ChainParameters::apply_emergency()`
-- [ ] Implement `ChainParameters::hash()`
+- [ ] Implement `ChainParameters::hash()` (include all param categories)
 - [ ] Define `GovernanceQueue` struct
 - [ ] Update `TendermintState` with new fields
 
@@ -1398,7 +1600,22 @@ async fn test_late_joiner_param_reconstruction() {
 - [ ] Implement `handle_governance_update()` dispatcher
 - [ ] Implement `handle_parameter_update()`
 - [ ] Implement `handle_emergency_action()`
-- [ ] Implement `validate_parameter_update()` for each param
+- [ ] Implement `validate_parameter_update()` for ALL params:
+  - [ ] MinerFeeBps (0-10000)
+  - [ ] MinFeeSatoshi (> 0)
+  - [ ] MaxFeeSatoshi (> min)
+  - [ ] BtcConfirmations (1-100)
+  - [ ] MinPegAmount (> 0)
+  - [ ] MaxPegAmount (> min)
+  - [ ] FederationThreshold (> n/2, <= n)
+  - [ ] FederationMembers (len >= threshold)
+  - [ ] ProposeTimeoutMs (100-60000)
+  - [ ] PrevoteTimeoutMs (100-60000)
+  - [ ] PrecommitTimeoutMs (100-60000)
+  - [ ] TimeoutDeltaMs (0-10000)
+  - [ ] MaxValidators (4-100, >= current)
+  - [ ] BaseFeeFloor (> 0)
+  - [ ] BaseFeeCeiling (> floor)
 - [ ] Implement `verify_governance_signature_param()`
 - [ ] Implement `verify_governance_signature_emergency()`
 
@@ -1431,12 +1648,23 @@ async fn test_late_joiner_param_reconstruction() {
 
 ---
 
-*Implementation Plan Version: 1.1*
+*Implementation Plan Version: 1.2*
 *Last Updated: February 2026*
 
 ---
 
 ### Changelog
+
+**v1.2** (February 2026):
+- Added dependencies on Document 15 (Validation) and Document 16 (AuxPoW)
+- Fixed block structure: `auxpow_checkpoint` → `auxpow: Option<AuxPowHeader>` (per Doc 16)
+- Added `GovernableParam::all()` iterator for parameter reconstruction
+- Added supporting struct definitions: `TendermintConsensusParams`, `FeeSchedule`, `BridgeConfig`, `PegInCompensation`
+- Completed `params_hash` computation (added consensus_params, fee_schedule, federation_members)
+- Added missing parameter validation: MinPegAmount, MaxPegAmount, FederationMembers, TimeoutDeltaMs, BaseFeeFloor, BaseFeeCeiling
+- Fixed `GovernanceUpdate::Emergency` to use `SignedEmergencyAction` (preserves signature for auditability)
+- Updated `GovernanceQueue::drain()` to preserve emergency signatures
+- Expanded checklist with supporting structs and detailed validation requirements
 
 **v1.1** (February 2026):
 - Removed checkpoint configuration from governable parameters (see Document 16 for simplified AuxPoW model)
