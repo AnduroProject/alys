@@ -4,6 +4,206 @@
 
 This document provides a comprehensive implementation guide for governance-controlled parameter changes in Alys V2. Chain parameters (peg-in fees, bridge config, consensus timeouts, etc.) can be modified by the federation via the Governance Client gRPC stream. All changes are included in blocks for auditability and verification by late-joining validators and light clients.
 
+---
+
+## Intro: 30,000 Foot View
+
+### What Are Governance Parameters?
+
+Governance parameters are **runtime-configurable chain settings** that can be modified without a hard fork. The federation (via the Governance Client) can adjust fees, timeouts, thresholds, and emergency controls while the chain is running.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     GOVERNANCE PARAMETER SYSTEM                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌──────────────┐     gRPC Stream      ┌──────────────────────────┐    │
+│   │  Governance  │ ──────────────────►  │      ChainActor          │    │
+│   │    Client    │  ValidatorUpdates    │                          │    │
+│   │  (External)  │  ParameterUpdates    │  ┌──────────────────┐    │    │
+│   │              │  EmergencyActions    │  │ GovernanceQueue  │    │    │
+│   └──────────────┘                      │  │  - validators    │    │    │
+│                                         │  │  - parameters    │    │    │
+│                                         │  │  - emergencies   │    │    │
+│                                         │  └────────┬─────────┘    │    │
+│                                         │           │              │    │
+│                                         │           ▼              │    │
+│                                         │  ┌──────────────────┐    │    │
+│                                         │  │ Block Proposal   │    │    │
+│                                         │  │ (includes updates)│   │    │
+│                                         │  └────────┬─────────┘    │    │
+│                                         └───────────┼──────────────┘    │
+│                                                     │                   │
+│                                                     ▼                   │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                      CONSENSUS BLOCK                             │   │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌────────────────────────┐   │   │
+│   │  │ last_commit │  │  exec_payload│  │  governance_updates    │   │   │
+│   │  └─────────────┘  └─────────────┘  │  ├─ ValidatorUpdate     │   │   │
+│   │  ┌─────────────┐  ┌─────────────┐  │  ├─ ParameterUpdate     │   │   │
+│   │  │   auxpow    │  │ params_hash │  │  └─ EmergencyAction     │   │   │
+│   │  └─────────────┘  └─────────────┘  └────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Update Types and Activation Timing
+
+Different update types have different activation delays to ensure safety:
+
+```mermaid
+flowchart LR
+    subgraph Inclusion["Block H (Inclusion)"]
+        I[Update included<br/>in block]
+    end
+
+    subgraph Emergency["H+0 (Immediate)"]
+        E[Emergency Actions<br/>• PauseChain<br/>• PausePegIns<br/>• PausePegOuts]
+    end
+
+    subgraph Parameters["H+1 (Next Block)"]
+        P[Parameter Updates<br/>• Fees<br/>• Timeouts<br/>• Thresholds]
+    end
+
+    subgraph Validators["H+2 (Two Blocks)"]
+        V[Validator Updates<br/>• Add validator<br/>• Remove validator<br/>• Change power]
+    end
+
+    I -->|Immediate| E
+    I -->|1 block delay| P
+    I -->|2 block delay| V
+```
+
+**Why different delays?**
+
+| Type | Delay | Rationale |
+|------|-------|-----------|
+| **Emergency** | H+0 | Must act immediately during exploits/attacks |
+| **Parameter** | H+1 | Allows propagation; non-validators can prepare |
+| **Validator** | H+2 | Standard Tendermint rule; prevents proposer manipulation |
+
+### Governance Flow
+
+```mermaid
+sequenceDiagram
+    participant GC as Governance Client
+    participant CA as ChainActor
+    participant V as Validators
+    participant S as Storage
+
+    Note over GC,S: 1. Update Submission
+    GC->>CA: ParameterUpdate (signed)
+    CA->>CA: Verify signature
+    CA->>CA: Validate constraints
+    CA->>CA: Queue for inclusion
+
+    Note over GC,S: 2. Block Production (Height H)
+    CA->>CA: Drain queue → governance_updates
+    CA->>V: Propose block with updates
+    V->>V: Verify all signatures
+    V->>CA: Prevote + Precommit
+    CA->>S: Store block + parameter history
+
+    Note over GC,S: 3. Activation (Height H+1)
+    CA->>CA: activate_pending_param_updates(H+1)
+    CA->>CA: Apply to ChainParameters
+    Note over CA: New params now active!
+```
+
+### Parameter Categories at a Glance
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        GOVERNABLE PARAMETERS                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌─────────────────────┐    ┌─────────────────────┐                     │
+│  │  PEG-IN COMPENSATION │    │  BRIDGE CONFIG      │                     │
+│  │  (100-199)           │    │  (200-299)          │                     │
+│  ├─────────────────────┤    ├─────────────────────┤                     │
+│  │ • miner_fee_bps     │    │ • btc_confirmations │                     │
+│  │ • min_fee_satoshi   │    │ • min_peg_amount    │                     │
+│  │ • max_fee_satoshi   │    │ • max_peg_amount    │                     │
+│  └─────────────────────┘    │ • federation_threshold                    │
+│                              │ • federation_members │                    │
+│                              └─────────────────────┘                     │
+│                                                                          │
+│  ┌─────────────────────┐    ┌─────────────────────┐                     │
+│  │  CONSENSUS PARAMS   │    │  FEE SCHEDULE       │                     │
+│  │  (400-499)          │    │  (500-599)          │                     │
+│  ├─────────────────────┤    ├─────────────────────┤                     │
+│  │ • propose_timeout   │    │ • base_fee_floor    │                     │
+│  │ • prevote_timeout   │    │ • base_fee_ceiling  │                     │
+│  │ • precommit_timeout │    └─────────────────────┘                     │
+│  │ • timeout_delta     │                                                │
+│  │ • max_validators    │    ┌─────────────────────┐                     │
+│  └─────────────────────┘    │  EMERGENCY CONTROLS │                     │
+│                              │  (Immediate)        │                     │
+│  ┌─────────────────────┐    ├─────────────────────┤                     │
+│  │  NOTE: AuxPoW has   │    │ • chain_paused      │                     │
+│  │  no governance      │    │ • pegins_paused     │                     │
+│  │  params (optional   │    │ • pegouts_paused    │                     │
+│  │  per-block, Doc 16) │    └─────────────────────┘                     │
+│  └─────────────────────┘                                                │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **GovernanceUpdate** | Unified enum for all update types (Validator, Parameter, Emergency) |
+| **GovernanceQueue** | In-memory queue; proposer drains into block |
+| **ChainParameters** | Runtime state holding all current parameter values |
+| **params_hash** | Hash in block header; enables light client verification |
+| **CF_PARAMETER_HISTORY** | Storage column family for late-joiner reconstruction |
+
+### Late-Joiner Support
+
+Validators joining after genesis can reconstruct the correct parameter state:
+
+```mermaid
+flowchart TD
+    A[New Validator Joins] --> B[Load Genesis Parameters]
+    B --> C[Query CF_PARAMETER_HISTORY]
+    C --> D{For each GovernableParam}
+    D --> E[Get value at sync height]
+    E --> F[Apply to ChainParameters]
+    F --> D
+    D -->|All params processed| G[Verify params_hash matches block]
+    G --> H[Ready to validate]
+```
+
+### Block Structure with Governance
+
+```rust
+ConsensusBlock {
+    parent_hash,
+    slot: height,
+    last_commit,           // Commit for previous block
+    execution_payload,     // EVM transactions
+    auxpow,               // Optional AuxPoW (Doc 16)
+
+    // === Governance Fields ===
+    governance_updates,    // Vec<GovernanceUpdate> (if any)
+    validators_hash,       // Hash of current validator set
+    next_validators_hash,  // Hash of H+2 validator set
+    params_hash,          // Hash of current ChainParameters
+}
+```
+
+### Security Properties
+
+1. **Signature Required**: Every update must have valid governance authority signature
+2. **Constraint Validation**: Parameter values checked against bounds before acceptance
+3. **Deterministic Activation**: All nodes apply changes at exactly the same height
+4. **Auditability**: All updates recorded in blocks (even emergency actions)
+5. **Light Client Friendly**: `params_hash` enables verification without full state
+
+---
+
 **Estimated Effort**: 1-2 weeks
 **Dependencies**:
 - `14_GENESIS_AND_VALIDATOR_INIT.md` (Governance Client stream, ValidatorUpdate)
@@ -44,7 +244,7 @@ Chain parameters set at genesis may need adjustment over time:
 
 ---
 
-## 2. Governable Parameters (Exhaustive List)
+## 2. Governable Parameters (*Exhaustive List)
 
 ### 2.1 Peg-In Compensation
 
@@ -1648,12 +1848,23 @@ async fn test_late_joiner_param_reconstruction() {
 
 ---
 
-*Implementation Plan Version: 1.2*
+*Implementation Plan Version: 1.3*
 *Last Updated: February 2026*
 
 ---
 
 ### Changelog
+
+**v1.3** (February 2026):
+- Added comprehensive "Intro: 30,000 Foot View" section with:
+  - System architecture diagram
+  - Mermaid flowchart for activation timing (H+0, H+1, H+2)
+  - Governance flow sequence diagram
+  - Parameter categories visual overview
+  - Late-joiner reconstruction flowchart
+  - Key concepts table
+  - Block structure summary
+  - Security properties
 
 **v1.2** (February 2026):
 - Added dependencies on Document 15 (Validation) and Document 16 (AuxPoW)
