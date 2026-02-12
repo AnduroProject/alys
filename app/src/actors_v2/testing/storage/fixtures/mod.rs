@@ -47,6 +47,7 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
         let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
+            last_commit: None,
             auxpow_header: None,
             execution_payload,
             pegins: vec![],
@@ -88,6 +89,7 @@ pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
     let consensus_block = ConsensusBlock {
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
+        last_commit: None,
         auxpow_header: None,
         execution_payload,
         pegins: vec![],
@@ -131,6 +133,7 @@ pub fn create_test_block_with_properties(
     let consensus_block = ConsensusBlock {
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
+        last_commit: None,
         auxpow_header: None,
         execution_payload,
         pegins: vec![],
@@ -280,6 +283,7 @@ pub fn create_performance_test_blocks(
         let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
+            last_commit: None,
             auxpow_header: None,
             execution_payload,
             pegins: vec![],
@@ -388,6 +392,7 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
         let consensus_block = ConsensusBlock {
             parent_hash,
             slot,
+            last_commit: None,
             auxpow_header: None,
             execution_payload,
             pegins: vec![],

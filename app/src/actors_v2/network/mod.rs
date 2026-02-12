@@ -19,6 +19,8 @@ pub mod rpc;
 pub mod swarm_factory;
 pub mod sync_actor;
 pub mod sync_checkpoint;
+pub mod tendermint;
+pub mod tendermint_sync;
 
 pub use behaviour::AlysNetworkBehaviour;
 pub use config::{NetworkConfig, SyncConfig};
@@ -30,3 +32,10 @@ pub use network_actor::NetworkActor;
 pub use rpc::{NetworkRpcHandler, NetworkRpcRequest, NetworkRpcResponse, NetworkSubsystem};
 pub use sync_actor::SyncActor;
 pub use sync_checkpoint::SyncCheckpoint;
+pub use tendermint::{
+    TendermintNetworkConfig, TendermintNetworkHandler, TendermintWireMessage, TendermintWireType,
+};
+pub use tendermint_sync::{
+    PersistableValidatorSetTracker, TendermintSyncConfig, TendermintSyncError, TendermintSyncState,
+    TendermintSyncValidator, TrustedCheckpoint, ValidatorSetTracker,
+};

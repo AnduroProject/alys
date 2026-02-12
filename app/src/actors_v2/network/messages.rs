@@ -96,6 +96,17 @@ pub enum NetworkMessage {
     /// Check V2 peer health and attempt reconnection if needed
     /// Triggered by SyncActor when no peer height responses are received
     CheckV2PeerHealth,
+    /// Broadcast Tendermint consensus message (Phase 2: Tendermint integration)
+    BroadcastTendermint {
+        message: crate::actors_v2::chain::tendermint::TendermintMessage,
+        correlation_id: Option<Uuid>,
+    },
+    /// Handle incoming Tendermint consensus message from network
+    HandleTendermintMessage {
+        message: crate::actors_v2::chain::tendermint::TendermintMessage,
+        peer_id: PeerId,
+        correlation_id: Option<Uuid>,
+    },
 }
 
 /// SyncActor messages - blockchain sync only
@@ -207,6 +218,13 @@ pub enum NetworkResponse {
         connected_peers: usize,
         issues: Vec<String>,
     },
+    /// Tendermint message broadcast confirmation (Phase 2: Tendermint integration)
+    TendermintBroadcasted {
+        peer_count: usize,
+        message_type: String,
+    },
+    /// Tendermint message forwarded to ChainActor
+    TendermintForwarded,
 }
 
 /// SyncActor response types

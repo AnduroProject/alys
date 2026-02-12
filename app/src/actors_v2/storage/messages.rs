@@ -111,9 +111,13 @@ pub struct BatchWriteMessage {
 
 // =============================================================================
 // CUMULATIVE DIFFICULTY OPERATIONS
+// DEPRECATED: Not used in Tendermint mode (instant finality, no forks)
 // =============================================================================
 
 /// Message to store cumulative difficulty at a given height
+///
+/// DEPRECATED: Not used in Tendermint mode - kept for V0 Aura coexistence.
+#[deprecated(note = "Not used in Tendermint mode - use ValidatorSet storage instead")]
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<(), StorageError>")]
 pub struct PutCumulativeDifficultyMessage {
@@ -126,10 +130,105 @@ pub struct PutCumulativeDifficultyMessage {
 }
 
 /// Message to get cumulative difficulty at a given height
+///
+/// DEPRECATED: Not used in Tendermint mode - kept for V0 Aura coexistence.
+#[deprecated(note = "Not used in Tendermint mode - use ValidatorSet storage instead")]
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<Option<u128>, StorageError>")]
 pub struct GetCumulativeDifficultyMessage {
     /// Block height to query
+    pub height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+// =============================================================================
+// TENDERMINT CONSENSUS OPERATIONS
+// =============================================================================
+
+/// Message to store a validator set at its effective height
+///
+/// Validator sets follow the Tendermint H+2 rule:
+/// - Update included in block H
+/// - Effective at block H+2
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct StoreValidatorSetMessage {
+    /// Height at which this validator set becomes effective
+    pub effective_height: u64,
+    /// The validator set to store
+    pub validator_set: crate::actors_v2::chain::tendermint::ValidatorSet,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get the validator set active at a given height
+///
+/// Performs a reverse lookup to find the most recent validator set
+/// that was effective at or before the given height.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<crate::actors_v2::chain::tendermint::ValidatorSet>, StorageError>")]
+pub struct GetValidatorSetForHeightMessage {
+    /// The height to query
+    pub height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get the validator set stored at an exact effective height
+///
+/// Unlike GetValidatorSetForHeightMessage, this only returns a validator set
+/// if there was a change at exactly that height.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<crate::actors_v2::chain::tendermint::ValidatorSet>, StorageError>")]
+pub struct GetValidatorSetAtHeightMessage {
+    /// The effective height to query
+    pub effective_height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get the commit proof for a block at a given height
+///
+/// In Tendermint, the commit for block N is stored in block N+1's last_commit field.
+/// This retrieves block N+1 and extracts its last_commit.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<crate::actors_v2::chain::tendermint::Commit>, StorageError>")]
+pub struct GetCommitForHeightMessage {
+    /// Height of the block to get the commit for
+    pub height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to store a governance parameter update
+///
+/// Parameters follow the H+1 rule:
+/// - Update included in block H
+/// - Effective at block H+1
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct StoreParameterUpdateMessage {
+    /// The parameter being updated
+    pub param_id: crate::actors_v2::chain::tendermint::GovernableParam,
+    /// Height at which this parameter value becomes effective
+    pub effective_height: u64,
+    /// The serialized parameter value
+    pub value: Vec<u8>,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Message to get a governance parameter value at a given height
+///
+/// Performs a reverse lookup to find the most recent parameter value
+/// that was effective at or before the given height.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<Vec<u8>>, StorageError>")]
+pub struct GetParameterAtHeightMessage {
+    /// The parameter to query
+    pub param_id: crate::actors_v2::chain::tendermint::GovernableParam,
+    /// The height to query
     pub height: u64,
     /// Optional correlation ID for tracing
     pub correlation_id: Option<Uuid>,

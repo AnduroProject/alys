@@ -48,13 +48,49 @@ pub mod column_families {
     pub const LOGS: &str = "logs";
     pub const METADATA: &str = "metadata";
     pub const CHAIN_HEAD: &str = "chain_head";
+
+    // ========================================================================
+    // Tendermint consensus column families
+    // ========================================================================
+
+    /// Column family for storing validator sets at each effective height.
+    /// Key: effective_height (u64, big-endian)
+    /// Value: serialized ValidatorSet
+    ///
+    /// Validator set changes use H+2 rule (standard Tendermint):
+    /// - Update included in block H
+    /// - Effective at block H+2
+    pub const VALIDATOR_SETS: &str = "validator_sets";
+
+    /// Column family for storing governance parameter history.
+    /// Key: [param_id (2 bytes)][effective_height (8 bytes BE)]
+    /// Value: serialized parameter value
+    ///
+    /// Parameter changes use H+1 rule:
+    /// - Update included in block H
+    /// - Effective at block H+1
+    pub const PARAMETER_HISTORY: &str = "parameter_history";
+
+    // ========================================================================
+    // Deprecated (Aura/fork-choice) column families - kept for V0 coexistence
+    // ========================================================================
+
     /// Column family for storing cumulative difficulty per block height.
     /// Key: block height (u64, big-endian)
     /// Value: cumulative difficulty (u128, big-endian)
+    ///
+    /// DEPRECATED: Not used in Tendermint mode (instant finality, no forks).
+    /// Kept for V0 Aura consensus coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - use VALIDATOR_SETS instead")]
     pub const CUMULATIVE_DIFFICULTY: &str = "cumulative_difficulty";
+
     /// Column family for storing orphaned (non-canonical) blocks.
     /// Key: block hash
     /// Value: serialized block
+    ///
+    /// DEPRECATED: Not used in Tendermint mode (no forks possible).
+    /// Kept for V0 Aura consensus coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - Tendermint has no forks")]
     pub const ORPHANED_BLOCKS: &str = "orphaned_blocks";
 }
 
@@ -137,6 +173,7 @@ impl DatabaseManager {
     }
 
     /// Get column family descriptors with proper configuration
+    #[allow(deprecated)] // Allow deprecated CFs for V0 coexistence
     fn get_column_family_descriptors(config: &DatabaseConfig) -> Vec<ColumnFamilyDescriptor> {
         let cf_names = [
             column_families::BLOCKS,
@@ -146,6 +183,10 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            // Tendermint consensus CFs
+            column_families::VALIDATOR_SETS,
+            column_families::PARAMETER_HISTORY,
+            // Deprecated CFs (kept for V0 coexistence)
             column_families::CUMULATIVE_DIFFICULTY,
             column_families::ORPHANED_BLOCKS,
         ];
@@ -170,6 +211,7 @@ impl DatabaseManager {
     }
 
     /// Get column family names mapping
+    #[allow(deprecated)] // Allow deprecated CFs for V0 coexistence
     fn get_column_family_names() -> HashMap<String, String> {
         let mut cf_map = HashMap::new();
         cf_map.insert("blocks".to_string(), column_families::BLOCKS.to_string());
@@ -191,6 +233,16 @@ impl DatabaseManager {
             "chain_head".to_string(),
             column_families::CHAIN_HEAD.to_string(),
         );
+        // Tendermint consensus CFs
+        cf_map.insert(
+            "validator_sets".to_string(),
+            column_families::VALIDATOR_SETS.to_string(),
+        );
+        cf_map.insert(
+            "parameter_history".to_string(),
+            column_families::PARAMETER_HISTORY.to_string(),
+        );
+        // Deprecated CFs (kept for V0 coexistence)
         cf_map.insert(
             "cumulative_difficulty".to_string(),
             column_families::CUMULATIVE_DIFFICULTY.to_string(),
@@ -350,12 +402,17 @@ impl DatabaseManager {
 
     // ========================================================================
     // Cumulative Difficulty Storage (Gap FC-2)
+    // DEPRECATED: Not used in Tendermint mode (instant finality, no forks)
     // ========================================================================
 
     /// Store the cumulative difficulty at a given height.
     ///
     /// This is the total proof-of-work from genesis to the block at this height.
     /// Used for "most work wins" fork choice decisions.
+    ///
+    /// DEPRECATED: Not used in Tendermint mode - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - use ValidatorSet storage instead")]
+    #[allow(deprecated)]
     pub async fn put_cumulative_difficulty(
         &self,
         height: u64,
@@ -387,6 +444,10 @@ impl DatabaseManager {
     /// Retrieve the cumulative difficulty at a given height.
     ///
     /// Returns None if no difficulty is stored at that height.
+    ///
+    /// DEPRECATED: Not used in Tendermint mode - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - use ValidatorSet storage instead")]
+    #[allow(deprecated)]
     pub async fn get_cumulative_difficulty(
         &self,
         height: u64,
@@ -422,6 +483,10 @@ impl DatabaseManager {
     /// Get the cumulative difficulty at the chain tip.
     ///
     /// Convenience method that combines get_chain_head + get_cumulative_difficulty.
+    ///
+    /// DEPRECATED: Not used in Tendermint mode - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - use ValidatorSet storage instead")]
+    #[allow(deprecated)]
     pub async fn get_tip_cumulative_difficulty(&self) -> Result<Option<u128>, StorageError> {
         let head = match self.get_chain_head().await? {
             Some(h) => h,
@@ -433,11 +498,16 @@ impl DatabaseManager {
 
     // ========================================================================
     // Orphaned Block Storage
+    // DEPRECATED: Not used in Tendermint mode (no forks possible)
     // ========================================================================
 
     /// Store a block as orphaned (non-canonical).
     ///
     /// Used when a block loses fork choice but we want to keep it for potential future reorgs.
+    ///
+    /// DEPRECATED: Not used in Tendermint mode (no forks) - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - Tendermint has no forks")]
+    #[allow(deprecated)]
     pub async fn put_orphaned_block(&self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
         let cf = db
@@ -465,6 +535,10 @@ impl DatabaseManager {
     }
 
     /// Retrieve an orphaned block by hash.
+    ///
+    /// DEPRECATED: Not used in Tendermint mode (no forks) - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - Tendermint has no forks")]
+    #[allow(deprecated)]
     pub async fn get_orphaned_block(
         &self,
         block_hash: &Hash256,
@@ -491,6 +565,10 @@ impl DatabaseManager {
     }
 
     /// Delete an orphaned block (e.g., when it becomes canonical or is too old).
+    ///
+    /// DEPRECATED: Not used in Tendermint mode (no forks) - kept for V0 coexistence.
+    #[deprecated(note = "Not used in Tendermint mode - Tendermint has no forks")]
+    #[allow(deprecated)]
     pub async fn delete_orphaned_block(&self, block_hash: &Hash256) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
         let cf = db
@@ -508,6 +586,196 @@ impl DatabaseManager {
         debug!(block_hash = %block_hash, "Deleted orphaned block");
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Tendermint Consensus Storage
+    // ========================================================================
+
+    /// Store a validator set at its effective height.
+    ///
+    /// Validator sets are stored by the height at which they become effective,
+    /// following the Tendermint H+2 rule:
+    /// - Update included in block H
+    /// - Stored with key = H+2 (effective height)
+    ///
+    /// # Arguments
+    /// * `effective_height` - The height at which this validator set becomes active
+    /// * `validator_set` - The validator set to store (serialized as JSON)
+    pub async fn put_validator_set(
+        &self,
+        effective_height: u64,
+        validator_set: &crate::actors_v2::chain::tendermint::ValidatorSet,
+    ) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::VALIDATOR_SETS)
+            .ok_or_else(|| {
+                StorageError::Database("VALIDATOR_SETS column family not found".to_string())
+            })?;
+
+        let key = effective_height.to_be_bytes();
+        let value = serde_json::to_vec(validator_set)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        db.put_cf(&cf, key, value).map_err(|e| {
+            StorageError::Database(format!("Failed to store validator set: {}", e))
+        })?;
+
+        debug!(
+            effective_height = effective_height,
+            validator_count = validator_set.len(),
+            "Stored validator set"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve the validator set that was active at a given height.
+    ///
+    /// This performs a reverse lookup to find the most recent validator set
+    /// that was effective at or before the given height.
+    ///
+    /// # Arguments
+    /// * `height` - The height to query
+    ///
+    /// # Returns
+    /// The validator set that was active at that height, or None if no validator set
+    /// has been stored (e.g., before genesis).
+    pub async fn get_validator_set_for_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<crate::actors_v2::chain::tendermint::ValidatorSet>, StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::VALIDATOR_SETS)
+            .ok_or_else(|| {
+                StorageError::Database("VALIDATOR_SETS column family not found".to_string())
+            })?;
+
+        // Search backwards from height to find the most recent validator set
+        // Using iterator in reverse to find the most recent entry <= height
+        let mut iter = db.raw_iterator_cf(&cf);
+        let search_key = height.to_be_bytes();
+        iter.seek_for_prev(&search_key);
+
+        if iter.valid() {
+            if let Some(value) = iter.value() {
+                let validator_set: crate::actors_v2::chain::tendermint::ValidatorSet =
+                    serde_json::from_slice(value)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                return Ok(Some(validator_set));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Retrieve the validator set stored at an exact effective height.
+    ///
+    /// Unlike `get_validator_set_for_height`, this only returns a validator set
+    /// if there was a change at exactly that height.
+    pub async fn get_validator_set_at_height(
+        &self,
+        effective_height: u64,
+    ) -> Result<Option<crate::actors_v2::chain::tendermint::ValidatorSet>, StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::VALIDATOR_SETS)
+            .ok_or_else(|| {
+                StorageError::Database("VALIDATOR_SETS column family not found".to_string())
+            })?;
+
+        let key = effective_height.to_be_bytes();
+
+        match db.get_cf(&cf, key).map_err(|e| {
+            StorageError::Database(format!("Failed to retrieve validator set: {}", e))
+        })? {
+            Some(value) => {
+                let validator_set: crate::actors_v2::chain::tendermint::ValidatorSet =
+                    serde_json::from_slice(&value)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                Ok(Some(validator_set))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Store a governance parameter update at its effective height.
+    ///
+    /// Parameters are stored by param_id and effective height, following
+    /// the H+1 rule:
+    /// - Update included in block H
+    /// - Stored with key = [param_id][H+1] (effective height)
+    pub async fn put_parameter_update(
+        &self,
+        param_id: crate::actors_v2::chain::tendermint::GovernableParam,
+        effective_height: u64,
+        value: &[u8],
+    ) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::PARAMETER_HISTORY)
+            .ok_or_else(|| {
+                StorageError::Database("PARAMETER_HISTORY column family not found".to_string())
+            })?;
+
+        // Key format: [param_id (2 bytes)][effective_height (8 bytes BE)]
+        let mut key = Vec::with_capacity(10);
+        key.extend_from_slice(&(param_id as u16).to_be_bytes());
+        key.extend_from_slice(&effective_height.to_be_bytes());
+
+        db.put_cf(&cf, &key, value).map_err(|e| {
+            StorageError::Database(format!("Failed to store parameter update: {}", e))
+        })?;
+
+        debug!(
+            param_id = ?param_id,
+            effective_height = effective_height,
+            "Stored parameter update"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve a governance parameter value at a given height.
+    ///
+    /// This performs a reverse lookup to find the most recent parameter value
+    /// that was effective at or before the given height.
+    pub async fn get_parameter_at_height(
+        &self,
+        param_id: crate::actors_v2::chain::tendermint::GovernableParam,
+        height: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let db = self.main_db.read().await;
+        let cf = db
+            .cf_handle(column_families::PARAMETER_HISTORY)
+            .ok_or_else(|| {
+                StorageError::Database("PARAMETER_HISTORY column family not found".to_string())
+            })?;
+
+        // Build the search key for this param at the given height
+        let mut search_key = Vec::with_capacity(10);
+        search_key.extend_from_slice(&(param_id as u16).to_be_bytes());
+        search_key.extend_from_slice(&height.to_be_bytes());
+
+        // Build the prefix for this param (to ensure we don't read other params)
+        let mut prefix = Vec::with_capacity(2);
+        prefix.extend_from_slice(&(param_id as u16).to_be_bytes());
+
+        let mut iter = db.raw_iterator_cf(&cf);
+        iter.seek_for_prev(&search_key);
+
+        if iter.valid() {
+            if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
+                // Check that the key starts with our param prefix
+                if key.starts_with(&prefix) {
+                    return Ok(Some(value.to_vec()));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Execute batch write operations
@@ -563,6 +831,7 @@ impl DatabaseManager {
     }
 
     /// Compact the database
+    #[allow(deprecated)] // Allow deprecated CFs for V0 coexistence
     pub async fn compact_database(&self) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
 
@@ -575,6 +844,8 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            column_families::VALIDATOR_SETS,
+            column_families::PARAMETER_HISTORY,
             column_families::CUMULATIVE_DIFFICULTY,
             column_families::ORPHANED_BLOCKS,
         ] {
@@ -589,6 +860,7 @@ impl DatabaseManager {
     }
 
     /// Get database statistics
+    #[allow(deprecated)] // Allow deprecated CFs for V0 coexistence
     pub async fn get_stats(&self) -> Result<DatabaseStats, StorageError> {
         let db = self.main_db.read().await;
         let mut column_family_sizes = HashMap::new();
@@ -603,6 +875,8 @@ impl DatabaseManager {
             column_families::LOGS,
             column_families::METADATA,
             column_families::CHAIN_HEAD,
+            column_families::VALIDATOR_SETS,
+            column_families::PARAMETER_HISTORY,
             column_families::CUMULATIVE_DIFFICULTY,
             column_families::ORPHANED_BLOCKS,
         ] {

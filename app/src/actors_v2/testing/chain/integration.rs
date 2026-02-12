@@ -215,6 +215,7 @@ mod tests {
         let consensus_block = crate::block::ConsensusBlock {
             parent_hash: lighthouse_wrapper::types::Hash256::zero(),
             slot: 100,
+            last_commit: None,
             auxpow_header: None,
             execution_payload,
             pegins: vec![],

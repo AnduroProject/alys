@@ -80,6 +80,23 @@ pub enum EngineMessage {
         graceful: bool,
         correlation_id: Option<Uuid>,
     },
+
+    /// Execute block with instant finality (Tendermint consensus)
+    ///
+    /// This message is used in Tendermint mode where blocks are immediately
+    /// finalized after 2/3+ precommit signatures. Unlike fork_choice_updated,
+    /// this always marks the block as finalized.
+    ///
+    /// # Arguments
+    ///
+    /// * `execution_payload` - The payload to execute and finalize
+    /// * `parent_hash` - Parent block hash for validation
+    /// * `correlation_id` - Optional tracking ID
+    ExecuteBlock {
+        execution_payload: ExecutionPayload<MainnetEthSpec>,
+        parent_hash: ExecutionBlockHash,
+        correlation_id: Option<Uuid>,
+    },
 }
 
 impl std::fmt::Debug for EngineMessage {
@@ -173,6 +190,17 @@ impl std::fmt::Debug for EngineMessage {
                 .field("graceful", graceful)
                 .field("correlation_id", correlation_id)
                 .finish(),
+            Self::ExecuteBlock {
+                execution_payload,
+                parent_hash,
+                correlation_id,
+            } => f
+                .debug_struct("ExecuteBlock")
+                .field("block_hash", &execution_payload.block_hash())
+                .field("block_number", &execution_payload.block_number())
+                .field("parent_hash", parent_hash)
+                .field("correlation_id", correlation_id)
+                .finish(),
         }
     }
 }
@@ -217,6 +245,12 @@ pub enum EngineResponse {
         head_block: Option<ExecutionBlockHash>,
     },
     ShutdownComplete,
+    /// Block executed and finalized (Tendermint instant finality)
+    BlockExecuted {
+        block_hash: ExecutionBlockHash,
+        block_number: u64,
+        execution_time: Duration,
+    },
 }
 
 /// Helper functions for creating common messages
@@ -252,6 +286,21 @@ impl EngineMessage {
     pub fn commit_block_for_finalization(payload: ExecutionPayload<MainnetEthSpec>) -> Self {
         Self::CommitBlock {
             execution_payload: payload,
+            correlation_id: Some(Uuid::new_v4()),
+        }
+    }
+
+    /// Create ExecuteBlock message for Tendermint instant finality
+    ///
+    /// In Tendermint mode, blocks are finalized immediately after 2/3+ precommits.
+    /// This method simplifies creating the execute message with proper parent hash.
+    pub fn execute_block_tendermint(
+        payload: ExecutionPayload<MainnetEthSpec>,
+        parent_hash: ExecutionBlockHash,
+    ) -> Self {
+        Self::ExecuteBlock {
+            execution_payload: payload,
+            parent_hash,
             correlation_id: Some(Uuid::new_v4()),
         }
     }

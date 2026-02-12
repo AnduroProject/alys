@@ -461,6 +461,7 @@ impl Handler<ChainMessage> for ChainActor {
                         let consensus_block = crate::block::ConsensusBlock {
                             parent_hash: parent_consensus_hash, // Use actual parent consensus block hash, not derived from slot
                             slot,
+                            last_commit: None, // TODO: Will be set when Tendermint consensus is active
                             auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
                             pegins: vec![], // Withdrawal collection integrated above via add_balances
@@ -2191,6 +2192,181 @@ impl Handler<ChainMessage> for ChainActor {
                     }
                 })
             }
+
+            // ===== Tendermint Consensus Message Handlers =====
+
+            ChainMessage::TendermintNewHeight {
+                height,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintNewHeight received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let (height, round) = actor
+                        .handle_tendermint_new_height(height, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintHeightStarted { height, round })
+                })
+            }
+
+            ChainMessage::TendermintPropose {
+                height,
+                round,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintPropose received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let block_hash = actor
+                        .handle_tendermint_propose(height, round, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintProposalCreated {
+                        height,
+                        round,
+                        block_hash,
+                    })
+                })
+            }
+
+            ChainMessage::TendermintProposal {
+                proposal,
+                peer_id,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintProposal received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let height = proposal.height;
+                let round = proposal.round;
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let block_hash = actor
+                        .handle_tendermint_proposal(proposal, peer_id, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintProposalAccepted {
+                        height,
+                        round,
+                        block_hash,
+                    })
+                })
+            }
+
+            ChainMessage::TendermintVote {
+                vote,
+                peer_id,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintVote received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let height = vote.height;
+                let round = vote.round;
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let voter = actor
+                        .handle_tendermint_vote(vote, peer_id, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintVoteAccepted {
+                        height,
+                        round,
+                        voter,
+                    })
+                })
+            }
+
+            ChainMessage::TendermintTimeout {
+                height,
+                round,
+                step,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintTimeout received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let new_round = actor
+                        .handle_tendermint_timeout(height, round, step, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintRoundAdvanced { height, new_round })
+                })
+            }
+
+            ChainMessage::TendermintGovernanceUpdate {
+                update,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintGovernanceUpdate received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let effective_height = actor
+                        .handle_tendermint_governance_update(update, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintGovernanceApplied { effective_height })
+                })
+            }
         }
     }
 }
@@ -2316,6 +2492,15 @@ async fn create_aux_block_helper(
         )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,
+        // Tendermint state (disabled for this helper)
+        tendermint_state: None,
+        timeout_scheduler: None,
+        consensus_wal: None,
+        validator_keypair: None,
+        validator_set: None,
+        cached_last_commit: None,
+        tendermint_enabled: false,
+        timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     actor.create_aux_block(miner_address).await
@@ -2357,6 +2542,15 @@ async fn submit_aux_block_helper(
         )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,
+        // Tendermint state (disabled for this helper)
+        tendermint_state: None,
+        timeout_scheduler: None,
+        consensus_wal: None,
+        validator_keypair: None,
+        validator_set: None,
+        cached_last_commit: None,
+        tendermint_enabled: false,
+        timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     actor

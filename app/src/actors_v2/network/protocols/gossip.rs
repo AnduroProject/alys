@@ -13,6 +13,12 @@ pub enum GossipTopic {
     Transactions,
     PeerAnnouncements,
     AuxPow, // Phase 4: AuxPoW mining coordination
+    // Tendermint consensus topics
+    TendermintProposals,
+    TendermintVotes,
+    TendermintTimeouts,
+    TendermintEvidence,
+    TendermintNewRound,
 }
 
 impl GossipTopic {
@@ -23,6 +29,12 @@ impl GossipTopic {
             GossipTopic::Transactions => IdentTopic::new("alys-transactions"),
             GossipTopic::PeerAnnouncements => IdentTopic::new("alys-peers"),
             GossipTopic::AuxPow => IdentTopic::new("alys-auxpow"),
+            // Tendermint topics
+            GossipTopic::TendermintProposals => IdentTopic::new("alys-tendermint-proposals"),
+            GossipTopic::TendermintVotes => IdentTopic::new("alys-tendermint-votes"),
+            GossipTopic::TendermintTimeouts => IdentTopic::new("alys-tendermint-timeouts"),
+            GossipTopic::TendermintEvidence => IdentTopic::new("alys-tendermint-evidence"),
+            GossipTopic::TendermintNewRound => IdentTopic::new("alys-tendermint-newround"),
         }
     }
 
@@ -33,6 +45,12 @@ impl GossipTopic {
             GossipTopic::Transactions => "alys-transactions",
             GossipTopic::PeerAnnouncements => "alys-peers",
             GossipTopic::AuxPow => "alys-auxpow",
+            // Tendermint topics
+            GossipTopic::TendermintProposals => "alys-tendermint-proposals",
+            GossipTopic::TendermintVotes => "alys-tendermint-votes",
+            GossipTopic::TendermintTimeouts => "alys-tendermint-timeouts",
+            GossipTopic::TendermintEvidence => "alys-tendermint-evidence",
+            GossipTopic::TendermintNewRound => "alys-tendermint-newround",
         }
     }
 
@@ -43,11 +61,17 @@ impl GossipTopic {
             "alys-transactions" => Some(GossipTopic::Transactions),
             "alys-peers" => Some(GossipTopic::PeerAnnouncements),
             "alys-auxpow" => Some(GossipTopic::AuxPow),
+            // Tendermint topics
+            "alys-tendermint-proposals" => Some(GossipTopic::TendermintProposals),
+            "alys-tendermint-votes" => Some(GossipTopic::TendermintVotes),
+            "alys-tendermint-timeouts" => Some(GossipTopic::TendermintTimeouts),
+            "alys-tendermint-evidence" => Some(GossipTopic::TendermintEvidence),
+            "alys-tendermint-newround" => Some(GossipTopic::TendermintNewRound),
             _ => None,
         }
     }
 
-    /// Get all essential topics
+    /// Get all essential topics (non-Tendermint)
     pub fn all_topics() -> Vec<Self> {
         vec![
             GossipTopic::Blocks,
@@ -55,6 +79,36 @@ impl GossipTopic {
             GossipTopic::PeerAnnouncements,
             GossipTopic::AuxPow,
         ]
+    }
+
+    /// Get all Tendermint consensus topics
+    pub fn tendermint_topics() -> Vec<Self> {
+        vec![
+            GossipTopic::TendermintProposals,
+            GossipTopic::TendermintVotes,
+            GossipTopic::TendermintTimeouts,
+            GossipTopic::TendermintEvidence,
+            GossipTopic::TendermintNewRound,
+        ]
+    }
+
+    /// Get all topics including Tendermint
+    pub fn all_topics_with_tendermint() -> Vec<Self> {
+        let mut topics = Self::all_topics();
+        topics.extend(Self::tendermint_topics());
+        topics
+    }
+
+    /// Check if this is a Tendermint consensus topic
+    pub fn is_tendermint(&self) -> bool {
+        matches!(
+            self,
+            GossipTopic::TendermintProposals
+                | GossipTopic::TendermintVotes
+                | GossipTopic::TendermintTimeouts
+                | GossipTopic::TendermintEvidence
+                | GossipTopic::TendermintNewRound
+        )
     }
 }
 

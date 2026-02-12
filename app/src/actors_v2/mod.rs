@@ -10,6 +10,7 @@ pub mod network;
 pub mod rpc;
 pub mod slot_worker;
 pub mod storage;
+pub mod tendermint_driver;
 
 pub mod testing;
 

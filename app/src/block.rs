@@ -1,4 +1,5 @@
 use crate::{
+    actors_v2::chain::tendermint::Commit,
     aura::Authority,
     auxpow::AuxPow,
     auxpow_miner::BlockIndex,
@@ -57,6 +58,10 @@ pub struct ConsensusBlock<T: EthSpec> {
     pub parent_hash: Hash256,
     /// Aura slot the block was produced in
     pub slot: u64,
+    /// Tendermint commit proof for the PREVIOUS block (Block N-1).
+    /// Block N contains the commit proof that finalized Block N-1.
+    /// None for genesis block (no previous block to commit).
+    pub last_commit: Option<Commit>,
     /// Proof of work, used for finalization. Not every block is expected to have this.
     pub auxpow_header: Option<AuxPowHeader>,
     // we always assume the geth node is configured
@@ -108,6 +113,7 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
         Self {
             parent_hash: Hash256::zero(),
             slot: 0,
+            last_commit: None,
             auxpow_header: None,
             execution_payload: ExecutionPayloadCapella {
                 parent_hash: ExecutionBlockHash::zero(),
@@ -138,6 +144,7 @@ impl ConsensusBlock<MainnetEthSpec> {
         slot: u64,
         payload: ExecutionPayload<MainnetEthSpec>,
         prev: Hash256,
+        last_commit: Option<Commit>,
         auxpow_header: Option<AuxPowHeader>,
         pegins: Vec<(Txid, BlockHash)>,
         pegout_payment_proposal: Option<BitcoinTransaction>,
@@ -146,6 +153,7 @@ impl ConsensusBlock<MainnetEthSpec> {
         Self {
             slot,
             parent_hash: prev,
+            last_commit,
             execution_payload: payload.as_capella().unwrap().clone(),
             auxpow_header,
             pegins,
@@ -231,6 +239,7 @@ impl SignedConsensusBlock<MainnetEthSpec> {
             message: ConsensusBlock {
                 parent_hash: Hash256::zero(),
                 slot: 0, // TODO: calculate slot
+                last_commit: None, // Genesis has no previous block to commit
                 auxpow_header: Some(AuxPowHeader {
                     range_start: Hash256::zero(),
                     range_end: Hash256::zero(),

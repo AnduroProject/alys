@@ -50,6 +50,7 @@ mod tests {
         let consensus_block = crate::block::ConsensusBlock {
             parent_hash: Hash256::from_low_u64_be(slot - 1),
             slot,
+            last_commit: None,
             auxpow_header: None,
             execution_payload,
             pegins: vec![],

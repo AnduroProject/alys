@@ -636,6 +636,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             slot,
             payload.clone(),
             prev,
+            None, // last_commit: V0 Aura consensus doesn't use Tendermint commits
             queued_pow,
             pegins,
             pegouts,

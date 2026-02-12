@@ -781,6 +781,122 @@ impl Handler<EngineMessage> for EngineActor {
 
                 Box::pin(async move { Ok(EngineResponse::ShutdownComplete) })
             }
+
+            EngineMessage::ExecuteBlock {
+                execution_payload,
+                parent_hash,
+                correlation_id,
+            } => {
+                // Tendermint instant finality: execute block and mark finalized immediately
+                let engine = self.engine.clone();
+                let metrics = self.metrics.clone();
+                let correlation_id = correlation_id.unwrap_or_else(|| Uuid::new_v4());
+                let block_hash = execution_payload.block_hash();
+                let block_number = execution_payload.block_number();
+
+                Box::pin(async move {
+                    let start_time = Instant::now();
+
+                    info!(
+                        correlation_id = %correlation_id,
+                        block_hash = ?block_hash,
+                        block_number = block_number,
+                        parent_hash = ?parent_hash,
+                        "Executing block with Tendermint instant finality"
+                    );
+
+                    // Step 1: Execute the payload via new_payload
+                    let new_payload_result = engine.api
+                        .new_payload::<MainnetEthSpec>(execution_payload.clone())
+                        .await;
+
+                    match new_payload_result {
+                        Ok(payload_status) => {
+                            // Check if EL considers payload valid
+                            let is_valid = payload_status.latest_valid_hash.is_some();
+
+                            if !is_valid {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = ?block_hash,
+                                    payload_status = ?payload_status.status,
+                                    "Payload execution failed - invalid"
+                                );
+                                return Err(EngineError::BlockValidationFailed(format!(
+                                    "Payload invalid: {:?}",
+                                    payload_status.status
+                                )));
+                            }
+
+                            debug!(
+                                correlation_id = %correlation_id,
+                                block_hash = ?block_hash,
+                                latest_valid_hash = ?payload_status.latest_valid_hash,
+                                "Payload executed successfully"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_hash = ?block_hash,
+                                error = ?e,
+                                "Payload execution API call failed"
+                            );
+                            return Err(EngineError::EngineApi(format!("{:?}", e)));
+                        }
+                    }
+
+                    // Step 2: Update fork choice to finalize (Tendermint = instant finality)
+                    // head = safe = finalized = this block
+                    let forkchoice_state = lighthouse_wrapper::execution_layer::ForkchoiceState {
+                        head_block_hash: block_hash,
+                        safe_block_hash: block_hash,
+                        finalized_block_hash: block_hash,
+                    };
+
+                    let fc_result = engine.api.forkchoice_updated(forkchoice_state, None).await;
+
+                    match fc_result {
+                        Ok(_fc_response) => {
+                            // Update internal finalized tracking
+                            engine.set_finalized(block_hash).await;
+
+                            let duration = start_time.elapsed();
+
+                            info!(
+                                correlation_id = %correlation_id,
+                                block_hash = ?block_hash,
+                                block_number = block_number,
+                                duration_ms = duration.as_millis(),
+                                "Block executed and finalized (Tendermint instant finality)"
+                            );
+
+                            metrics.record_fork_choice_update_success(duration);
+
+                            Ok(EngineResponse::BlockExecuted {
+                                block_hash,
+                                block_number,
+                                execution_time: duration,
+                            })
+                        }
+                        Err(e) => {
+                            let duration = start_time.elapsed();
+                            error!(
+                                correlation_id = %correlation_id,
+                                block_hash = ?block_hash,
+                                error = ?e,
+                                duration_ms = duration.as_millis(),
+                                "Fork choice update failed during Tendermint finalization"
+                            );
+
+                            metrics.record_fork_choice_update_failure(duration);
+                            metrics.record_engine_api_error();
+
+                            Err(EngineError::ForkChoiceUpdateFailed(format!("{:?}", e)))
+                        }
+                    }
+                })
+            }
         }
     }
 }

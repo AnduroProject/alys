@@ -80,6 +80,49 @@ pub enum ChainMessage {
 
     /// Peer disconnected notification
     PeerDisconnected { peer_id: String },
+
+    // ===== Tendermint Consensus Messages =====
+
+    /// Start new height in Tendermint consensus
+    TendermintNewHeight {
+        height: u64,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Trigger proposal creation (for designated proposer)
+    TendermintPropose {
+        height: u64,
+        round: u32,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Received proposal from network
+    TendermintProposal {
+        proposal: crate::actors_v2::chain::tendermint::Proposal,
+        peer_id: Option<String>,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Received vote (prevote or precommit) from network
+    TendermintVote {
+        vote: crate::actors_v2::chain::tendermint::Vote,
+        peer_id: Option<String>,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Timeout event from scheduler
+    TendermintTimeout {
+        height: u64,
+        round: u32,
+        step: crate::actors_v2::chain::tendermint::TendermintStep,
+        correlation_id: Option<Uuid>,
+    },
+
+    /// Governance update to apply
+    TendermintGovernanceUpdate {
+        update: crate::actors_v2::chain::tendermint::GovernanceUpdate,
+        correlation_id: Option<Uuid>,
+    },
 }
 
 /// ChainManager interface messages (for future EngineActor/AuxPowActor coordination)
@@ -183,6 +226,53 @@ pub enum ChainResponse {
     NetworkBlockProcessed {
         accepted: bool,
         reason: Option<String>,
+    },
+
+    // ===== Tendermint Consensus Responses =====
+
+    /// New height initialized
+    TendermintHeightStarted {
+        height: u64,
+        round: u32,
+    },
+
+    /// Proposal created and broadcast
+    TendermintProposalCreated {
+        height: u64,
+        round: u32,
+        block_hash: H256,
+    },
+
+    /// Proposal accepted (vote will be cast)
+    TendermintProposalAccepted {
+        height: u64,
+        round: u32,
+        block_hash: H256,
+    },
+
+    /// Vote accepted
+    TendermintVoteAccepted {
+        height: u64,
+        round: u32,
+        voter: crate::actors_v2::chain::tendermint::ValidatorId,
+    },
+
+    /// Block committed (2/3+ precommits received)
+    TendermintBlockCommitted {
+        height: u64,
+        round: u32,
+        block_hash: H256,
+    },
+
+    /// Round advanced (timeout or 2/3+ nil)
+    TendermintRoundAdvanced {
+        height: u64,
+        new_round: u32,
+    },
+
+    /// Governance update applied
+    TendermintGovernanceApplied {
+        effective_height: u64,
     },
 }
 

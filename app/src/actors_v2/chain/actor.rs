@@ -28,7 +28,13 @@ use crate::actors_v2::{
     storage::StorageActor,
 };
 use crate::block::SignedConsensusBlock;
+use lighthouse_wrapper::bls::Keypair as BLSKeypair;
 use lighthouse_wrapper::types::MainnetEthSpec;
+
+// Tendermint imports
+use super::tendermint::{
+    Commit, ConsensusWAL, TendermintState, TimeoutEvent, TimeoutScheduler, ValidatorSet,
+};
 
 pub(crate) const DEFAULT_MAX_PENDING_IMPORTS: usize = 1000;
 
@@ -113,6 +119,35 @@ pub struct ChainActor {
     /// Active Height Monitoring (Layer 3): Consecutive PayloadIdUnavailable errors
     /// Used to detect chain head desynchronization and trigger emergency re-sync
     pub(crate) payload_unavailable_count: u32,
+
+    // ===== Tendermint Consensus State =====
+
+    /// Tendermint consensus state machine (None if Tendermint mode disabled)
+    pub(crate) tendermint_state: Option<Arc<RwLock<TendermintState>>>,
+
+    /// Timeout scheduler for Tendermint consensus phases
+    pub(crate) timeout_scheduler: Option<Arc<RwLock<TimeoutScheduler>>>,
+
+    /// Write-ahead log for consensus safety
+    pub(crate) consensus_wal: Option<Arc<RwLock<ConsensusWAL>>>,
+
+    /// Validator keypair for signing (None if not a validator)
+    pub(crate) validator_keypair: Option<Arc<BLSKeypair>>,
+
+    /// Current validator set (loaded from storage at startup)
+    pub(crate) validator_set: Option<Arc<RwLock<ValidatorSet>>>,
+
+    /// Cached last commit for embedding in next block's last_commit field
+    pub(crate) cached_last_commit: Option<Arc<RwLock<Commit>>>,
+
+    /// Whether Tendermint consensus mode is enabled
+    pub(crate) tendermint_enabled: bool,
+
+    /// Receiver for timeout events from the TimeoutScheduler
+    /// Used to trigger TendermintTimeout messages when consensus phases expire.
+    /// Wrapped in Arc<Mutex<Option>> to allow Clone while ensuring only one
+    /// consumer can take ownership of the receiver.
+    pub(crate) timeout_receiver: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<TimeoutEvent>>>>,
 }
 
 impl ChainActor {
@@ -152,7 +187,80 @@ impl ChainActor {
             orphan_cache: Arc::new(RwLock::new(OrphanBlockCache::new())),
             // Active Height Monitoring (Layer 3): Initialize error counter
             payload_unavailable_count: 0,
+            // Tendermint state (initialized as disabled, enable via configure_tendermint)
+            tendermint_state: None,
+            timeout_scheduler: None,
+            consensus_wal: None,
+            validator_keypair: None,
+            validator_set: None,
+            cached_last_commit: None,
+            tendermint_enabled: false,
+            timeout_receiver: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+
+    /// Configure Tendermint consensus mode.
+    ///
+    /// Must be called after actor creation to enable Tendermint consensus.
+    /// This initializes the state machine, timeout scheduler, and WAL.
+    ///
+    /// # Arguments
+    ///
+    /// * `validator_keypair` - BLS keypair for signing (None if non-validator node)
+    /// * `validator_set` - Initial validator set
+    /// * `wal_path` - Directory path for write-ahead log
+    pub fn configure_tendermint(
+        &mut self,
+        validator_keypair: Option<BLSKeypair>,
+        validator_set: ValidatorSet,
+        wal_path: &std::path::Path,
+    ) -> Result<(), ChainError> {
+        use super::tendermint::TimeoutConfig;
+
+        // Wrap in Arc for sharing
+        let validator_set = Arc::new(validator_set);
+
+        // Determine our validator ID if we have a keypair
+        let our_validator_id = validator_keypair.as_ref().and_then(|kp| {
+            validator_set.find_validator(&kp.pk)
+        });
+
+        // Initialize state machine
+        let state = TendermintState::new(
+            self.state.get_height() + 1, // Start at next height
+            validator_set.clone(),
+            our_validator_id,
+        );
+
+        // Initialize timeout scheduler with event channel
+        let timeout_config = TimeoutConfig::default();
+        let (timeout_tx, timeout_rx) = tokio::sync::mpsc::channel(100);
+        let timeout_scheduler = TimeoutScheduler::new(timeout_config, timeout_tx);
+
+        // Initialize WAL
+        let wal = ConsensusWAL::new(wal_path)
+            .map_err(|e| ChainError::Internal(format!("Failed to open WAL: {}", e)))?;
+
+        // Clone validator_set for the RwLock
+        let validator_set_for_state = (*validator_set).clone();
+
+        // Store state
+        self.tendermint_state = Some(Arc::new(RwLock::new(state)));
+        self.timeout_scheduler = Some(Arc::new(RwLock::new(timeout_scheduler)));
+        self.consensus_wal = Some(Arc::new(RwLock::new(wal)));
+        self.validator_keypair = validator_keypair.map(Arc::new);
+        self.validator_set = Some(Arc::new(RwLock::new(validator_set_for_state)));
+        self.cached_last_commit = None;
+        self.tendermint_enabled = true;
+        // Store the timeout receiver (wrapped for Clone compatibility)
+        *self.timeout_receiver.blocking_lock() = Some(timeout_rx);
+
+        info!(
+            our_validator_id = ?our_validator_id,
+            "Tendermint consensus mode enabled"
+        );
+
+        Ok(())
     }
 
     /// Set storage actor address
@@ -1310,6 +1418,75 @@ impl ChainActor {
             "Sync health monitor started"
         );
     }
+
+    /// Start the Tendermint timeout event loop.
+    ///
+    /// This spawns a background task that:
+    /// 1. Takes ownership of the timeout receiver
+    /// 2. Polls for timeout events from the TimeoutScheduler
+    /// 3. Dispatches TendermintTimeout messages to self when timeouts fire
+    ///
+    /// This is critical for consensus liveness - timeouts drive round advancement
+    /// when proposals or votes are not received in time.
+    fn start_tendermint_timeout_loop(&self, ctx: &mut Context<Self>) {
+        if !self.tendermint_enabled {
+            return;
+        }
+
+        let timeout_receiver = self.timeout_receiver.clone();
+        let addr = ctx.address();
+
+        // Spawn a task that takes ownership of the receiver and processes events
+        ctx.spawn(
+            async move {
+                // Try to take the receiver from the Option
+                let mut receiver = {
+                    let mut guard = timeout_receiver.lock().await;
+                    match guard.take() {
+                        Some(rx) => rx,
+                        None => {
+                            warn!("Tendermint timeout receiver already taken or not initialized");
+                            return;
+                        }
+                    }
+                };
+
+                info!("Tendermint timeout event loop started");
+
+                // Process timeout events until the channel closes
+                while let Some(event) = receiver.recv().await {
+                    let correlation_id = uuid::Uuid::new_v4();
+
+                    debug!(
+                        correlation_id = %correlation_id,
+                        height = event.height,
+                        round = event.round,
+                        step = ?event.step,
+                        "Timeout event received from scheduler"
+                    );
+
+                    // Send TendermintTimeout message to self
+                    let msg = super::messages::ChainMessage::TendermintTimeout {
+                        height: event.height,
+                        round: event.round,
+                        step: event.step,
+                        correlation_id: Some(correlation_id),
+                    };
+
+                    if let Err(e) = addr.send(msg).await {
+                        error!(
+                            correlation_id = %correlation_id,
+                            error = %e,
+                            "Failed to send TendermintTimeout message to ChainActor"
+                        );
+                    }
+                }
+
+                info!("Tendermint timeout event loop ended (channel closed)");
+            }
+            .into_actor(self),
+        );
+    }
 }
 
 impl Actor for ChainActor {
@@ -1406,6 +1583,9 @@ impl Actor for ChainActor {
 
         // Start queue monitoring (Phase 3)
         self.start_queue_monitor(ctx);
+
+        // Start Tendermint timeout event loop (if enabled)
+        self.start_tendermint_timeout_loop(ctx);
 
         // Initialize sync state after genesis is ready
         let addr = ctx.address();

@@ -34,6 +34,12 @@ pub mod monitoring;
 pub mod recovery;
 pub mod reorganization;
 
+// Tendermint consensus module (Phase 5 migration)
+pub mod tendermint;
+
+// Tendermint handler implementations
+pub mod tendermint_handlers;
+
 pub use actor::ChainActor;
 pub use config::ChainConfig;
 pub use error::ChainError;
