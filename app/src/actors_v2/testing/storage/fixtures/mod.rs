@@ -48,9 +48,8 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
             parent_hash,
             slot,
             last_commit: None,
-            auxpow_header: None,
+            auxpow_header: None, // Path B: pegins would be in auxpow_header.pegins if present
             execution_payload,
-            pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
         };
@@ -90,9 +89,8 @@ pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
         last_commit: None,
-        auxpow_header: None,
+        auxpow_header: None, // Path B: pegins would be in auxpow_header.pegins if present
         execution_payload,
-        pegins: vec![],
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
     };
@@ -134,9 +132,8 @@ pub fn create_test_block_with_properties(
         parent_hash: Hash256::from_low_u64_be(slot.saturating_sub(1)),
         slot,
         last_commit: None,
-        auxpow_header: None,
+        auxpow_header: None, // Path B: pegins would be in auxpow_header.pegins if present
         execution_payload,
-        pegins: vec![],
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
     };
@@ -284,9 +281,8 @@ pub fn create_performance_test_blocks(
             parent_hash,
             slot,
             last_commit: None,
-            auxpow_header: None,
+            auxpow_header: None, // Path B: pegins would be in auxpow_header.pegins if present
             execution_payload,
-            pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
         };
@@ -393,9 +389,8 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
             parent_hash,
             slot,
             last_commit: None,
-            auxpow_header: None,
+            auxpow_header: None, // Path B: pegins would be in auxpow_header.pegins if present
             execution_payload,
-            pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
         };

@@ -31,10 +31,10 @@ This directory contains comprehensive implementation plans for migrating Alys V2
 | 10 | [Slot Worker to Tendermint Timing](10_SLOT_WORKER_TO_TENDERMINT_TIMING.md) | 3-5 days | 02, 08 |
 | 11 | [Storage Schema Migration](11_STORAGE_SCHEMA_MIGRATION.md) | 1 week | 01 |
 | 12 | [RPC Actor Migration](12_RPC_ACTOR_MIGRATION.md) | 2-3 days | 11, 13 |
-| 13 | [Bridge Integration](13_BRIDGE_INTEGRATION.md) | 3-5 days | 07 |
+| 13 | ~~Bridge Integration~~ (Removed - peg-ins via AuxPoW) | N/A | - |
 | 14 | [Genesis & Validator Init](14_GENESIS_AND_VALIDATOR_INIT.md) | 1-2 days | 01 |
 | 15 | [Validation Module](15_VALIDATION_MODULE.md) | 3-5 days | 01, 02, 03 |
-| 16 | [AuxPoW-Tendermint Integration](16_AUXPOW_TENDERMINT_INTEGRATION.md) | 2-3 weeks | 07, 13 |
+| 16 | [AuxPoW-Tendermint Integration](16_AUXPOW_TENDERMINT_INTEGRATION.md) | 2-3 weeks | 07 |
 | 17 | [Governance Parameters](17_GOVERNANCE_PARAMETERS.md) | 1-2 weeks | 14, 11 |
 
 ---
@@ -97,7 +97,7 @@ graph LR
 2. **14 Genesis & Validator Init** - Required for bootstrap
 3. **15 Validation Module** - Replace Aura validation
 4. **10 Timing** - Replace slot worker with TendermintDriver
-5. **13 Bridge Integration** - Instant finality for peg-ins
+5. ~~**13 Bridge Integration**~~ - Removed (peg-ins handled via AuxPoW, Document 16)
 6. **12 RPC Migration** - AuxPoW submission API
 
 ### Phase 4: Testing & Hardening (3-4 weeks)
@@ -341,7 +341,7 @@ Block N:
 | **SyncActor** | Commit-proof verification, simplified state machine | 09 |
 | **RpcActor** | AuxPoW submission API, validator status RPCs | 12 |
 | **SlotWorker** | Replaced by TendermintDriver (event-driven timing) | 10 |
-| **Bridge** | Instant finality peg-ins, checkpoint-based peg-outs | 13 |
+| **Bridge** | N/A (peg-ins handled via AuxPoW) | 16 |
 
 ### Code Removal / Replacement
 

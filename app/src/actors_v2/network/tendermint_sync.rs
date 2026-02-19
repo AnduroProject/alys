@@ -426,6 +426,34 @@ impl TendermintSyncValidator {
         }
     }
 
+    /// Create a new sync validator without a genesis set (for deferred initialization).
+    ///
+    /// The validator set must be loaded via `set_validator_set()` before any block
+    /// validation can occur. Blocks will be rejected until a validator set is available.
+    pub fn new_deferred(config: TendermintSyncConfig) -> Self {
+        // Create empty validator set - will be initialized via set_validator_set()
+        let empty_set = ValidatorSet::with_equal_power(Vec::new());
+        Self {
+            config,
+            validator_tracker: ValidatorSetTracker::new(empty_set),
+            last_verified_height: 0,
+            last_verified_hash: None,
+            checkpoint: None,
+        }
+    }
+
+    /// Set the initial validator set (for deferred initialization).
+    ///
+    /// Call this before processing blocks if using `new_deferred()`.
+    pub fn set_validator_set(&mut self, height: Height, validator_set: ValidatorSet) {
+        self.validator_tracker = ValidatorSetTracker::new(validator_set);
+        self.last_verified_height = height;
+        info!(
+            height = height,
+            "Validator set initialized for sync validation"
+        );
+    }
+
     /// Create a sync validator from a trusted checkpoint.
     ///
     /// This allows faster sync by skipping verification of blocks before the checkpoint.

@@ -1,6 +1,12 @@
 //! ChainActor V2 State Management
 //!
-//! Simplified state management derived from chain.rs without complex RwLock patterns.
+//! State management for ChainActor V2 with Arc<RwLock> wrapping for async handler compatibility.
+//!
+//! ## State Mutation Safety (Phase 2 Fix)
+//!
+//! All mutable state fields are wrapped in `Arc<RwLock>` to ensure mutations made in
+//! async handlers (which receive cloned ChainActor instances) propagate back to the
+//! original state. This fixes the state mutation bug where cloned state changes were lost.
 //!
 //! ## Cumulative Difficulty Tracking (Gap FC-2)
 //!
@@ -11,7 +17,7 @@
 use bitcoin::{BlockHash, Txid};
 use ethereum_types::{Address, H256};
 use lru::LruCache;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -22,7 +28,11 @@ use crate::aura::Aura;
 use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::block::AuxPowHeader;
 use crate::block_hash_cache::BlockHashCache;
-use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo};
+use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge};
+
+// Import V2 Tendermint types for peg-in handling (Doc 16)
+use super::tendermint::pegin::QueuedPegIn;
+use super::tendermint::types::Commit;
 
 /// Default size for the difficulty cache (number of heights to cache)
 const DEFAULT_DIFFICULTY_CACHE_SIZE: usize = 256;
@@ -67,39 +77,103 @@ impl SyncStatus {
     }
 }
 
-/// ChainActor state (simplified from chain.rs) - Arc/RwLock pattern for functional bridge processing
+/// ChainActor state with Arc<RwLock> wrapping for async handler compatibility.
+///
+/// ## State Mutation Safety
+///
+/// All mutable fields are wrapped in `Arc<RwLock>` to ensure mutations made in
+/// async handlers propagate correctly. When handlers clone ChainActor for async use,
+/// the Arc<RwLock> fields share state, so mutations are visible across clones.
+///
+/// ## Field Categories
+///
+/// - **Read-only**: `aura`, `federation`, `is_validator`, `retarget_params`, `max_blocks_without_pow`
+/// - **Mutable (Arc<RwLock>)**: All other fields that may be modified during operation
 #[derive(Clone)]
 pub struct ChainState {
+    // ========================================================================
+    // Read-Only Components (no Arc<RwLock> needed)
+    // ========================================================================
+
     /// Core blockchain state (derived from chain.rs) - Read-only Arc-wrapped V0 components
     pub aura: Arc<Aura>, // ✅ Read-only: consensus validation only
 
-    /// Essential blockchain state (simple types - cloneable as-is)
-    pub head: Option<BlockRef>,
-    pub sync_status: SyncStatus,
+    /// Federation members (read-only after initialization)
     pub federation: Vec<Address>,
 
-    /// Essential AuxPoW and consensus
-    pub queued_pow: Option<AuxPowHeader>,
+    /// Essential configuration (read-only)
+    pub is_validator: bool,
+    pub retarget_params: BitcoinConsensusParams,
+    pub block_hash_cache: Option<BlockHashCache>,
     pub max_blocks_without_pow: u64,
+
+    // ========================================================================
+    // Mutable State (Arc<RwLock> for async handler compatibility)
+    // ========================================================================
+
+    /// Current chain head - WRAPPED for async handler access
+    /// Previously: `head: Option<BlockRef>` (mutations lost in cloned handlers)
+    pub head: Arc<RwLock<Option<BlockRef>>>,
+
+    /// Current sync status - WRAPPED for async handler access
+    /// Previously: `sync_status: SyncStatus` (mutations lost in cloned handlers)
+    pub sync_status: Arc<RwLock<SyncStatus>>,
+
+    /// Queued AuxPoW header for next block - WRAPPED for async handler access
+    /// Previously: `queued_pow: Option<AuxPowHeader>` (mutations lost in cloned handlers)
+    pub queued_pow: Arc<RwLock<Option<AuxPowHeader>>>,
+
+    /// Blocks since last AuxPoW - WRAPPED for async handler access
+    /// Previously: `blocks_without_pow: u64` (mutations lost in cloned handlers)
+    pub blocks_without_pow: Arc<RwLock<u64>>,
+
+    /// Last block production time - WRAPPED for async handler access
+    /// Previously: `last_block_time: Option<SystemTime>` (mutations lost in cloned handlers)
+    pub last_block_time: Arc<RwLock<Option<SystemTime>>>,
+
+    // ========================================================================
+    // Mining Context (Already Arc<RwLock>)
+    // ========================================================================
 
     /// Mining context state (Priority 3: tracks issued work for validation)
     pub mining_contexts: Arc<RwLock<BTreeMap<BlockHash, MiningContext>>>,
 
-    /// Peg operations (Arc<RwLock<T>> for mutable bridge processing)
+    // ========================================================================
+    // Peg Operations (Already Arc<RwLock>)
+    // ========================================================================
+
+    /// Bridge for Bitcoin interaction
     pub bridge: Arc<RwLock<Bridge>>,
-    pub queued_pegins: Arc<RwLock<BTreeMap<Txid, PegInInfo>>>,
+
+    /// Queued peg-ins awaiting block inclusion (Doc 16: uses QueuedPegIn with fee_recipient)
+    /// Changed from `BTreeMap<Txid, PegInInfo>` to `BTreeMap<Txid, QueuedPegIn>`
+    pub queued_pegins: Arc<RwLock<BTreeMap<Txid, QueuedPegIn>>>,
+
+    /// Bitcoin wallet for peg-out UTXO management
     pub bitcoin_wallet: Arc<RwLock<BitcoinWallet>>,
+
+    /// Signature collector for multi-sig peg-outs
     pub bitcoin_signature_collector: Arc<RwLock<BitcoinSignatureCollector>>,
+
+    /// Bitcoin signer for validators (None for non-validators)
     pub maybe_bitcoin_signer: Option<Arc<RwLock<BitcoinSigner>>>,
 
-    /// Essential configuration
-    pub is_validator: bool,
-    pub retarget_params: BitcoinConsensusParams,
-    pub block_hash_cache: Option<BlockHashCache>,
+    // ========================================================================
+    // Peg-In Deduplication (Doc 16 Layer 2: Producer filter)
+    // ========================================================================
 
-    /// Runtime state
-    pub blocks_without_pow: u64,
-    pub last_block_time: Option<SystemTime>,
+    /// Processed peg-in txids - prevents re-processing same deposit
+    /// Uses Arc<RwLock> for async handler compatibility
+    pub processed_pegin_txids: Arc<RwLock<HashSet<Txid>>>,
+
+    // ========================================================================
+    // Tendermint Runtime State
+    // ========================================================================
+
+    /// Tendermint-specific runtime state (separate from ChainParams static config)
+    /// Includes emergency pause flags that can be toggled at runtime
+    /// None if Tendermint mode is disabled
+    pub tendermint_runtime: Option<Arc<RwLock<TendermintRuntimeState>>>,
 
     // ========================================================================
     // Cumulative Difficulty Tracking (Gap FC-2)
@@ -125,21 +199,42 @@ pub struct ChainState {
     pub difficulty_cache: Arc<RwLock<LruCache<u64, u128>>>,
 }
 
+/// Runtime state for Tendermint consensus
+///
+/// Separate from TendermintState (consensus state machine) and ChainParams (static config).
+/// Contains emergency pause flags and runtime state that can be modified during operation.
+#[derive(Debug, Clone, Default)]
+pub struct TendermintRuntimeState {
+    /// Emergency: Chain is paused (no new blocks)
+    pub chain_paused: bool,
+
+    /// Emergency: Peg-ins are paused (new deposits rejected)
+    pub pegins_paused: bool,
+
+    /// Emergency: Peg-outs are paused (withdrawals halted)
+    pub pegouts_paused: bool,
+
+    /// Cached last commit for next block's last_commit field
+    pub pending_commit: Option<Commit>,
+}
+
 impl std::fmt::Debug for ChainState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChainState")
-            .field("head", &self.head)
-            .field("sync_status", &self.sync_status)
-            .field("queued_pow", &self.queued_pow)
+            .field("head", &"<Arc<RwLock<Option<BlockRef>>>>")
+            .field("sync_status", &"<Arc<RwLock<SyncStatus>>>")
+            .field("queued_pow", &"<Arc<RwLock<Option<AuxPowHeader>>>>")
+            .field("blocks_without_pow", &"<Arc<RwLock<u64>>>")
+            .field("last_block_time", &"<Arc<RwLock<Option<SystemTime>>>>")
             .field("max_blocks_without_pow", &self.max_blocks_without_pow)
             .field("mining_contexts", &"<BTreeMap<BlockHash, MiningContext>>")
             .field("federation", &self.federation)
-            .field("queued_pegins", &self.queued_pegins)
+            .field("queued_pegins", &"<Arc<RwLock<BTreeMap<Txid, QueuedPegIn>>>>")
+            .field("processed_pegin_txids", &"<Arc<RwLock<HashSet<Txid>>>>")
+            .field("tendermint_runtime", &"<Option<Arc<RwLock<TendermintRuntimeState>>>>")
             .field("is_validator", &self.is_validator)
             .field("retarget_params", &self.retarget_params)
             .field("block_hash_cache", &self.block_hash_cache)
-            .field("blocks_without_pow", &self.blocks_without_pow)
-            .field("last_block_time", &self.last_block_time)
             .field("cumulative_difficulty", &"<Arc<RwLock<u128>>>")
             .field("difficulty_cache", &"<LruCache<u64, u128>>")
             .field("aura", &"<Aura>")
@@ -158,7 +253,7 @@ impl std::fmt::Debug for ChainState {
 }
 
 impl ChainState {
-    /// Create new chain state with Arc-wrapped V0 components
+    /// Create new chain state with Arc-wrapped components for async handler compatibility
     pub fn new(
         aura: Aura,
         federation: Vec<Address>,
@@ -172,24 +267,38 @@ impl ChainState {
         head: Option<BlockRef>,
     ) -> Self {
         Self {
+            // Read-only components
             aura: Arc::new(aura),
-            head,
-            sync_status: SyncStatus::Synced,
-            queued_pow: None,
-            max_blocks_without_pow,
-            mining_contexts: Arc::new(RwLock::new(BTreeMap::new())),
             federation,
+            is_validator,
+            retarget_params,
+            block_hash_cache: Some(BlockHashCache::new(None)),
+            max_blocks_without_pow,
+
+            // Mutable state wrapped in Arc<RwLock>
+            head: Arc::new(RwLock::new(head)),
+            sync_status: Arc::new(RwLock::new(SyncStatus::Synced)),
+            queued_pow: Arc::new(RwLock::new(None)),
+            blocks_without_pow: Arc::new(RwLock::new(0)),
+            last_block_time: Arc::new(RwLock::new(None)),
+
+            // Mining contexts
+            mining_contexts: Arc::new(RwLock::new(BTreeMap::new())),
+
+            // Bridge components
             bridge: Arc::new(RwLock::new(bridge)),
             queued_pegins: Arc::new(RwLock::new(BTreeMap::new())),
             bitcoin_wallet: Arc::new(RwLock::new(bitcoin_wallet)),
             bitcoin_signature_collector: Arc::new(RwLock::new(bitcoin_signature_collector)),
             maybe_bitcoin_signer: maybe_bitcoin_signer.map(|signer| Arc::new(RwLock::new(signer))),
-            is_validator,
-            retarget_params,
-            block_hash_cache: Some(BlockHashCache::new(None)),
-            blocks_without_pow: 0,
-            last_block_time: None,
-            // Initialize cumulative difficulty tracking (Gap FC-2)
+
+            // Peg-in deduplication (Doc 16 Layer 2)
+            processed_pegin_txids: Arc::new(RwLock::new(HashSet::new())),
+
+            // Tendermint runtime state (None until Tendermint mode enabled)
+            tendermint_runtime: None,
+
+            // Cumulative difficulty tracking (Gap FC-2)
             cumulative_difficulty: Arc::new(RwLock::new(0)),
             difficulty_cache: Arc::new(RwLock::new(LruCache::new(
                 NonZeroUsize::new(DEFAULT_DIFFICULTY_CACHE_SIZE).unwrap(),
@@ -197,65 +306,184 @@ impl ChainState {
         }
     }
 
-    /// Update chain head
-    pub fn update_head(&mut self, head: BlockRef) {
-        self.head = Some(head);
-        self.last_block_time = Some(SystemTime::now());
+    /// Enable Tendermint runtime state
+    pub fn enable_tendermint_runtime(&mut self) {
+        self.tendermint_runtime = Some(Arc::new(RwLock::new(TendermintRuntimeState::default())));
     }
 
-    /// Check if chain is synced
-    pub fn is_synced(&self) -> bool {
-        matches!(self.sync_status, SyncStatus::Synced)
+    // ========================================================================
+    // Head/Height Methods (async due to Arc<RwLock>)
+    // ========================================================================
+
+    /// Update chain head (async for Arc<RwLock> compatibility)
+    pub async fn update_head(&self, head: BlockRef) {
+        *self.head.write().await = Some(head);
+        *self.last_block_time.write().await = Some(SystemTime::now());
     }
 
-    /// Update sync status
-    pub fn set_sync_status(&mut self, status: SyncStatus) {
-        self.sync_status = status;
+    /// Get current chain head (async for Arc<RwLock> compatibility)
+    pub async fn get_head(&self) -> Option<BlockRef> {
+        self.head.read().await.clone()
     }
 
-    /// Add queued peg-in (async due to RwLock)
-    pub async fn add_queued_pegin(&self, txid: Txid, pegin: PegInInfo) {
-        self.queued_pegins.write().await.insert(txid, pegin);
+    /// Get current height (async for Arc<RwLock> compatibility)
+    pub async fn get_height(&self) -> u64 {
+        self.head.read().await.as_ref().map(|h| h.number).unwrap_or(0)
     }
 
-    /// Remove processed peg-in (async due to RwLock)
-    pub async fn remove_queued_pegin(&self, txid: &Txid) -> Option<PegInInfo> {
+    /// Get current height (blocking version for sync contexts)
+    ///
+    /// Uses try_read to avoid blocking. Returns 0 if lock is held.
+    /// Prefer the async version when possible.
+    pub fn get_height_blocking(&self) -> u64 {
+        self.head
+            .try_read()
+            .map(|guard| guard.as_ref().map(|h| h.number).unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// Get head hash (async for Arc<RwLock> compatibility)
+    pub async fn get_head_hash(&self) -> Option<lighthouse_wrapper::types::Hash256> {
+        self.head.read().await.as_ref().map(|h| h.hash)
+    }
+
+    // ========================================================================
+    // Sync Status Methods (async due to Arc<RwLock>)
+    // ========================================================================
+
+    /// Check if chain is synced (async for Arc<RwLock> compatibility)
+    pub async fn is_synced(&self) -> bool {
+        matches!(*self.sync_status.read().await, SyncStatus::Synced)
+    }
+
+    /// Check if chain is synced (blocking version for sync contexts)
+    pub fn is_synced_blocking(&self) -> bool {
+        self.sync_status
+            .try_read()
+            .map(|guard| matches!(*guard, SyncStatus::Synced))
+            .unwrap_or(false)
+    }
+
+    /// Update sync status (async for Arc<RwLock> compatibility)
+    pub async fn set_sync_status(&self, status: SyncStatus) {
+        *self.sync_status.write().await = status;
+    }
+
+    /// Get current sync status (async for Arc<RwLock> compatibility)
+    pub async fn get_sync_status(&self) -> SyncStatus {
+        self.sync_status.read().await.clone()
+    }
+
+    // ========================================================================
+    // AuxPoW Methods (async due to Arc<RwLock>)
+    // ========================================================================
+
+    /// Check if we need AuxPoW (async for Arc<RwLock> compatibility)
+    pub async fn needs_auxpow(&self) -> bool {
+        *self.blocks_without_pow.read().await >= self.max_blocks_without_pow
+    }
+
+    /// Check if we need AuxPoW (blocking version for sync contexts)
+    pub fn needs_auxpow_blocking(&self) -> bool {
+        self.blocks_without_pow
+            .try_read()
+            .map(|guard| *guard >= self.max_blocks_without_pow)
+            .unwrap_or(false)
+    }
+
+    /// Increment blocks without AuxPoW (async for Arc<RwLock> compatibility)
+    pub async fn increment_blocks_without_pow(&self) {
+        *self.blocks_without_pow.write().await += 1;
+    }
+
+    /// Reset blocks without AuxPoW (async for Arc<RwLock> compatibility)
+    pub async fn reset_blocks_without_pow(&self) {
+        *self.blocks_without_pow.write().await = 0;
+    }
+
+    /// Set queued AuxPoW (async for Arc<RwLock> compatibility)
+    pub async fn set_queued_pow(&self, auxpow: Option<AuxPowHeader>) {
+        *self.queued_pow.write().await = auxpow;
+    }
+
+    /// Get queued AuxPoW (async for Arc<RwLock> compatibility)
+    pub async fn get_queued_pow(&self) -> Option<AuxPowHeader> {
+        self.queued_pow.read().await.clone()
+    }
+
+    /// Check if AuxPoW is queued (blocking version for sync contexts)
+    pub fn has_queued_pow_blocking(&self) -> bool {
+        self.queued_pow
+            .try_read()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Take queued AuxPoW (consumes it for block inclusion)
+    pub async fn take_queued_pow(&self) -> Option<AuxPowHeader> {
+        self.queued_pow.write().await.take()
+    }
+
+    /// Get blocks without AuxPoW count (blocking version for sync contexts)
+    pub fn get_blocks_without_pow_blocking(&self) -> u64 {
+        self.blocks_without_pow
+            .try_read()
+            .map(|guard| *guard)
+            .unwrap_or(0)
+    }
+
+    // ========================================================================
+    // Peg-in Methods (Doc 16: Producer Filter and Deduplication)
+    // ========================================================================
+
+    /// Check if peg-in already processed (Doc 16 Layer 2: Producer filter)
+    pub async fn is_pegin_processed(&self, txid: &Txid) -> bool {
+        self.processed_pegin_txids.read().await.contains(txid)
+    }
+
+    /// Mark peg-in as processed (Doc 16 Layer 2: Producer filter)
+    pub async fn mark_pegin_processed(&self, txid: Txid) {
+        self.processed_pegin_txids.write().await.insert(txid);
+    }
+
+    /// Queue a peg-in with deduplication (Doc 16 Layer 1 + Layer 2)
+    ///
+    /// Takes QueuedPegIn which includes fee_recipient for miner compensation.
+    /// Returns false if already queued or processed.
+    pub async fn queue_pegin(&self, queued_pegin: QueuedPegIn) -> bool {
+        let txid = queued_pegin.info.txid;
+
+        // Layer 2: Check if already processed
+        if self.is_pegin_processed(&txid).await {
+            return false;
+        }
+
+        // Layer 1: Check if already queued
+        let mut queued = self.queued_pegins.write().await;
+        if queued.contains_key(&txid) {
+            return false;
+        }
+
+        queued.insert(txid, queued_pegin);
+        true
+    }
+
+    /// Drain all queued peg-ins for block production
+    ///
+    /// Returns Vec<QueuedPegIn> and clears the queue
+    pub async fn drain_queued_pegins(&self) -> Vec<QueuedPegIn> {
+        let mut queued = self.queued_pegins.write().await;
+        std::mem::take(&mut *queued).into_values().collect()
+    }
+
+    /// Remove a specific queued peg-in by txid
+    pub async fn remove_queued_pegin(&self, txid: &Txid) -> Option<QueuedPegIn> {
         self.queued_pegins.write().await.remove(txid)
     }
 
-    /// Get current height
-    pub fn get_height(&self) -> u64 {
-        self.head.as_ref().map(|h| h.number).unwrap_or(0)
-    }
-
-    /// Get head hash
-    pub fn get_head_hash(&self) -> Option<lighthouse_wrapper::types::Hash256> {
-        self.head.as_ref().map(|h| h.hash)
-    }
-
-    /// Check if we need AuxPoW
-    pub fn needs_auxpow(&self) -> bool {
-        self.blocks_without_pow >= self.max_blocks_without_pow
-    }
-
-    /// Increment blocks without AuxPoW
-    pub fn increment_blocks_without_pow(&mut self) {
-        self.blocks_without_pow += 1;
-    }
-
-    /// Reset blocks without AuxPoW (when AuxPoW is processed)
-    pub fn reset_blocks_without_pow(&mut self) {
-        self.blocks_without_pow = 0;
-    }
-
-    /// Set queued AuxPoW
-    pub fn set_queued_pow(&mut self, auxpow: Option<AuxPowHeader>) {
-        self.queued_pow = auxpow;
-    }
-
-    /// Get queued AuxPoW
-    pub fn get_queued_pow(&self) -> &Option<AuxPowHeader> {
-        &self.queued_pow
+    /// Get count of queued peg-ins
+    pub async fn queued_pegins_count(&self) -> usize {
+        self.queued_pegins.read().await.len()
     }
 
     /// Store mining context for submitted work validation (Priority 3)

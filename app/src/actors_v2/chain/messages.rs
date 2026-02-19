@@ -352,13 +352,192 @@ pub struct CreateAuxBlock {
 }
 
 /// Submit completed AuxPoW for validation and processing (RPC endpoint)
+///
+/// Extended per Doc 16 to accept peg-in data detected by miners.
+/// Miners monitor Bitcoin for deposits and submit them along with AuxPoW.
 #[derive(Debug, Message)]
-#[rtype(result = "Result<AuxPowHeader, crate::actors_v2::chain::ChainError>")]
+#[rtype(result = "Result<SubmitAuxBlockResponse, crate::actors_v2::chain::ChainError>")]
 pub struct SubmitAuxBlock {
     /// Aggregate hash from createauxblock response
     pub aggregate_hash: BitcoinBlockHash,
     /// Completed AuxPoW proof
     pub auxpow: AuxPow,
+    /// Peg-in data detected by miner (Doc 16) - uses V2 PegInInfo
+    pub pegins: Vec<crate::actors_v2::chain::tendermint::pegin::PegInInfo>,
+    /// Miner's fee recipient address (for peg-in compensation)
+    pub fee_recipient: Address,
     /// Correlation ID for distributed tracing
     pub correlation_id: Uuid,
+}
+
+/// Response for SubmitAuxBlock (per Document 16)
+#[derive(Debug, Clone)]
+pub struct SubmitAuxBlockResponse {
+    /// The validated AuxPoW header
+    pub auxpow_header: AuxPowHeader,
+    /// Whether AuxPoW was accepted
+    pub accepted: bool,
+    /// Number of new peg-ins queued (deduplicated)
+    pub pegins_queued: usize,
+    /// Height of the AuxPoW header
+    pub height: u64,
+}
+
+// ============================================================================
+// Tendermint RPC Query Messages (Phase 4: Document 12)
+// ============================================================================
+
+/// Get current Tendermint consensus state (for RPC: tendermint_consensusState)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<TendermintStateResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetTendermintState {
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetTendermintState
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TendermintStateResponse {
+    /// Current consensus height
+    pub height: u64,
+    /// Current consensus round
+    pub round: u32,
+    /// Current step: "Propose" | "Prevote" | "Precommit" | "Commit"
+    pub step: String,
+    /// Block hash being proposed/voted on (if any)
+    pub proposal_block_hash: Option<H256>,
+    /// Locked block hash
+    pub locked_block_hash: Option<H256>,
+    /// Locked round
+    pub locked_round: Option<u32>,
+    /// Valid block hash
+    pub valid_block_hash: Option<H256>,
+    /// Valid round
+    pub valid_round: Option<u32>,
+    /// Prevotes received count
+    pub prevotes_count: u32,
+    /// Precommits received count
+    pub precommits_count: u32,
+    /// Total validator count
+    pub total_validators: u32,
+}
+
+/// Get validator set for a height (for RPC: tendermint_validators)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<ValidatorSetResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetValidatorSet {
+    /// Height to query (None = current)
+    pub height: Option<u64>,
+    /// Page number (1-indexed, defaults to 1)
+    pub page: u32,
+    /// Results per page (defaults to 30)
+    pub per_page: u32,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetValidatorSet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorSetResponse {
+    /// Height at which this validator set is active
+    pub height: u64,
+    /// Validators in this page
+    pub validators: Vec<ValidatorInfoResponse>,
+    /// Number in this page
+    pub count: u32,
+    /// Total validators
+    pub total: u32,
+}
+
+/// Validator information for RPC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorInfoResponse {
+    /// Validator index
+    pub index: u32,
+    /// Hex-encoded address/ID
+    pub address: String,
+    /// Public key (base64)
+    pub public_key: String,
+    /// Voting power
+    pub voting_power: u64,
+}
+
+/// Get commit for a height (for RPC: tendermint_commit)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<CommitResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetCommit {
+    /// Height to query (None = latest)
+    pub height: Option<u64>,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetCommit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitResponse {
+    /// Height of the commit
+    pub height: u64,
+    /// Round at which commit happened
+    pub round: u32,
+    /// Block hash that was committed
+    pub block_hash: H256,
+    /// Number of signatures
+    pub signatures_count: u32,
+    /// Whether block is canonical
+    pub canonical: bool,
+    /// Whether commit proof is available (false for head block until next block produced)
+    pub commit_available: bool,
+}
+
+/// Get chain parameters (for RPC: tendermint_params)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<ChainParamsResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetChainParams {
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetChainParams
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainParamsResponse {
+    /// Height at which these params are active
+    pub height: u64,
+    /// Block size limit
+    pub max_block_bytes: u64,
+    /// Max gas per block
+    pub max_gas: i64,
+    /// Evidence max age in blocks
+    pub evidence_max_age_blocks: u64,
+    /// Peg-in minimum satoshis
+    pub pegin_minimum_satoshis: u64,
+    /// Peg-in confirmation depth
+    pub pegin_confirmation_depth: u32,
+    /// Miner fee basis points
+    pub miner_fee_bps: u64,
+}
+
+/// Get pending governance updates (for RPC: tendermint_pendingGovernanceUpdates)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<PendingGovernanceResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetPendingGovernance {
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetPendingGovernance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingGovernanceResponse {
+    /// Pending updates
+    pub updates: Vec<PendingGovernanceUpdate>,
+}
+
+/// Pending governance update info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingGovernanceUpdate {
+    /// Update type: "Validator" | "Parameter" | "Emergency"
+    pub update_type: String,
+    /// Height at which update activates
+    pub activation_height: u64,
+    /// Height at which update was proposed
+    pub proposed_at_height: u64,
 }

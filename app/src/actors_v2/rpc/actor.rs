@@ -10,7 +10,10 @@ use tokio::sync::RwLock;
 use super::config::RpcConfig;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use super::error::{JsonRpcError, RpcError};
-use super::handlers::{CreateAuxBlockHandler, SubmitAuxBlockHandler};
+use super::handlers::{
+    CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, DeprecatedAuraHandler,
+    ParamsHandler, PendingGovernanceHandler, SubmitAuxBlockHandler, ValidatorsHandler,
+};
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
 use crate::actors_v2::chain::ChainActor;
 
@@ -177,8 +180,32 @@ impl RpcActor {
     /// Route request to appropriate handler
     async fn route_request(req: JsonRpcRequest, state: RpcServerState) -> Result<Value, RpcError> {
         match req.method.as_str() {
+            // Mining RPC endpoints
             "createauxblock" => CreateAuxBlockHandler::handle(req.params, state.chain_actor).await,
             "submitauxblock" => SubmitAuxBlockHandler::handle(req.params, state.chain_actor).await,
+
+            // Tendermint consensus RPC endpoints (Phase 4: Document 12)
+            "tendermint_consensusState" => {
+                ConsensusStateHandler::handle(req.params, state.chain_actor).await
+            }
+            "tendermint_validators" => {
+                ValidatorsHandler::handle(req.params, state.chain_actor).await
+            }
+            "tendermint_commit" => CommitHandler::handle(req.params, state.chain_actor).await,
+            "tendermint_params" => ParamsHandler::handle(req.params, state.chain_actor).await,
+            "tendermint_pendingGovernanceUpdates" => {
+                PendingGovernanceHandler::handle(req.params, state.chain_actor).await
+            }
+
+            // Deprecated Aura methods (Phase 4: Document 12)
+            // These return deprecation errors with migration guidance
+            "aura_currentAuthorities" => {
+                DeprecatedAuraHandler::handle_current_authorities(req.params).await
+            }
+            "aura_currentSlot" => DeprecatedAuraHandler::handle_current_slot(req.params).await,
+            "aura_nextSlotTime" => DeprecatedAuraHandler::handle_next_slot_time(req.params).await,
+            "aura_slotDuration" => DeprecatedAuraHandler::handle_slot_duration(req.params).await,
+
             _ => Err(RpcError::MethodNotFound(req.method)),
         }
     }

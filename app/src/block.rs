@@ -1,4 +1,5 @@
 use crate::{
+    actors_v2::chain::tendermint::pegin::PegInInfo,
     actors_v2::chain::tendermint::Commit,
     aura::Authority,
     auxpow::AuxPow,
@@ -8,7 +9,7 @@ use crate::{
     spec::ChainSpec,
     store::BlockRef,
 };
-use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction, Txid};
+use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction};
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::types::{
     Address, EthSpec, ExecutionBlockHash, ExecutionPayload, ExecutionPayloadCapella, FixedVector,
@@ -48,6 +49,9 @@ pub struct AuxPowHeader {
     pub auxpow: Option<AuxPow>,
     /// The miner's EVM address
     pub fee_recipient: Address,
+    /// Peg-in transactions submitted by the miner (Path B: pegins moved from ConsensusBlock)
+    /// Only blocks with AuxPoW can include peg-ins since miners detect and submit them.
+    pub pegins: Vec<PegInInfo>,
 }
 
 // this is the sidechain block (pre-signing) that contains
@@ -63,12 +67,12 @@ pub struct ConsensusBlock<T: EthSpec> {
     /// None for genesis block (no previous block to commit).
     pub last_commit: Option<Commit>,
     /// Proof of work, used for finalization. Not every block is expected to have this.
+    /// Path B: Peg-ins are now stored in auxpow_header.pegins since only miners
+    /// can submit them via submitauxblock. Blocks without AuxPoW cannot include peg-ins.
     pub auxpow_header: Option<AuxPowHeader>,
     // we always assume the geth node is configured
     // to start after the capella hard fork
     pub execution_payload: ExecutionPayloadCapella<T>,
-    /// Transactions that are sending funds to the bridge
-    pub pegins: Vec<(Txid, BlockHash)>,
     /// Bitcoin payments for pegouts
     pub pegout_payment_proposal: Option<BitcoinTransaction>,
     /// Finalized bitcoin payments. Only non-empty if there is an auxpow.
@@ -132,7 +136,6 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
                 transactions: Transactions::<MainnetEthSpec>::default(),
                 withdrawals: Withdrawals::<MainnetEthSpec>::default(),
             },
-            pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
         }
@@ -140,13 +143,16 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
 }
 
 impl ConsensusBlock<MainnetEthSpec> {
+    /// Create a new ConsensusBlock.
+    ///
+    /// Note: Peg-ins are stored in `auxpow_header.pegins` (Path B design).
+    /// Only blocks with AuxPoW can include peg-ins since miners submit them.
     pub fn new(
         slot: u64,
         payload: ExecutionPayload<MainnetEthSpec>,
         prev: Hash256,
         last_commit: Option<Commit>,
         auxpow_header: Option<AuxPowHeader>,
-        pegins: Vec<(Txid, BlockHash)>,
         pegout_payment_proposal: Option<BitcoinTransaction>,
         finalized_pegouts: Vec<BitcoinTransaction>,
     ) -> Self {
@@ -156,10 +162,19 @@ impl ConsensusBlock<MainnetEthSpec> {
             last_commit,
             execution_payload: payload.as_capella().unwrap().clone(),
             auxpow_header,
-            pegins,
             pegout_payment_proposal,
             finalized_pegouts,
         }
+    }
+
+    /// Helper to get peg-ins from the AuxPowHeader (if present).
+    ///
+    /// Returns empty slice if no AuxPoW is attached to this block.
+    pub fn pegins(&self) -> &[PegInInfo] {
+        self.auxpow_header
+            .as_ref()
+            .map(|h| h.pegins.as_slice())
+            .unwrap_or(&[])
     }
 
     fn signing_root(&self) -> Hash256 {
@@ -248,9 +263,10 @@ impl SignedConsensusBlock<MainnetEthSpec> {
                     height: 0,
                     auxpow: None,
                     fee_recipient: Address::zero(),
+                    pegins: vec![], // Genesis has no peg-ins
                 }),
                 execution_payload,
-                pegins: vec![],
+                // Path B: Peg-ins are stored in auxpow_header.pegins
                 pegout_payment_proposal: None,
                 finalized_pegouts: vec![],
             },

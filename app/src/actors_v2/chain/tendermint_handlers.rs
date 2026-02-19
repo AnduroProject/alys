@@ -791,7 +791,7 @@ impl ChainActor {
         update: GovernanceUpdate,
         correlation_id: Uuid,
     ) -> TendermintResult<u64> {
-        let current_height = self.state.get_height();
+        let current_height = self.state.get_height().await;
         let effective_height = update.effective_height(current_height);
         let variant_name = update.variant_name();
 
@@ -810,22 +810,42 @@ impl ChainActor {
 
         match update {
             GovernanceUpdate::Validator(validator_update) => {
-                // Single validator update - need to load current set, apply update, store new set
-                // For now, log the pending update
-                // TODO: Implement proper validator set update logic
+                // Validator updates activate at H+2
                 info!(
                     correlation_id = %correlation_id,
                     effective_height = effective_height,
                     public_key = ?validator_update.public_key,
                     power = validator_update.power,
                     is_removal = validator_update.is_removal(),
-                    "Validator update queued for activation"
+                    "Processing validator update for H+2 activation"
                 );
 
-                // In full implementation:
                 // 1. Load current validator set from storage
+                let mut current_set = self.load_validator_set_for_height(current_height).await?;
+
                 // 2. Apply the update (add/modify/remove)
-                // 3. Store the new validator set at effective_height
+                current_set.apply_updates(&[validator_update.clone()]);
+
+                // 3. Store the new validator set for activation at effective_height
+                storage
+                    .send(crate::actors_v2::storage::messages::StoreValidatorSetMessage {
+                        effective_height,
+                        validator_set: current_set.clone(),
+                        correlation_id: Some(correlation_id),
+                    })
+                    .await
+                    .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
+                    .map_err(|e| ChainError::Storage(format!("Storage error: {}", e)))?;
+
+                // Note: Local validator set is NOT updated here.
+                // The new set activates at effective_height (H+2) via load_validator_set_for_height()
+
+                info!(
+                    correlation_id = %correlation_id,
+                    effective_height = effective_height,
+                    "Validator update stored and will activate at height {}",
+                    effective_height
+                );
             }
 
             GovernanceUpdate::Parameter(param_update) => {
@@ -853,14 +873,50 @@ impl ChainActor {
             }
 
             GovernanceUpdate::Emergency(emergency_action) => {
-                // Emergency actions take effect immediately
-                info!(
+                // Emergency actions take effect immediately (H+0)
+                use super::tendermint::governance::EmergencyActionKind;
+
+                warn!(
                     correlation_id = %correlation_id,
-                    effective_height = effective_height,
-                    action = ?emergency_action,
-                    "Emergency action processed"
+                    action = ?emergency_action.action,
+                    "Applying emergency action IMMEDIATELY"
                 );
-                // TODO: Implement emergency action handling (pause/resume)
+
+                // Update TendermintRuntimeState pause flags
+                if let Some(ref runtime_state) = self.state.tendermint_runtime {
+                    let mut runtime = runtime_state.write().await;
+                    match emergency_action.action {
+                        EmergencyActionKind::PauseChain => {
+                            runtime.chain_paused = true;
+                            warn!("Chain PAUSED - no new blocks will be produced");
+                        }
+                        EmergencyActionKind::ResumeChain => {
+                            runtime.chain_paused = false;
+                            info!("Chain RESUMED - normal operation restored");
+                        }
+                        EmergencyActionKind::PausePegIns => {
+                            runtime.pegins_paused = true;
+                            warn!("Peg-ins PAUSED - new deposits will be rejected");
+                        }
+                        EmergencyActionKind::ResumePegIns => {
+                            runtime.pegins_paused = false;
+                            info!("Peg-ins RESUMED");
+                        }
+                        EmergencyActionKind::PausePegOuts => {
+                            runtime.pegouts_paused = true;
+                            warn!("Peg-outs PAUSED - withdrawals halted");
+                        }
+                        EmergencyActionKind::ResumePegOuts => {
+                            runtime.pegouts_paused = false;
+                            info!("Peg-outs RESUMED");
+                        }
+                    }
+                } else {
+                    warn!(
+                        correlation_id = %correlation_id,
+                        "TendermintRuntimeState not initialized - emergency action not applied"
+                    );
+                }
             }
         }
 
@@ -967,12 +1023,30 @@ impl ChainActor {
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0));
 
-        // 3. Request execution payload from EngineActor
+        // 3. Get optional queued AuxPoW header FIRST (from miners via submitauxblock)
+        // Path B: AuxPoW header contains pegins, which we need for EVM balance credits
+        let auxpow_header = self.state.take_queued_pow().await;
+        if auxpow_header.is_some() {
+            info!(
+                correlation_id = %correlation_id,
+                pegin_count = auxpow_header.as_ref().map(|h| h.pegins.len()).unwrap_or(0),
+                "Including AuxPoW header with peg-ins in proposal block"
+            );
+        }
+
+        // 4. Collect peg-in withdrawals FROM AuxPoW header (Path B: pegins in auxpow_header.pegins)
+        // Doc 16: proposer converts queued peg-ins to EVM withdrawals
+        let add_balances = self.collect_pegin_withdrawals_from_auxpow(
+            correlation_id,
+            auxpow_header.as_ref(),
+        ).await?;
+
+        // 5. Request execution payload from EngineActor with peg-in withdrawals
         let execution_payload = {
             let build_msg = EngineMessage::BuildPayload {
                 timestamp,
                 parent_hash: Some(parent_hash),
-                add_balances: Vec::new(), // Peg-ins handled separately
+                add_balances, // Peg-in withdrawals as balance additions
                 correlation_id: Some(correlation_id),
             };
 
@@ -1002,7 +1076,7 @@ impl ChainActor {
             }
         };
 
-        // 4. Get last_commit from cache (commit proof for the previous block)
+        // 6. Get last_commit from cache (commit proof for the previous block)
         let last_commit = if let Some(ref cached) = self.cached_last_commit {
             let guard = cached.read().await;
             // Clone the commit - it will be embedded in this block
@@ -1017,7 +1091,7 @@ impl ChainActor {
             None
         };
 
-        // 5. Convert ExecutionPayload to ExecutionPayloadCapella
+        // 7. Convert ExecutionPayload to ExecutionPayloadCapella
         // The execution_payload from EngineActor should already be Capella
         let execution_payload_capella = match execution_payload {
             lighthouse_wrapper::types::ExecutionPayload::Capella(capella) => capella,
@@ -1028,15 +1102,15 @@ impl ChainActor {
             }
         };
 
-        // 6. Assemble the ConsensusBlock
+        // 8. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
         // Convert ExecutionBlockHash to Hash256 using into_root()
+        // Path B: Pegins are now stored in auxpow_header.pegins (not directly on ConsensusBlock)
         let block = crate::block::ConsensusBlock {
             parent_hash: execution_payload_capella.parent_hash.into_root(),
             slot: height, // In Tendermint mode, slot == height
             last_commit,
-            auxpow_header: None, // AuxPoW is optional per-block in Tendermint
+            auxpow_header, // Optional AuxPoW from miners via submitauxblock (includes pegins)
             execution_payload: execution_payload_capella,
-            pegins: Vec::new(),           // Peg-ins handled by bridge actor
             pegout_payment_proposal: None, // Peg-outs handled separately
             finalized_pegouts: Vec::new(),
         };
@@ -1047,10 +1121,184 @@ impl ChainActor {
             block_number = block.execution_payload.block_number,
             parent_hash = %block.parent_hash,
             has_last_commit = block.last_commit.is_some(),
+            has_auxpow = block.auxpow_header.is_some(),
+            pegin_count = block.pegins().len(),
             "Proposal block built successfully"
         );
 
         Ok(block)
+    }
+
+    /// Collect peg-in balance additions from AuxPowHeader (Path B design).
+    ///
+    /// Per Doc 16: Each peg-in creates two balance additions:
+    /// 1. User receives (amount - miner_fee) → pegin.evm_account
+    /// 2. Miner receives miner_fee → auxpow_header.fee_recipient
+    ///
+    /// Path B: Peg-ins are stored in auxpow_header.pegins. This ensures the
+    /// EVM balance credits match exactly with the pegins recorded in the block.
+    ///
+    /// Returns:
+    /// - `Vec<AddBalance>`: EVM balance credits for execution_payload
+    async fn collect_pegin_withdrawals_from_auxpow(
+        &self,
+        correlation_id: Uuid,
+        auxpow_header: Option<&crate::block::AuxPowHeader>,
+    ) -> TendermintResult<Vec<crate::engine::AddBalance>>
+    {
+        use crate::engine::{AddBalance, ConsensusAmount};
+        use super::tendermint::pegin::PegInCompensation;
+
+        let mut add_balances = Vec::new();
+
+        // No AuxPoW = no pegins (Path B: only blocks with AuxPoW can have pegins)
+        let header = match auxpow_header {
+            Some(h) => h,
+            None => {
+                debug!(
+                    correlation_id = %correlation_id,
+                    "No AuxPoW header, no peg-ins to process"
+                );
+                return Ok(add_balances);
+            }
+        };
+
+        if header.pegins.is_empty() {
+            debug!(
+                correlation_id = %correlation_id,
+                "AuxPoW header has no peg-ins"
+            );
+            return Ok(add_balances);
+        }
+
+        // Get peg-in compensation params (use defaults, governance can override)
+        let compensation = PegInCompensation::default();
+
+        // Process pegins from AuxPowHeader (already validated in SubmitAuxBlock handler)
+        for pegin in &header.pegins {
+            // Calculate miner fee (Doc 16: fee = amount * bps / 10000, clamped)
+            let miner_fee = compensation.calculate_fee(pegin.amount);
+            let user_amount = pegin.amount.saturating_sub(miner_fee);
+
+            // User balance credit
+            add_balances.push(AddBalance::from((
+                pegin.evm_account,
+                ConsensusAmount::from_satoshi(user_amount),
+            )));
+
+            // Miner fee credit (to fee_recipient from AuxPowHeader)
+            if miner_fee > 0 {
+                add_balances.push(AddBalance::from((
+                    header.fee_recipient,
+                    ConsensusAmount::from_satoshi(miner_fee),
+                )));
+            }
+
+            debug!(
+                correlation_id = %correlation_id,
+                txid = %pegin.txid,
+                user_amount = user_amount,
+                miner_fee = miner_fee,
+                evm_account = ?pegin.evm_account,
+                fee_recipient = ?header.fee_recipient,
+                "Processed peg-in from AuxPoW header"
+            );
+        }
+
+        info!(
+            correlation_id = %correlation_id,
+            pegins_processed = header.pegins.len(),
+            balance_additions = add_balances.len(),
+            "Collected peg-in withdrawals from AuxPoW header (Path B)"
+        );
+
+        Ok(add_balances)
+    }
+
+    /// DEPRECATED: Use `collect_pegin_withdrawals_from_auxpow` instead.
+    /// This function used state.queued_pegins which is separate from auxpow_header.pegins.
+    #[allow(dead_code)]
+    async fn collect_pegin_withdrawals_legacy(
+        &self,
+        correlation_id: Uuid,
+    ) -> TendermintResult<(Vec<crate::engine::AddBalance>, Vec<(bitcoin::Txid, bitcoin::BlockHash)>)>
+    {
+        use crate::engine::{AddBalance, ConsensusAmount};
+        use super::tendermint::pegin::PegInCompensation;
+
+        let mut add_balances = Vec::new();
+        let mut pegin_refs = Vec::new();
+
+        // Get peg-in compensation params (use defaults, governance can override)
+        let compensation = PegInCompensation::default();
+
+        // Drain queued peg-ins (Doc 16: queued via submitauxblock)
+        let queued_pegins = self.state.drain_queued_pegins().await;
+
+        if queued_pegins.is_empty() {
+            debug!(
+                correlation_id = %correlation_id,
+                "No queued peg-ins to process"
+            );
+            return Ok((add_balances, pegin_refs));
+        }
+
+        for queued in queued_pegins {
+            let pegin = &queued.info;
+
+            // Skip if already processed (Doc 16 Layer 2: Producer filter)
+            if self.state.is_pegin_processed(&pegin.txid).await {
+                debug!(
+                    correlation_id = %correlation_id,
+                    txid = %pegin.txid,
+                    "Skipping already-processed peg-in"
+                );
+                continue;
+            }
+
+            // Calculate miner fee (Doc 16: fee = amount * bps / 10000, clamped)
+            let miner_fee = compensation.calculate_fee(pegin.amount);
+            let user_amount = pegin.amount.saturating_sub(miner_fee);
+
+            // User balance credit (tuple struct)
+            add_balances.push(AddBalance::from((
+                pegin.evm_account,
+                ConsensusAmount::from_satoshi(user_amount),
+            )));
+
+            // Miner fee credit (to fee_recipient from QueuedPegIn)
+            if miner_fee > 0 {
+                add_balances.push(AddBalance::from((
+                    queued.fee_recipient,
+                    ConsensusAmount::from_satoshi(miner_fee),
+                )));
+            }
+
+            // Track peg-in reference (Txid + BTC block) for block.pegins field
+            pegin_refs.push((pegin.txid, pegin.block_hash));
+
+            // Note: Peg-ins are marked as processed in commit_block() AFTER
+            // the block containing them is committed (Doc 16 Layer 2: deduplication)
+
+            debug!(
+                correlation_id = %correlation_id,
+                txid = %pegin.txid,
+                user_amount = user_amount,
+                miner_fee = miner_fee,
+                evm_account = ?pegin.evm_account,
+                fee_recipient = ?queued.fee_recipient,
+                "Processed peg-in for block"
+            );
+        }
+
+        info!(
+            correlation_id = %correlation_id,
+            pegins_processed = pegin_refs.len(),
+            balance_additions = add_balances.len(),
+            "Collected peg-in withdrawals for block"
+        );
+
+        Ok((add_balances, pegin_refs))
     }
 
     /// Broadcast a Tendermint proposal via NetworkActor.
@@ -1346,6 +1594,9 @@ impl ChainActor {
     }
 
     /// Commit a block after receiving 2/3+ precommits.
+    ///
+    /// This is the finalization step of Tendermint consensus. Once we have 2/3+
+    /// precommits for a block, it is considered finalized with instant finality.
     async fn commit_block(
         &self,
         height: u64,
@@ -1353,6 +1604,11 @@ impl ChainActor {
         block_hash: BlockHash,
         correlation_id: Uuid,
     ) -> TendermintResult<()> {
+        use crate::actors_v2::engine::{EngineMessage, EngineResponse};
+        use crate::actors_v2::storage::messages::{StoreBlockMessage, UpdateChainHeadMessage};
+        use crate::actors_v2::storage::actor::BlockRef;
+        use lighthouse_wrapper::types::ExecutionPayload;
+
         info!(
             correlation_id = %correlation_id,
             height = height,
@@ -1371,23 +1627,27 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
 
-        // Write commit WAL entry
-        {
-            let mut wal_guard = wal.write().await;
-            wal_guard
-                .write(WALEntry::Commit {
-                    height,
-                    block_hash,
-                })
-                .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
-        }
+        // 1. Retrieve the block from proposals
+        let block = {
+            let state = tendermint_state.read().await;
+            let proposal = state.current_proposal.as_ref()
+                .ok_or_else(|| ChainError::Internal("No proposal found for commit".into()))?;
 
-        // Build Commit from precommit votes using VoteSet's build_commit_sigs
+            // Verify the block hash matches
+            if proposal.block_hash() != block_hash {
+                return Err(ChainError::Consensus(format!(
+                    "Block hash mismatch: expected {:?}, got {:?}",
+                    block_hash, proposal.block_hash()
+                )));
+            }
+
+            proposal.block.clone()
+        };
+
+        // 2. Build Commit from precommit votes
         let commit = {
             let state = tendermint_state.read().await;
             let precommits = state.precommits.read().await;
-
-            // Use the VoteSet's build_commit_sigs method which handles all the details
             let signatures = precommits.build_commit_sigs(block_hash);
 
             Commit {
@@ -1398,21 +1658,113 @@ impl ChainActor {
             }
         };
 
-        // Cache the commit for the next block's last_commit
+        // 3. Write commit WAL entry BEFORE any state changes
+        {
+            let mut wal_guard = wal.write().await;
+            wal_guard
+                .write(WALEntry::Commit {
+                    height,
+                    block_hash,
+                })
+                .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+        }
+
+        // 4. Execute block via EngineActor (instant finality)
+        let execution_hash = if let Some(ref engine) = self.engine_actor {
+            let parent_hash = block.execution_payload.parent_hash;
+
+            let engine_result = engine.send(EngineMessage::ExecuteBlock {
+                execution_payload: ExecutionPayload::Capella(block.execution_payload.clone()),
+                parent_hash,
+                correlation_id: Some(correlation_id),
+            }).await
+                .map_err(|e| ChainError::Internal(format!("Engine mailbox error: {}", e)))?
+                .map_err(|e| ChainError::Engine(format!("Block execution failed: {}", e)))?;
+
+            match engine_result {
+                EngineResponse::BlockExecuted { block_hash: exec_hash, .. } => exec_hash,
+                other => return Err(ChainError::Engine(format!("Unexpected response: {:?}", other))),
+            }
+        } else {
+            warn!(correlation_id = %correlation_id, "EngineActor not configured - skipping execution");
+            lighthouse_wrapper::types::ExecutionBlockHash::zero()
+        };
+
+        // 5. Store block to StorageActor
+        if let Some(ref storage) = self.storage_actor {
+            let signed_block = crate::block::SignedConsensusBlock {
+                message: block.clone(),
+                signature: crate::signatures::AggregateApproval::new(),
+            };
+
+            storage.send(StoreBlockMessage {
+                block: signed_block,
+                canonical: true, // Tendermint blocks are always canonical
+                correlation_id: Some(correlation_id),
+            }).await
+                .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
+                .map_err(|e| ChainError::Storage(format!("Block storage failed: {}", e)))?;
+
+            // 6. Update chain head
+            let block_ref = BlockRef {
+                hash: H256::from_slice(block_hash.as_bytes()),
+                number: height,
+                execution_hash,
+            };
+
+            storage.send(UpdateChainHeadMessage {
+                new_head: block_ref.clone(),
+                correlation_id: Some(correlation_id),
+            }).await
+                .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
+                .map_err(|e| ChainError::Storage(format!("Head update failed: {}", e)))?;
+
+            // Update local state
+            self.state.update_head(block_ref).await;
+
+            // 6b. Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)
+            // This happens AFTER commit to ensure peg-ins aren't lost if commit fails
+            // Path B: Peg-ins are stored in auxpow_header.pegins (via pegins() helper)
+            for pegin_info in block.pegins() {
+                self.state.mark_pegin_processed(pegin_info.txid).await;
+            }
+
+            if !block.pegins().is_empty() {
+                debug!(
+                    correlation_id = %correlation_id,
+                    pegins_finalized = block.pegins().len(),
+                    "Marked peg-ins as processed after commit"
+                );
+            }
+        } else {
+            warn!(correlation_id = %correlation_id, "StorageActor not configured - skipping storage");
+        }
+
+        // 7. Cache the commit for the next block's last_commit
         if let Some(ref cached_commit) = self.cached_last_commit {
             let mut guard = cached_commit.write().await;
             *guard = commit.clone();
         }
 
-        // Advance state to Commit step
+        // 8. Advance state to Commit step
         {
             let mut state = tendermint_state.write().await;
             state.set_step(TendermintStep::Commit);
         }
 
-        // TODO: Store block to StorageActor
-        // TODO: Execute block via EngineActor (instant finality)
-        // TODO: Notify NetworkActor of new block
+        // 9. Notify network peers of committed block
+        if let Some(ref network) = self.network_actor {
+            let message = super::tendermint::TendermintMessage::NewRound {
+                height: height + 1,
+                round: 0,
+                highest_known_round: 0,
+            };
+
+            network.send(crate::actors_v2::network::messages::NetworkMessage::BroadcastTendermint {
+                message,
+                correlation_id: Some(correlation_id),
+            }).await.ok(); // Non-critical
+        }
 
         info!(
             correlation_id = %correlation_id,
@@ -1422,8 +1774,16 @@ impl ChainActor {
             "Block committed successfully"
         );
 
-        // TODO: Trigger NewHeight for H+1
-        // For now, this would be called externally after block storage
+        // 10. Notify TendermintDriver of commit
+        if let Some(ref driver) = self.tendermint_driver {
+            driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Committed {
+                height,
+                last_commit: commit.clone(),
+            });
+        }
+
+        // 11. Trigger NewHeight for H+1
+        self.handle_tendermint_new_height(height + 1, correlation_id).await?;
 
         Ok(())
     }

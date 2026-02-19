@@ -138,6 +138,12 @@ pub struct SyncConfig {
     pub peer_height_max_age_secs: u64,
     /// Cooldown after sync completion before allowing another re-sync (seconds)
     pub sync_cooldown_secs: u64,
+
+    // Tendermint sync configuration
+    /// Whether Tendermint consensus is enabled (enables commit verification during sync)
+    pub tendermint_enabled: bool,
+    /// Whether to verify last_commit signatures during sync (disable for testing)
+    pub verify_commits: bool,
 }
 
 impl Default for SyncConfig {
@@ -157,6 +163,10 @@ impl Default for SyncConfig {
             min_peer_quorum: 1,
             peer_height_max_age_secs: 60,
             sync_cooldown_secs: 30,
+
+            // Tendermint sync defaults
+            tendermint_enabled: false, // Disabled by default for backwards compatibility
+            verify_commits: true,      // Verify commits when enabled
         }
     }
 }

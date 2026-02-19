@@ -32,7 +32,7 @@ impl ChainActor {
         );
 
         // Step 1: Check if AuxPoW is required and available
-        let queued_auxpow = self.state.queued_pow.clone();
+        let queued_auxpow = self.state.get_queued_pow().await;
 
         if let Some(auxpow_header) = queued_auxpow {
             info!(
@@ -65,8 +65,8 @@ impl ChainActor {
                 );
 
                 // Step 5: Clear queued AuxPoW and reset counter
-                self.state.set_queued_pow(None);
-                self.state.reset_blocks_without_pow();
+                self.state.set_queued_pow(None).await;
+                self.state.reset_blocks_without_pow().await;
 
                 // Step 6: Update metrics
                 self.metrics.auxpow_processed.inc();
@@ -77,13 +77,13 @@ impl ChainActor {
                     correlation_id = %correlation_id,
                     "AuxPoW validation failed for block - clearing queued AuxPoW"
                 );
-                self.state.set_queued_pow(None);
+                self.state.set_queued_pow(None).await;
                 self.metrics.auxpow_failures.inc();
             }
         }
 
         // Step 7: Check blocks without PoW limit
-        let blocks_without_pow = self.state.blocks_without_pow;
+        let blocks_without_pow = self.state.get_blocks_without_pow_blocking();
         let max_blocks_without_pow = self.state.max_blocks_without_pow;
 
         if blocks_without_pow >= max_blocks_without_pow {
@@ -106,11 +106,11 @@ impl ChainActor {
         let signed_block = consensus_block.sign_block(authority);
 
         // Increment counter for blocks produced without AuxPoW
-        self.state.increment_blocks_without_pow();
+        self.state.increment_blocks_without_pow().await;
 
         debug!(
             correlation_id = %correlation_id,
-            blocks_without_pow = self.state.blocks_without_pow,
+            blocks_without_pow = self.state.get_blocks_without_pow_blocking(),
             max_blocks_without_pow = max_blocks_without_pow,
             "Created block without AuxPoW"
         );
@@ -274,6 +274,7 @@ impl ChainActor {
         );
 
         // Step 4: Create validated AuxPowHeader
+        // Note: pegins are attached separately in the handler after validation
         let auxpow_header = AuxPowHeader {
             range_start: context.start_hash.to_block_hash(),
             range_end: context.end_hash.to_block_hash(),
@@ -282,6 +283,7 @@ impl ChainActor {
             height: context.height,
             auxpow: Some(auxpow),
             fee_recipient: context.miner_address,
+            pegins: vec![], // Pegins added by handler after AuxPoW validation
         };
 
         info!(
@@ -299,9 +301,9 @@ impl ChainActor {
     /// Clear queued AuxPoW after use (Phase 4: Task 4.2.1)
     /// Note: This would need to be called through a handler that can mutate state
     pub async fn clear_queued_auxpow(&mut self) {
-        if self.state.queued_pow.is_some() {
+        if self.state.has_queued_pow_blocking() {
             debug!("Clearing queued AuxPoW");
-            self.state.queued_pow = None;
+            self.state.set_queued_pow(None).await;
         }
     }
 
@@ -317,7 +319,7 @@ impl ChainActor {
         );
 
         // Basic validation of AuxPoW header
-        let current_height = self.state.get_height();
+        let current_height = self.state.get_height().await;
         if auxpow_header.height < current_height {
             warn!(
                 correlation_id = %correlation_id,
@@ -331,7 +333,7 @@ impl ChainActor {
         }
 
         // Queue the AuxPoW
-        self.state.queued_pow = Some(auxpow_header);
+        self.state.set_queued_pow(Some(auxpow_header)).await;
 
         debug!(
             correlation_id = %correlation_id,
@@ -344,7 +346,7 @@ impl ChainActor {
     /// Calculate blocks without PoW count (Phase 4: Task 4.2.1)
     pub async fn calculate_blocks_without_pow(&self) -> Result<u64, ChainError> {
         // Return the current count from state
-        Ok(self.state.blocks_without_pow)
+        Ok(*self.state.blocks_without_pow.read().await)
     }
 
     /// Broadcast AuxPoW to network for mining (Phase 4: Task 4.2.1)
@@ -407,11 +409,12 @@ impl ChainActor {
 
     /// Update blocks without PoW counter (Phase 4: Task 4.2.1)
     /// Note: This would need to be called through a handler that can mutate state
-    pub async fn increment_blocks_without_pow(&mut self) {
-        self.state.blocks_without_pow += 1;
+    pub async fn increment_blocks_without_pow_v2(&mut self) {
+        self.state.increment_blocks_without_pow().await;
+        let blocks_without_pow = self.state.get_blocks_without_pow_blocking();
 
         debug!(
-            blocks_without_pow = self.state.blocks_without_pow,
+            blocks_without_pow = blocks_without_pow,
             max_blocks_without_pow = self.state.max_blocks_without_pow,
             "Incremented blocks without PoW counter"
         );
@@ -419,9 +422,9 @@ impl ChainActor {
 
     /// Reset blocks without PoW counter after AuxPoW block (Phase 4: Task 4.2.1)
     /// Note: This would need to be called through a handler that can mutate state
-    pub async fn reset_blocks_without_pow(&mut self) {
-        let previous_count = self.state.blocks_without_pow;
-        self.state.blocks_without_pow = 0;
+    pub async fn reset_blocks_without_pow_v2(&mut self) {
+        let previous_count = self.state.get_blocks_without_pow_blocking();
+        self.state.reset_blocks_without_pow().await;
 
         info!(
             previous_count = previous_count,
@@ -446,10 +449,11 @@ impl ChainActor {
         let current_head = self
             .state
             .get_head_hash()
+            .await
             .ok_or_else(|| ChainError::Internal("No chain head available".to_string()))?;
 
         // Check if there's queued AuxPoW and if we have new work since then
-        if let Some(ref queued_pow) = self.state.queued_pow {
+        if let Some(ref queued_pow) = self.state.get_queued_pow().await {
             let range_end = queued_pow.range_end;
 
             // Convert range_end to comparison format
@@ -492,7 +496,7 @@ impl ChainActor {
     ) -> Result<AuxBlock, ChainError> {
         let correlation_id = Uuid::new_v4();
 
-        let current_height = self.state.get_height();
+        let current_height = self.state.get_height().await;
 
         debug!(
             correlation_id = %correlation_id,
@@ -535,6 +539,7 @@ impl ChainActor {
             last_hash: self
                 .state
                 .get_head_hash()
+                .await
                 .ok_or_else(|| ChainError::Internal("No chain head".to_string()))?,
             start_hash: *hashes
                 .first()
@@ -589,7 +594,7 @@ impl ChainActor {
     ) -> Result<AuxPowHeader, ChainError> {
         let correlation_id = Uuid::new_v4();
 
-        let current_height = self.state.get_height();
+        let current_height = self.state.get_height().await;
 
         debug!(
             correlation_id = %correlation_id,
@@ -636,6 +641,7 @@ impl ChainActor {
             height: target_height,
             auxpow: None, // Miners will fill this with completed work
             fee_recipient,
+            pegins: vec![], // Pegins submitted with completed AuxPoW
         };
 
         info!(

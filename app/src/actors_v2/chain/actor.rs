@@ -148,6 +148,10 @@ pub struct ChainActor {
     /// Wrapped in Arc<Mutex<Option>> to allow Clone while ensuring only one
     /// consumer can take ownership of the receiver.
     pub(crate) timeout_receiver: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<TimeoutEvent>>>>,
+
+    /// TendermintDriver address for consensus coordination
+    /// Used to send commit notifications after block finalization
+    pub(crate) tendermint_driver: Option<actix::Addr<crate::actors_v2::tendermint_driver::TendermintDriver>>,
 }
 
 impl ChainActor {
@@ -162,9 +166,9 @@ impl ChainActor {
             Err(e) => tracing::error!("✗ Failed to register ChainMetrics with Prometheus: {}", e),
         }
 
-        // Initialize metrics based on current state
-        metrics.set_sync_status(state.is_synced());
-        metrics.set_chain_height(state.get_height());
+        // Initialize metrics based on current state (use blocking versions in sync context)
+        metrics.set_sync_status(state.is_synced_blocking());
+        metrics.set_chain_height(state.get_height_blocking());
 
         Self {
             config,
@@ -196,7 +200,15 @@ impl ChainActor {
             cached_last_commit: None,
             tendermint_enabled: false,
             timeout_receiver: Arc::new(tokio::sync::Mutex::new(None)),
+            tendermint_driver: None,
         }
+    }
+
+    /// Set TendermintDriver address for consensus coordination.
+    ///
+    /// Called during initialization to establish bidirectional communication.
+    pub fn set_tendermint_driver(&mut self, addr: actix::Addr<crate::actors_v2::tendermint_driver::TendermintDriver>) {
+        self.tendermint_driver = Some(addr);
     }
 
     /// Configure Tendermint consensus mode.
@@ -227,7 +239,7 @@ impl ChainActor {
 
         // Initialize state machine
         let state = TendermintState::new(
-            self.state.get_height() + 1, // Start at next height
+            self.state.get_height_blocking() + 1, // Start at next height (blocking for sync context)
             validator_set.clone(),
             our_validator_id,
         );
@@ -287,8 +299,8 @@ impl ChainActor {
     pub(crate) fn record_activity(&mut self) {
         self.last_activity = Instant::now();
         self.metrics.record_activity();
-        self.metrics.set_chain_height(self.state.get_height());
-        self.metrics.set_sync_status(self.state.is_synced());
+        self.metrics.set_chain_height(self.state.get_height_blocking());
+        self.metrics.set_sync_status(self.state.is_synced_blocking());
     }
 
     /// Check if network is ready for consensus decisions
@@ -659,7 +671,7 @@ impl ChainActor {
         );
 
         if let Some(ref storage_actor) = self.storage_actor {
-            let current_height = self.state.get_height();
+            let current_height = self.state.get_height().await;
             let current_cumulative_difficulty = self.state.get_cumulative_difficulty().await;
 
             // Call the reorganization module
@@ -839,7 +851,8 @@ impl ChainActor {
     /// Check if node is falling behind and trigger catch-up sync
     async fn check_sync_health(&mut self) -> Result<(), ChainError> {
         // Skip if already syncing
-        if self.state.sync_status.is_syncing() {
+        let sync_status = self.state.get_sync_status().await;
+        if sync_status.is_syncing() {
             return Ok(());
         }
 
@@ -863,10 +876,10 @@ impl ChainActor {
                 "🚨 Node falling behind! Triggering catch-up sync"
             );
 
-            self.state.sync_status = SyncStatus::Syncing {
+            self.state.set_sync_status(SyncStatus::Syncing {
                 progress: 0.0,
                 target_height: network_height,
-            };
+            }).await;
             self.trigger_sync().await?;
         } else {
             trace!(
@@ -952,7 +965,7 @@ impl ChainActor {
         peer_id: Option<String>,
     ) -> Result<(), ChainError> {
         let block_height = block.message.execution_payload.block_number;
-        let current_height = self.state.get_height();
+        let current_height = self.state.get_height().await;
         let expected_height = current_height + 1;
 
         debug!(
@@ -1024,7 +1037,7 @@ impl ChainActor {
         let mut processed_count = 0;
 
         loop {
-            let current_height = self.state.get_height();
+            let current_height = self.state.get_height().await;
             let next_height = current_height + 1;
 
             // Check if we have the next sequential block

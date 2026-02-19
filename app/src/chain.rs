@@ -249,14 +249,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         add_balances
     }
 
+    /// Fill peg-ins and return the full PegInInfo data for AuxPowHeader.
+    /// Path B: Peg-ins are now stored in auxpow_header.pegins.
     async fn fill_pegins(
         &self,
         add_balances: &mut Vec<(Address, ConsensusAmount)>,
-    ) -> Vec<(Txid, BlockHash)> {
+    ) -> Vec<crate::actors_v2::chain::tendermint::pegin::PegInInfo> {
         let _span = tracing::info_span!("fill_pegins").entered();
 
         let mut withdrawals = BTreeMap::<_, u64>::new();
-        let mut processed_pegins = Vec::new();
+        let mut processed_pegins: Vec<crate::actors_v2::chain::tendermint::pegin::PegInInfo> = Vec::new();
         let mut total_pegin_amount: u64 = 0;
 
         // Track initial queue size
@@ -332,7 +334,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
                         .unwrap_or_default()
                         .add(pegin.amount),
                 );
-                processed_pegins.push((pegin.txid, pegin.block_hash));
+                // Path B: Store full PegInInfo for AuxPowHeader
+                processed_pegins.push(crate::actors_v2::chain::tendermint::pegin::PegInInfo {
+                    txid: pegin.txid,
+                    block_hash: pegin.block_hash,
+                    block_height: pegin.block_height,
+                    amount: pegin.amount,
+                    evm_account: pegin.evm_account,
+                });
                 CHAIN_PEGIN_TOTALS.with_label_values(&["added"]).inc();
                 total_pegin_amount += pegin.amount;
                 unique_addresses.insert(pegin.evm_account);
@@ -397,14 +406,14 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Default::default()
         };
 
-        // add the expected withdrawals for the pegins
-        for (txid, block_hash) in &unverified_block.message.pegins {
-            if self.bitcoin_wallet.read().await.get_tx(txid)?.is_some() {
+        // add the expected withdrawals for the pegins (Path B: pegins from AuxPowHeader)
+        for pegin_info in unverified_block.message.pegins() {
+            if self.bitcoin_wallet.read().await.get_tx(&pegin_info.txid)?.is_some() {
                 return Err(Error::PegInAlreadyIncluded);
             }
             let info = self
                 .bridge
-                .get_confirmed_pegin_from_txid(txid, block_hash)?;
+                .get_confirmed_pegin_from_txid(&pegin_info.txid, &pegin_info.block_hash)?;
             expected.insert(
                 info.evm_account,
                 expected
@@ -572,8 +581,16 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         };
         debug!("Add balances: {:?}", add_balances.len());
 
+        // Path B: Collect pegins to add to AuxPowHeader
         let pegins = self.fill_pegins(&mut add_balances).await;
         debug!("Filled pegins: {:?}", pegins.len());
+
+        // Path B: Add pegins to queued_pow (AuxPowHeader) if present
+        // Only blocks with AuxPoW can include pegins since miners submit them via submitauxblock
+        let queued_pow = queued_pow.map(|mut header| {
+            header.pegins = pegins.clone();
+            header
+        });
 
         let payload_result = self
             .engine
@@ -632,13 +649,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             trace!("Finalized pegouts: {:?}", finalized_pegouts[0].input);
         }
 
+        // Path B: Pegins are already included in queued_pow.pegins (if AuxPoW present)
         let block = ConsensusBlock::new(
             slot,
             payload.clone(),
             prev,
             None, // last_commit: V0 Aura consensus doesn't use Tendermint commits
             queued_pow,
-            pegins,
             pegouts,
             finalized_pegouts,
         );
@@ -1703,13 +1720,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             .accumulate_fees(&verified_block, execution_block, &execution_receipts)
             .await?;
         if self.is_validator {
-            // process pegins:
-            for (txid, block_hash) in verified_block.message.pegins.iter() {
-                info!("➡️  Processed peg-in with txid {txid}");
-                self.queued_pegins.write().await.remove(txid);
+            // process pegins (Path B: pegins from AuxPowHeader):
+            for pegin_info in verified_block.message.pegins() {
+                info!("➡️  Processed peg-in with txid {}", pegin_info.txid);
+                self.queued_pegins.write().await.remove(&pegin_info.txid);
 
                 // Make the bitcoin utxos available for spending
-                let tx = self.bridge.fetch_transaction(txid, block_hash).unwrap();
+                let tx = self.bridge.fetch_transaction(&pegin_info.txid, &pegin_info.block_hash).unwrap();
                 self.bitcoin_wallet
                     .write()
                     .await
@@ -2630,6 +2647,7 @@ impl<DB: ItemStore<MainnetEthSpec>> ChainManager<ConsensusBlock<MainnetEthSpec>>
             height,
             auxpow: Some(auxpow),
             fee_recipient: address,
+            pegins: vec![], // Pegins will be added by fill_pegins() during block production
         };
         if self.queued_pow.read().await.as_ref().is_some_and(|prev| {
             prev.range_start.eq(&pow.range_start) && prev.range_end.eq(&pow.range_end)

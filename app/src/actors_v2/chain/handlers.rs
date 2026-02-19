@@ -44,7 +44,7 @@ impl Handler<ChainMessage> for ChainActor {
                         Ok(cache) => (cache.observed_height(), cache.len()),
                         Err(_) => {
                             // If we can't get the lock, use current height as observed
-                            (self.state.get_height(), 0)
+                            (self.state.get_height_blocking(), 0)
                         }
                     }
                 };
@@ -52,16 +52,19 @@ impl Handler<ChainMessage> for ChainActor {
                 // Query StorageActor for actual chain height instead of using stale local state
                 // This is critical for Active Height Monitoring - peers need accurate heights
                 let storage_actor = self.storage_actor.clone();
-                let is_synced = self.state.is_synced();
+                let is_synced = self.state.is_synced_blocking();
                 let is_validator = self.config.is_validator;
+                // Use try_read for non-blocking access in sync context
                 let last_block_time = self
                     .state
                     .last_block_time
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+                    .try_read()
+                    .ok()
+                    .and_then(|t| t.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()));
                 let auxpow_enabled = self.config.enable_auxpow;
-                let blocks_without_pow = self.state.blocks_without_pow;
-                let local_height = self.state.get_height();
-                let local_head_hash = self.state.get_head_hash();
+                let blocks_without_pow = self.state.blocks_without_pow.try_read().ok().map(|g| *g).unwrap_or(0);
+                let local_height = self.state.get_height_blocking();
+                let local_head_hash = self.state.head.try_read().ok().and_then(|g| g.as_ref().map(|h| h.hash));
 
                 Box::pin(async move {
                     // Query StorageActor for authoritative chain height and head
@@ -464,7 +467,7 @@ impl Handler<ChainMessage> for ChainActor {
                             last_commit: None, // TODO: Will be set when Tendermint consensus is active
                             auxpow_header: None, // Will be set by incorporate_auxpow if available
                             execution_payload: capella_payload,
-                            pegins: vec![], // Withdrawal collection integrated above via add_balances
+                            // Path B: Peg-ins are stored in auxpow_header.pegins, not here
                             pegout_payment_proposal: None,
                             finalized_pegouts: vec![],
                         };
@@ -485,9 +488,10 @@ impl Handler<ChainMessage> for ChainActor {
                             Err(ChainError::Consensus(msg))
                                 if msg.contains("Too many blocks without PoW") =>
                             {
+                                let blocks_without_pow = self_clone.state.blocks_without_pow.try_read().ok().map(|g| *g).unwrap_or(0);
                                 error!(
                                     correlation_id = %correlation_id,
-                                    blocks_without_pow = self_clone.state.blocks_without_pow,
+                                    blocks_without_pow = blocks_without_pow,
                                     "Cannot produce block: AuxPoW required but not available"
                                 );
                                 return Err(ChainError::Consensus(msg));
@@ -716,7 +720,7 @@ impl Handler<ChainMessage> for ChainActor {
             } => {
                 // Perform basic validation before import
                 let block_height = block.message.execution_payload.block_number;
-                let current_height = self.state.get_height();
+                let current_height = self.state.get_height_blocking();
 
                 if block_height <= current_height && current_height > 0 {
                     info!(
@@ -1331,38 +1335,33 @@ impl Handler<ChainMessage> for ChainActor {
                         }
 
                         // Step 4: Process peg operations (Critical Blocker 3 solution)
-                        if !block.message.pegins.is_empty() || !block.message.finalized_pegouts.is_empty() {
+                        // Path B: Peg-ins are stored in auxpow_header.pegins (via pegins() helper)
+                        if !block.message.pegins().is_empty() || !block.message.finalized_pegouts.is_empty() {
                             debug!(
                                 correlation_id = %correlation_id,
-                                pegin_count = block.message.pegins.len(),
+                                pegin_count = block.message.pegins().len(),
                                 pegout_count = block.message.finalized_pegouts.len(),
                                 "Processing peg operations from imported block"
                             );
 
-                            // Process peg-ins with real validation
-                            for (pegin_txid, pegin_block_hash) in &block.message.pegins {
-                                // Look up full PegInInfo from queued pegins
-                                let pegin_info = {
-                                    let queued_pegins = self_clone.state.queued_pegins.read().await;
-                                    queued_pegins.get(pegin_txid).cloned()
+                            // Process peg-ins directly from AuxPowHeader (Path B design)
+                            for pegin_info in block.message.pegins() {
+                                // Convert V2 PegInInfo to bridge::PegInInfo (same fields, different types)
+                                let bridge_pegin = bridge::PegInInfo {
+                                    txid: pegin_info.txid,
+                                    block_hash: pegin_info.block_hash,
+                                    amount: pegin_info.amount,
+                                    evm_account: pegin_info.evm_account,
+                                    block_height: pegin_info.block_height,
                                 };
-
-                                if let Some(pegin_info) = pegin_info {
-                                    if let Err(pegin_error) = self_clone.process_block_pegin(&pegin_info, &block_hash).await {
-                                        error!(
-                                            correlation_id = %correlation_id,
-                                            txid = %pegin_txid,
-                                            error = ?pegin_error,
-                                            "Failed to process peg-in from imported block"
-                                        );
-                                        return Err(pegin_error);
-                                    }
-                                } else {
-                                    warn!(
+                                if let Err(pegin_error) = self_clone.process_block_pegin(&bridge_pegin, &block_hash).await {
+                                    error!(
                                         correlation_id = %correlation_id,
-                                        txid = %pegin_txid,
-                                        "Peg-in not found in queued pegins - skipping"
+                                        txid = %pegin_info.txid,
+                                        error = ?pegin_error,
+                                        "Failed to process peg-in from imported block"
                                     );
+                                    return Err(pegin_error);
                                 }
                             }
 
@@ -1381,7 +1380,7 @@ impl Handler<ChainMessage> for ChainActor {
 
                             info!(
                                 correlation_id = %correlation_id,
-                                pegin_count = block.message.pegins.len(),
+                                pegin_count = block.message.pegins().len(),
                                 pegout_count = block.message.finalized_pegouts.len(),
                                 "Successfully processed all peg operations from imported block"
                             );
@@ -1640,11 +1639,11 @@ impl Handler<ChainMessage> for ChainActor {
                             "AuxPoW is not enabled".to_string(),
                         ))
                     })
-                } else if self.state.needs_auxpow() {
+                } else if self.state.needs_auxpow_blocking() {
                     // Process AuxPoW when needed
                     info!(
                         block_hash = %block_hash,
-                        blocks_without_pow = self.state.blocks_without_pow,
+                        blocks_without_pow = self.state.get_blocks_without_pow_blocking(),
                         "Processing AuxPoW - basic validation"
                     );
 
@@ -2071,10 +2070,12 @@ impl Handler<ChainMessage> for ChainActor {
 
                 Box::pin(async move {
                     // Skip if already syncing
-                    if sync_status.is_syncing() {
+                    let current_status = sync_status.read().await;
+                    if current_status.is_syncing() {
                         trace!("Skipping health check - already syncing");
                         return Ok(ChainResponse::Success);
                     }
+                    drop(current_status); // Release lock before continuing
 
                     // Get storage height
                     let storage_height = if let Some(ref storage) = storage_actor {
@@ -2380,12 +2381,12 @@ impl Handler<ChainManagerMessage> for ChainActor {
 
         match msg {
             ChainManagerMessage::IsSynced => {
-                let is_synced = self.state.is_synced();
+                let is_synced = self.state.is_synced_blocking();
                 info!(is_synced = is_synced, "ChainManager: IsSynced query");
                 Box::pin(async move { Ok(ChainManagerResponse::Synced(is_synced)) })
             }
             ChainManagerMessage::GetHead => {
-                let current_height = self.state.get_height();
+                let current_height = self.state.get_height_blocking();
                 info!(
                     current_height = current_height,
                     "ChainManager: GetHead request"
@@ -2501,6 +2502,7 @@ async fn create_aux_block_helper(
         cached_last_commit: None,
         tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+        tendermint_driver: None,
     };
 
     actor.create_aux_block(miner_address).await
@@ -2551,6 +2553,7 @@ async fn submit_aux_block_helper(
         cached_last_commit: None,
         tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+        tendermint_driver: None,
     };
 
     actor
@@ -2606,29 +2609,35 @@ impl Handler<CreateAuxBlock> for ChainActor {
 }
 
 impl Handler<SubmitAuxBlock> for ChainActor {
-    type Result = ResponseActFuture<Self, Result<crate::block::AuxPowHeader, ChainError>>;
+    type Result = ResponseActFuture<Self, Result<crate::actors_v2::chain::messages::SubmitAuxBlockResponse, ChainError>>;
 
     fn handle(&mut self, msg: SubmitAuxBlock, _ctx: &mut Self::Context) -> Self::Result {
+        use crate::actors_v2::chain::messages::SubmitAuxBlockResponse;
+        use crate::actors_v2::chain::tendermint::pegin::QueuedPegIn;
+
         let correlation_id = msg.correlation_id;
         let aggregate_hash = msg.aggregate_hash;
         let auxpow = msg.auxpow;
+        let pegins = msg.pegins;
+        let fee_recipient = msg.fee_recipient;
 
         debug!(
             correlation_id = %correlation_id,
             hash = %aggregate_hash,
-            "SubmitAuxBlock handler invoked"
+            pegins_count = pegins.len(),
+            "SubmitAuxBlock handler invoked with peg-ins"
         );
 
         self.record_activity();
 
-        // Clone state and config for async operation
-        let mut state = self.state.clone();
+        // Clone state and config for async operation (Arc<RwLock> fields propagate correctly)
+        let state = self.state.clone();
         let config = self.config.clone();
 
         Box::pin(
             async move {
                 // Step 1: Validate submitted AuxPoW
-                let auxpow_header =
+                let mut auxpow_header =
                     submit_aux_block_helper(&state, &config, aggregate_hash, auxpow).await?;
 
                 info!(
@@ -2638,19 +2647,330 @@ impl Handler<SubmitAuxBlock> for ChainActor {
                     "AuxPoW validated successfully"
                 );
 
-                // Step 2: Queue validated AuxPoW
-                state.set_queued_pow(Some(auxpow_header.clone()));
-                state.reset_blocks_without_pow();
+                // Step 2: Filter and attach pegins to AuxPowHeader (Path B: pegins in AuxPowHeader)
+                // Deduplicate against already-processed pegins (Doc 16 Layer 2)
+                let mut valid_pegins = Vec::new();
+                for pegin in pegins {
+                    if state.is_pegin_processed(&pegin.txid).await {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            txid = %pegin.txid,
+                            "Peg-in already processed, skipping"
+                        );
+                        continue;
+                    }
+                    valid_pegins.push(pegin);
+                }
+                let queued_count = valid_pegins.len();
+                auxpow_header.pegins = valid_pegins;
+
+                // Step 3: Queue validated AuxPoW with attached pegins
+                state.set_queued_pow(Some(auxpow_header.clone())).await;
+                state.reset_blocks_without_pow().await;
 
                 info!(
                     correlation_id = %correlation_id,
-                    "AuxPoW queued for next block production"
+                    pegins_attached = queued_count,
+                    "AuxPoW queued with attached peg-ins (Path B)"
                 );
 
-                // TODO: Step 3: Broadcast to network (NetworkActor integration pending)
-                // This will be implemented once NetworkActor is fully integrated
+                // TODO: Step 4: Broadcast to network (NetworkActor integration pending)
 
-                Ok(auxpow_header)
+                Ok(SubmitAuxBlockResponse {
+                    auxpow_header: auxpow_header.clone(),
+                    accepted: true,
+                    pegins_queued: queued_count,
+                    height: auxpow_header.height,
+                })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// ============================================================================
+// Tendermint RPC Query Handlers (Phase 4: Document 12)
+// ============================================================================
+
+use crate::actors_v2::chain::messages::{
+    GetTendermintState, TendermintStateResponse,
+    GetValidatorSet, ValidatorSetResponse, ValidatorInfoResponse,
+    GetCommit, CommitResponse,
+    GetChainParams, ChainParamsResponse,
+    GetPendingGovernance, PendingGovernanceResponse, PendingGovernanceUpdate,
+};
+
+impl Handler<GetTendermintState> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<TendermintStateResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetTendermintState, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let tendermint_state = self.tendermint_state.clone();
+
+        Box::pin(
+            async move {
+                let state = tendermint_state
+                    .ok_or_else(|| ChainError::Configuration("Tendermint not initialized".into()))?;
+
+                let state_guard = state.read().await;
+
+                // Get validator count (available directly from state_guard)
+                let total_validators = state_guard.validator_set.len() as u32;
+
+                // Acquire vote set locks to get current vote counts
+                let prevotes = state_guard.prevotes.read().await;
+                let precommits = state_guard.precommits.read().await;
+
+                let response = TendermintStateResponse {
+                    height: state_guard.height,
+                    round: state_guard.round,
+                    step: format!("{:?}", state_guard.step),
+                    proposal_block_hash: state_guard.current_proposal.as_ref().map(|p| {
+                        let block_hash = p.block_hash();
+                        H256::from_slice(block_hash.as_bytes())
+                    }),
+                    locked_block_hash: state_guard.locked_block.map(|h| H256::from_slice(h.as_bytes())),
+                    locked_round: state_guard.locked_round,
+                    valid_block_hash: state_guard.valid_block.map(|h| H256::from_slice(h.as_bytes())),
+                    valid_round: state_guard.valid_round,
+                    prevotes_count: prevotes.vote_count() as u32,
+                    precommits_count: precommits.vote_count() as u32,
+                    total_validators,
+                };
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    height = response.height,
+                    round = response.round,
+                    step = %response.step,
+                    "GetTendermintState query completed"
+                );
+
+                Ok(response)
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<GetValidatorSet> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ValidatorSetResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetValidatorSet, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let state = self.state.clone();
+        let storage_actor = self.storage_actor.clone();
+        let page = msg.page.max(1);
+        let per_page = msg.per_page.clamp(1, 100);
+
+        Box::pin(
+            async move {
+                // Get current height if not specified
+                let height = match msg.height {
+                    Some(h) => h,
+                    None => state.get_height().await,
+                };
+
+                // Try to get validator set from storage
+                let validator_infos: Vec<(u32, String, String, u64)> = if let Some(ref storage) = storage_actor {
+                    use crate::actors_v2::storage::messages::GetValidatorSetForHeightMessage;
+
+                    match storage.send(GetValidatorSetForHeightMessage { height, correlation_id: None }).await {
+                        Ok(Ok(Some(set))) => {
+                            // Convert validator set to info tuples using iter()
+                            set.iter()
+                                .map(|(id, pubkey, power)| {
+                                    (
+                                        id.index() as u32,
+                                        format!("{:?}", id),
+                                        format!("{:?}", pubkey), // Debug format gives hex
+                                        power,
+                                    )
+                                })
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+
+                let total = validator_infos.len() as u32;
+                let start = ((page - 1) * per_page) as usize;
+                let end = (start + per_page as usize).min(validator_infos.len());
+
+                let paginated: Vec<ValidatorInfoResponse> = validator_infos
+                    .get(start..end)
+                    .unwrap_or(&[])
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_idx, addr, pk, power))| ValidatorInfoResponse {
+                        index: (start + i) as u32,
+                        address: addr.clone(),
+                        public_key: pk.clone(),
+                        voting_power: *power,
+                    })
+                    .collect();
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    count = paginated.len(),
+                    total = total,
+                    "GetValidatorSet query completed"
+                );
+
+                Ok(ValidatorSetResponse {
+                    height,
+                    validators: paginated,
+                    count: (end - start) as u32,
+                    total,
+                })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<GetCommit> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<CommitResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetCommit, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let state = self.state.clone();
+        let storage_actor = self.storage_actor.clone();
+
+        Box::pin(
+            async move {
+                // Get height to query
+                let height = match msg.height {
+                    Some(h) => h,
+                    None => state.get_height().await,
+                };
+
+                // Get block from storage
+                let block = if let Some(ref storage) = storage_actor {
+                    use crate::actors_v2::storage::messages::GetBlockByHeightMessage;
+
+                    match storage.send(GetBlockByHeightMessage { height, correlation_id: None }).await {
+                        Ok(Ok(Some(b))) => Some(b),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                let block = block.ok_or_else(|| {
+                    ChainError::Storage(format!("Block not found at height {}", height))
+                })?;
+
+                // Extract commit from the NEXT block's last_commit
+                // Since block N's commit proof is in block N+1's last_commit
+                // For the head block, the commit won't be available until the next block is produced
+                let (round, signatures_count, commit_available) = if let Some(ref storage) = storage_actor {
+                    use crate::actors_v2::storage::messages::GetBlockByHeightMessage;
+
+                    match storage.send(GetBlockByHeightMessage { height: height + 1, correlation_id: None }).await {
+                        Ok(Ok(Some(next_block))) => {
+                            if let Some(commit) = next_block.message.last_commit {
+                                (commit.round, commit.signatures.len() as u32, true)
+                            } else {
+                                // Next block exists but has no last_commit (shouldn't happen)
+                                (0, 0, false)
+                            }
+                        }
+                        _ => {
+                            // Next block doesn't exist yet - commit not available
+                            // This is expected for the current head block
+                            (0, 0, false)
+                        }
+                    }
+                } else {
+                    (0, 0, false)
+                };
+
+                let block_hash = H256::from_slice(block.canonical_root().as_bytes());
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    signatures = signatures_count,
+                    commit_available = commit_available,
+                    "GetCommit query completed"
+                );
+
+                Ok(CommitResponse {
+                    height,
+                    round,
+                    block_hash,
+                    signatures_count,
+                    canonical: true,
+                    commit_available,
+                })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<GetChainParams> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ChainParamsResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetChainParams, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let state = self.state.clone();
+        let _config = self.config.clone(); // TODO: Use config values when implemented
+
+        Box::pin(
+            async move {
+                let height = state.get_height().await;
+
+                // TODO: Read from ChainParams when integrated with TendermintState
+                // These are the default values from tendermint/params.rs
+                // See ChainParams struct for the full parameter set
+                let response = ChainParamsResponse {
+                    height,
+                    max_block_bytes: 22020096,      // ~21MB (EIP-4844 compatible)
+                    max_gas: 30_000_000,            // 30M gas limit
+                    evidence_max_age_blocks: 100_000,
+                    pegin_minimum_satoshis: 10_000, // 0.0001 BTC (from tendermint/params.rs defaults)
+                    pegin_confirmation_depth: 6,    // 6 Bitcoin confirmations
+                    miner_fee_bps: 50,              // 0.5% miner fee (from pegin_compensation defaults)
+                };
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "GetChainParams query completed"
+                );
+
+                Ok(response)
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<GetPendingGovernance> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<PendingGovernanceResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetPendingGovernance, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+
+        Box::pin(
+            async move {
+                // TODO: Connect to governance queue when infrastructure is ready
+                // For now, return empty list as governance updates aren't tracked yet
+                let updates: Vec<PendingGovernanceUpdate> = Vec::new();
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    pending_count = updates.len(),
+                    "GetPendingGovernance query completed"
+                );
+
+                Ok(PendingGovernanceResponse { updates })
             }
             .into_actor(self),
         )

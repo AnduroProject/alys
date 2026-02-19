@@ -3,14 +3,13 @@
 //! Implements the data pipeline for collecting peg-in operations and fee distribution
 //! that are required for execution payload building.
 
-use bitcoin::Txid;
-use bridge::PegInInfo;
 use ethereum_types::{Address, U256};
 use lighthouse_wrapper::types::Withdrawal;
 use std::collections::BTreeMap;
 use tracing::{debug, info, warn};
 
 use super::{ChainActor, ChainConfig, ChainError};
+use super::tendermint::pegin::{PegInInfo, QueuedPegIn};
 use crate::engine::ConsensusAmount;
 
 /// Withdrawal collection result
@@ -24,7 +23,7 @@ pub struct WithdrawalCollection {
 
 /// Standalone withdrawal collection function for use in async handlers
 pub async fn collect_withdrawals_standalone(
-    queued_pegins: &BTreeMap<bitcoin::Txid, bridge::PegInInfo>,
+    queued_pegins: &BTreeMap<bitcoin::Txid, QueuedPegIn>,
     storage_actor: Option<&actix::Addr<crate::actors_v2::storage::StorageActor>>,
     validator_address: Option<ethereum_types::Address>,
     federation: &[ethereum_types::Address],
@@ -36,8 +35,9 @@ pub async fn collect_withdrawals_standalone(
 
     debug!("Starting standalone withdrawal collection for block production");
 
-    // 1. Process queued peg-ins
-    for (txid, pegin_info) in queued_pegins {
+    // 1. Process queued peg-ins (QueuedPegIn wrapper, access .info for PegInInfo)
+    for (txid, queued_pegin) in queued_pegins {
+        let pegin_info = &queued_pegin.info;
         debug!(
             txid = %txid,
             amount = pegin_info.amount,
@@ -212,8 +212,10 @@ impl ChainActor {
         debug!("Starting withdrawal collection for block production");
 
         // 1. Process queued peg-ins from bridge (async RwLock access)
+        // Note: queued_pegins now stores QueuedPegIn, access .info for PegInInfo fields
         let queued_pegins_snapshot = self.state.queued_pegins.read().await.clone();
-        for (txid, pegin_info) in &queued_pegins_snapshot {
+        for (txid, queued_pegin) in &queued_pegins_snapshot {
+            let pegin_info = &queued_pegin.info;
             debug!(
                 txid = %txid,
                 amount = pegin_info.amount,
@@ -376,11 +378,14 @@ impl ChainActor {
         // Implementation matches V0 chain.rs:1637-1643 pattern
 
         // Get parent block for fee accumulation lookup
-        let parent_hash = match &self.state.head {
-            Some(head_ref) => head_ref.hash,
-            None => {
-                debug!("No parent block found - returning zero fees for genesis");
-                return Ok(ConsensusAmount(0));
+        let parent_hash = {
+            let head_guard = self.state.head.read().await;
+            match head_guard.as_ref() {
+                Some(head_ref) => head_ref.hash,
+                None => {
+                    debug!("No parent block found - returning zero fees for genesis");
+                    return Ok(ConsensusAmount(0));
+                }
             }
         };
 

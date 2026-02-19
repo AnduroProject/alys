@@ -15,6 +15,7 @@ use super::{
     messages::{Block, NetworkMessage, PeerId, SyncStatus},
     metrics::update_prometheus_sync_state,
     sync_checkpoint::SyncCheckpoint,
+    tendermint_sync::{TendermintSyncConfig, TendermintSyncValidator},
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
 use crate::actors_v2::storage::{StorageActor, messages::GetChainHeadMessage};
@@ -303,6 +304,9 @@ pub struct SyncActor {
     network_actor: Option<Addr<crate::actors_v2::network::NetworkActor>>,
     chain_actor: Option<Addr<crate::actors_v2::chain::ChainActor>>,
     storage_actor: Option<Addr<StorageActor>>,
+
+    /// Tendermint sync validator for commit verification (Phase 3)
+    tendermint_validator: Option<std::sync::Arc<std::sync::RwLock<TendermintSyncValidator>>>,
 }
 
 impl SyncActor {
@@ -316,12 +320,30 @@ impl SyncActor {
             .validate()
             .map_err(|e| anyhow!("Invalid sync configuration: {}", e))?;
 
+        // Initialize Tendermint validator if enabled
+        // Uses deferred initialization - validator set loaded from storage later
+        let tendermint_validator = if config.tendermint_enabled {
+            let tm_config = TendermintSyncConfig {
+                verify_commits: config.verify_commits,
+                max_batch_size: config.max_blocks_per_request,
+                allow_untrusted_sync: false,
+            };
+            tracing::info!("Tendermint sync validation enabled (verify_commits={})", config.verify_commits);
+            Some(std::sync::Arc::new(std::sync::RwLock::new(
+                TendermintSyncValidator::new_deferred(tm_config)
+            )))
+        } else {
+            tracing::info!("Tendermint sync validation disabled (legacy mode)");
+            None
+        };
+
         Ok(Self {
             state: std::sync::Arc::new(std::sync::RwLock::new(SyncActorState::new())),
             config,
             network_actor: None,
             chain_actor: None,
             storage_actor: None,
+            tendermint_validator,
         })
     }
 
@@ -1160,6 +1182,7 @@ impl Handler<SyncMessage> for SyncActor {
                 let state = std::sync::Arc::clone(&self.state);
                 let chain_actor = self.chain_actor.clone();
                 let peer_id_clone = peer_id.clone();
+                let tendermint_validator = self.tendermint_validator.clone();
 
                 ctx.spawn(
                     async move {
@@ -1219,6 +1242,36 @@ impl Handler<SyncMessage> for SyncActor {
                                                     block_height,
                                                     peer_id
                                                 );
+
+                                                // Tendermint commit verification (Phase 3)
+                                                if let Some(ref validator) = tendermint_validator {
+                                                    match validator.write() {
+                                                        Ok(mut v) => {
+                                                            if let Err(e) = v.validate_sync_block(&block, block_height) {
+                                                                tracing::error!(
+                                                                    height = block_height,
+                                                                    error = %e,
+                                                                    peer = %peer_id,
+                                                                    "Block failed Tendermint commit verification - rejecting"
+                                                                );
+                                                                let mut s = state.write().unwrap();
+                                                                s.metrics.record_network_error();
+                                                                continue; // Skip this block but process others
+                                                            }
+                                                            tracing::debug!(
+                                                                height = block_height,
+                                                                "Block passed Tendermint commit verification"
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!(
+                                                                error = %e,
+                                                                "Failed to acquire Tendermint validator lock"
+                                                            );
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
 
                                                 if let Err(e) = chain_actor
                                                     .send(crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
