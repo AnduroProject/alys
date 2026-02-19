@@ -8,7 +8,7 @@ on:
       - 'AN-*'
     tags: [ 'v*.*.*' ]
   pull_request:
-    branches: [ "main", "development", "feature/v2-network" ]
+    branches: [ "main", "development", "feature/v2-network", "feature/tendermint" ]
 
 env:
   REGISTRY: ghcr.io
