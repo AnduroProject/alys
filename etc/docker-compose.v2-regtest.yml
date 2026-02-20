@@ -83,7 +83,7 @@ services:
     # build:
     #   context: ..
     #   dockerfile: ./etc/Dockerfile
-    image: ghcr.io/anduroproject/alys:feature-v2-network
+    image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-1
     restart: unless-stopped
     networks:
@@ -133,7 +133,7 @@ services:
     # build:
     #   context: ..
     #   dockerfile: ./etc/Dockerfile
-    image: ghcr.io/anduroproject/alys:feature-v2-network
+    image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-2
     restart: unless-stopped
     networks:
@@ -184,7 +184,7 @@ services:
     # build:
     #   context: ..
     #   dockerfile: ./etc/Dockerfile
-    image: ghcr.io/anduroproject/alys:feature-v2-network
+    image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-3
     restart: unless-stopped
     networks:
