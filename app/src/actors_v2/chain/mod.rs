@@ -22,17 +22,14 @@ pub mod error;
 pub mod handlers;
 pub mod messages;
 pub mod metrics;
-pub mod orphan_cache;
 pub mod state;
 pub mod withdrawals;
 
 // Phase 4 production hardening modules
 pub mod auxpow;
-pub mod fork_choice;
 pub mod genesis;
 pub mod monitoring;
 pub mod recovery;
-pub mod reorganization;
 
 // Tendermint consensus module (Phase 5 migration)
 pub mod tendermint;
@@ -45,7 +42,6 @@ pub use config::ChainConfig;
 pub use error::ChainError;
 pub use messages::{ChainMessage, ChainResponse};
 pub use metrics::ChainMetrics;
-pub use orphan_cache::{OrphanBlockCache, OrphanCacheConfig, OrphanCacheStats};
 pub use state::ChainState;
 
 // Phase 4 exports

@@ -123,6 +123,12 @@ pub enum ChainMessage {
         update: crate::actors_v2::chain::tendermint::GovernanceUpdate,
         correlation_id: Option<Uuid>,
     },
+
+    /// Set TendermintDriver address for bidirectional communication
+    /// Allows ChainActor to notify the driver when blocks are committed
+    SetTendermintDriver {
+        addr: actix::Addr<crate::actors_v2::tendermint_driver::TendermintDriver>,
+    },
 }
 
 /// ChainManager interface messages (for future EngineActor/AuxPowActor coordination)
@@ -331,13 +337,14 @@ pub struct ChainStatus {
     /// Blocks without AuxPoW
     pub blocks_without_pow: u64,
 
-    /// Observed network height (includes orphan blocks)
-    /// This tracks the highest block height seen from the network,
-    /// even if those blocks couldn't be imported due to missing parents.
-    /// Used by SyncActor for network height discovery.
+    /// Observed network height
+    /// With Tendermint instant finality, this equals the committed height.
+    /// (Legacy field maintained for API compatibility)
     pub observed_height: u64,
 
     /// Number of orphan blocks in cache
+    /// With Tendermint instant finality, always 0 (no orphan blocks possible).
+    /// (Legacy field maintained for API compatibility)
     pub orphan_count: usize,
 }
 

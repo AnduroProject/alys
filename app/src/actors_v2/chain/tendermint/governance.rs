@@ -7,10 +7,46 @@
 //! - Emergency actions: H+0 activation (immediate)
 
 use super::params::{GovernableParam, ParameterUpdate};
-use super::types::VotingPower;
+use super::types::{ValidatorSet, VotingPower};
+use ethereum_types::H256;
 use lighthouse_wrapper::bls::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use tiny_keccak::{Hasher, Keccak};
+
+/// Errors related to governance operations
+#[derive(Debug, Clone, PartialEq)]
+pub enum GovernanceError {
+    /// Governance update is missing a required signature
+    MissingSignature,
+    /// Governance signature failed verification
+    InvalidSignature,
+    /// Insufficient voting power to authorize the action
+    InsufficientVotingPower { required: u64, provided: u64 },
+}
+
+impl fmt::Display for GovernanceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GovernanceError::MissingSignature => {
+                write!(f, "Governance update is missing required signature")
+            }
+            GovernanceError::InvalidSignature => {
+                write!(f, "Governance signature failed verification")
+            }
+            GovernanceError::InsufficientVotingPower { required, provided } => {
+                write!(
+                    f,
+                    "Insufficient voting power: required {}, provided {}",
+                    required, provided
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for GovernanceError {}
 
 /// Unified type for all governance-controlled changes
 ///
@@ -79,6 +115,66 @@ impl ValidatorUpdate {
     pub fn is_removal(&self) -> bool {
         self.power == 0
     }
+
+    /// Compute the signing root for this validator update.
+    ///
+    /// Issue 1.4 Fix: This provides the message that governance signers must sign.
+    /// Includes domain separation and chain_id for replay protection.
+    pub fn signing_root(&self, chain_id: &str) -> H256 {
+        let mut hasher = Keccak::v256();
+
+        // Domain separation prefix
+        hasher.update(b"governance-validator-update");
+        // Chain ID for cross-network replay protection
+        hasher.update(chain_id.as_bytes());
+        // Validator being updated
+        hasher.update(&self.public_key.serialize());
+        // New voting power
+        hasher.update(&self.power.to_le_bytes());
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        H256::from(output)
+    }
+
+    /// Verify the governance signature against the current validator set.
+    ///
+    /// Issue 1.4 Fix: Requires 2/3+ of current validators to sign.
+    /// For MVP, we use a single aggregate signature that must verify against
+    /// a quorum of the validator set.
+    pub fn verify_governance_signature(
+        &self,
+        validator_set: &ValidatorSet,
+        chain_id: &str,
+    ) -> Result<(), GovernanceError> {
+        let signing_root = self.signing_root(chain_id);
+
+        // Check if signature is empty (empty signature is all zeros)
+        if self.governance_signature == Signature::empty() {
+            return Err(GovernanceError::MissingSignature);
+        }
+
+        // For MVP: Verify as an aggregate BLS signature from all validators
+        // The signature should be an aggregate of individual validator signatures.
+        // This assumes all validators participated in signing.
+        //
+        // In production, we would need to:
+        // 1. Track which validators signed (e.g., using a bitfield)
+        // 2. Aggregate only participating validator public keys
+        // 3. Verify that participating power >= 2/3+ threshold
+        //
+        // For now, aggregate all validator public keys and verify
+        let aggregate_pubkey = validator_set.aggregate_public_key();
+
+        if !self
+            .governance_signature
+            .verify(&aggregate_pubkey, signing_root)
+        {
+            return Err(GovernanceError::InvalidSignature);
+        }
+
+        Ok(())
+    }
 }
 
 /// Emergency action from governance
@@ -115,6 +211,53 @@ impl EmergencyAction {
     /// Get the action type for logging/metrics
     pub fn action_type(&self) -> EmergencyActionKind {
         self.action
+    }
+
+    /// Compute the signing root for this emergency action.
+    ///
+    /// Issue 1.4 Fix: This provides the message that governance signers must sign.
+    /// Includes domain separation and chain_id for replay protection.
+    pub fn signing_root(&self, chain_id: &str) -> H256 {
+        let mut hasher = Keccak::v256();
+
+        // Domain separation prefix
+        hasher.update(b"governance-emergency-action");
+        // Chain ID for cross-network replay protection
+        hasher.update(chain_id.as_bytes());
+        // The action being taken
+        hasher.update(&[self.action as u8]);
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        H256::from(output)
+    }
+
+    /// Verify the governance signature against the current validator set.
+    ///
+    /// Issue 1.4 Fix: Emergency actions require 2/3+ of current validators to sign.
+    pub fn verify_governance_signature(
+        &self,
+        validator_set: &ValidatorSet,
+        chain_id: &str,
+    ) -> Result<(), GovernanceError> {
+        let signing_root = self.signing_root(chain_id);
+
+        // Check if signature is empty
+        if self.governance_signature == Signature::empty() {
+            return Err(GovernanceError::MissingSignature);
+        }
+
+        // Verify as aggregate BLS signature (same as ValidatorUpdate)
+        let aggregate_pubkey = validator_set.aggregate_public_key();
+
+        if !self
+            .governance_signature
+            .verify(&aggregate_pubkey, signing_root)
+        {
+            return Err(GovernanceError::InvalidSignature);
+        }
+
+        Ok(())
     }
 }
 
@@ -249,5 +392,115 @@ mod tests {
             governance_signature: Signature::empty(),
         };
         assert!(!update.is_removal());
+    }
+
+    #[test]
+    fn test_governance_signature_verification_rejects_empty() {
+        use lighthouse_wrapper::bls::SecretKey;
+
+        // Create a validator set with 3 validators
+        let secret_keys: Vec<SecretKey> = (0..3).map(|_| SecretKey::random()).collect();
+        let public_keys: Vec<PublicKey> = secret_keys.iter().map(|sk| sk.public_key()).collect();
+        let validator_set = ValidatorSet::with_equal_power(public_keys.clone());
+
+        // Create an update with empty signature (unsigned)
+        let update = ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        };
+
+        // Verification should fail with MissingSignature
+        let result = update.verify_governance_signature(&validator_set, "alys-test");
+        assert_eq!(result, Err(GovernanceError::MissingSignature));
+    }
+
+    #[test]
+    fn test_governance_signing_root_domain_separation() {
+        let update = ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        };
+
+        // Signing roots with different chain_ids should be different
+        let root_mainnet = update.signing_root("alys-mainnet-1");
+        let root_testnet = update.signing_root("alys-testnet-1");
+
+        assert_ne!(
+            root_mainnet, root_testnet,
+            "Signing roots should differ for different chain_ids"
+        );
+
+        // Same chain_id should produce same root
+        let root_mainnet_2 = update.signing_root("alys-mainnet-1");
+        assert_eq!(
+            root_mainnet, root_mainnet_2,
+            "Signing roots should be deterministic"
+        );
+    }
+
+    #[test]
+    fn test_emergency_action_signing_root_domain_separation() {
+        let action = EmergencyAction {
+            action: EmergencyActionKind::PausePegIns,
+            governance_signature: Signature::empty(),
+        };
+
+        // Signing roots with different chain_ids should be different
+        let root_mainnet = action.signing_root("alys-mainnet-1");
+        let root_testnet = action.signing_root("alys-testnet-1");
+
+        assert_ne!(
+            root_mainnet, root_testnet,
+            "Signing roots should differ for different chain_ids"
+        );
+
+        // Different actions should have different signing roots
+        let action2 = EmergencyAction {
+            action: EmergencyActionKind::PausePegOuts,
+            governance_signature: Signature::empty(),
+        };
+        let root_pause_pegouts = action2.signing_root("alys-mainnet-1");
+
+        assert_ne!(
+            root_mainnet, root_pause_pegouts,
+            "Different actions should have different signing roots"
+        );
+    }
+
+    #[test]
+    fn test_governance_signature_verification_valid_aggregate() {
+        use lighthouse_wrapper::bls::{AggregateSignature, SecretKey};
+
+        // Create a validator set with 3 validators
+        let secret_keys: Vec<SecretKey> = (0..3).map(|_| SecretKey::random()).collect();
+        let public_keys: Vec<PublicKey> = secret_keys.iter().map(|sk| sk.public_key()).collect();
+        let validator_set = ValidatorSet::with_equal_power(public_keys.clone());
+
+        // Create an update
+        let mut update = ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        };
+
+        // Compute the signing root
+        let chain_id = "alys-test";
+        let signing_root = update.signing_root(chain_id);
+
+        // Have all validators sign
+        let mut aggregate_sig = AggregateSignature::empty();
+        for sk in &secret_keys {
+            let sig = sk.sign(signing_root);
+            aggregate_sig.add(&sig);
+        }
+
+        // Set the governance signature
+        update.governance_signature = aggregate_sig.to_signature();
+
+        // Verification should succeed
+        let result = update.verify_governance_signature(&validator_set, chain_id);
+        assert!(result.is_ok(), "Valid aggregate signature should verify");
     }
 }

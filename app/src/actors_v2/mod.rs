@@ -8,7 +8,6 @@ pub mod common;
 pub mod engine;
 pub mod network;
 pub mod rpc;
-pub mod slot_worker;
 pub mod storage;
 pub mod tendermint_driver;
 

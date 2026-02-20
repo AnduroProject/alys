@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use super::{
     messages::{BlockSource, ChainMessage},
-    orphan_cache::OrphanBlockCache,
     state::SyncStatus,
     ChainConfig, ChainError, ChainMetrics, ChainState,
 };
@@ -112,10 +111,6 @@ pub struct ChainActor {
     /// Phase 3: Active gap fill requests (start_height -> GapFillRequest)
     pub(crate) gap_fill_requests: Arc<RwLock<HashMap<u64, GapFillRequest>>>,
 
-    /// Orphan block cache: stores blocks whose parents haven't been imported yet
-    /// Used for out-of-order block reception and tracking observed network height
-    pub(crate) orphan_cache: Arc<RwLock<OrphanBlockCache>>,
-
     /// Active Height Monitoring (Layer 3): Consecutive PayloadIdUnavailable errors
     /// Used to detect chain head desynchronization and trigger emergency re-sync
     pub(crate) payload_unavailable_count: u32,
@@ -187,8 +182,6 @@ impl ChainActor {
             // Phase 3: Initialize gap detection queue
             queued_blocks: Arc::new(RwLock::new(HashMap::new())),
             gap_fill_requests: Arc::new(RwLock::new(HashMap::new())),
-            // Orphan block cache for out-of-order block reception
-            orphan_cache: Arc::new(RwLock::new(OrphanBlockCache::new())),
             // Active Height Monitoring (Layer 3): Initialize error counter
             payload_unavailable_count: 0,
             // Tendermint state (initialized as disabled, enable via configure_tendermint)
@@ -654,69 +647,6 @@ impl ChainActor {
         } else {
             Err(ChainError::Storage(
                 "StorageActor not available".to_string(),
-            ))
-        }
-    }
-
-    /// Phase 4C: Reorganize chain to new canonical tip when fork choice determines it's better
-    pub async fn reorganize_chain(
-        &self,
-        new_tip_block: &SignedConsensusBlock<MainnetEthSpec>,
-        correlation_id: Uuid,
-    ) -> Result<super::reorganization::ReorganizationResult, ChainError> {
-        warn!(
-            correlation_id = %correlation_id,
-            new_tip_height = new_tip_block.message.execution_payload.block_number,
-            "Starting chain reorganization"
-        );
-
-        if let Some(ref storage_actor) = self.storage_actor {
-            let current_height = self.state.get_height().await;
-            let current_cumulative_difficulty = self.state.get_cumulative_difficulty().await;
-
-            // Call the reorganization module
-            let result = super::reorganization::reorganize_to_new_tip(
-                new_tip_block,
-                current_height,
-                current_cumulative_difficulty,
-                storage_actor,
-                correlation_id,
-            )
-            .await?;
-
-            // Update ChainState with new cumulative difficulty after successful reorg
-            self.state
-                .set_cumulative_difficulty(result.new_cumulative_difficulty)
-                .await;
-
-            // Cache the new tip's cumulative difficulty
-            self.state
-                .cache_difficulty(result.new_tip_height, result.new_cumulative_difficulty)
-                .await;
-
-            // For deep reorgs, invalidate cache entries above reorg height
-            if result.is_deep_reorg {
-                // Clear entries above the common ancestor (rolled back blocks)
-                // The rollback_difficulty method handles this
-                self.state
-                    .rollback_difficulty(result.reorg_height, result.new_cumulative_difficulty)
-                    .await;
-            }
-
-            info!(
-                correlation_id = %correlation_id,
-                reorg_height = result.reorg_height,
-                blocks_rolled_back = result.blocks_rolled_back,
-                blocks_applied = result.blocks_applied,
-                new_tip = %result.new_tip,
-                new_cumulative_difficulty = result.new_cumulative_difficulty,
-                "Chain reorganization completed - ChainState updated"
-            );
-
-            Ok(result)
-        } else {
-            Err(ChainError::Storage(
-                "StorageActor not available for reorganization".to_string(),
             ))
         }
     }

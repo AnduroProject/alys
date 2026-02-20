@@ -18,6 +18,8 @@
 use super::messages::Proposal;
 use super::types::*;
 use super::vote_set::VoteSet;
+use crate::block::ConsensusBlock;
+use lighthouse_wrapper::types::MainnetEthSpec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -61,6 +63,13 @@ pub struct TendermintState {
     ///
     /// Safety invariant: if locked_round is Some, locked_block must also be Some
     pub locked_block: Option<BlockHash>,
+
+    /// The actual block content we are locked on (Issue 2.1 fix)
+    ///
+    /// This is needed so that a locked proposer can re-propose the locked block.
+    /// Without storing the block content, we would only have the hash and couldn't
+    /// create a valid proposal.
+    pub locked_block_data: Option<ConsensusBlock<MainnetEthSpec>>,
 
     /// The round at which we last saw 2/3+ prevotes (used for unlocking)
     pub valid_round: Option<Round>,
@@ -147,6 +156,7 @@ impl TendermintState {
 
             locked_round: None,
             locked_block: None,
+            locked_block_data: None, // Issue 2.1: Block data stored when locking
             valid_round: None,
             valid_block: None,
 
@@ -226,6 +236,7 @@ impl TendermintState {
         // Clear locking state
         self.locked_round = None;
         self.locked_block = None;
+        self.locked_block_data = None; // Issue 2.1: Clear block data at new height
         self.valid_round = None;
         self.valid_block = None;
 
@@ -313,15 +324,33 @@ impl TendermintState {
     /// Lock on a block after seeing 2/3+ prevotes
     ///
     /// This is the critical locking operation that ensures safety.
+    /// Lock on a block hash (without storing block content)
+    ///
+    /// Note: For locked proposers to re-propose, use `lock_on_with_block` instead.
     pub fn lock_on(&mut self, round: Round, block_hash: BlockHash) {
+        self.lock_on_with_block(round, block_hash, None);
+    }
+
+    /// Lock on a block with full block content (Issue 2.1 fix)
+    ///
+    /// Stores both the block hash and the full block content, allowing
+    /// a locked proposer to re-propose the locked block in later rounds.
+    pub fn lock_on_with_block(
+        &mut self,
+        round: Round,
+        block_hash: BlockHash,
+        block_data: Option<ConsensusBlock<MainnetEthSpec>>,
+    ) {
         info!(
             height = self.height,
             round = round,
             block_hash = %block_hash,
+            has_block_data = block_data.is_some(),
             "Locking on block"
         );
         self.locked_round = Some(round);
         self.locked_block = Some(block_hash);
+        self.locked_block_data = block_data;
     }
 
     /// Update valid block after seeing 2/3+ prevotes
@@ -336,10 +365,14 @@ impl TendermintState {
     ///
     /// We can unlock if we see 2/3+ prevotes for a different block
     /// in a round higher than our locked round.
+    /// Check if we can unlock based on a Proof-of-Lock-Change claim
+    ///
+    /// Issue 2.4 Fix: Changed from `>` to `>=` per Tendermint paper.
+    /// A POL from the same round as the lock is valid for unlocking.
     pub fn can_unlock(&self, pol_round: Round, _pol_block: BlockHash) -> bool {
         match self.locked_round {
             None => true, // Not locked, no unlock needed
-            Some(locked_round) => pol_round > locked_round,
+            Some(locked_round) => pol_round >= locked_round, // Issue 2.4: Use >= not >
         }
     }
 
@@ -375,6 +408,12 @@ impl TendermintState {
     /// 2. If locked on the proposed block: vote for it
     /// 3. If locked on different block but proposal has valid POL: can vote for proposal
     /// 4. If locked on different block and no valid POL: vote NIL or locked block
+    ///
+    /// # POL Verification (Issue 1.3 Fix)
+    ///
+    /// When a proposal claims a POL (pol_round), we verify it against our
+    /// historical_prevotes. This prevents malicious proposers from lying
+    /// about having a POL to unlock validators.
     pub fn determine_prevote_target(&self, proposal: &Proposal) -> Option<BlockHash> {
         let proposal_hash = proposal.block_hash();
 
@@ -388,11 +427,29 @@ impl TendermintState {
             // Locked on different block - check POL for unlock
             (Some(_locked), Some(locked_round)) => {
                 match proposal.pol_round {
-                    // Proposal has POL from higher round than our lock
+                    // Proposal claims POL from round >= our lock
                     Some(pol_round) if pol_round >= *locked_round => {
-                        // We could verify the POL here, but for now trust it
-                        // In production, would verify 2/3+ prevotes exist
-                        Some(proposal_hash)
+                        // Issue 1.3 FIX: Verify POL against our historical prevotes
+                        // instead of blindly trusting the proposer's claim
+                        if self.verify_pol_claim(pol_round, &proposal_hash) {
+                            debug!(
+                                pol_round = pol_round,
+                                proposal_hash = %proposal_hash,
+                                locked_round = *locked_round,
+                                "POL verified from historical prevotes - unlocking"
+                            );
+                            Some(proposal_hash)
+                        } else {
+                            // Proposer claims POL but our records don't support it
+                            // Stay locked for safety
+                            debug!(
+                                pol_round = pol_round,
+                                proposal_hash = %proposal_hash,
+                                locked_round = *locked_round,
+                                "POL claimed but not verified - staying locked"
+                            );
+                            None
+                        }
                     }
                     // No valid POL - vote NIL (cannot vote for conflicting block)
                     _ => None,
@@ -402,6 +459,30 @@ impl TendermintState {
             // Locked but no locked_round (shouldn't happen)
             (Some(locked), None) => Some(*locked),
         }
+    }
+
+    /// Verify a POL claim against our historical prevotes.
+    ///
+    /// Returns true if we have evidence of 2/3+ prevotes for the given block
+    /// at the specified round.
+    ///
+    /// # Safety Trade-off
+    ///
+    /// If we were offline during pol_round, we won't have the historical data
+    /// and will return false. This keeps us locked (safe but potentially slower
+    /// progress). This is the correct behavior - staying locked is always safe.
+    fn verify_pol_claim(&self, pol_round: Round, block_hash: &BlockHash) -> bool {
+        // Check if we have archived prevotes from pol_round
+        if let Some(archived_votes) = self.historical_prevotes.get(&pol_round) {
+            // Use try_read to avoid blocking - if lock is contended, stay safe
+            if let Ok(votes) = archived_votes.try_read() {
+                return votes.has_two_thirds_for(Some(block_hash));
+            }
+        }
+
+        // No historical data for this round (may have been offline)
+        // or lock contention - stay locked for safety
+        false
     }
 }
 

@@ -486,6 +486,34 @@ impl ValidatorSet {
         self.total_power = self.powers.iter().sum();
     }
 
+    /// Compute the aggregate public key of all validators.
+    ///
+    /// Issue 1.4 Fix: Used for governance signature verification.
+    /// This aggregates all validator public keys for BLS aggregate signature verification.
+    ///
+    /// # Note
+    ///
+    /// In production, this should only aggregate keys of validators who actually signed.
+    /// The current implementation assumes all validators participated.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the validator set is empty.
+    pub fn aggregate_public_key(&self) -> PublicKey {
+        use lighthouse_wrapper::bls::AggregatePublicKey;
+
+        assert!(
+            !self.validators.is_empty(),
+            "Cannot aggregate public keys from empty validator set"
+        );
+
+        // Aggregate all validator public keys
+        let aggregate = AggregatePublicKey::aggregate(&self.validators)
+            .expect("BLS public key aggregation should not fail for valid keys");
+
+        aggregate.to_public_key()
+    }
+
     /// Apply a batch of validator updates atomically
     ///
     /// Updates are applied in order. Power of 0 means removal.

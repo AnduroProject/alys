@@ -1,7 +1,7 @@
 #![allow(clippy::manual_div_ceil)]
 
 use crate::actors_v2::network::{NetworkMessage, SyncMessage};
-use crate::aura::{Aura, AuraSlotWorker};
+use crate::aura::Aura;
 use crate::auxpow_miner::spawn_background_miner;
 use crate::block_hash_cache::BlockHashCacheInit;
 use crate::chain::{BitcoinWallet, Chain};
@@ -582,10 +582,16 @@ impl App {
                 max_outbound_connections: 500,
                 connection_timeout: Duration::from_secs(30),
                 gossip_topics: vec![
-                    "alys/blocks".to_string(),          // Regular block gossip
-                    "alys/blocks/priority".to_string(), // Priority block gossip
-                    "alys/transactions".to_string(),    // Transaction gossip
-                    "alys/auxpow".to_string(),          // AuxPoW mining coordination
+                    "alys/blocks".to_string(),              // Regular block gossip
+                    "alys/blocks/priority".to_string(),     // Priority block gossip
+                    "alys/transactions".to_string(),        // Transaction gossip
+                    "alys/auxpow".to_string(),              // AuxPoW mining coordination
+                    // Tendermint consensus topics
+                    "alys-tendermint-proposals".to_string(),  // Block proposals
+                    "alys-tendermint-votes".to_string(),      // Prevotes and precommits
+                    "alys-tendermint-timeouts".to_string(),   // Timeout notifications
+                    "alys-tendermint-evidence".to_string(),   // Equivocation evidence
+                    "alys-tendermint-newround".to_string(),   // New round announcements
                 ],
                 message_size_limit: 4 * 1024 * 1024, // 4MB
                 discovery_interval: Duration::from_secs(60),
@@ -629,6 +635,32 @@ impl App {
             chain_actor.set_storage_actor(storage_actor.clone());
             chain_actor.set_network_actors(network_actor.clone(), sync_actor.clone());
             chain_actor.set_engine_actor(engine_actor.clone());
+
+            // Configure Tendermint consensus
+            info!("🔐 Configuring Tendermint consensus...");
+            let validator_set = crate::actors_v2::chain::tendermint::ValidatorSet::with_equal_power(
+                v2_authorities_for_slot_worker.clone()
+            );
+            let wal_path = std::path::PathBuf::from(format!("{}/tendermint_wal", v2_data_path));
+
+            // Create WAL directory if it doesn't exist
+            if let Err(e) = std::fs::create_dir_all(&wal_path) {
+                error!("Failed to create WAL directory: {:?}", e);
+            }
+
+            // Configure Tendermint with validator keypair (if validator)
+            if let Err(e) = chain_actor.configure_tendermint(
+                v2_maybe_aura_signer_for_slot_worker.clone(),
+                validator_set.clone(),
+                &wal_path,
+            ) {
+                error!("✗ Failed to configure Tendermint: {:?}", e);
+            } else {
+                info!("✓ Tendermint consensus configured");
+            }
+
+            // Wrap validator_set in Arc for TendermintDriver (reuse the same set)
+            let validator_set_arc = std::sync::Arc::new(validator_set);
 
             let chain_actor_addr = chain_actor.start();
             info!("✓ ChainActor V2 started with all dependencies wired");
@@ -709,24 +741,91 @@ impl App {
 
             info!("🎉 V2 Actor System fully initialized and operational!");
 
-            // 7. Start V2 Aura slot worker (if validator)
-            if v2_is_validator && !v2_not_validator {
-                info!("⏰ Starting V2 Aura slot worker...");
+            // 7. Start Tendermint consensus driver
+            {
+                use crate::actors_v2::tendermint_driver::{TendermintDriver, TendermintDriverConfig, NodeMode, TendermintDriverMessage};
+                use crate::actors_v2::chain::tendermint::TimeoutConfig;
+                use crate::actors_v2::chain::messages::ChainMessage;
 
-                tokio::spawn(async move {
-                    crate::actors_v2::slot_worker::AuraSlotWorkerV2::new(
-                        Duration::from_millis(v2_slot_duration),
-                        v2_authorities_for_slot_worker,
-                        v2_maybe_aura_signer_for_slot_worker,
-                        chain_actor_addr_for_slot_worker,
-                    )
-                    .start_slot_worker()
-                    .await;
-                });
+                info!("🔄 Starting Tendermint consensus driver...");
 
-                info!("✓ V2 Aura slot worker started successfully");
-            } else {
-                info!("ℹ️  V2 Aura slot worker not started (not configured as validator)");
+                // Determine node mode
+                let node_mode = if v2_is_validator && !v2_not_validator {
+                    NodeMode::Validator
+                } else {
+                    NodeMode::Observer
+                };
+
+                // Create driver config
+                let driver_config = TendermintDriverConfig {
+                    mode: node_mode.clone(),
+                    timeout_config: TimeoutConfig::default(),
+                    data_dir: std::path::PathBuf::from(format!("{}/tendermint_driver", v2_data_path)),
+                    wal_enabled: true,
+                };
+
+                // Create WAL directory for driver
+                if let Err(e) = std::fs::create_dir_all(&driver_config.data_dir) {
+                    error!("Failed to create Tendermint driver WAL directory: {:?}", e);
+                }
+
+                // Get validator public key if we're a validator
+                let validator_pubkey = v2_maybe_aura_signer_for_slot_worker.as_ref().map(|kp| kp.pk.clone());
+
+                // Create TendermintDriver (reuse validator_set_arc from above)
+                let mut tendermint_driver = TendermintDriver::new(
+                    driver_config,
+                    validator_pubkey,
+                    validator_set_arc,
+                );
+
+                // Wire driver to ChainActor (driver -> chain)
+                tendermint_driver.set_chain_actor(chain_actor_addr_for_slot_worker.clone());
+
+                // Start the driver as an Actix actor
+                let driver_addr = tendermint_driver.start();
+
+                // Wire ChainActor to driver (chain -> driver) for bidirectional communication
+                // This allows ChainActor to notify the driver when blocks are committed
+                if let Err(e) = chain_actor_addr_for_slot_worker.try_send(
+                    ChainMessage::SetTendermintDriver { addr: driver_addr.clone() }
+                ) {
+                    error!("Failed to set TendermintDriver in ChainActor: {:?}", e);
+                } else {
+                    info!("✓ Bidirectional wiring complete: ChainActor <-> TendermintDriver");
+                }
+
+                info!(
+                    mode = ?node_mode,
+                    "✓ Tendermint consensus driver started"
+                );
+
+                // Query current chain height from storage to determine start height
+                let start_height = match storage_actor.send(
+                    crate::actors_v2::storage::messages::GetChainHeadMessage { correlation_id: None }
+                ).await {
+                    Ok(Ok(Some(head))) => {
+                        info!(current_height = head.number, "Starting Tendermint at height {}", head.number + 1);
+                        head.number + 1
+                    }
+                    Ok(Ok(None)) => {
+                        info!("No chain head found, starting Tendermint at height 1");
+                        1
+                    }
+                    Ok(Err(e)) => {
+                        warn!(error = ?e, "Failed to get chain head, starting at height 1");
+                        1
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "Storage actor unreachable, starting at height 1");
+                        1
+                    }
+                };
+
+                // Start consensus at the determined height
+                if let Err(e) = driver_addr.try_send(TendermintDriverMessage::NewHeight { height: start_height }) {
+                    error!("Failed to send initial NewHeight to TendermintDriver: {:?}", e);
+                }
             }
 
                     // Keep actors alive - this task runs indefinitely
@@ -761,16 +860,6 @@ impl App {
                 .monitor_bitcoin_blocks(bitcoin_start_height)
                 .await;
         }
-
-        // TODO: Uncomment this when not testing local two-node regtest
-        // AuraSlotWorker::new(
-        //     Duration::from_millis(slot_duration),
-        //     authorities,
-        //     maybe_aura_signer,
-        //     chain,
-        // )
-        // .start_slot_worker()
-        // .await;
 
         // Send the chain Arc for graceful shutdown handling
         if chain_tx.send(chain.clone()).is_err() {
