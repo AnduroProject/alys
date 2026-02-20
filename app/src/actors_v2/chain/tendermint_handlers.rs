@@ -115,9 +115,10 @@ impl ChainActor {
             state.is_proposer()
         };
 
-        // Schedule propose timeout
+        // Schedule propose timeout (Issue 3.3: set position before scheduling)
         {
             let mut scheduler = timeout_scheduler.write().await;
+            scheduler.set_position(height, 0);
             let _ = scheduler.schedule(TendermintStep::Propose);
         }
 
@@ -192,18 +193,58 @@ impl ChainActor {
         // Determine what to propose based on locking rules
         let (block, pol_round) = if let (Some(locked_hash), Some(lr)) = (locked_block, locked_round)
         {
-            // We're locked - must propose the locked block
+            // We're locked - must propose the locked block (Issue 2.1 fix)
             info!(
                 correlation_id = %correlation_id,
                 locked_hash = %locked_hash,
                 locked_round = lr,
                 "Proposing locked block"
             );
-            // TODO: Retrieve the locked block from storage/cache
-            // For now, this is a placeholder - need to implement block caching
-            return Err(ChainError::Internal(
-                "Locked block proposal not yet implemented".into(),
-            ));
+
+            // Try to get the locked block content from state
+            let locked_block_data = {
+                let state = tendermint_state.read().await;
+                state.locked_block_data.clone()
+            };
+
+            match locked_block_data {
+                Some(block) => {
+                    info!(
+                        correlation_id = %correlation_id,
+                        locked_hash = %locked_hash,
+                        locked_round = lr,
+                        "Found locked block data - re-proposing"
+                    );
+                    (block, Some(lr))
+                }
+                None => {
+                    // Fallback: try to find in proposals HashMap
+                    let state = tendermint_state.read().await;
+                    let found_block = state
+                        .proposals
+                        .values()
+                        .find(|p| p.block_hash() == locked_hash)
+                        .map(|p| p.block.clone());
+
+                    match found_block {
+                        Some(block) => {
+                            info!(
+                                correlation_id = %correlation_id,
+                                locked_hash = %locked_hash,
+                                locked_round = lr,
+                                "Found locked block in proposals cache - re-proposing"
+                            );
+                            (block, Some(lr))
+                        }
+                        None => {
+                            return Err(ChainError::Internal(format!(
+                                "Locked on block {} at round {} but block data not found",
+                                locked_hash, lr
+                            )));
+                        }
+                    }
+                }
+            }
         } else {
             // Not locked - build a fresh block via EngineActor
             let block = self.build_proposal_block(height, correlation_id).await?;
@@ -228,8 +269,9 @@ impl ChainActor {
             signature: lighthouse_wrapper::bls::Signature::empty(),
         };
 
-        // Sign the proposal
-        let signing_root = proposal.signing_root();
+        // Sign the proposal (Issue 1.2: use chain_id for domain separation)
+        let chain_id_str = self.config.chain_id.to_string();
+        let signing_root = proposal.signing_root(&chain_id_str);
         let signature = keypair.sk.sign(signing_root);
         let proposal = Proposal { signature, ..proposal };
 
@@ -324,8 +366,9 @@ impl ChainActor {
             (state.height, state.round, state.validator_set.clone())
         };
 
-        // Validate proposal
-        verify_proposal(&proposal, &validator_set, current_height, current_round).map_err(
+        // Validate proposal (Issue 1.2: pass chain_id for domain separation)
+        let chain_id_str = self.config.chain_id.to_string();
+        verify_proposal(&proposal, &validator_set, current_height, current_round, &chain_id_str).map_err(
             |e| match e {
                 TendermintValidationError::InvalidHeight { expected, actual } => {
                     ChainError::Consensus(format!(
@@ -387,9 +430,10 @@ impl ChainActor {
             state.set_step(TendermintStep::Prevote);
         }
 
-        // Schedule prevote timeout
+        // Schedule prevote timeout (Issue 3.3: set position before scheduling)
         {
             let mut scheduler = timeout_scheduler.write().await;
+            scheduler.set_position(height, round);
             let _ = scheduler.schedule(TendermintStep::Prevote);
         }
 
@@ -451,8 +495,9 @@ impl ChainActor {
             (state.height, state.round, state.validator_set.clone())
         };
 
-        // Validate vote
-        verify_vote(&vote, &validator_set, current_height, current_round).map_err(|e| {
+        // Validate vote (Issue 1.2: pass chain_id for domain separation)
+        let chain_id_str = self.config.chain_id.to_string();
+        verify_vote(&vote, &validator_set, current_height, current_round, &chain_id_str).map_err(|e| {
             ChainError::Consensus(format!("Vote validation failed: {}", e))
         })?;
 
@@ -497,9 +542,24 @@ impl ChainActor {
                             "2/3+ prevotes reached for block"
                         );
 
-                        // Lock on the block
+                        // Issue 2.1 FIX: Get the locked block content from current_proposal or proposals
+                        let locked_block_content = state
+                            .current_proposal
+                            .as_ref()
+                            .filter(|p| p.block_hash() == block_hash)
+                            .map(|p| p.block.clone())
+                            .or_else(|| {
+                                // Fallback: search proposals HashMap
+                                state
+                                    .proposals
+                                    .values()
+                                    .find(|p| p.block_hash() == block_hash)
+                                    .map(|p| p.block.clone())
+                            });
+
+                        // Lock on the block WITH the block content
                         drop(prevotes);
-                        state.lock_on(round, block_hash);
+                        state.lock_on_with_block(round, block_hash, locked_block_content);
                         state.set_valid(round, block_hash);
                         ConsensusAction::BroadcastPrecommit(Some(block_hash))
                     } else if prevotes.has_two_thirds_nil() {
@@ -564,9 +624,10 @@ impl ChainActor {
                     state.set_step(TendermintStep::Precommit);
                 }
 
-                // Schedule precommit timeout
+                // Schedule precommit timeout (Issue 3.3: set position before scheduling)
                 {
                     let mut scheduler = timeout_scheduler.write().await;
+                    scheduler.set_position(height, round);
                     let _ = scheduler.schedule(TendermintStep::Precommit);
                 }
 
@@ -588,9 +649,10 @@ impl ChainActor {
                     state.new_round(new_round);
                 }
 
-                // Schedule propose timeout for new round
+                // Schedule propose timeout for new round (Issue 3.3: set position before scheduling)
                 {
                     let mut scheduler = timeout_scheduler.write().await;
+                    scheduler.set_position(height, new_round);
                     let _ = scheduler.schedule(TendermintStep::Propose);
                 }
 
@@ -645,6 +707,11 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("Timeout scheduler not initialized".into()))?;
 
+        let wal = self
+            .consensus_wal
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
+
         // Verify timeout is for current state
         let (current_height, current_round, current_step) = {
             let state = tendermint_state.read().await;
@@ -689,8 +756,10 @@ impl ChainActor {
                     state.set_step(TendermintStep::Prevote);
                 }
 
+                // Issue 3.3 FIX: Set position before scheduling
                 {
                     let mut scheduler = timeout_scheduler.write().await;
+                    scheduler.set_position(height, round);
                     let _ = scheduler.schedule(TendermintStep::Prevote);
                 }
 
@@ -714,8 +783,10 @@ impl ChainActor {
                     state.set_step(TendermintStep::Precommit);
                 }
 
+                // Issue 3.3 FIX: Set position before scheduling
                 {
                     let mut scheduler = timeout_scheduler.write().await;
+                    scheduler.set_position(height, round);
                     let _ = scheduler.schedule(TendermintStep::Precommit);
                 }
 
@@ -736,13 +807,27 @@ impl ChainActor {
                     "Precommit timeout - advancing to next round"
                 );
 
+                // Write WAL entry for new round BEFORE state change
+                {
+                    let mut wal_guard = wal.write().await;
+                    wal_guard
+                        .write(WALEntry::NewRound {
+                            height,
+                            round: new_round,
+                        })
+                        .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+                }
+
+                // Advance state to new round
                 {
                     let mut state = tendermint_state.write().await;
                     state.new_round(new_round);
                 }
 
+                // Issue 3.3 FIX: Update scheduler position before scheduling
                 {
                     let mut scheduler = timeout_scheduler.write().await;
+                    scheduler.set_position(height, new_round);
                     let _ = scheduler.schedule(TendermintStep::Propose);
                 }
 
@@ -752,14 +837,30 @@ impl ChainActor {
                     state.is_proposer()
                 };
 
+                // Issue 2.3 FIX: Actually trigger the proposal if we're the proposer
                 if is_proposer {
                     info!(
                         correlation_id = %correlation_id,
                         height = height,
                         new_round = new_round,
-                        "We are proposer for new round"
+                        "We are proposer for new round - creating proposal"
                     );
-                    // TODO: Trigger TendermintPropose message
+
+                    // Trigger proposal creation
+                    if let Err(e) = self
+                        .handle_tendermint_propose(height, new_round, correlation_id)
+                        .await
+                    {
+                        warn!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            new_round = new_round,
+                            error = %e,
+                            "Failed to create proposal for new round"
+                        );
+                        // Don't return error - timeout still fired successfully
+                        // The propose timeout will trigger and we'll cast nil prevote
+                    }
                 }
 
                 Ok(new_round)
@@ -1408,10 +1509,34 @@ impl ChainActor {
             signature: lighthouse_wrapper::bls::Signature::empty(),
         };
 
-        // Sign the vote
-        let signing_root = vote.signing_root();
+        // Sign the vote (Issue 1.2: use chain_id for domain separation)
+        let chain_id_str = self.config.chain_id.to_string();
+        let signing_root = vote.signing_root(&chain_id_str);
         let signature = keypair.sk.sign(signing_root);
         let vote = Vote { signature, ..vote };
+
+        // Issue 2.2 FIX: Add our own vote to the VoteSet BEFORE WAL/broadcast
+        // This ensures our vote counts towards the 2/3+ threshold immediately
+        {
+            let state = tendermint_state.read().await;
+            let mut prevotes = state.prevotes.write().await;
+
+            if let Err(e) = prevotes.add_vote(vote.clone()) {
+                // This should never happen for our own vote (not a duplicate)
+                warn!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "Failed to add own prevote to VoteSet"
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    "Added own prevote to VoteSet"
+                );
+            }
+        }
 
         // Write WAL entry BEFORE broadcast
         {
@@ -1425,7 +1550,7 @@ impl ChainActor {
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
         }
 
-        // Record the vote
+        // Record the vote (for double-vote prevention tracking)
         {
             let mut state = tendermint_state.write().await;
             state.record_prevote(block_hash);
@@ -1504,10 +1629,39 @@ impl ChainActor {
             signature: lighthouse_wrapper::bls::Signature::empty(),
         };
 
-        // Sign the vote
-        let signing_root = vote.signing_root();
+        // Sign the vote (Issue 1.2: use chain_id for domain separation)
+        let chain_id_str = self.config.chain_id.to_string();
+        let signing_root = vote.signing_root(&chain_id_str);
         let signature = keypair.sk.sign(signing_root);
         let vote = Vote { signature, ..vote };
+
+        // Issue 2.2 FIX: Add our own vote to the VoteSet BEFORE WAL/broadcast
+        // This ensures our vote counts towards the 2/3+ threshold immediately
+        // Also check if our vote completes the 2/3+ threshold for commit
+        let should_commit = {
+            let state = tendermint_state.read().await;
+            let mut precommits = state.precommits.write().await;
+
+            if let Err(e) = precommits.add_vote(vote.clone()) {
+                // This should never happen for our own vote
+                warn!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "Failed to add own precommit to VoteSet"
+                );
+                None
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    "Added own precommit to VoteSet"
+                );
+
+                // Check if our vote completes the 2/3+ threshold
+                precommits.two_thirds_majority()
+            }
+        };
 
         // Write WAL entry BEFORE broadcast
         {
@@ -1521,7 +1675,7 @@ impl ChainActor {
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
         }
 
-        // Record the vote
+        // Record the vote (for double-vote prevention tracking)
         {
             let mut state = tendermint_state.write().await;
             state.record_precommit(block_hash);
@@ -1537,6 +1691,21 @@ impl ChainActor {
             block_hash = ?block_hash,
             "Cast precommit"
         );
+
+        // If our vote completed the 2/3+ threshold, commit the block
+        if let Some(committed_hash) = should_commit {
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                round = round,
+                block_hash = %H256::from_slice(committed_hash.as_bytes()),
+                "2/3+ precommits reached with our vote - committing"
+            );
+
+            // Commit the block
+            self.commit_block(height, round, committed_hash, correlation_id)
+                .await?;
+        }
 
         Ok(())
     }

@@ -101,6 +101,7 @@ pub enum TendermintValidationError {
 /// * `validator_set` - The current validator set
 /// * `expected_height` - The expected height for this proposal
 /// * `expected_round` - The expected round for this proposal
+/// * `chain_id` - Chain identifier for domain separation (Issue 1.2)
 ///
 /// # Returns
 ///
@@ -110,6 +111,7 @@ pub fn verify_proposal(
     validator_set: &ValidatorSet,
     expected_height: Height,
     expected_round: Round,
+    chain_id: &str,
 ) -> Result<(), TendermintValidationError> {
     // Check height
     if proposal.height != expected_height {
@@ -148,8 +150,8 @@ pub fn verify_proposal(
         .get_public_key(&proposal.proposer)
         .map_err(|_| TendermintValidationError::PublicKeyNotFound(proposal.proposer))?;
 
-    // Verify signature
-    if !proposal.verify_signature(public_key) {
+    // Verify signature (Issue 1.2: pass chain_id for domain separation)
+    if !proposal.verify_signature(public_key, chain_id) {
         return Err(TendermintValidationError::InvalidSignature {
             validator: proposal.proposer,
             message_type: "Proposal".to_string(),
@@ -174,6 +176,7 @@ pub fn verify_proposal(
 /// * `validator_set` - The current validator set
 /// * `expected_height` - The expected height for this vote
 /// * `expected_round` - The expected round for this vote
+/// * `chain_id` - Chain identifier for domain separation (Issue 1.2)
 ///
 /// # Returns
 ///
@@ -183,6 +186,7 @@ pub fn verify_vote(
     validator_set: &ValidatorSet,
     expected_height: Height,
     expected_round: Round,
+    chain_id: &str,
 ) -> Result<(), TendermintValidationError> {
     // Check height
     if vote.height != expected_height {
@@ -216,7 +220,8 @@ pub fn verify_vote(
         VoteType::Precommit => "Precommit",
     };
 
-    if !vote.verify_signature(public_key) {
+    // Issue 1.2: pass chain_id for domain separation
+    if !vote.verify_signature(public_key, chain_id) {
         return Err(TendermintValidationError::InvalidSignature {
             validator: vote.validator,
             message_type: message_type.to_string(),
@@ -239,6 +244,7 @@ pub fn verify_vote(
 /// * `commit` - The commit to validate
 /// * `validator_set` - The validator set at the commit height
 /// * `expected_block_hash` - The expected block hash being committed
+/// * `chain_id` - Chain identifier for domain separation (Issue 1.2)
 ///
 /// # Returns
 ///
@@ -247,6 +253,7 @@ pub fn verify_commit(
     commit: &Commit,
     validator_set: &ValidatorSet,
     expected_block_hash: BlockHash,
+    chain_id: &str,
 ) -> Result<(), TendermintValidationError> {
     // Check block hash matches
     if commit.block_hash != expected_block_hash {
@@ -281,10 +288,12 @@ pub fn verify_commit(
                 // Get public key and verify signature
                 if let Ok(public_key) = validator_set.get_public_key(&validator_id) {
                     // Build the signing message (same as what the validator signed)
+                    // Issue 1.2: pass chain_id for domain separation
                     let signing_message = commit_sig_signing_bytes(
                         commit.height,
                         commit.round,
                         &commit.block_hash,
+                        chain_id,
                     );
 
                     // Verify the signature if present
@@ -405,10 +414,20 @@ pub fn validate_last_commit(
 ///
 /// This creates the canonical byte representation that validators sign
 /// when creating precommit votes that become part of a Commit.
-fn commit_sig_signing_bytes(height: Height, round: Round, block_hash: &BlockHash) -> ethereum_types::H256 {
+///
+/// IMPORTANT: This must match Vote::signing_root() for Precommit votes.
+/// The format is: keccak256(chain_id || vote_type || height || round || block_hash)
+///
+/// Issue 1.2: Added chain_id parameter for domain separation to prevent replay attacks.
+fn commit_sig_signing_bytes(height: Height, round: Round, block_hash: &BlockHash, chain_id: &str) -> ethereum_types::H256 {
     use tiny_keccak::{Hasher, Keccak};
 
     let mut hasher = Keccak::v256();
+    // Issue 1.2: Add chain_id for domain separation
+    hasher.update(chain_id.as_bytes());
+    // Issue 1.1 FIX: Include vote_type to match Vote::signing_root()
+    // Commit signatures are from Precommit votes
+    hasher.update(&[VoteType::Precommit as u8]);
     hasher.update(&height.to_le_bytes());
     hasher.update(&round.to_le_bytes());
     hasher.update(block_hash.as_bytes());
@@ -548,12 +567,15 @@ mod tests {
         assert_eq!(ev.kind, EquivocationType::DoublePrevote);
     }
 
+    // Test chain_id constant for Issue 1.2 domain separation tests
+    const TEST_CHAIN_ID: &str = "test-chain-1337";
+
     #[test]
     fn test_empty_validator_set_error() {
         let empty_set = ValidatorSet::with_equal_power(vec![]);
         let commit = Commit::new(1, 0, BlockHash::from_low_u64_be(1), vec![]);
 
-        let result = verify_commit(&commit, &empty_set, BlockHash::from_low_u64_be(1));
+        let result = verify_commit(&commit, &empty_set, BlockHash::from_low_u64_be(1), TEST_CHAIN_ID);
         assert!(matches!(result, Err(TendermintValidationError::EmptyValidatorSet)));
     }
 
@@ -563,10 +585,69 @@ mod tests {
         let commit = Commit::new(1, 0, BlockHash::from_low_u64_be(1), vec![]);
         let wrong_expected = BlockHash::from_low_u64_be(999);
 
-        let result = verify_commit(&commit, &validator_set, wrong_expected);
+        let result = verify_commit(&commit, &validator_set, wrong_expected, TEST_CHAIN_ID);
         assert!(matches!(
             result,
             Err(TendermintValidationError::CommitBlockMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn test_commit_sig_signing_bytes_matches_vote_signing_root() {
+        // Issue 1.1 & 1.2 test: Verify commit_sig_signing_bytes matches Vote::signing_root
+        // for Precommit votes (with chain_id domain separation)
+        use crate::actors_v2::chain::tendermint::messages::Vote;
+
+        let height = 100u64;
+        let round = 5u32;
+        let block_hash = BlockHash::from_low_u64_be(12345);
+
+        // Create a precommit vote
+        let vote = Vote {
+            height,
+            round,
+            vote_type: VoteType::Precommit,
+            block_hash: Some(block_hash),
+            validator: ValidatorId::new(0),
+            timestamp: 0,
+            signature: Signature::empty(),
+        };
+
+        // Get the signing root from the vote (Issue 1.2: with chain_id)
+        let vote_signing_root = vote.signing_root(TEST_CHAIN_ID);
+
+        // Get the commit signing bytes (used in verify_commit) (Issue 1.2: with chain_id)
+        let commit_signing_bytes = commit_sig_signing_bytes(height, round, &block_hash, TEST_CHAIN_ID);
+
+        // They must match for commit verification to work
+        assert_eq!(
+            vote_signing_root.as_bytes(),
+            commit_signing_bytes.as_bytes(),
+            "commit_sig_signing_bytes must match Vote::signing_root() for Precommit"
+        );
+    }
+
+    #[test]
+    fn test_signing_roots_differ_by_chain_id() {
+        // Issue 1.2: Verify that different chain_ids produce different signing roots
+        use crate::actors_v2::chain::tendermint::messages::Vote;
+
+        let vote = Vote {
+            height: 100,
+            round: 0,
+            vote_type: VoteType::Prevote,
+            block_hash: Some(BlockHash::zero()),
+            validator: ValidatorId::new(0),
+            timestamp: 0,
+            signature: Signature::empty(),
+        };
+
+        let root_mainnet = vote.signing_root("mainnet");
+        let root_testnet = vote.signing_root("testnet");
+
+        assert_ne!(
+            root_mainnet, root_testnet,
+            "Signing roots must differ for different chain_ids (domain separation)"
+        );
     }
 }

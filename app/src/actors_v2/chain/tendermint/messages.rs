@@ -72,18 +72,29 @@ pub struct Proposal {
 }
 
 impl Proposal {
-    /// Get the hash of the proposed block
+    /// Compute the block hash for this proposal.
+    ///
+    /// Uses the same tree_hash + MessagePack approach as ConsensusBlock::signing_root()
+    /// for consistency. This ensures that the same block always produces the same hash
+    /// within the Alys implementation.
+    ///
+    /// Note: MessagePack serialization determinism depends on consistent field ordering,
+    /// which Rust's serde derive macros provide for structs.
     pub fn block_hash(&self) -> BlockHash {
-        // Use the existing signing_root from ConsensusBlock
-        let signing_root = tree_hash::merkle_root(&rmp_serde::to_vec(&self.block).unwrap(), 0);
-        BlockHash::from_slice(signing_root.as_bytes())
+        // Use tree_hash merkle_root with MessagePack serialization
+        // Same approach as ConsensusBlock::signing_root() for consistency
+        let merkle = tree_hash::merkle_root(&rmp_serde::to_vec(&self.block).unwrap(), 0);
+        BlockHash::from_slice(merkle.as_bytes())
     }
 
     /// Create the signing root for this proposal
     ///
-    /// The signing root is: `keccak256(height || round || block_hash || pol_round_flag || pol_round)`
-    pub fn signing_root(&self) -> Hash256 {
+    /// Issue 1.2: Domain separation - includes chain_id to prevent replay across networks.
+    /// The signing root is: `keccak256(chain_id || height || round || block_hash || pol_round_flag || pol_round)`
+    pub fn signing_root(&self, chain_id: &str) -> Hash256 {
         let mut hasher = Keccak::v256();
+        // Issue 1.2: Add chain_id for domain separation
+        hasher.update(chain_id.as_bytes());
         hasher.update(&self.height.to_le_bytes());
         hasher.update(&self.round.to_le_bytes());
         hasher.update(self.block_hash().as_bytes());
@@ -104,8 +115,10 @@ impl Proposal {
     }
 
     /// Verify the proposal signature
-    pub fn verify_signature(&self, public_key: &lighthouse_wrapper::bls::PublicKey) -> bool {
-        let signing_root = self.signing_root();
+    ///
+    /// Issue 1.2: Requires chain_id for domain separation.
+    pub fn verify_signature(&self, public_key: &lighthouse_wrapper::bls::PublicKey, chain_id: &str) -> bool {
+        let signing_root = self.signing_root(chain_id);
         self.signature.verify(public_key, signing_root)
     }
 }
@@ -158,9 +171,12 @@ impl Vote {
 
     /// Create the signing root for this vote
     ///
-    /// The signing root is: `keccak256(vote_type || height || round || block_hash_or_zeros)`
-    pub fn signing_root(&self) -> Hash256 {
+    /// Issue 1.2: Domain separation - includes chain_id to prevent replay across networks.
+    /// The signing root is: `keccak256(chain_id || vote_type || height || round || block_hash_or_zeros)`
+    pub fn signing_root(&self, chain_id: &str) -> Hash256 {
         let mut hasher = Keccak::v256();
+        // Issue 1.2: Add chain_id for domain separation
+        hasher.update(chain_id.as_bytes());
         hasher.update(&[self.vote_type as u8]);
         hasher.update(&self.height.to_le_bytes());
         hasher.update(&self.round.to_le_bytes());
@@ -176,12 +192,16 @@ impl Vote {
     }
 
     /// Verify the vote signature
-    pub fn verify_signature(&self, public_key: &lighthouse_wrapper::bls::PublicKey) -> bool {
-        let signing_root = self.signing_root();
+    ///
+    /// Issue 1.2: Requires chain_id for domain separation.
+    pub fn verify_signature(&self, public_key: &lighthouse_wrapper::bls::PublicKey, chain_id: &str) -> bool {
+        let signing_root = self.signing_root(chain_id);
         self.signature.verify(public_key, signing_root)
     }
 
     /// Create a signed vote
+    ///
+    /// Issue 1.2: Requires chain_id for domain separation.
     pub fn new_signed(
         height: Height,
         round: Round,
@@ -190,6 +210,7 @@ impl Vote {
         validator: ValidatorId,
         timestamp: u64,
         keypair: &lighthouse_wrapper::bls::Keypair,
+        chain_id: &str,
     ) -> Self {
         let mut vote = Self {
             height,
@@ -201,7 +222,7 @@ impl Vote {
             signature: BLSSignature::empty(), // Placeholder
         };
 
-        let signing_root = vote.signing_root();
+        let signing_root = vote.signing_root(chain_id);
         vote.signature = keypair.sk.sign(signing_root);
         vote
     }
@@ -231,8 +252,12 @@ pub struct Timeout {
 
 impl Timeout {
     /// Create the signing root for this timeout
-    pub fn signing_root(&self) -> Hash256 {
+    ///
+    /// Issue 1.2: Domain separation - includes chain_id to prevent replay across networks.
+    pub fn signing_root(&self, chain_id: &str) -> Hash256 {
         let mut hasher = Keccak::v256();
+        // Issue 1.2: Add chain_id for domain separation
+        hasher.update(chain_id.as_bytes());
         hasher.update(b"timeout");
         hasher.update(&self.height.to_le_bytes());
         hasher.update(&self.round.to_le_bytes());
@@ -273,15 +298,17 @@ impl EquivocationEvidence {
     }
 
     /// Compute the evidence hash for deduplication
-    pub fn evidence_hash(&self) -> [u8; 32] {
+    ///
+    /// Issue 1.2: Requires chain_id for domain separation in vote signing roots.
+    pub fn evidence_hash(&self, chain_id: &str) -> [u8; 32] {
         let mut hasher = Keccak::v256();
         hasher.update(&[self.kind as u8]);
         hasher.update(&self.culprit.0.to_le_bytes());
         hasher.update(&self.height.to_le_bytes());
         hasher.update(&self.round.to_le_bytes());
-        // Include both vote hashes
-        hasher.update(self.vote_a.signing_root().as_bytes());
-        hasher.update(self.vote_b.signing_root().as_bytes());
+        // Include both vote hashes (Issue 1.2: with chain_id)
+        hasher.update(self.vote_a.signing_root(chain_id).as_bytes());
+        hasher.update(self.vote_b.signing_root(chain_id).as_bytes());
 
         let mut output = [0u8; 32];
         hasher.finalize(&mut output);
@@ -417,6 +444,9 @@ mod tests {
         assert!(!vote_with_hash.is_nil());
     }
 
+    // Test chain_id constant for Issue 1.2 domain separation tests
+    const TEST_CHAIN_ID: &str = "test-chain-1337";
+
     #[test]
     fn test_vote_signing_root_differs_by_type() {
         let prevote = Vote {
@@ -439,7 +469,8 @@ mod tests {
             signature: BLSSignature::empty(),
         };
 
-        assert_ne!(prevote.signing_root(), precommit.signing_root());
+        // Issue 1.2: signing_root now requires chain_id
+        assert_ne!(prevote.signing_root(TEST_CHAIN_ID), precommit.signing_root(TEST_CHAIN_ID));
     }
 
     #[test]

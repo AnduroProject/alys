@@ -144,6 +144,11 @@ pub struct SyncConfig {
     pub tendermint_enabled: bool,
     /// Whether to verify last_commit signatures during sync (disable for testing)
     pub verify_commits: bool,
+    /// Chain ID for signature domain separation (Issue 1.2)
+    ///
+    /// This must match the chain_id used by validators when signing commits.
+    /// Different networks (mainnet, testnet) should use different chain_ids.
+    pub chain_id: u32,
 }
 
 impl Default for SyncConfig {
@@ -167,6 +172,7 @@ impl Default for SyncConfig {
             // Tendermint sync defaults
             tendermint_enabled: false, // Disabled by default for backwards compatibility
             verify_commits: true,      // Verify commits when enabled
+            chain_id: 1337,            // Alys mainnet default
         }
     }
 }

@@ -52,6 +52,13 @@ pub struct TendermintSyncConfig {
 
     /// Whether to allow syncing from untrusted peers (testing only)
     pub allow_untrusted_sync: bool,
+
+    /// Chain ID for signature domain separation (Issue 1.2)
+    ///
+    /// This must match the chain_id used by validators when signing commits.
+    /// Different networks (mainnet, testnet) should use different chain_ids
+    /// to prevent replay attacks across networks.
+    pub chain_id: String,
 }
 
 impl Default for TendermintSyncConfig {
@@ -60,6 +67,7 @@ impl Default for TendermintSyncConfig {
             verify_commits: true,
             max_batch_size: 100,
             allow_untrusted_sync: false,
+            chain_id: "1337".to_string(), // Default Alys mainnet chain ID
         }
     }
 }
@@ -564,17 +572,19 @@ impl TendermintSyncValidator {
         // So we verify that the commit in this block is valid
         if self.config.verify_commits {
             // Get the last_commit from the block
-            // Note: This requires the ConsensusBlock to have the last_commit field
-            // For now, we'll skip this if the field doesn't exist (backwards compatibility)
             if let Some(ref last_commit) = block.message.last_commit {
                 self.verify_block_commit(last_commit, block_height)?;
             } else if block_height > 1 {
-                // Non-genesis blocks should have last_commit
+                // Issue 4.1 FIX: Non-genesis blocks MUST have last_commit - reject if missing
                 // Height 1 is special - it has commit for genesis which might be empty
-                warn!(
+                // But any block at height > 1 must have a commit proving the previous block
+                error!(
                     height = block_height,
-                    "Block missing last_commit field (may be legacy format)"
+                    "Block at height > 1 missing required last_commit - rejecting"
                 );
+                return Err(TendermintSyncError::MissingCommit {
+                    height: block_height,
+                });
             }
         }
 
@@ -607,8 +617,8 @@ impl TendermintSyncValidator {
                 height: commit_height,
             })?;
 
-        // Verify the commit
-        verify_commit(commit, &validator_set, commit.block_hash).map_err(|e| {
+        // Verify the commit (Issue 1.2: pass chain_id for domain separation)
+        verify_commit(commit, &validator_set, commit.block_hash, &self.config.chain_id).map_err(|e| {
             TendermintSyncError::InvalidCommit {
                 height: block_height,
                 reason: format!("{:?}", e),

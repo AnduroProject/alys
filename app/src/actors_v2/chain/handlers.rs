@@ -7,22 +7,19 @@ use bitcoin::hashes::Hash;
 use ethereum_types::{H256, U256};
 use eyre::Result;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::{
     messages::{
         AuxPowParams, BlockSource, ChainManagerMessage, ChainManagerResponse, ChainMessage,
-        ChainResponse, CreateAuxBlock, PegOutRequest, SubmitAuxBlock,
+        ChainResponse, CreateAuxBlock, SubmitAuxBlock,
     },
     ChainActor, ChainError,
 };
 
-use crate::actors_v2::engine::{EngineMessage, EngineResponse};
-use crate::types::ExecutionBlockHash;
-
-use crate::actors_v2::common::serialization::{calculate_block_hash, serialize_block};
+use crate::actors_v2::common::serialization::calculate_block_hash;
 use crate::auxpow::AuxPow;
 use crate::block::SignedConsensusBlock;
 use bridge::PegInInfo;
@@ -38,16 +35,8 @@ impl Handler<ChainMessage> for ChainActor {
 
         match msg {
             ChainMessage::GetChainStatus => {
-                // Get orphan cache stats (sync access via try_read to avoid blocking)
-                let (observed_height, orphan_count) = {
-                    match self.orphan_cache.try_read() {
-                        Ok(cache) => (cache.observed_height(), cache.len()),
-                        Err(_) => {
-                            // If we can't get the lock, use current height as observed
-                            (self.state.get_height_blocking(), 0)
-                        }
-                    }
-                };
+                // With Tendermint instant finality, no orphan tracking needed
+                // Observed height equals current committed height
 
                 // Query StorageActor for actual chain height instead of using stale local state
                 // This is critical for Active Height Monitoring - peers need accurate heights
@@ -108,8 +97,8 @@ impl Handler<ChainMessage> for ChainActor {
                         last_block_time,
                         auxpow_enabled,
                         blocks_without_pow,
-                        observed_height,
-                        orphan_count,
+                        observed_height: height, // With Tendermint, observed = committed
+                        orphan_count: 0,         // No orphans with instant finality
                     };
                     Ok(ChainResponse::ChainStatus(status))
                 })
@@ -881,110 +870,44 @@ impl Handler<ChainMessage> for ChainActor {
                         );
 
                         // Step 1.7: Parent hash validation (Phase 3)
+                        // With Tendermint instant finality, blocks must arrive in order.
+                        // If parent is missing, trigger sync rather than caching orphans.
                         if let Some(ref storage_actor) = storage_actor {
                             if let Err(parent_error) = crate::actors_v2::common::validation::validate_parent_relationship(&block, storage_actor).await {
-                                // Check if this is an orphan block (parent not found)
-                                if let ChainError::OrphanBlock { parent_hash: orphan_parent_hash, block_height: orphan_height } = &parent_error {
-                                    // Cache as orphan instead of rejecting
-                                    info!(
+                                // Check if this is a missing parent (sync needed)
+                                if let ChainError::OrphanBlock { parent_hash: missing_parent, block_height: incoming_height } = &parent_error {
+                                    warn!(
                                         correlation_id = %correlation_id,
                                         block_hash = %block_hash,
-                                        parent_hash = %orphan_parent_hash,
-                                        block_height = orphan_height,
-                                        "Block is orphan (parent not found) - caching for later processing"
+                                        parent_hash = %missing_parent,
+                                        block_height = incoming_height,
+                                        "Block parent not found - triggering sync"
                                     );
 
-                                    // Add to orphan cache (use storage_current_height, not stale current_height)
-                                    let cache_result = {
-                                        let mut cache = self_clone.orphan_cache.write().await;
-                                        let parent_hash_h256 = *orphan_parent_hash;
-                                        cache.add(
-                                            block.clone(),
-                                            *orphan_height,
-                                            block_hash,
-                                            parent_hash_h256,
-                                            storage_current_height,
-                                            peer_id.clone(),
-                                        )
-                                    };
-
-                                    match cache_result {
-                                        Ok(true) => {
-                                            info!(
-                                                correlation_id = %correlation_id,
-                                                block_hash = %block_hash,
-                                                "Orphan block cached successfully"
-                                            );
-
-                                            // Bug Fix: Orphan-triggered re-sync
-                                            // If we receive orphan blocks that are far ahead of our current height,
-                                            // it indicates we've fallen behind and need to re-sync.
-                                            // This handles the case where gossipsub delivers blocks but
-                                            // Active Height Monitoring fails to detect the gap.
-                                            const ORPHAN_RESYNC_THRESHOLD: u64 = 5;
-
-                                            let observed_height = {
-                                                let cache = self_clone.orphan_cache.read().await;
-                                                cache.observed_height()
-                                            };
-
-                                            let gap = observed_height.saturating_sub(storage_current_height);
-
-                                            if gap >= ORPHAN_RESYNC_THRESHOLD {
-                                                warn!(
-                                                    correlation_id = %correlation_id,
-                                                    current_height = storage_current_height,
-                                                    observed_height = observed_height,
-                                                    gap = gap,
-                                                    threshold = ORPHAN_RESYNC_THRESHOLD,
-                                                    "Large orphan gap detected - triggering re-sync"
-                                                );
-
-                                                // Trigger ForceResync to fetch missing blocks
-                                                if let Some(ref sync_actor) = self_clone.sync_actor {
-                                                    let reason = format!(
-                                                        "Orphan gap {} exceeds threshold {} (current: {}, observed: {})",
-                                                        gap, ORPHAN_RESYNC_THRESHOLD, storage_current_height, observed_height
-                                                    );
-                                                    if let Err(e) = sync_actor.send(
-                                                        crate::actors_v2::network::SyncMessage::ForceResync { reason }
-                                                    ).await {
-                                                        warn!(
-                                                            correlation_id = %correlation_id,
-                                                            error = %e,
-                                                            "Failed to trigger ForceResync from orphan detection"
-                                                        );
-                                                    }
-                                                }
-                                            }
-
-                                            // Return success - block is cached, not rejected
-                                            return Ok(ChainResponse::BlockRejected {
-                                                reason: format!("Orphan block cached: parent {} not found", orphan_parent_hash),
-                                            });
-                                        }
-                                        Ok(false) => {
-                                            debug!(
-                                                correlation_id = %correlation_id,
-                                                block_hash = %block_hash,
-                                                "Orphan block not cached (duplicate or too far ahead)"
-                                            );
-                                            return Ok(ChainResponse::BlockRejected {
-                                                reason: "Orphan block rejected: duplicate or too far ahead".to_string(),
-                                            });
-                                        }
-                                        Err(e) => {
+                                    // Trigger sync to fetch missing blocks
+                                    if let Some(ref sync_actor) = self_clone.sync_actor {
+                                        let reason = format!(
+                                            "Missing parent {} for block at height {}",
+                                            missing_parent, incoming_height
+                                        );
+                                        if let Err(e) = sync_actor.send(
+                                            crate::actors_v2::network::SyncMessage::ForceResync { reason }
+                                        ).await {
                                             warn!(
                                                 correlation_id = %correlation_id,
                                                 error = %e,
-                                                "Failed to cache orphan block"
+                                                "Failed to trigger sync for missing parent"
                                             );
-                                            return Err(parent_error);
                                         }
                                     }
+
+                                    // Reject block - it will be re-received after sync
+                                    return Ok(ChainResponse::BlockRejected {
+                                        reason: format!("Parent {} not found - sync triggered", missing_parent),
+                                    });
                                 }
 
-                                // Not an orphan error - propagate the error
+                                // Not a missing parent error - propagate
                                 error!(
                                     correlation_id = %correlation_id,
                                     block_hash = %block_hash,
@@ -1006,8 +929,9 @@ impl Handler<ChainMessage> for ChainActor {
                             );
                         }
 
-                        // Step 1.9: Fork detection (Phase 4)
-                        // Check if a block already exists at this height
+                        // Step 1.9: Duplicate detection (Tendermint simplified)
+                        // With Tendermint instant finality, no forks are possible.
+                        // If a block exists at this height, it's either a duplicate or invalid.
                         if let Some(ref storage_actor) = storage_actor {
                             let get_by_height_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
                                 height: block_height,
@@ -1024,211 +948,30 @@ impl Handler<ChainMessage> for ChainActor {
                                             correlation_id = %correlation_id,
                                             block_hash = %block_hash,
                                             block_height = block_height,
-                                            "Duplicate block received - already imported, ignoring gracefully"
+                                            "Duplicate block received - already imported"
                                         );
 
-                                        // Return success without penalty - this is normal in distributed systems
                                         return Ok(ChainResponse::BlockImported {
                                             block_hash,
                                             height: block_height,
                                         });
                                     } else {
-                                        // FORK DETECTED: Different block at same height
-                                        warn!(
+                                        // With Tendermint, conflicting blocks at same height should not happen
+                                        // This indicates either a bug or malicious behavior
+                                        error!(
                                             correlation_id = %correlation_id,
                                             existing_hash = %existing_hash,
                                             new_hash = %block_hash,
                                             height = block_height,
-                                            "FORK DETECTED: Competing blocks at same height"
+                                            "CONFLICT: Different block at same height - rejecting (Tendermint instant finality)"
                                         );
 
-                                        // Phase 5: Record fork detection metric
                                         self_clone.metrics.forks_detected.inc();
 
-                                        // Apply fork choice rule (Phase 4)
-                                        let fork_choice = crate::actors_v2::chain::fork_choice::compare_blocks(
-                                            &existing_block,
-                                            &block,
-                                        );
-
-                                        match fork_choice {
-                                            crate::actors_v2::chain::fork_choice::ForkChoice::KeepCurrent => {
-                                                info!(
-                                                    correlation_id = %correlation_id,
-                                                    existing_hash = %existing_hash,
-                                                    new_hash = %block_hash,
-                                                    "Fork choice: keeping current block (better chain)"
-                                                );
-
-                                                // Current block is canonical - reject new block
-                                                return Ok(ChainResponse::BlockImported {
-                                                    block_hash: existing_hash,
-                                                    height: block_height,
-                                                });
-                                            }
-                                            crate::actors_v2::chain::fork_choice::ForkChoice::Tiebreak { winner } => {
-                                                if winner == block_hash {
-                                                    warn!(
-                                                        correlation_id = %correlation_id,
-                                                        new_hash = %block_hash,
-                                                        existing_hash = %existing_hash,
-                                                        "Fork choice: new block wins tiebreak - replacing current block"
-                                                    );
-
-                                                    // New block wins - continue with import
-                                                    // Note: In a full implementation, we would mark the existing block
-                                                    // as non-canonical in storage. For now, we'll overwrite it.
-                                                    info!(
-                                                        correlation_id = %correlation_id,
-                                                        "Proceeding with import of winning block"
-                                                    );
-                                                } else {
-                                                    info!(
-                                                        correlation_id = %correlation_id,
-                                                        existing_hash = %existing_hash,
-                                                        new_hash = %block_hash,
-                                                        "Fork choice: existing block wins tiebreak - keeping current"
-                                                    );
-
-                                                    // Existing block wins - reject new block
-                                                    return Ok(ChainResponse::BlockImported {
-                                                        block_hash: existing_hash,
-                                                        height: block_height,
-                                                    });
-                                                }
-                                            }
-                                            crate::actors_v2::chain::fork_choice::ForkChoice::Reorganize { new_tip, rollback_to } => {
-                                                warn!(
-                                                    correlation_id = %correlation_id,
-                                                    new_tip = %new_tip,
-                                                    rollback_to = rollback_to,
-                                                    "Fork choice: reorganization needed - executing chain reorganization"
-                                                );
-
-                                                // Phase 4C: Execute chain reorganization
-                                                match self_clone.reorganize_chain(&block, correlation_id).await {
-                                                    Ok(reorg_result) => {
-                                                        info!(
-                                                            correlation_id = %correlation_id,
-                                                            blocks_rolled_back = reorg_result.blocks_rolled_back,
-                                                            blocks_applied = reorg_result.blocks_applied,
-                                                            new_tip = %reorg_result.new_tip,
-                                                            "Chain reorganization completed successfully - new block is now canonical"
-                                                        );
-
-                                                        // Phase 5: Record reorganization metrics
-                                                        self_clone.metrics.reorganizations.inc();
-                                                        self_clone.metrics.reorganization_depth.observe(reorg_result.blocks_rolled_back as f64);
-
-                                                        // CRITICAL FIX: Update execution layer fork choice to new canonical head
-                                                        // Without this, EL and CL are desynchronized after reorg
-                                                        let new_head_hash = block.message.execution_payload.block_hash;
-                                                        let finalized_hash = ExecutionBlockHash::zero(); // TODO: Track actual finalized hash
-
-                                                        debug!(
-                                                            correlation_id = %correlation_id,
-                                                            new_head = ?new_head_hash,
-                                                            finalized = ?finalized_hash,
-                                                            "Updating execution layer fork choice after reorganization"
-                                                        );
-
-                                                        if let Some(ref engine_actor) = self_clone.engine_actor {
-                                                            let fork_choice_result = engine_actor
-                                                                .send(EngineMessage::UpdateForkChoice {
-                                                                    head_hash: new_head_hash,
-                                                                    safe_hash: finalized_hash,
-                                                                    finalized_hash: finalized_hash,
-                                                                    correlation_id: Some(correlation_id),
-                                                                })
-                                                                .await;
-
-                                                            match fork_choice_result {
-                                                                Ok(Ok(EngineResponse::ForkChoiceUpdated { success: true })) => {
-                                                                    info!(
-                                                                        correlation_id = %correlation_id,
-                                                                        new_head = ?new_head_hash,
-                                                                        "Execution layer fork choice updated successfully after reorganization"
-                                                                    );
-                                                                }
-                                                                Ok(Ok(_)) => {
-                                                                    error!(
-                                                                        correlation_id = %correlation_id,
-                                                                        "Unexpected response from UpdateForkChoice after reorganization"
-                                                                    );
-                                                                    // Non-fatal: CL updated, EL may recover on next block
-                                                                }
-                                                                Ok(Err(e)) => {
-                                                                    error!(
-                                                                        correlation_id = %correlation_id,
-                                                                        error = ?e,
-                                                                        "CRITICAL: Failed to update execution layer fork choice after reorganization"
-                                                                    );
-                                                                    // Non-fatal: Log critical error but continue
-                                                                    // CL reorg completed, EL will sync on next block
-                                                                    self_clone.metrics.fork_choice_failures_after_reorg.inc();
-                                                                }
-                                                                Err(e) => {
-                                                                    error!(
-                                                                        correlation_id = %correlation_id,
-                                                                        error = ?e,
-                                                                        "CRITICAL: Actor mailbox error during fork choice update after reorganization"
-                                                                    );
-                                                                    // Mailbox error is serious - return error
-                                                                    return Err(ChainError::ActorMailbox(format!(
-                                                                        "Failed to communicate with EngineActor after reorg: {:?}",
-                                                                        e
-                                                                    )));
-                                                                }
-                                                            }
-                                                        } else {
-                                                            warn!(
-                                                                correlation_id = %correlation_id,
-                                                                "EngineActor not available - cannot update fork choice after reorganization"
-                                                            );
-                                                        }
-
-                                                        // Reorganization already handled storage and chain head updates
-                                                        // Skip the normal import flow and return success
-                                                        return Ok(ChainResponse::BlockImported {
-                                                            block_hash: reorg_result.new_tip,
-                                                            height: reorg_result.new_tip_height,
-                                                        });
-                                                    }
-                                                    Err(reorg_error) => {
-                                                        error!(
-                                                            correlation_id = %correlation_id,
-                                                            error = ?reorg_error,
-                                                            "Chain reorganization failed - keeping current block"
-                                                        );
-                                                        return Err(reorg_error);
-                                                    }
-                                                }
-                                            }
-                                            crate::actors_v2::chain::fork_choice::ForkChoice::RequiresDeepAnalysis => {
-                                                // Deep reorg detected that exceeds automatic limits
-                                                // This requires operator intervention or explicit deep reorg handling
-                                                warn!(
-                                                    correlation_id = %correlation_id,
-                                                    existing_hash = %existing_hash,
-                                                    new_hash = %block_hash,
-                                                    block_height = block_height,
-                                                    "Fork choice: deep reorganization required - exceeds automatic reorg limits. Manual intervention may be needed."
-                                                );
-
-                                                // Record metric for monitoring
-                                                self_clone.metrics.deep_reorgs_detected.inc();
-
-                                                // For now, keep the current chain and log the situation
-                                                // TODO: In future, implement:
-                                                // 1. Store block as orphan for later analysis
-                                                // 2. Operator override mechanism for deep reorgs
-                                                // 3. Notification system for critical events
-
-                                                return Err(ChainError::ReorganizationError(
-                                                    "Deep reorganization required - exceeds automatic limits. Manual intervention needed.".to_string()
-                                                ));
-                                            }
-                                        }
+                                        return Err(ChainError::InvalidBlock(format!(
+                                            "Block at height {} already exists with different hash {}",
+                                            block_height, existing_hash
+                                        )));
                                     }
                                 }
                                 Ok(Ok(None)) => {
@@ -1236,49 +979,177 @@ impl Handler<ChainMessage> for ChainActor {
                                     debug!(
                                         correlation_id = %correlation_id,
                                         block_height = block_height,
-                                        "No existing block at this height - proceeding with normal import"
+                                        "No existing block at this height - proceeding with import"
                                     );
                                 }
                                 Ok(Err(e)) => {
                                     warn!(
                                         correlation_id = %correlation_id,
                                         error = ?e,
-                                        "Failed to check for existing block at height - proceeding anyway (risky)"
+                                        "Failed to check for existing block at height - proceeding anyway"
                                     );
-                                    // Continue - non-fatal but logged as warning
                                 }
                                 Err(e) => {
                                     warn!(
                                         correlation_id = %correlation_id,
                                         error = ?e,
-                                        "Communication error checking for existing block - proceeding anyway (risky)"
+                                        "Communication error checking for existing block - proceeding anyway"
                                     );
-                                    // Continue - non-fatal but logged as warning
                                 }
                             }
-                        } else {
-                            warn!(
-                                correlation_id = %correlation_id,
-                                "StorageActor not available for fork detection - skipping (unsafe!)"
-                            );
                         }
 
-                        // Step 2: Consensus validation via V0 Aura (Critical Blocker 2 solution)
-                        if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
-                            error!(
+                        // Step 2: Consensus validation
+                        // With Tendermint enabled, validation is handled via commit signatures.
+                        // For backward compatibility during transition, we still check Aura signatures
+                        // on blocks that were produced under the old consensus.
+                        if !self_clone.tendermint_enabled {
+                            if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    error = ?aura_error,
+                                    "Block failed Aura consensus validation"
+                                );
+                                return Err(ChainError::Consensus(format!("Aura validation failed: {:?}", aura_error)));
+                            }
+
+                            debug!(
                                 correlation_id = %correlation_id,
                                 block_hash = %block_hash,
-                                error = ?aura_error,
-                                "Block failed V0 Aura consensus validation"
+                                "Block passed Aura consensus validation"
                             );
-                            return Err(ChainError::Consensus(format!("Aura validation failed: {:?}", aura_error)));
-                        }
+                        } else {
+                            // Tendermint validation: verify last_commit and commit signatures
+                            use crate::actors_v2::chain::tendermint::validation::{
+                                validate_last_commit, verify_commit,
+                            };
 
-                        debug!(
-                            correlation_id = %correlation_id,
-                            block_hash = %block_hash,
-                            "Block passed V0 Aura consensus validation"
-                        );
+                            // Get parent hash for last_commit validation
+                            let parent_hash_h256 = ethereum_types::H256::from_slice(
+                                block.message.parent_hash.as_bytes()
+                            );
+
+                            // Step 2.1: Validate last_commit field structure
+                            // - Genesis (height 0 or 1) doesn't need last_commit
+                            // - Non-genesis needs valid last_commit with matching parent
+                            if let Err(commit_error) = validate_last_commit(
+                                block_height,
+                                &parent_hash_h256,
+                                block.message.last_commit.as_ref(),
+                            ) {
+                                // Special case: height 1 is also considered "genesis" in some chains
+                                // Allow missing last_commit for first few blocks during chain startup
+                                if block_height <= 1 {
+                                    debug!(
+                                        correlation_id = %correlation_id,
+                                        block_height = block_height,
+                                        "Allowing missing last_commit for initial block"
+                                    );
+                                } else {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        block_height = block_height,
+                                        error = ?commit_error,
+                                        "Block failed last_commit validation"
+                                    );
+                                    return Err(ChainError::Consensus(format!(
+                                        "Invalid last_commit: {:?}", commit_error
+                                    )));
+                                }
+                            }
+
+                            // Step 2.2: Verify commit signatures (2/3+ voting power)
+                            // The last_commit proves that block N-1 was finalized
+                            // Note: We need the validator set that was active at the COMMIT height
+                            // (height - 1), not the current block height. This matters when
+                            // validator sets change.
+                            if let Some(ref last_commit) = block.message.last_commit {
+                                // Get validator set for commit verification
+                                // First try storage (for correct height-aware lookup), fall back to cached
+                                let commit_height = last_commit.height;
+
+                                let validator_set_for_commit = if let Some(ref storage) = storage_actor {
+                                    // Query validator set at the commit height from storage
+                                    match storage.send(
+                                        crate::actors_v2::storage::messages::GetValidatorSetForHeightMessage {
+                                            height: commit_height,
+                                            correlation_id: Some(correlation_id),
+                                        }
+                                    ).await {
+                                        Ok(Ok(Some(vs))) => {
+                                            trace!(
+                                                correlation_id = %correlation_id,
+                                                commit_height = commit_height,
+                                                "Using stored validator set for commit verification"
+                                            );
+                                            Some(vs)
+                                        }
+                                        _ => None, // Fall back to cached
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                // Use stored validator set if available, otherwise use cached
+                                let validator_set = match validator_set_for_commit {
+                                    Some(vs) => vs,
+                                    None => {
+                                        // Fall back to cached validator set
+                                        match &self_clone.validator_set {
+                                            Some(vs) => vs.read().await.clone(),
+                                            None => {
+                                                error!(
+                                                    correlation_id = %correlation_id,
+                                                    block_hash = %block_hash,
+                                                    "Tendermint mode but no validator set available"
+                                                );
+                                                return Err(ChainError::Configuration(
+                                                    "Tendermint mode requires validator set".to_string()
+                                                ));
+                                            }
+                                        }
+                                    }
+                                };
+
+                                // Verify that the commit has sufficient signatures
+                                // Issue 1.2: pass chain_id for domain separation
+                                let chain_id_str = self_clone.config.chain_id.to_string();
+                                if let Err(verify_error) = verify_commit(
+                                    last_commit,
+                                    &validator_set,
+                                    parent_hash_h256,
+                                    &chain_id_str,
+                                ) {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        block_hash = %block_hash,
+                                        commit_height = last_commit.height,
+                                        commit_round = last_commit.round,
+                                        error = ?verify_error,
+                                        "Block's last_commit failed signature verification"
+                                    );
+                                    return Err(ChainError::Consensus(format!(
+                                        "Invalid commit signatures: {:?}", verify_error
+                                    )));
+                                }
+
+                                debug!(
+                                    correlation_id = %correlation_id,
+                                    block_hash = %block_hash,
+                                    commit_height = last_commit.height,
+                                    signatures = last_commit.signatures.len(),
+                                    "Last commit signatures verified successfully"
+                                );
+                            }
+
+                            debug!(
+                                correlation_id = %correlation_id,
+                                block_hash = %block_hash,
+                                "Block passed Tendermint consensus validation"
+                            );
+                        }
 
                         // Step 3: Execution payload validation via EngineActor
                         if let Some(ref engine_actor) = engine_actor {
@@ -1513,49 +1384,8 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                            // Step 8: Process orphan children that were waiting for this block
-                            // Check if any blocks in the orphan cache were waiting for this parent
-                            let orphan_children = {
-                                let mut cache = self_clone.orphan_cache.write().await;
-                                cache.remove_by_parent(&block_hash)
-                            };
-
-                            if !orphan_children.is_empty() {
-                                info!(
-                                    correlation_id = %correlation_id,
-                                    parent_hash = %block_hash,
-                                    orphan_count = orphan_children.len(),
-                                    "Found orphan children waiting for this block - processing recursively"
-                                );
-
-                                // Process each orphan child as a new import
-                                for orphan_entry in orphan_children {
-                                    info!(
-                                        correlation_id = %correlation_id,
-                                        orphan_hash = %orphan_entry.hash,
-                                        orphan_height = orphan_entry.height,
-                                        "Re-processing orphan child after parent import"
-                                    );
-
-                                    // Re-submit the orphan block for import via the actor address
-                                    // This ensures proper sequencing through the import lock
-                                    let import_msg = ChainMessage::ImportBlock {
-                                        block: orphan_entry.block,
-                                        source: BlockSource::Sync, // Mark as sync since it was cached
-                                        peer_id: orphan_entry.peer_id,
-                                    };
-
-                                    // Send to self via the actor address for proper async handling
-                                    if let Err(e) = ctx_addr.send(import_msg).await {
-                                        warn!(
-                                            correlation_id = %correlation_id,
-                                            orphan_hash = %orphan_entry.hash,
-                                            error = ?e,
-                                            "Failed to re-submit orphan block for import"
-                                        );
-                                    }
-                                }
-                            }
+                            // Step 8: With Tendermint instant finality, no orphan processing needed
+                            // Blocks are committed in order, so children are always received after parents
 
                             let import_duration = start_time.elapsed();
 
@@ -2368,6 +2198,15 @@ impl Handler<ChainMessage> for ChainActor {
                     Ok(ChainResponse::TendermintGovernanceApplied { effective_height })
                 })
             }
+
+            ChainMessage::SetTendermintDriver { addr } => {
+                // Store the driver address for bidirectional communication
+                self.tendermint_driver = Some(addr);
+                info!("TendermintDriver address set in ChainActor");
+                Box::pin(async move {
+                    Ok(ChainResponse::Success)
+                })
+            }
         }
     }
 }
@@ -2487,10 +2326,6 @@ async fn create_aux_block_helper(
         gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
         )),
-        // Orphan cache
-        orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
-            super::orphan_cache::OrphanBlockCache::new(),
-        )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,
         // Tendermint state (disabled for this helper)
@@ -2537,10 +2372,6 @@ async fn submit_aux_block_helper(
         )),
         gap_fill_requests: std::sync::Arc::new(tokio::sync::RwLock::new(
             std::collections::HashMap::new(),
-        )),
-        // Orphan cache
-        orphan_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
-            super::orphan_cache::OrphanBlockCache::new(),
         )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,

@@ -327,6 +327,7 @@ impl SyncActor {
                 verify_commits: config.verify_commits,
                 max_batch_size: config.max_blocks_per_request,
                 allow_untrusted_sync: false,
+                chain_id: config.chain_id.to_string(), // Issue 1.2: domain separation
             };
             tracing::info!("Tendermint sync validation enabled (verify_commits={})", config.verify_commits);
             Some(std::sync::Arc::new(std::sync::RwLock::new(
