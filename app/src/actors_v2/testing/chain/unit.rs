@@ -74,16 +74,16 @@ mod tests {
         let state = harness.into_chain_state(is_validator, max_blocks_without_pow, None);
 
         // Test initial state
-        assert_eq!(state.get_height(), 0);
-        assert!(state.get_head_hash().is_none());
-        assert!(state.is_synced());
-        assert_eq!(state.blocks_without_pow, 0);
-        assert!(!state.needs_auxpow());
-        assert!(state.get_queued_pow().is_none());
+        assert_eq!(state.get_height().await, 0);
+        assert!(state.get_head_hash().await.is_none());
+        assert!(state.is_synced().await);
+        assert_eq!(*state.blocks_without_pow.read().await, 0);
+        assert!(!state.needs_auxpow().await);
+        assert!(state.get_queued_pow().await.is_none());
         assert!(state.queued_pegins.read().await.is_empty());
         assert_eq!(state.is_validator, true);
         assert!(state.block_hash_cache.is_some());
-        assert!(state.last_block_time.is_none());
+        assert!(state.last_block_time.read().await.is_none());
     }
 
     #[tokio::test]
@@ -103,7 +103,7 @@ mod tests {
         let mut state = harness.into_chain_state(is_validator, max_blocks_without_pow, None);
 
         // Test initial height
-        assert_eq!(state.get_height(), 0);
+        assert_eq!(state.get_height().await, 0);
 
         // Test height updates
         let block_ref_1 = BlockRef {
@@ -111,19 +111,19 @@ mod tests {
             number: 100,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        state.update_head(block_ref_1.clone());
-        assert_eq!(state.get_height(), 100);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(1)));
-        assert!(state.last_block_time.is_some());
+        state.update_head(block_ref_1.clone()).await;
+        assert_eq!(state.get_height().await, 100);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(1)));
+        assert!(state.last_block_time.read().await.is_some());
 
         let block_ref_2 = BlockRef {
             hash: H256::from_low_u64_be(2),
             number: 200,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        state.update_head(block_ref_2.clone());
-        assert_eq!(state.get_height(), 200);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
+        state.update_head(block_ref_2.clone()).await;
+        assert_eq!(state.get_height().await, 200);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(2)));
     }
 
     #[tokio::test]
@@ -141,24 +141,24 @@ mod tests {
         let mut state = harness.into_chain_state(is_validator, max_blocks_without_pow, None);
 
         // Test initial sync status
-        assert!(state.is_synced());
-        assert!(matches!(state.sync_status, SyncStatus::Synced));
+        assert!(state.is_synced().await);
+        assert!(matches!(*state.sync_status.read().await, SyncStatus::Synced));
 
         // Test sync status transitions
-        state.set_sync_status(SyncStatus::NotSynced);
-        assert!(!state.is_synced());
+        state.set_sync_status(SyncStatus::NotSynced).await;
+        assert!(!state.is_synced().await);
 
         state.set_sync_status(SyncStatus::Syncing {
             progress: 0.5,
             target_height: 1000,
-        });
-        assert!(!state.is_synced());
+        }).await;
+        assert!(!state.is_synced().await);
 
-        state.set_sync_status(SyncStatus::Error("Network timeout".to_string()));
-        assert!(!state.is_synced());
+        state.set_sync_status(SyncStatus::Error("Network timeout".to_string())).await;
+        assert!(!state.is_synced().await);
 
-        state.set_sync_status(SyncStatus::Synced);
-        assert!(state.is_synced());
+        state.set_sync_status(SyncStatus::Synced).await;
+        assert!(state.is_synced().await);
     }
 
     #[tokio::test]
@@ -177,25 +177,25 @@ mod tests {
         );
 
         // Test initial AuxPoW state
-        assert!(!state.needs_auxpow());
-        assert_eq!(state.blocks_without_pow, 0);
+        assert!(!state.needs_auxpow().await);
+        assert_eq!(*state.blocks_without_pow.read().await, 0);
 
         // Test incrementing blocks without PoW
         for i in 1..10 {
-            state.increment_blocks_without_pow();
-            assert_eq!(state.blocks_without_pow, i);
-            assert!(!state.needs_auxpow());
+            state.increment_blocks_without_pow().await;
+            assert_eq!(*state.blocks_without_pow.read().await, i);
+            assert!(!state.needs_auxpow().await);
         }
 
         // After max_blocks_without_pow, should need AuxPoW
-        state.increment_blocks_without_pow();
-        assert_eq!(state.blocks_without_pow, 10);
-        assert!(state.needs_auxpow());
+        state.increment_blocks_without_pow().await;
+        assert_eq!(*state.blocks_without_pow.read().await, 10);
+        assert!(state.needs_auxpow().await);
 
         // Test reset
-        state.reset_blocks_without_pow();
-        assert_eq!(state.blocks_without_pow, 0);
-        assert!(!state.needs_auxpow());
+        state.reset_blocks_without_pow().await;
+        assert_eq!(*state.blocks_without_pow.read().await, 0);
+        assert!(!state.needs_auxpow().await);
     }
 
     #[tokio::test]
@@ -214,7 +214,7 @@ mod tests {
         let mut state = harness.into_chain_state(is_validator, max_blocks_without_pow, None);
 
         // Test initial state
-        assert!(state.get_queued_pow().is_none());
+        assert!(state.get_queued_pow().await.is_none());
 
         // Create and set queued AuxPoW
         let auxpow = mock_auxpow();
@@ -226,17 +226,18 @@ mod tests {
             height: 100,
             auxpow: Some(auxpow),
             fee_recipient: ethereum_types::Address::zero(),
+            pegins: vec![],
         };
 
-        state.set_queued_pow(Some(auxpow_header.clone()));
-        assert!(state.get_queued_pow().is_some());
+        state.set_queued_pow(Some(auxpow_header.clone())).await;
+        assert!(state.get_queued_pow().await.is_some());
 
-        let queued = state.get_queued_pow().as_ref().unwrap();
-        assert_eq!(queued.range_end, H256::from_low_u64_be(42));
+        let queued = state.get_queued_pow().await;
+        assert_eq!(queued.as_ref().unwrap().range_end, H256::from_low_u64_be(42));
 
         // Test clearing queued AuxPoW
-        state.set_queued_pow(None);
-        assert!(state.get_queued_pow().is_none());
+        state.set_queued_pow(None).await;
+        assert!(state.get_queued_pow().await.is_none());
     }
 
     #[tokio::test]
@@ -256,22 +257,37 @@ mod tests {
         // Test initial state (async RwLock access)
         assert!(state.queued_pegins.read().await.is_empty());
 
-        // Add peg-ins (async methods)
-        let pegin = mock_pegin_info();
-        let txid1 = Txid::from_byte_array([1u8; 32]);
-        let txid2 = Txid::from_byte_array([2u8; 32]);
+        // Add peg-ins (async methods) - using queue_pegin with QueuedPegIn
+        use crate::actors_v2::chain::tendermint::pegin::QueuedPegIn;
+        use lighthouse_wrapper::types::Address;
 
-        state.add_queued_pegin(txid1, pegin.clone()).await;
+        let pegin = mock_pegin_info();
+        let txid1 = pegin.txid;
+        let mut pegin2 = pegin.clone();
+        pegin2.txid = Txid::from_byte_array([2u8; 32]);
+        let txid2 = pegin2.txid;
+
+        let queued1 = QueuedPegIn {
+            info: pegin.clone(),
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        state.queue_pegin(queued1).await;
         assert_eq!(state.queued_pegins.read().await.len(), 1);
         assert!(state.queued_pegins.read().await.contains_key(&txid1));
 
-        state.add_queued_pegin(txid2, pegin.clone()).await;
+        let queued2 = QueuedPegIn {
+            info: pegin2.clone(),
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        state.queue_pegin(queued2).await;
         assert_eq!(state.queued_pegins.read().await.len(), 2);
 
         // Remove peg-in (async method)
         let removed = state.remove_queued_pegin(&txid1).await;
         assert!(removed.is_some());
-        assert_eq!(removed.unwrap().amount, pegin.amount);
+        assert_eq!(removed.unwrap().info.amount, pegin.amount);
         assert_eq!(state.queued_pegins.read().await.len(), 1);
         assert!(!state.queued_pegins.read().await.contains_key(&txid1));
 
@@ -306,14 +322,14 @@ mod tests {
         );
 
         // Test immediate AuxPoW requirement
-        assert!(!state.needs_auxpow());
-        state.increment_blocks_without_pow();
-        assert!(state.needs_auxpow());
+        assert!(!state.needs_auxpow().await);
+        state.increment_blocks_without_pow().await;
+        assert!(state.needs_auxpow().await);
 
         // Test multiple resets
-        state.reset_blocks_without_pow();
-        state.reset_blocks_without_pow(); // Should not panic
-        assert!(!state.needs_auxpow());
+        state.reset_blocks_without_pow().await;
+        state.reset_blocks_without_pow().await; // Should not panic
+        assert!(!state.needs_auxpow().await);
 
         // Test head updates with same height
         let block_ref_1 = BlockRef {
@@ -327,13 +343,13 @@ mod tests {
             execution_hash: ExecutionBlockHash::zero(),
         };
 
-        state.update_head(block_ref_1.clone());
-        assert_eq!(state.get_height(), 100);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(1)));
+        state.update_head(block_ref_1.clone()).await;
+        assert_eq!(state.get_height().await, 100);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(1)));
 
-        state.update_head(block_ref_2.clone());
-        assert_eq!(state.get_height(), 100);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(2)));
+        state.update_head(block_ref_2.clone()).await;
+        assert_eq!(state.get_height().await, 100);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(2)));
 
         // Test decreasing height (reorg simulation)
         let block_ref_3 = BlockRef {
@@ -341,8 +357,8 @@ mod tests {
             number: 50,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        state.update_head(block_ref_3.clone());
-        assert_eq!(state.get_height(), 50);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(3)));
+        state.update_head(block_ref_3.clone()).await;
+        assert_eq!(state.get_height().await, 50);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(3)));
     }
 }

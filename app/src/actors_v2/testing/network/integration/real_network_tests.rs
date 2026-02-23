@@ -438,6 +438,7 @@ async fn test_auxpow_broadcast() {
         height: 0,
         auxpow: None, // Will be completed by miner
         fee_recipient: Address::zero(),
+        pegins: vec![],
     };
     let auxpow_data = serde_json::to_vec(&auxpow_header).expect("Failed to serialize AuxPoW");
 

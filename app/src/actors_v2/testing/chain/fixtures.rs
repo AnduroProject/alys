@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use crate::actors_v2::chain::{
     messages::{AuxPowParams, ChainStatus, PegOutRequest},
+    tendermint::pegin::PegInInfo,
     ChainConfig,
 };
-use bridge::PegInInfo;
 
 /// Test fixture for validator configuration
 pub fn validator_config() -> ChainConfig {

@@ -53,11 +53,24 @@ mod tests {
     #[tokio::test]
     async fn test_peg_operation_message_structure() {
         // Test peg operation messages are correctly structured
+        // Note: ChainMessage::ProcessPegins uses bridge::PegInInfo (V0 compat),
+        // while QueuedPegIn uses tendermint::pegin::PegInInfo (V2).
+        // Convert for this test.
         let pegins = mock_multiple_pegins();
+        let bridge_pegins: Vec<bridge::PegInInfo> = pegins
+            .iter()
+            .map(|p| bridge::PegInInfo {
+                txid: p.txid,
+                block_hash: p.block_hash,
+                amount: p.amount,
+                evm_account: p.evm_account,
+                block_height: p.block_height,
+            })
+            .collect();
         let pegouts = mock_multiple_pegouts();
 
         let pegin_msg = ChainMessage::ProcessPegins {
-            pegin_infos: pegins.clone(),
+            pegin_infos: bridge_pegins.clone(),
         };
         let pegout_msg = ChainMessage::ProcessPegouts {
             pegout_requests: pegouts.clone(),
@@ -658,10 +671,10 @@ mod tests {
         );
 
         // Test initial state
-        assert_eq!(state.get_height(), 0);
-        assert!(state.get_head_hash().is_none());
-        assert!(state.is_synced());
-        assert_eq!(state.blocks_without_pow, 0);
+        assert_eq!(state.get_height().await, 0);
+        assert!(state.get_head_hash().await.is_none());
+        assert!(state.is_synced().await);
+        assert_eq!(*state.blocks_without_pow.read().await, 0);
 
         // Test head update transition
         let block_ref = BlockRef {
@@ -669,42 +682,42 @@ mod tests {
             number: 100,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        state.update_head(block_ref.clone());
-        assert_eq!(state.get_height(), 100);
-        assert_eq!(state.get_head_hash(), Some(H256::from_low_u64_be(42)));
-        assert!(state.last_block_time.is_some());
+        state.update_head(block_ref.clone()).await;
+        assert_eq!(state.get_height().await, 100);
+        assert_eq!(state.get_head_hash().await, Some(H256::from_low_u64_be(42)));
+        assert!(state.last_block_time.read().await.is_some());
 
         // Test sync status transitions
-        assert!(state.is_synced());
+        assert!(state.is_synced().await);
         state.set_sync_status(SyncStatus::Syncing {
             progress: 0.5,
             target_height: 200,
-        });
-        assert!(!state.is_synced());
-        state.set_sync_status(SyncStatus::NotSynced);
-        assert!(!state.is_synced());
-        state.set_sync_status(SyncStatus::Error("Network error".to_string()));
-        assert!(!state.is_synced());
-        state.set_sync_status(SyncStatus::Synced);
-        assert!(state.is_synced());
+        }).await;
+        assert!(!state.is_synced().await);
+        state.set_sync_status(SyncStatus::NotSynced).await;
+        assert!(!state.is_synced().await);
+        state.set_sync_status(SyncStatus::Error("Network error".to_string())).await;
+        assert!(!state.is_synced().await);
+        state.set_sync_status(SyncStatus::Synced).await;
+        assert!(state.is_synced().await);
 
         // Test AuxPoW state transitions
-        assert!(!state.needs_auxpow());
+        assert!(!state.needs_auxpow().await);
         for _ in 0..max_blocks_without_pow {
-            state.increment_blocks_without_pow();
+            state.increment_blocks_without_pow().await;
         }
-        assert!(state.needs_auxpow());
-        state.reset_blocks_without_pow();
-        assert!(!state.needs_auxpow());
-        assert_eq!(state.blocks_without_pow, 0);
+        assert!(state.needs_auxpow().await);
+        state.reset_blocks_without_pow().await;
+        assert!(!state.needs_auxpow().await);
+        assert_eq!(*state.blocks_without_pow.read().await, 0);
 
         // Test queued AuxPoW state
-        assert!(state.get_queued_pow().is_none());
+        assert!(state.get_queued_pow().await.is_none());
         let auxpow_header = create_mock_auxpow_header();
-        state.set_queued_pow(Some(auxpow_header.clone()));
-        assert!(state.get_queued_pow().is_some());
-        state.set_queued_pow(None);
-        assert!(state.get_queued_pow().is_none());
+        state.set_queued_pow(Some(auxpow_header.clone())).await;
+        assert!(state.get_queued_pow().await.is_some());
+        state.set_queued_pow(None).await;
+        assert!(state.get_queued_pow().await.is_none());
     }
 
     #[tokio::test]
@@ -724,21 +737,34 @@ mod tests {
         );
 
         // Test peg-in queue management
+        use crate::actors_v2::chain::tendermint::pegin::QueuedPegIn;
+        use lighthouse_wrapper::types::Address;
+
         let pegins = mock_multiple_pegins();
-        let txid1 = Txid::from_byte_array([1u8; 32]);
-        let txid2 = Txid::from_byte_array([2u8; 32]);
+        let txid1 = pegins[0].txid;
+        let txid2 = pegins[1].txid;
 
         assert!(state.queued_pegins.read().await.is_empty());
 
-        // Add peg-ins (async methods)
-        state.add_queued_pegin(txid1, pegins[0].clone()).await;
-        state.add_queued_pegin(txid2, pegins[1].clone()).await;
+        // Add peg-ins (async methods) - now using queue_pegin with QueuedPegIn
+        let queued1 = QueuedPegIn {
+            info: pegins[0].clone(),
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        let queued2 = QueuedPegIn {
+            info: pegins[1].clone(),
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        state.queue_pegin(queued1).await;
+        state.queue_pegin(queued2).await;
         assert_eq!(state.queued_pegins.read().await.len(), 2);
 
         // Remove peg-ins (async method)
         let removed = state.remove_queued_pegin(&txid1).await;
         assert!(removed.is_some());
-        assert_eq!(removed.unwrap().amount, pegins[0].amount);
+        assert_eq!(removed.unwrap().info.amount, pegins[0].amount);
         assert_eq!(state.queued_pegins.read().await.len(), 1);
 
         // Remove non-existent peg-in
@@ -772,8 +798,8 @@ mod tests {
         // Test initial state
         assert_eq!(actor.config.is_validator, true);
         assert_eq!(actor.config.enable_auxpow, true);
-        assert_eq!(actor.state.get_height(), 0);
-        assert!(actor.state.is_synced());
+        assert_eq!(actor.state.get_height().await, 0);
+        assert!(actor.state.is_synced().await);
 
         // Test activity recording
         let initial_activity = actor.last_activity;
@@ -787,10 +813,10 @@ mod tests {
             number: 50,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        actor.state.update_head(block_ref);
-        assert_eq!(actor.state.get_height(), 50);
+        actor.state.update_head(block_ref).await;
+        assert_eq!(actor.state.get_height().await, 50);
         assert_eq!(
-            actor.state.get_head_hash(),
+            actor.state.get_head_hash().await,
             Some(H256::from_low_u64_be(123))
         );
     }
@@ -829,6 +855,7 @@ mod tests {
             height: 100,
             auxpow: Some(create_mock_auxpow()),
             fee_recipient: Address::zero(),
+            pegins: vec![],
         }
     }
 
@@ -981,37 +1008,52 @@ mod tests {
         );
 
         // Test with zero max blocks without pow (should always need auxpow)
-        assert!(state.needs_auxpow()); // Should be true immediately with 0 max
-        state.increment_blocks_without_pow();
-        assert!(state.needs_auxpow());
+        assert!(state.needs_auxpow().await); // Should be true immediately with 0 max
+        state.increment_blocks_without_pow().await;
+        assert!(state.needs_auxpow().await);
 
         // Test sync error status
-        state.set_sync_status(SyncStatus::Error("Critical error".to_string()));
-        assert!(!state.is_synced());
-        match &state.sync_status {
+        state.set_sync_status(SyncStatus::Error("Critical error".to_string())).await;
+        assert!(!state.is_synced().await);
+        match &*state.sync_status.read().await {
             SyncStatus::Error(msg) => assert_eq!(msg, "Critical error"),
             _ => panic!("Expected error status"),
         }
 
         // Test multiple peg-in operations with same txid (should overwrite)
-        let pegin1 = mock_pegin_info();
-        let mut pegin2 = pegin1.clone();
-        pegin2.amount = 200000000; // Different amount
+        use crate::actors_v2::chain::tendermint::pegin::QueuedPegIn;
+        use lighthouse_wrapper::types::Address;
 
-        let txid = bitcoin::Txid::from_byte_array([42u8; 32]);
-        state.add_queued_pegin(txid, pegin1).await;
+        let pegin_info1 = mock_pegin_info();
+        let mut pegin_info2 = pegin_info1.clone();
+        pegin_info2.amount = 200000000; // Different amount
+
+        let txid = pegin_info1.txid;
+        let queued1 = QueuedPegIn {
+            info: pegin_info1,
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        state.queue_pegin(queued1).await;
         assert_eq!(state.queued_pegins.read().await.len(), 1);
         assert_eq!(
-            state.queued_pegins.read().await.get(&txid).unwrap().amount,
+            state.queued_pegins.read().await.get(&txid).unwrap().info.amount,
             100000000
         );
 
-        // Adding same txid should overwrite
-        state.add_queued_pegin(txid, pegin2).await;
+        // Adding same txid should be rejected (not overwrite)
+        let queued2 = QueuedPegIn {
+            info: pegin_info2,
+            fee_recipient: Address::zero(),
+            queued_at_height: 0,
+        };
+        let result = state.queue_pegin(queued2).await;
+        assert!(!result, "Duplicate txid should be rejected");
         assert_eq!(state.queued_pegins.read().await.len(), 1);
+        // Amount should remain the original (100000000), not be overwritten
         assert_eq!(
-            state.queued_pegins.read().await.get(&txid).unwrap().amount,
-            200000000
+            state.queued_pegins.read().await.get(&txid).unwrap().info.amount,
+            100000000
         );
     }
 
@@ -1093,30 +1135,30 @@ mod tests {
         let state2 = Arc::clone(&state);
 
         let handle1 = tokio::spawn(async move {
-            let mut s = state1.lock().await;
+            let s = state1.lock().await;
             for _ in 0..5 {
-                s.increment_blocks_without_pow();
+                s.increment_blocks_without_pow().await;
             }
         });
 
         let handle2 = tokio::spawn(async move {
-            let mut s = state2.lock().await;
+            let s = state2.lock().await;
             let block_ref = BlockRef {
                 hash: H256::from_low_u64_be(123),
                 number: 100,
                 execution_hash: ExecutionBlockHash::zero(),
             };
-            s.update_head(block_ref);
+            s.update_head(block_ref).await;
         });
 
         // Wait for both operations to complete
         let _ = tokio::join!(handle1, handle2);
 
         let final_state = state.lock().await;
-        assert_eq!(final_state.blocks_without_pow, 5);
-        assert_eq!(final_state.get_height(), 100);
+        assert_eq!(*final_state.blocks_without_pow.read().await, 5);
+        assert_eq!(final_state.get_height().await, 100);
         assert_eq!(
-            final_state.get_head_hash(),
+            final_state.get_head_hash().await,
             Some(H256::from_low_u64_be(123))
         );
     }
@@ -1196,7 +1238,7 @@ mod tests {
             number: 100,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        actor.state.update_head(block_ref);
+        actor.state.update_head(block_ref).await;
         actor.record_activity();
 
         assert_eq!(actor.metrics.get_activity_count(), 0); // Still no operations performed
@@ -1205,7 +1247,8 @@ mod tests {
         // Test sync status in metrics
         actor
             .state
-            .set_sync_status(crate::actors_v2::chain::state::SyncStatus::NotSynced);
+            .set_sync_status(crate::actors_v2::chain::state::SyncStatus::NotSynced)
+            .await;
         actor.record_activity();
         assert!(!actor.metrics.get_sync_status());
     }
@@ -1381,27 +1424,27 @@ mod tests {
             number: 500,
             execution_hash: ExecutionBlockHash::zero(),
         };
-        actor.state.update_head(block_ref.clone());
+        actor.state.update_head(block_ref.clone()).await;
         actor.record_activity();
 
         // Metrics should reflect state changes
         assert_eq!(actor.metrics.get_chain_height(), 500);
-        assert_eq!(actor.state.get_height(), 500);
+        assert_eq!(actor.state.get_height().await, 500);
         assert_eq!(
-            actor.state.get_head_hash(),
+            actor.state.get_head_hash().await,
             Some(H256::from_low_u64_be(100))
         );
 
         // Test AuxPoW state consistency
         for _ in 0..actor.config.max_blocks_without_pow {
-            actor.state.increment_blocks_without_pow();
+            actor.state.increment_blocks_without_pow().await;
         }
-        assert!(actor.state.needs_auxpow());
+        assert!(actor.state.needs_auxpow().await);
 
         actor.record_activity();
         // Metrics should be updated but auxpow status is state-dependent
         assert_eq!(
-            actor.state.blocks_without_pow,
+            *actor.state.blocks_without_pow.read().await,
             actor.config.max_blocks_without_pow
         );
     }
