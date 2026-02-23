@@ -548,3 +548,116 @@ pub struct PendingGovernanceUpdate {
     /// Height at which update was proposed
     pub proposed_at_height: u64,
 }
+
+// ============================================================================
+// Issue 3.2: Internal State Query Messages (for TendermintDriver)
+// ============================================================================
+
+/// Query current Tendermint position for timeout coordination.
+///
+/// This is an internal message used by TendermintDriver to query the
+/// consensus position from ChainActor (the single source of truth).
+/// Issue 3.2: Eliminates duplicate state between TendermintDriver and ChainActor.
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<TendermintPositionSnapshot, crate::actors_v2::chain::ChainError>")]
+pub struct QueryTendermintPosition {
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Snapshot of consensus position for TendermintDriver timeout decisions.
+///
+/// This is a lightweight internal snapshot (vs. the full TendermintStateResponse for RPC).
+/// Contains only what TendermintDriver needs for timeout coordination.
+#[derive(Debug, Clone)]
+pub struct TendermintPositionSnapshot {
+    /// Current consensus height
+    pub height: u64,
+    /// Current consensus round
+    pub round: u32,
+    /// Current step (as enum, not string)
+    pub step: crate::actors_v2::chain::tendermint::TendermintStep,
+    /// Whether we are the proposer for this round
+    pub is_proposer: bool,
+    /// Locked round (if any)
+    pub locked_round: Option<u32>,
+    /// Locked block hash (if any)
+    pub locked_block: Option<crate::actors_v2::chain::tendermint::BlockHash>,
+}
+
+// ============================================================================
+// Issue 3.1: WAL Recovery Integration Messages
+// ============================================================================
+
+/// Apply recovered consensus state from WAL replay.
+///
+/// This message is sent to ChainActor at startup after WAL replay to restore
+/// consensus state that was persisted before a crash. This ensures:
+/// - No double-voting (sent_prevotes/sent_precommits restored)
+/// - Lock state preserved across restarts
+/// - Consensus resumes at correct height/round
+///
+/// Issue 3.1: Proper integration of WAL recovery with ChainActor's TendermintState.
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<ApplyRecoveredStateResponse, crate::actors_v2::chain::ChainError>")]
+pub struct ApplyRecoveredState {
+    /// Recovered state from WAL replay
+    pub recovered: crate::actors_v2::chain::tendermint::wal::RecoveredState,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for ApplyRecoveredState
+#[derive(Debug, Clone)]
+pub struct ApplyRecoveredStateResponse {
+    /// Whether recovery was applied (false if no state to recover)
+    pub applied: bool,
+    /// Height after recovery
+    pub height: u64,
+    /// Round after recovery
+    pub round: u32,
+    /// Whether a lock was restored
+    pub lock_restored: bool,
+    /// Number of prevotes restored
+    pub prevotes_restored: usize,
+    /// Number of precommits restored
+    pub precommits_restored: usize,
+}
+
+// ============================================================================
+// Issue 4.2: ValidatorSetTracker Integration Messages
+// ============================================================================
+
+/// Set the TendermintSyncValidator reference for governance notifications.
+///
+/// Issue 4.2: When governance updates change the validator set, ChainActor
+/// notifies the sync validator so it can track validator set changes.
+/// This enables proper commit verification during sync.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetSyncValidator {
+    /// Arc<RwLock<TendermintSyncValidator>> for thread-safe access
+    /// Note: Uses std::sync::RwLock to match SyncActor's validator type
+    pub validator: std::sync::Arc<std::sync::RwLock<crate::actors_v2::network::tendermint_sync::TendermintSyncValidator>>,
+}
+
+impl std::fmt::Debug for SetSyncValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetSyncValidator")
+            .field("validator", &"<TendermintSyncValidator>")
+            .finish()
+    }
+}
+
+/// Notification that a validator set change occurred.
+///
+/// Sent to notify the sync validator when governance updates the validator set.
+/// The sync validator uses this to track which validator sets are active at which heights.
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "()")]
+pub struct ValidatorSetChanged {
+    /// Height at which the new set becomes active
+    pub activation_height: u64,
+    /// The new validator set
+    pub new_set: crate::actors_v2::chain::tendermint::ValidatorSet,
+}

@@ -648,11 +648,23 @@ mod tests {
         // Lock at round 0
         state.lock_on(0, BlockHash::repeat_byte(0xAB));
 
-        // POL from round 1 should allow unlock
+        // POL from round 1 should allow unlock (1 >= 0)
         assert!(state.can_unlock(1, BlockHash::repeat_byte(0xCD)));
 
-        // POL from round 0 should not allow unlock
-        assert!(!state.can_unlock(0, BlockHash::repeat_byte(0xCD)));
+        // POL from round 0 should allow unlock (Issue 2.4: 0 >= 0 is valid per Tendermint paper)
+        assert!(state.can_unlock(0, BlockHash::repeat_byte(0xCD)));
+
+        // Lock at round 2 now
+        state.lock_on(2, BlockHash::repeat_byte(0xEF));
+
+        // POL from round 1 should NOT allow unlock (1 < 2)
+        assert!(!state.can_unlock(1, BlockHash::repeat_byte(0xCD)));
+
+        // POL from round 2 should allow unlock (2 >= 2)
+        assert!(state.can_unlock(2, BlockHash::repeat_byte(0xCD)));
+
+        // POL from round 3 should allow unlock (3 >= 2)
+        assert!(state.can_unlock(3, BlockHash::repeat_byte(0xCD)));
     }
 
     #[test]

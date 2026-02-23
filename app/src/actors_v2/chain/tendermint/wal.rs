@@ -492,7 +492,7 @@ impl ConsensusWAL {
 }
 
 /// Recovered state from WAL replay
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RecoveredState {
     /// Last committed height (start consensus at height + 1)
     pub last_committed_height: Option<u64>,

@@ -348,6 +348,14 @@ impl SyncActor {
         })
     }
 
+    /// Get the TendermintSyncValidator reference for sharing with ChainActor.
+    ///
+    /// Issue 4.2 Step 4.2.6: This allows ChainActor to receive governance notifications
+    /// and forward them to the sync validator, ensuring validator set tracking stays
+    /// synchronized between consensus and sync validation.
+    pub fn tendermint_validator(&self) -> Option<std::sync::Arc<std::sync::RwLock<TendermintSyncValidator>>> {
+        self.tendermint_validator.clone()
+    }
 
     /// Calculate the mode (most common value) from a list of heights
     /// Returns the highest value if there are ties (conservative approach)

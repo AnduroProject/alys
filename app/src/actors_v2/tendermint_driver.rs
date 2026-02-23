@@ -20,11 +20,13 @@ use crate::actors_v2::chain::tendermint::{
 use crate::actors_v2::chain::ChainActor;
 use actix::prelude::*;
 use lighthouse_wrapper::bls::PublicKey;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+// Issue 3.2: Removed HashMap - vote tracking now in ChainActor.tendermint_state
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use tracing::{debug, error, info, trace, warn};
+use uuid::Uuid;
 
 /// Error types for TendermintDriver
 #[derive(Debug, Clone, Error)]
@@ -126,6 +128,10 @@ pub enum TendermintDriverMessage {
 /// Tendermint Consensus Driver
 ///
 /// Replaces AuraSlotWorkerV2 with event-driven consensus timing.
+///
+/// Issue 3.2: This driver coordinates timeouts and delegates consensus state
+/// to ChainActor (the single source of truth). It no longer maintains duplicate
+/// consensus state like locked_round, locked_value, sent_prevotes, etc.
 pub struct TendermintDriver {
     /// Configuration
     config: TendermintDriverConfig,
@@ -149,7 +155,7 @@ pub struct TendermintDriver {
     /// Address of ChainActor
     chain_actor: Option<Addr<ChainActor>>,
 
-    /// Current step
+    /// Current step (for timeout scheduling)
     current_step: TendermintStep,
 
     /// Pending timeout handle (for cancellation)
@@ -161,30 +167,26 @@ pub struct TendermintDriver {
     /// Last committed block's commit (for next proposal)
     last_commit: Option<Commit>,
 
-    /// Lock state: round at which we locked
-    locked_round: Option<u32>,
+    // Issue 3.2: Removed duplicate consensus state:
+    // - locked_round, locked_value: Now only in ChainActor.tendermint_state
+    // - valid_round, valid_value: Now only in ChainActor.tendermint_state
+    // - sent_prevotes, sent_precommits: Now only in ChainActor.tendermint_state
 
-    /// Lock state: value we are locked on
-    locked_value: Option<BlockHash>,
-
-    /// Valid value from POL (Proof of Lock)
-    valid_round: Option<u32>,
-
-    /// Valid value hash
-    valid_value: Option<BlockHash>,
-
-    /// Current height
+    /// Current height (for timeout scheduling context)
+    /// Note: This is the driver's tracking of position for timeout scheduling.
+    /// ChainActor.tendermint_state is the single source of truth for consensus.
     current_height: u64,
 
-    /// Current round
+    /// Current round (for timeout scheduling context)
     current_round: u32,
 
     /// Write-Ahead Log for crash recovery safety
+    /// Issue 3.1 will move this to ChainActor
     wal: Option<Arc<RwLock<ConsensusWAL>>>,
 
-    /// Votes already sent (recovered from WAL, prevents double-voting)
-    sent_prevotes: HashMap<u32, Option<BlockHash>>,
-    sent_precommits: HashMap<u32, Option<BlockHash>>,
+    /// Recovered state from WAL replay (Issue 3.1)
+    /// Stored until ChainActor is available, then sent via ApplyRecoveredState
+    pending_recovery: Option<RecoveredState>,
 }
 
 impl TendermintDriver {
@@ -237,20 +239,17 @@ impl TendermintDriver {
             (None, None)
         };
 
-        // Extract recovered state
-        let (current_height, current_round, locked_round, locked_value, sent_prevotes, sent_precommits) =
-            if let Some(ref state) = recovered_state {
-                (
-                    state.start_height().saturating_sub(1), // Will be incremented on NewHeight
-                    state.current_round.unwrap_or(0),
-                    state.locked_round,
-                    state.locked_block.clone(),
-                    state.sent_prevotes.clone(),
-                    state.sent_precommits.clone(),
-                )
-            } else {
-                (0, 0, None, None, HashMap::new(), HashMap::new())
-            };
+        // Extract recovered state for position tracking
+        // Issue 3.2: Locking state and vote tracking moved to ChainActor.tendermint_state
+        // Issue 3.1 will handle applying recovered state to ChainActor
+        let (current_height, current_round) = if let Some(ref state) = recovered_state {
+            (
+                state.start_height().saturating_sub(1), // Will be incremented on NewHeight
+                state.current_round.unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
 
         Self {
             config,
@@ -264,15 +263,13 @@ impl TendermintDriver {
             pending_timeout: None,
             is_paused: false,
             last_commit: None,
-            locked_round,
-            locked_value,
-            valid_round: None,
-            valid_value: None,
+            // Issue 3.2: Removed locked_round, locked_value, valid_round, valid_value,
+            // sent_prevotes, sent_precommits - now only in ChainActor.tendermint_state
             current_height,
             current_round,
             wal,
-            sent_prevotes,
-            sent_precommits,
+            // Issue 3.1: Store recovered state for later application to ChainActor
+            pending_recovery: recovered_state,
         }
     }
 
@@ -302,21 +299,64 @@ impl TendermintDriver {
             pending_timeout: None,
             is_paused: false,
             last_commit: None,
-            locked_round: None,
-            locked_value: None,
-            valid_round: None,
-            valid_value: None,
+            // Issue 3.2: Removed locked_round, locked_value, valid_round, valid_value,
+            // sent_prevotes, sent_precommits - now only in ChainActor.tendermint_state
             current_height: 0,
             current_round: 0,
             wal: None,
-            sent_prevotes: HashMap::new(),
-            sent_precommits: HashMap::new(),
+            pending_recovery: None,
         }
     }
 
-    /// Set the ChainActor address
+    /// Set the ChainActor address and apply any pending WAL recovery
+    ///
+    /// Issue 3.1: When ChainActor is set, any recovered state from WAL
+    /// is sent to ChainActor for proper integration with TendermintState.
     pub fn set_chain_actor(&mut self, addr: Addr<ChainActor>) {
-        self.chain_actor = Some(addr);
+        self.chain_actor = Some(addr.clone());
+
+        // Issue 3.1: Apply pending recovery to ChainActor
+        if let Some(recovered) = self.pending_recovery.take() {
+            if recovered.last_committed_height.is_some() || recovered.current_round.is_some() {
+                info!(
+                    last_committed = ?recovered.last_committed_height,
+                    current_round = ?recovered.current_round,
+                    locked_round = ?recovered.locked_round,
+                    prevotes = recovered.sent_prevotes.len(),
+                    precommits = recovered.sent_precommits.len(),
+                    "Sending WAL recovery to ChainActor"
+                );
+
+                use crate::actors_v2::chain::messages::ApplyRecoveredState;
+
+                actix::spawn(async move {
+                    match addr
+                        .send(ApplyRecoveredState {
+                            recovered,
+                            correlation_id: Some(Uuid::new_v4()),
+                        })
+                        .await
+                    {
+                        Ok(Ok(response)) => {
+                            info!(
+                                height = response.height,
+                                round = response.round,
+                                lock_restored = response.lock_restored,
+                                prevotes = response.prevotes_restored,
+                                precommits = response.precommits_restored,
+                                "WAL recovery applied to ChainActor"
+                            );
+                        }
+                        Ok(Err(e)) => {
+                            error!(error = ?e, "Failed to apply WAL recovery to ChainActor");
+                        }
+                        Err(e) => {
+                            error!(error = %e, "ChainActor mailbox error during WAL recovery");
+                        }
+                    }
+                });
+            }
+        }
     }
 
     /// Write an entry to the WAL
@@ -336,31 +376,10 @@ impl TendermintDriver {
         Ok(())
     }
 
-    /// Check if we've already voted prevote in this round (from WAL recovery)
-    fn has_sent_prevote(&self, round: u32) -> bool {
-        self.sent_prevotes.contains_key(&round)
-    }
-
-    /// Check if we've already voted precommit in this round (from WAL recovery)
-    fn has_sent_precommit(&self, round: u32) -> bool {
-        self.sent_precommits.contains_key(&round)
-    }
-
-    /// Record that we sent a prevote (for double-vote prevention)
-    fn record_sent_prevote(&mut self, round: u32, block_hash: Option<BlockHash>) {
-        self.sent_prevotes.insert(round, block_hash);
-    }
-
-    /// Record that we sent a precommit
-    fn record_sent_precommit(&mut self, round: u32, block_hash: Option<BlockHash>) {
-        self.sent_precommits.insert(round, block_hash);
-    }
-
-    /// Clear vote tracking on height change
-    fn clear_vote_tracking(&mut self) {
-        self.sent_prevotes.clear();
-        self.sent_precommits.clear();
-    }
+    // Issue 3.2: Removed vote tracking methods - now handled by ChainActor.tendermint_state
+    // - has_sent_prevote, has_sent_precommit: now checked in TendermintState
+    // - record_sent_prevote, record_sent_precommit: now recorded in TendermintState
+    // - clear_vote_tracking: handled by TendermintState.new_height()
 
     /// Check if running in observer mode
     pub fn is_observer(&self) -> bool {
@@ -459,9 +478,10 @@ impl TendermintDriver {
         self.current_round = 0;
         self.current_step = TendermintStep::Propose;
 
-        // Clear lock state and vote tracking for new height
-        self.clear_lock_state();
-        self.clear_vote_tracking();
+        // Issue 3.2: Removed clear_lock_state() and clear_vote_tracking()
+        // Lock state and vote tracking are now managed by ChainActor.tendermint_state
+        // ChainActor.handle_tendermint_new_height() calls TendermintState.new_height()
+        // which handles clearing locks and vote tracking
 
         // Write NewRound to WAL BEFORE any actions
         if let Err(e) = self.wal_write(WALEntry::NewRound { height, round: 0 }) {
@@ -653,35 +673,20 @@ impl TendermintDriver {
     }
 
     /// Send NIL prevote (proposal timeout or invalid proposal)
+    ///
+    /// Issue 3.2: Removed local vote tracking - now handled by ChainActor.
+    /// ChainActor.handle_tendermint_timeout() will check TendermintState.has_voted_prevote()
+    /// before casting the vote, and will write to WAL before broadcasting.
     fn send_nil_prevote(&mut self, height: u64, round: u32, ctx: &mut Context<Self>) {
         if !self.is_validator() {
             return; // Observers don't vote
         }
 
-        // Check if we already voted in this round (double-vote prevention)
-        if self.has_sent_prevote(round) {
-            debug!(
-                height = height,
-                round = round,
-                "Already sent prevote in this round, skipping"
-            );
-            return;
-        }
+        debug!(height = height, round = round, "Triggering NIL prevote via timeout");
 
-        debug!(height = height, round = round, "Sending NIL prevote");
-
-        // Write to WAL BEFORE broadcasting (critical for safety)
-        if let Err(e) = self.wal_write(WALEntry::SentPrevote {
-            height,
-            round,
-            block_hash: None, // NIL vote
-        }) {
-            error!(error = ?e, "Failed to write SentPrevote to WAL, aborting vote");
-            return; // Don't vote if WAL write fails - safety over liveness
-        }
-
-        // Record that we voted
-        self.record_sent_prevote(round, None);
+        // Issue 3.2: Removed local vote tracking and WAL write
+        // ChainActor handles double-vote prevention via TendermintState.has_voted_prevote()
+        // ChainActor writes to WAL before broadcasting vote
 
         let chain_actor = match &self.chain_actor {
             Some(addr) => addr.clone(),
@@ -704,35 +709,20 @@ impl TendermintDriver {
     }
 
     /// Send NIL precommit (prevote timeout)
+    ///
+    /// Issue 3.2: Removed local vote tracking - now handled by ChainActor.
+    /// ChainActor.handle_tendermint_timeout() will check TendermintState.has_voted_precommit()
+    /// before casting the vote, and will write to WAL before broadcasting.
     fn send_nil_precommit(&mut self, height: u64, round: u32, ctx: &mut Context<Self>) {
         if !self.is_validator() {
             return; // Observers don't vote
         }
 
-        // Check if we already voted in this round (double-vote prevention)
-        if self.has_sent_precommit(round) {
-            debug!(
-                height = height,
-                round = round,
-                "Already sent precommit in this round, skipping"
-            );
-            return;
-        }
+        debug!(height = height, round = round, "Triggering NIL precommit via timeout");
 
-        debug!(height = height, round = round, "Sending NIL precommit");
-
-        // Write to WAL BEFORE broadcasting (critical for safety)
-        if let Err(e) = self.wal_write(WALEntry::SentPrecommit {
-            height,
-            round,
-            block_hash: None, // NIL vote
-        }) {
-            error!(error = ?e, "Failed to write SentPrecommit to WAL, aborting vote");
-            return; // Don't vote if WAL write fails - safety over liveness
-        }
-
-        // Record that we voted
-        self.record_sent_precommit(round, None);
+        // Issue 3.2: Removed local vote tracking and WAL write
+        // ChainActor handles double-vote prevention via TendermintState.has_voted_precommit()
+        // ChainActor writes to WAL before broadcasting vote
 
         let chain_actor = match &self.chain_actor {
             Some(addr) => addr.clone(),
@@ -754,88 +744,11 @@ impl TendermintDriver {
         );
     }
 
-    /// Update lock state when we see 2/3+ prevotes for a block
-    ///
-    /// Tendermint safety rule: Once locked on a value, we can only
-    /// unlock if we see a POL (Proof of Lock) for a different value
-    /// at a higher round.
-    #[allow(dead_code)] // Will be used when full consensus loop is implemented
-    fn update_lock(&mut self, round: u32, block_hash: BlockHash) {
-        // Write Locked to WAL BEFORE updating state
-        if let Err(e) = self.wal_write(WALEntry::Locked {
-            round,
-            block_hash: block_hash.clone(),
-        }) {
-            error!(error = ?e, "Failed to write Locked to WAL");
-            // Continue anyway - locking is a safety optimization
-        }
-
-        self.locked_round = Some(round);
-        self.locked_value = Some(block_hash.clone());
-
-        // Also update valid value
-        self.valid_round = Some(round);
-        self.valid_value = Some(block_hash.clone());
-
-        info!(
-            round = round,
-            block_hash = %block_hash,
-            "Locked on block"
-        );
-    }
-
-    /// Check if we can vote for a block given our lock state
-    ///
-    /// Returns true if:
-    /// - We are not locked, OR
-    /// - The block matches our locked value, OR
-    /// - We have a valid POL for this block at a round >= locked_round
-    pub fn can_vote_for(&self, block_hash: &BlockHash, pol_round: Option<u32>) -> bool {
-        match (&self.locked_value, &self.locked_round) {
-            (None, _) => true, // Not locked
-            (Some(locked), _) if locked == block_hash => true, // Same value
-            (_, Some(lr)) => {
-                // Check if POL round >= locked round
-                pol_round.map(|pr| pr >= *lr).unwrap_or(false)
-            }
-            _ => false,
-        }
-    }
-
-    /// Get the block to propose (considering lock state)
-    ///
-    /// If locked, we MUST re-propose the locked value.
-    /// Otherwise, we can propose a new block.
-    pub fn get_proposal_value(&self) -> Option<BlockHash> {
-        // If we're locked, must re-propose locked value
-        if let Some(locked) = &self.locked_value {
-            debug!(
-                locked_round = ?self.locked_round,
-                "Re-proposing locked value"
-            );
-            return Some(locked.clone());
-        }
-
-        // If we have a valid value, prefer it
-        if let Some(valid) = &self.valid_value {
-            debug!(
-                valid_round = ?self.valid_round,
-                "Proposing valid value from POL"
-            );
-            return Some(valid.clone());
-        }
-
-        // Build new block
-        None
-    }
-
-    /// Clear lock state on height advancement
-    fn clear_lock_state(&mut self) {
-        self.locked_round = None;
-        self.locked_value = None;
-        self.valid_round = None;
-        self.valid_value = None;
-    }
+    // Issue 3.2: Removed duplicate consensus state methods:
+    // - update_lock(): Now handled by ChainActor.tendermint_state.lock_on()
+    // - can_vote_for(): Now handled by ChainActor.tendermint_state.determine_prevote_target()
+    // - get_proposal_value(): Now handled by ChainActor.handle_tendermint_propose()
+    // - clear_lock_state(): Now handled by ChainActor.tendermint_state.new_height()
 
     /// Store the LastCommit for the next block proposal
     fn store_last_commit(&mut self, last_commit: Commit) {
@@ -971,8 +884,8 @@ impl TendermintDriver {
         info!(height = height, "Resuming consensus after sync");
         self.is_paused = false;
 
-        // Clear any stale lock state from before sync
-        self.clear_lock_state();
+        // Issue 3.2: Removed clear_lock_state() - now handled by ChainActor.tendermint_state
+        // when TendermintState.new_height() is called
 
         // Start fresh at the new height
         self.start_height(height, ctx);
@@ -1178,49 +1091,9 @@ mod tests {
         assert!(!driver.is_proposer(1, 0));
     }
 
-    #[test]
-    fn test_lock_state() {
-        let validator_set = create_test_validator_set(4);
-        let config = test_config();
-        let pubkey = create_mock_pubkey();
-        let mut driver = TendermintDriver::new_without_wal(config, Some(pubkey), validator_set);
-
-        let block_hash = BlockHash::from_low_u64_be(1);
-
-        // Initially not locked
-        assert!(driver.can_vote_for(&block_hash, None));
-
-        // Lock on block
-        driver.update_lock(0, block_hash.clone());
-
-        // Can vote for same block
-        assert!(driver.can_vote_for(&block_hash, None));
-
-        // Cannot vote for different block without POL
-        let other_hash = BlockHash::from_low_u64_be(2);
-        assert!(!driver.can_vote_for(&other_hash, None));
-
-        // Can vote for different block with higher POL round
-        assert!(driver.can_vote_for(&other_hash, Some(1)));
-    }
-
-    #[test]
-    fn test_clear_lock_state() {
-        let validator_set = create_test_validator_set(4);
-        let config = test_config();
-        let pubkey = create_mock_pubkey();
-        let mut driver = TendermintDriver::new_without_wal(config, Some(pubkey), validator_set);
-
-        let block_hash = BlockHash::from_low_u64_be(1);
-        driver.update_lock(0, block_hash);
-
-        assert!(driver.locked_value.is_some());
-
-        driver.clear_lock_state();
-
-        assert!(driver.locked_value.is_none());
-        assert!(driver.locked_round.is_none());
-    }
+    // Issue 3.2: Removed test_lock_state and test_clear_lock_state
+    // These tests were for duplicate state that's now only in ChainActor.tendermint_state
+    // The equivalent tests exist in state_machine.rs
 
     #[test]
     fn test_last_commit_for_proposal() {
@@ -1245,30 +1118,9 @@ mod tests {
         assert!(result.unwrap().is_some());
     }
 
-    #[test]
-    fn test_vote_tracking() {
-        let validator_set = create_test_validator_set(4);
-        let config = test_config();
-        let pubkey = create_mock_pubkey();
-        let mut driver = TendermintDriver::new_without_wal(config, Some(pubkey), validator_set);
-
-        // Initially no votes
-        assert!(!driver.has_sent_prevote(0));
-        assert!(!driver.has_sent_precommit(0));
-
-        // Record votes
-        driver.record_sent_prevote(0, Some(BlockHash::from_low_u64_be(1)));
-        driver.record_sent_precommit(0, None);
-
-        // Now we have votes
-        assert!(driver.has_sent_prevote(0));
-        assert!(driver.has_sent_precommit(0));
-
-        // Clear tracking
-        driver.clear_vote_tracking();
-        assert!(!driver.has_sent_prevote(0));
-        assert!(!driver.has_sent_precommit(0));
-    }
+    // Issue 3.2: Removed test_vote_tracking
+    // Vote tracking is now in ChainActor.tendermint_state (TendermintState.sent_prevotes/sent_precommits)
+    // The equivalent tests exist in state_machine.rs
 
     #[test]
     fn test_check_validator_status_pubkey_matching() {

@@ -622,9 +622,14 @@ impl App {
                 data_dir: sync_data_dir,
                 ..Default::default()
             };
-            let sync_actor = crate::actors_v2::network::SyncActor::new(sync_config)
-                .expect("Failed to create SyncActor V2")
-                .start();
+            let sync_actor_instance = crate::actors_v2::network::SyncActor::new(sync_config)
+                .expect("Failed to create SyncActor V2");
+
+            // Issue 4.2 Step 4.2.6: Get TendermintSyncValidator reference before starting actor
+            // This allows sharing with ChainActor for governance notifications
+            let tendermint_sync_validator = sync_actor_instance.tendermint_validator();
+
+            let sync_actor = sync_actor_instance.start();
             info!("✓ SyncActor V2 started");
 
             // 5. Initialize ChainActor V2 and wire up dependencies
@@ -717,6 +722,15 @@ impl App {
                 Ok(Ok(_)) => info!("✓ SyncActor address configured in NetworkActor for block response forwarding"),
                 Ok(Err(e)) => error!("✗ Failed to set SyncActor in NetworkActor: {:?}", e),
                 Err(e) => error!("✗ NetworkActor mailbox error during SetSyncActor: {:?}", e),
+            }
+
+            // Issue 4.2 Step 4.2.6: Wire TendermintSyncValidator to ChainActor for governance notifications
+            // This allows ChainActor to notify the sync validator when validator set changes are processed
+            if let Some(validator) = tendermint_sync_validator {
+                match chain_actor_addr.send(crate::actors_v2::chain::messages::SetSyncValidator { validator }).await {
+                    Ok(()) => info!("✓ TendermintSyncValidator configured in ChainActor for governance notifications"),
+                    Err(e) => error!("✗ Failed to set TendermintSyncValidator in ChainActor: {:?}", e),
+                }
             }
 
             // Clone chain_actor_addr for slot worker (before RPC consumes it)

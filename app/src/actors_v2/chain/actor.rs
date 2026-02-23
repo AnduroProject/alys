@@ -147,6 +147,12 @@ pub struct ChainActor {
     /// TendermintDriver address for consensus coordination
     /// Used to send commit notifications after block finalization
     pub(crate) tendermint_driver: Option<actix::Addr<crate::actors_v2::tendermint_driver::TendermintDriver>>,
+
+    /// Issue 4.2: TendermintSyncValidator for governance notifications
+    /// When validator set changes occur via governance, this reference is used
+    /// to notify the sync validator so it can track validator sets for sync verification.
+    /// Note: Uses std::sync::RwLock to match SyncActor's validator type
+    pub(crate) tendermint_sync_validator: Option<Arc<std::sync::RwLock<crate::actors_v2::network::tendermint_sync::TendermintSyncValidator>>>,
 }
 
 impl ChainActor {
@@ -194,6 +200,7 @@ impl ChainActor {
             tendermint_enabled: false,
             timeout_receiver: Arc::new(tokio::sync::Mutex::new(None)),
             tendermint_driver: None,
+            tendermint_sync_validator: None,
         }
     }
 
