@@ -26,7 +26,7 @@ use crate::actors_v2::storage::messages::{
 use ethereum_types::H256;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::tendermint::{
@@ -941,6 +941,27 @@ impl ChainActor {
                 // Note: Local validator set is NOT updated here.
                 // The new set activates at effective_height (H+2) via load_validator_set_for_height()
 
+                // Issue 4.2: Notify sync validator of upcoming validator set change
+                if let Some(ref sync_validator) = self.tendermint_sync_validator {
+                    match sync_validator.write() {
+                        Ok(mut validator_guard) => {
+                            validator_guard.record_validator_change(effective_height, current_set.clone());
+                            info!(
+                                correlation_id = %correlation_id,
+                                effective_height = effective_height,
+                                "Notified sync validator of validator set change"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to acquire sync validator lock for governance notification"
+                            );
+                        }
+                    }
+                }
+
                 info!(
                     correlation_id = %correlation_id,
                     effective_height = effective_height,
@@ -1206,6 +1227,10 @@ impl ChainActor {
         // 8. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
         // Convert ExecutionBlockHash to Hash256 using into_root()
         // Path B: Pegins are now stored in auxpow_header.pegins (not directly on ConsensusBlock)
+        //
+        // Tendermint schema fields: In full production, validators_hash and params_hash
+        // would be computed from current state. For now, set to None until governance
+        // integration is complete.
         let block = crate::block::ConsensusBlock {
             parent_hash: execution_payload_capella.parent_hash.into_root(),
             slot: height, // In Tendermint mode, slot == height
@@ -1214,6 +1239,11 @@ impl ChainActor {
             execution_payload: execution_payload_capella,
             pegout_payment_proposal: None, // Peg-outs handled separately
             finalized_pegouts: Vec::new(),
+            // Tendermint schema fields - will be computed when governance is fully integrated
+            validators_hash: None,      // TODO: Compute from current validator set
+            next_validators_hash: None, // TODO: Compute from next validator set
+            params_hash: None,          // TODO: Compute from current chain params
+            governance_updates: None,   // TODO: Collect pending governance updates
         };
 
         info!(

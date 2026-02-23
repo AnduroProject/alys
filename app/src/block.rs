@@ -1,6 +1,7 @@
 use crate::{
     actors_v2::chain::tendermint::pegin::PegInInfo,
     actors_v2::chain::tendermint::Commit,
+    actors_v2::chain::tendermint::GovernanceUpdate,
     aura::Authority,
     auxpow::AuxPow,
     auxpow_miner::BlockIndex,
@@ -80,6 +81,43 @@ pub struct ConsensusBlock<T: EthSpec> {
     /// tx, but that's left as a future optimization. We could even completely
     /// omit the field but for now it's nice to have a public record
     pub finalized_pegouts: Vec<BitcoinTransaction>,
+
+    // =========================================================================
+    // Tendermint Schema Fields (Issue 4.2 / Migration)
+    // =========================================================================
+    //
+    // These fields are added at the END of the struct for MessagePack compatibility.
+    // All use #[serde(default, skip_serializing_if)] to maintain backward compat.
+
+    /// Hash of the current validator set.
+    ///
+    /// Computed via `ValidatorSet::compute_hash()`. Allows light clients to
+    /// verify blocks without requiring the full validator set data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validators_hash: Option<Hash256>,
+
+    /// Hash of the next validator set (after pending H+2 changes apply).
+    ///
+    /// If no validator updates are pending, equals `validators_hash`.
+    /// If updates are pending at height H, this shows the set that
+    /// will be active at H+2. Enables light clients to track validator transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_validators_hash: Option<Hash256>,
+
+    /// Hash of current chain parameters.
+    ///
+    /// Computed via `ChainParams::compute_hash()`. Allows light clients to
+    /// verify parameter state without replaying all governance updates from genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params_hash: Option<Hash256>,
+
+    /// Governance updates included in this block.
+    ///
+    /// Contains validator changes (H+2 activation), parameter updates (H+1 activation),
+    /// and emergency actions (immediate). Recorded for auditability and enables
+    /// syncing nodes to extract validator set changes from historical blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_updates: Option<Vec<GovernanceUpdate>>,
 }
 
 // NOTE: implementation assumes ConsensusBlock contains auxpow_header
@@ -138,6 +176,11 @@ impl Default for ConsensusBlock<MainnetEthSpec> {
             },
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+            // Tendermint schema fields
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         }
     }
 }
@@ -147,6 +190,10 @@ impl ConsensusBlock<MainnetEthSpec> {
     ///
     /// Note: Peg-ins are stored in `auxpow_header.pegins` (Path B design).
     /// Only blocks with AuxPoW can include peg-ins since miners submit them.
+    ///
+    /// The Tendermint schema fields (validators_hash, next_validators_hash,
+    /// params_hash, governance_updates) default to None. Use the builder-style
+    /// methods or direct field assignment to set them when needed.
     pub fn new(
         slot: u64,
         payload: ExecutionPayload<MainnetEthSpec>,
@@ -164,7 +211,53 @@ impl ConsensusBlock<MainnetEthSpec> {
             auxpow_header,
             pegout_payment_proposal,
             finalized_pegouts,
+            // Tendermint schema fields - default to None
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         }
+    }
+
+    /// Check if this block contains governance updates
+    pub fn has_governance_updates(&self) -> bool {
+        self.governance_updates
+            .as_ref()
+            .map_or(false, |u| !u.is_empty())
+    }
+
+    /// Get validator updates from governance updates
+    pub fn validator_updates(&self) -> Vec<&crate::actors_v2::chain::tendermint::ValidatorUpdate> {
+        self.governance_updates
+            .as_ref()
+            .map(|updates| {
+                updates
+                    .iter()
+                    .filter_map(|u| match u {
+                        GovernanceUpdate::Validator(v) => Some(v),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get parameter updates from governance updates
+    pub fn parameter_updates(
+        &self,
+    ) -> Vec<&crate::actors_v2::chain::tendermint::ParameterUpdate> {
+        self.governance_updates
+            .as_ref()
+            .map(|updates| {
+                updates
+                    .iter()
+                    .filter_map(|u| match u {
+                        GovernanceUpdate::Parameter(p) => Some(p),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Helper to get peg-ins from the AuxPowHeader (if present).
@@ -269,6 +362,12 @@ impl SignedConsensusBlock<MainnetEthSpec> {
                 // Path B: Peg-ins are stored in auxpow_header.pegins
                 pegout_payment_proposal: None,
                 finalized_pegouts: vec![],
+                // Tendermint schema fields - genesis has no governance updates
+                // Validator/params hashes can be computed and set by the caller if needed
+                validators_hash: None,
+                next_validators_hash: None,
+                params_hash: None,
+                governance_updates: None,
             },
             signature: AggregateApproval::new(),
         }

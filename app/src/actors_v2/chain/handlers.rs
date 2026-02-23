@@ -459,6 +459,11 @@ impl Handler<ChainMessage> for ChainActor {
                             // Path B: Peg-ins are stored in auxpow_header.pegins, not here
                             pegout_payment_proposal: None,
                             finalized_pegouts: vec![],
+                            // Tendermint schema fields - populated by Tendermint handlers when active
+                            validators_hash: None,
+                            next_validators_hash: None,
+                            params_hash: None,
+                            governance_updates: None,
                         };
 
                         // Step 7: Incorporate AuxPoW if available (Phase 4: Integration Point 1)
@@ -2338,6 +2343,7 @@ async fn create_aux_block_helper(
         tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
+        tendermint_sync_validator: None,
     };
 
     actor.create_aux_block(miner_address).await
@@ -2385,6 +2391,7 @@ async fn submit_aux_block_helper(
         tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
+        tendermint_sync_validator: None,
     };
 
     actor
@@ -2528,7 +2535,10 @@ use crate::actors_v2::chain::messages::{
     GetValidatorSet, ValidatorSetResponse, ValidatorInfoResponse,
     GetCommit, CommitResponse,
     GetChainParams, ChainParamsResponse,
+    QueryTendermintPosition, TendermintPositionSnapshot,
     GetPendingGovernance, PendingGovernanceResponse, PendingGovernanceUpdate,
+    ApplyRecoveredState, ApplyRecoveredStateResponse,
+    SetSyncValidator,
 };
 
 impl Handler<GetTendermintState> for ChainActor {
@@ -2805,5 +2815,204 @@ impl Handler<GetPendingGovernance> for ChainActor {
             }
             .into_actor(self),
         )
+    }
+}
+
+// ============================================================================
+// Issue 3.2: Internal State Query Handler (for TendermintDriver)
+// ============================================================================
+
+impl Handler<QueryTendermintPosition> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<TendermintPositionSnapshot, ChainError>>;
+
+    fn handle(&mut self, msg: QueryTendermintPosition, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let tendermint_state = self.tendermint_state.clone();
+
+        Box::pin(
+            async move {
+                let state = tendermint_state
+                    .ok_or_else(|| ChainError::Configuration("Tendermint not initialized".into()))?;
+
+                let state_guard = state.read().await;
+
+                let snapshot = TendermintPositionSnapshot {
+                    height: state_guard.height,
+                    round: state_guard.round,
+                    step: state_guard.step,
+                    is_proposer: state_guard.is_proposer(),
+                    locked_round: state_guard.locked_round,
+                    locked_block: state_guard.locked_block,
+                };
+
+                tracing::trace!(
+                    correlation_id = %correlation_id,
+                    height = snapshot.height,
+                    round = snapshot.round,
+                    step = ?snapshot.step,
+                    is_proposer = snapshot.is_proposer,
+                    "QueryTendermintPosition completed"
+                );
+
+                Ok(snapshot)
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// ============================================================================
+// Issue 3.1: WAL Recovery Handler
+// ============================================================================
+
+impl Handler<ApplyRecoveredState> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<ApplyRecoveredStateResponse, ChainError>>;
+
+    fn handle(&mut self, msg: ApplyRecoveredState, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let recovered = msg.recovered;
+        let tendermint_state = self.tendermint_state.clone();
+
+        Box::pin(
+            async move {
+                // Check if there's any state to recover
+                if recovered.last_committed_height.is_none() && recovered.current_round.is_none() {
+                    tracing::debug!(
+                        correlation_id = %correlation_id,
+                        "No WAL state to recover"
+                    );
+                    return Ok(ApplyRecoveredStateResponse {
+                        applied: false,
+                        height: 0,
+                        round: 0,
+                        lock_restored: false,
+                        prevotes_restored: 0,
+                        precommits_restored: 0,
+                    });
+                }
+
+                let state = tendermint_state
+                    .ok_or_else(|| ChainError::Configuration("Tendermint not initialized".into()))?;
+
+                let mut state_guard = state.write().await;
+
+                // Determine the height we should be at
+                let recovery_height = recovered.start_height();
+                let current_height = state_guard.height;
+
+                // Only apply recovery if heights match or we need to advance
+                if recovery_height != current_height {
+                    tracing::info!(
+                        correlation_id = %correlation_id,
+                        recovery_height = recovery_height,
+                        current_height = current_height,
+                        "WAL recovery height mismatch - state may have been reset"
+                    );
+                }
+
+                // Apply recovered round (if WAL shows we were at a higher round)
+                let mut round_advanced = false;
+                if let Some(wal_round) = recovered.current_round {
+                    if wal_round > state_guard.round {
+                        tracing::info!(
+                            correlation_id = %correlation_id,
+                            current_round = state_guard.round,
+                            recovered_round = wal_round,
+                            "Advancing to recovered round from WAL"
+                        );
+                        state_guard.round = wal_round;
+                        round_advanced = true;
+                    }
+                }
+
+                // Restore lock state (critical for safety)
+                let lock_restored = if let (Some(locked_round), Some(locked_block)) =
+                    (recovered.locked_round, recovered.locked_block)
+                {
+                    tracing::info!(
+                        correlation_id = %correlation_id,
+                        locked_round = locked_round,
+                        locked_block = %locked_block,
+                        "Restoring lock state from WAL"
+                    );
+                    state_guard.locked_round = Some(locked_round);
+                    state_guard.locked_block = Some(locked_block);
+                    // Also set valid_block if we were locked (locked implies valid)
+                    state_guard.valid_round = Some(locked_round);
+                    state_guard.valid_block = Some(locked_block);
+                    true
+                } else {
+                    false
+                };
+
+                // Restore sent votes (critical for double-vote prevention)
+                // TendermintState uses HashMap<Round, Option<BlockHash>> for vote tracking
+                let mut prevotes_restored = 0;
+                for (round, block_hash_opt) in recovered.sent_prevotes.iter() {
+                    state_guard.sent_prevotes.insert(*round, *block_hash_opt);
+                    prevotes_restored += 1;
+                    tracing::trace!(
+                        correlation_id = %correlation_id,
+                        height = current_height,
+                        round = round,
+                        block_hash = ?block_hash_opt,
+                        "Restored prevote from WAL"
+                    );
+                }
+
+                let mut precommits_restored = 0;
+                for (round, block_hash_opt) in recovered.sent_precommits.iter() {
+                    state_guard.sent_precommits.insert(*round, *block_hash_opt);
+                    precommits_restored += 1;
+                    tracing::trace!(
+                        correlation_id = %correlation_id,
+                        height = current_height,
+                        round = round,
+                        block_hash = ?block_hash_opt,
+                        "Restored precommit from WAL"
+                    );
+                }
+
+                // Determine and set the step based on what was recovered
+                let new_step = recovered.current_step();
+                if round_advanced || lock_restored || prevotes_restored > 0 || precommits_restored > 0 {
+                    state_guard.step = new_step;
+                }
+
+                tracing::info!(
+                    correlation_id = %correlation_id,
+                    height = state_guard.height,
+                    round = state_guard.round,
+                    step = ?state_guard.step,
+                    lock_restored = lock_restored,
+                    prevotes_restored = prevotes_restored,
+                    precommits_restored = precommits_restored,
+                    "WAL recovery applied to TendermintState"
+                );
+
+                Ok(ApplyRecoveredStateResponse {
+                    applied: true,
+                    height: state_guard.height,
+                    round: state_guard.round,
+                    lock_restored,
+                    prevotes_restored,
+                    precommits_restored,
+                })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// ============================================================================
+// Issue 4.2: ValidatorSetTracker Integration Handler
+// ============================================================================
+
+impl Handler<SetSyncValidator> for ChainActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetSyncValidator, _ctx: &mut Self::Context) -> Self::Result {
+        info!("Setting TendermintSyncValidator reference for governance notifications");
+        self.tendermint_sync_validator = Some(msg.validator);
     }
 }

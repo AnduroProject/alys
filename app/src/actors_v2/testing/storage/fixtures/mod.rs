@@ -52,6 +52,11 @@ pub fn create_test_block_sequence(count: usize) -> Vec<AlysConsensusBlock> {
             execution_payload,
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+            // Tendermint schema fields
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         };
 
         blocks.push(AlysConsensusBlock {
@@ -93,6 +98,11 @@ pub fn create_test_block(slot: u64) -> AlysConsensusBlock {
         execution_payload,
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
+        // Tendermint schema fields
+        validators_hash: None,
+        next_validators_hash: None,
+        params_hash: None,
+        governance_updates: None,
     };
 
     AlysConsensusBlock {
@@ -136,6 +146,11 @@ pub fn create_test_block_with_properties(
         execution_payload,
         pegout_payment_proposal: None,
         finalized_pegouts: vec![],
+        // Tendermint schema fields
+        validators_hash: None,
+        next_validators_hash: None,
+        params_hash: None,
+        governance_updates: None,
     };
 
     AlysConsensusBlock {
@@ -285,6 +300,11 @@ pub fn create_performance_test_blocks(
             execution_payload,
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+            // Tendermint schema fields
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         };
 
         blocks.push(AlysConsensusBlock {
@@ -393,6 +413,11 @@ pub fn create_deterministic_test_blocks(count: usize, seed: u64) -> Vec<AlysCons
             execution_payload,
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+            // Tendermint schema fields
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         };
 
         blocks.push(AlysConsensusBlock {

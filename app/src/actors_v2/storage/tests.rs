@@ -53,9 +53,13 @@ mod tests {
             last_commit: None,
             auxpow_header: None,
             execution_payload,
-            pegins: vec![],
             pegout_payment_proposal: None,
             finalized_pegouts: vec![],
+            // New schema fields (Issue 4.2 / Tendermint migration)
+            validators_hash: None,
+            next_validators_hash: None,
+            params_hash: None,
+            governance_updates: None,
         };
 
         AlysConsensusBlock {

@@ -665,6 +665,104 @@ impl TendermintSyncValidator {
         self.validator_tracker.record_change(activation_height, new_set);
     }
 
+    /// Validate a block and extract any validator set changes (Issue 4.2 Step 4.2.5).
+    ///
+    /// This combines validation with automatic tracking of governance updates.
+    /// When a block contains validator updates, they are automatically recorded
+    /// for future sync verification.
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block to validate
+    /// * `expected_height` - The height we expect this block to have
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if validation passes, or an error describing the failure.
+    pub fn validate_and_track_changes(
+        &mut self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+        expected_height: Height,
+    ) -> Result<(), TendermintSyncError> {
+        // First, perform standard validation
+        self.validate_sync_block(block, expected_height)?;
+
+        // Then, extract and track any validator changes from the block
+        if let Some(validator_updates) = self.extract_validator_updates(block) {
+            // Validator updates activate at H+2 per Tendermint rules
+            let activation_height = expected_height + 2;
+
+            // Apply updates to current set to compute new set
+            let mut new_set = (*self.current_validator_set()).clone();
+            new_set.apply_updates(&validator_updates);
+
+            // Record the change for future sync verification
+            self.record_validator_change(activation_height, new_set);
+
+            info!(
+                height = expected_height,
+                activation_height = activation_height,
+                updates = validator_updates.len(),
+                "Recorded validator set change from synced block"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Extract validator updates from a block's governance transactions.
+    ///
+    /// Issue 4.2 Step 4.2.5: This method extracts validator updates from blocks
+    /// during sync so the ValidatorSetTracker can maintain accurate history.
+    ///
+    /// # Current Implementation
+    ///
+    /// Returns `None` because the `ConsensusBlock` structure does not yet include
+    /// a `governance_updates` field. When the block structure is extended to include
+    /// governance updates (per the Tendermint migration plan), this method should
+    /// be updated to extract `GovernanceUpdate::Validator` entries.
+    ///
+    /// # Future Implementation
+    ///
+    /// ```rust,ignore
+    /// fn extract_validator_updates(&self, block: &SignedConsensusBlock<MainnetEthSpec>)
+    ///     -> Option<Vec<ValidatorUpdate>>
+    /// {
+    ///     block.message.governance_updates.as_ref().and_then(|updates| {
+    ///         let validator_updates: Vec<_> = updates
+    ///             .iter()
+    ///             .filter_map(|u| match u {
+    ///                 GovernanceUpdate::Validator(v) => Some(v.clone()),
+    ///                 _ => None,
+    ///             })
+    ///             .collect();
+    ///         if validator_updates.is_empty() { None } else { Some(validator_updates) }
+    ///     })
+    /// }
+    /// ```
+    fn extract_validator_updates(
+        &self,
+        block: &SignedConsensusBlock<MainnetEthSpec>,
+    ) -> Option<Vec<crate::actors_v2::chain::tendermint::ValidatorUpdate>> {
+        use crate::actors_v2::chain::tendermint::GovernanceUpdate;
+
+        block.message.governance_updates.as_ref().and_then(|updates| {
+            let validator_updates: Vec<_> = updates
+                .iter()
+                .filter_map(|update| match update {
+                    GovernanceUpdate::Validator(v) => Some(v.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            if validator_updates.is_empty() {
+                None
+            } else {
+                Some(validator_updates)
+            }
+        })
+    }
+
     /// Get the current validator set.
     pub fn current_validator_set(&self) -> Arc<ValidatorSet> {
         self.validator_tracker.current()

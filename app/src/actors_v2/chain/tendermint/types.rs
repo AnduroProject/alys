@@ -602,6 +602,31 @@ impl ValidatorSet {
     pub fn from_serializable(s: &SerializableValidatorSet) -> Result<Self, ValidatorError> {
         s.to_validator_set()
     }
+
+    /// Compute a deterministic hash of the validator set.
+    ///
+    /// Used in block headers (`validators_hash`, `next_validators_hash`) for
+    /// light client verification. Hash includes all validator public keys
+    /// and their voting powers in order.
+    ///
+    /// # Returns
+    ///
+    /// A 32-byte Keccak256 hash of the validator set.
+    pub fn compute_hash(&self) -> H256 {
+        use tiny_keccak::{Hasher, Keccak};
+
+        let mut hasher = Keccak::v256();
+
+        // Hash each validator's pubkey (48 bytes) and power (8 bytes)
+        for (i, validator) in self.validators.iter().enumerate() {
+            hasher.update(&validator.serialize());
+            hasher.update(&self.powers[i].to_le_bytes());
+        }
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        H256::from_slice(&output)
+    }
 }
 
 // Implement Serialize for ValidatorSet via SerializableValidatorSet
