@@ -2145,7 +2145,7 @@ impl ChainActor {
             })
             .await
             .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
-            .map_err(|e| ChainError::Storage(e))?
+            .map_err(|e| ChainError::Storage(e.to_string()))?
             .ok_or_else(|| {
                 ChainError::Consensus(format!(
                     "No validator set found for evidence height {}",
