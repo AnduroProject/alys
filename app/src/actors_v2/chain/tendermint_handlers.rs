@@ -31,8 +31,9 @@ use uuid::Uuid;
 
 use super::tendermint::{
     check_for_equivocation, verify_proposal, verify_vote, BlockHash, Commit, CommitSig,
-    ConsensusAction, GovernanceUpdate, Proposal, TendermintStep, TendermintValidationError,
-    ValidatorId, Vote, VoteType, WALEntry,
+    ConsensusAction, EquivocationEvidence, EquivocationType, GovernanceUpdate, Proposal,
+    TendermintMessage, TendermintStep, TendermintValidationError, ValidatorId, Vote, VoteType,
+    WALEntry,
 };
 
 // Type alias for WAL entry BlockHash (H256)
@@ -395,9 +396,21 @@ impl ChainActor {
             },
         )?;
 
-        // TODO: Validate block via EngineActor (execution layer validation)
-        // For now, we trust the proposer's block is valid
-        // This should call: self.validate_block_execution(&proposal.block).await?;
+        // Phase 4.3: Validate block execution payload via EngineActor
+        // If validation fails, we vote NIL (not error out) - proper BFT behavior
+        let execution_valid = self
+            .validate_block_execution(&proposal.block, correlation_id)
+            .await;
+
+        if !execution_valid {
+            warn!(
+                correlation_id = %correlation_id,
+                height = height,
+                round = round,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Block execution validation failed - will vote NIL"
+            );
+        }
 
         // Store proposal in state and determine prevote target
         let prevote_target = {
@@ -406,14 +419,20 @@ impl ChainActor {
             // Check for equivocation (same proposer, different block)
             if let Some(existing) = state.proposals.get(&(round, proposer)) {
                 if existing.block_hash() != block_hash {
-                    warn!(
+                    error!(
                         correlation_id = %correlation_id,
                         proposer = ?proposer,
                         existing_hash = %H256::from_slice(existing.block_hash().as_bytes()),
                         new_hash = %H256::from_slice(block_hash.as_bytes()),
-                        "Detected proposal equivocation"
+                        "PROPOSAL EQUIVOCATION DETECTED: Validator {} proposed different blocks at height {} round {}",
+                        proposer.0,
+                        height,
+                        round
                     );
-                    // TODO: Create and broadcast equivocation evidence
+                    // Note: Proposal equivocation evidence would require a different struct
+                    // (EquivocationEvidence stores Votes, not Proposals). For now we log it
+                    // prominently. Vote equivocation (prevote/precommit) is the more critical
+                    // case for consensus safety and is fully implemented.
                 }
             }
 
@@ -421,7 +440,13 @@ impl ChainActor {
             state.proposals.insert((round, proposer), proposal.clone());
 
             // Determine prevote target based on locking rules
-            state.determine_prevote_target(&proposal)
+            // Phase 4.3: If execution validation failed, vote NIL regardless of locking
+            if execution_valid {
+                state.determine_prevote_target(&proposal)
+            } else {
+                // Invalid execution payload - vote NIL
+                None
+            }
         };
 
         // Advance step to Prevote
@@ -502,6 +527,9 @@ impl ChainActor {
         })?;
 
         // Add vote to appropriate VoteSet and check thresholds
+        // Capture any detected equivocation evidence to broadcast after releasing locks
+        let mut detected_evidence: Option<EquivocationEvidence> = None;
+
         let action = {
             let mut state = tendermint_state.write().await;
 
@@ -517,7 +545,8 @@ impl ChainActor {
                                 "Detected prevote equivocation: {:?}",
                                 evidence
                             );
-                            // TODO: Broadcast equivocation evidence
+                            // Capture evidence to broadcast after releasing locks
+                            detected_evidence = Some(evidence);
                         }
                     }
                     drop(prevotes);
@@ -578,6 +607,22 @@ impl ChainActor {
                 }
 
                 VoteType::Precommit => {
+                    // Check for equivocation before adding
+                    let precommits_read = state.precommits.read().await;
+                    if let Some(existing) = precommits_read.get_vote_by_validator(&voter) {
+                        if let Some(evidence) = check_for_equivocation(&vote, &[(voter, existing.clone())].into_iter().collect()) {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                voter = ?voter,
+                                "Detected precommit equivocation: {:?}",
+                                evidence
+                            );
+                            // Capture evidence to broadcast after releasing locks
+                            detected_evidence = Some(evidence);
+                        }
+                    }
+                    drop(precommits_read);
+
                     // Add vote to precommit set
                     let mut precommits = state.precommits.write().await;
                     if let Err(e) = precommits.add_vote(vote.clone()) {
@@ -666,6 +711,21 @@ impl ChainActor {
 
             ConsensusAction::None | ConsensusAction::ScheduleTimeout(_) | ConsensusAction::BroadcastPrevote(_) => {
                 // No action needed
+            }
+        }
+
+        // Broadcast any detected equivocation evidence (after locks released)
+        if let Some(evidence) = detected_evidence {
+            if let Err(e) = self
+                .broadcast_equivocation_evidence(evidence, correlation_id)
+                .await
+            {
+                // Log error but don't fail the vote handling
+                error!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "Failed to broadcast equivocation evidence"
+                );
             }
         }
 
@@ -1073,6 +1133,97 @@ impl ChainActor {
         })
     }
 
+    /// Validate a block's execution payload via EngineActor (Phase 4.3).
+    ///
+    /// This performs a dry-run validation of the execution payload without
+    /// committing any state changes. Used to verify proposals before voting.
+    ///
+    /// # Returns
+    ///
+    /// * `true` - Execution payload is valid
+    /// * `false` - Execution payload is invalid or validation failed
+    ///
+    /// # Note
+    ///
+    /// Returns `false` (not error) on failure to ensure proper BFT behavior:
+    /// invalid proposals should receive NIL votes, not cause handler errors.
+    async fn validate_block_execution(
+        &self,
+        block: &crate::block::ConsensusBlock<lighthouse_wrapper::types::MainnetEthSpec>,
+        correlation_id: Uuid,
+    ) -> bool {
+        use crate::actors_v2::engine::{EngineMessage, EngineResponse};
+        use lighthouse_wrapper::types::ExecutionPayload;
+
+        // Get EngineActor - if not configured, skip validation (return true)
+        // This allows testing without full engine integration
+        let engine = match self.engine_actor.as_ref() {
+            Some(e) => e,
+            None => {
+                debug!(
+                    correlation_id = %correlation_id,
+                    "EngineActor not configured, skipping execution validation"
+                );
+                return true;
+            }
+        };
+
+        // Convert ExecutionPayloadCapella to ExecutionPayload enum
+        let payload = ExecutionPayload::Capella(block.execution_payload.clone());
+
+        // Send validation request to EngineActor
+        let result = engine
+            .send(EngineMessage::ValidatePayload {
+                payload,
+                correlation_id: Some(correlation_id),
+            })
+            .await;
+
+        match result {
+            Ok(Ok(EngineResponse::PayloadValid { is_valid, validation_time })) => {
+                if is_valid {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        validation_time_ms = validation_time.as_millis(),
+                        "Block execution payload validated successfully"
+                    );
+                    true
+                } else {
+                    warn!(
+                        correlation_id = %correlation_id,
+                        validation_time_ms = validation_time.as_millis(),
+                        "Block execution payload is INVALID"
+                    );
+                    false
+                }
+            }
+            Ok(Ok(other)) => {
+                warn!(
+                    correlation_id = %correlation_id,
+                    response = ?other,
+                    "Unexpected response from EngineActor validation"
+                );
+                false
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "EngineActor validation returned error"
+                );
+                false
+            }
+            Err(e) => {
+                warn!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "Failed to send validation request to EngineActor"
+                );
+                false
+            }
+        }
+    }
+
     /// Build a proposal block via EngineActor.
     ///
     /// This creates a new block for proposal by:
@@ -1224,13 +1375,40 @@ impl ChainActor {
             }
         };
 
-        // 8. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
+        // 8. Compute Tendermint governance schema fields
+        // These fields enable light client verification and governance tracking
+        let (validators_hash, next_validators_hash, params_hash) = {
+            // Get current validator set from Tendermint state
+            let tendermint_state = self.tendermint_state.as_ref()
+                .ok_or_else(|| ChainError::Configuration("Tendermint state not initialized".into()))?;
+            let state = tendermint_state.read().await;
+            let current_validator_set = state.validator_set.clone();
+            drop(state);
+
+            // Compute validators_hash from current validator set
+            let validators_hash = current_validator_set.compute_hash();
+
+            // For next_validators_hash: Use same as current unless governance update pending
+            // In production, this would check for pending validator set changes at H+2
+            // For now, assume no changes (next_validators_hash == validators_hash)
+            let next_validators_hash = validators_hash;
+
+            // Compute params_hash from chain parameters
+            // Using default params until governance integration is complete
+            // TODO: Load actual ChainParams from storage when governance is fully integrated
+            let chain_params = super::tendermint::params::ChainParams::default();
+            let params_hash = chain_params.compute_hash();
+
+            (
+                Some(validators_hash),
+                Some(next_validators_hash),
+                Some(params_hash),
+            )
+        };
+
+        // 9. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
         // Convert ExecutionBlockHash to Hash256 using into_root()
         // Path B: Pegins are now stored in auxpow_header.pegins (not directly on ConsensusBlock)
-        //
-        // Tendermint schema fields: In full production, validators_hash and params_hash
-        // would be computed from current state. For now, set to None until governance
-        // integration is complete.
         let block = crate::block::ConsensusBlock {
             parent_hash: execution_payload_capella.parent_hash.into_root(),
             slot: height, // In Tendermint mode, slot == height
@@ -1239,11 +1417,13 @@ impl ChainActor {
             execution_payload: execution_payload_capella,
             pegout_payment_proposal: None, // Peg-outs handled separately
             finalized_pegouts: Vec::new(),
-            // Tendermint schema fields - will be computed when governance is fully integrated
-            validators_hash: None,      // TODO: Compute from current validator set
-            next_validators_hash: None, // TODO: Compute from next validator set
-            params_hash: None,          // TODO: Compute from current chain params
-            governance_updates: None,   // TODO: Collect pending governance updates
+            // Tendermint schema fields for light client verification
+            validators_hash,
+            next_validators_hash,
+            params_hash,
+            // governance_updates: Collected when governance proposals are finalized
+            // For now, None until governance integration is complete (Phase 5)
+            governance_updates: None,
         };
 
         info!(
@@ -1254,6 +1434,7 @@ impl ChainActor {
             has_last_commit = block.last_commit.is_some(),
             has_auxpow = block.auxpow_header.is_some(),
             pegin_count = block.pegins().len(),
+            validators_hash = ?block.validators_hash,
             "Proposal block built successfully"
         );
 
@@ -1790,6 +1971,300 @@ impl ChainActor {
                 Err(ChainError::Internal(format!("Mailbox error: {}", e)))
             }
         }
+    }
+
+    /// Broadcast equivocation evidence via NetworkActor.
+    ///
+    /// Called when we detect a validator double-voting or double-proposing.
+    /// Evidence is written to WAL before broadcast to prevent re-broadcasting after crash.
+    async fn broadcast_equivocation_evidence(
+        &self,
+        evidence: EquivocationEvidence,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        let network = self
+            .network_actor
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("NetworkActor not configured".into()))?;
+
+        let wal = self
+            .consensus_wal
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
+
+        let height = evidence.height;
+        let culprit = evidence.culprit;
+        let kind = evidence.kind;
+
+        // Compute evidence hash for deduplication (uses chain_id for domain separation)
+        let chain_id = format!("{}", self.config.chain_id);
+        let evidence_hash = evidence.evidence_hash(&chain_id);
+
+        // Check if we've already processed/broadcast this evidence
+        let tendermint_state = self
+            .tendermint_state
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("Tendermint state not initialized".into()))?;
+
+        {
+            let state = tendermint_state.read().await;
+            if state.processed_evidence.contains(&evidence_hash) {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    culprit = ?culprit,
+                    "Skipping evidence broadcast - already processed"
+                );
+                return Ok(());
+            }
+        }
+
+        // Write WAL entry BEFORE broadcast (crash safety - prevents re-broadcast)
+        {
+            let mut wal_guard = wal.write().await;
+            wal_guard
+                .write(WALEntry::SentEvidence {
+                    height,
+                    culprit,
+                    evidence_hash,
+                })
+                .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+        }
+
+        // Wrap in TendermintMessage for network transmission
+        let message = TendermintMessage::Evidence(evidence);
+
+        let msg = crate::actors_v2::network::messages::NetworkMessage::BroadcastTendermint {
+            message,
+            correlation_id: Some(correlation_id),
+        };
+
+        match network.send(msg).await {
+            Ok(Ok(_)) => {
+                // Mark as processed after successful broadcast
+                {
+                    let mut state = tendermint_state.write().await;
+                    state.processed_evidence.insert(evidence_hash);
+                }
+
+                warn!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    culprit = ?culprit,
+                    kind = ?kind,
+                    "Equivocation evidence broadcast successfully"
+                );
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                error!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    culprit = ?culprit,
+                    error = %e,
+                    "NetworkActor rejected evidence broadcast"
+                );
+                Err(ChainError::Network(e))
+            }
+            Err(e) => {
+                error!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    culprit = ?culprit,
+                    error = %e,
+                    "Failed to send evidence to NetworkActor"
+                );
+                Err(ChainError::Internal(format!("Mailbox error: {}", e)))
+            }
+        }
+    }
+
+    /// Handle equivocation evidence received from the network.
+    ///
+    /// Validates the evidence and stores it for potential slashing/governance action.
+    ///
+    /// # Validation Steps
+    /// 1. Deduplication: Check if we've already processed this evidence
+    /// 2. Get historical validator set for the evidence height
+    /// 3. Verify both vote signatures against the historical validator set
+    /// 4. Verify culprit matches both votes
+    /// 5. Verify votes conflict (same h/r/type, different block_hash)
+    pub async fn handle_tendermint_evidence(
+        &self,
+        evidence: EquivocationEvidence,
+        peer_id: Option<String>,
+        correlation_id: Uuid,
+    ) -> TendermintResult<(ValidatorId, u64)> {
+        let height = evidence.height;
+        let culprit = evidence.culprit;
+        let kind = evidence.kind;
+
+        info!(
+            correlation_id = %correlation_id,
+            height = height,
+            culprit = ?culprit,
+            kind = ?kind,
+            peer_id = ?peer_id,
+            "Processing equivocation evidence from network"
+        );
+
+        // Compute evidence hash for deduplication
+        let chain_id = format!("{}", self.config.chain_id);
+        let evidence_hash = evidence.evidence_hash(&chain_id);
+
+        // Issue 1 Fix: Check if we've already processed this evidence
+        let tendermint_state = self
+            .tendermint_state
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("Tendermint state not initialized".into()))?;
+
+        {
+            let state = tendermint_state.read().await;
+            if state.processed_evidence.contains(&evidence_hash) {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    culprit = ?culprit,
+                    "Evidence already processed, skipping"
+                );
+                return Ok((culprit, height));
+            }
+        }
+
+        // Issue 2 Fix: Get historical validator set for the evidence height
+        // Evidence could be from a past height where the validator set was different
+        let storage = self
+            .storage_actor
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("StorageActor not configured".into()))?;
+
+        let historical_validator_set = storage
+            .send(GetValidatorSetForHeightMessage {
+                height,
+                correlation_id: Some(correlation_id),
+            })
+            .await
+            .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
+            .map_err(|e| ChainError::Storage(e))?
+            .ok_or_else(|| {
+                ChainError::Consensus(format!(
+                    "No validator set found for evidence height {}",
+                    height
+                ))
+            })?;
+
+        // For evidence verification, we use the height/round from the vote itself
+        let vote_a_height = evidence.vote_a.height;
+        let vote_a_round = evidence.vote_a.round;
+        let vote_b_height = evidence.vote_b.height;
+        let vote_b_round = evidence.vote_b.round;
+
+        // Verify vote_a signature against historical validator set
+        if let Err(e) = verify_vote(
+            &evidence.vote_a,
+            &historical_validator_set,
+            vote_a_height,
+            vote_a_round,
+            &chain_id,
+        ) {
+            warn!(
+                correlation_id = %correlation_id,
+                culprit = ?culprit,
+                error = ?e,
+                "Evidence vote_a signature verification failed"
+            );
+            return Err(ChainError::Consensus(format!(
+                "Invalid evidence: vote_a signature verification failed: {:?}",
+                e
+            )));
+        }
+
+        // Verify vote_b signature against historical validator set
+        if let Err(e) = verify_vote(
+            &evidence.vote_b,
+            &historical_validator_set,
+            vote_b_height,
+            vote_b_round,
+            &chain_id,
+        ) {
+            warn!(
+                correlation_id = %correlation_id,
+                culprit = ?culprit,
+                error = ?e,
+                "Evidence vote_b signature verification failed"
+            );
+            return Err(ChainError::Consensus(format!(
+                "Invalid evidence: vote_b signature verification failed: {:?}",
+                e
+            )));
+        }
+
+        // Verify both votes are from the same validator (the culprit)
+        if evidence.vote_a.validator != culprit || evidence.vote_b.validator != culprit {
+            warn!(
+                correlation_id = %correlation_id,
+                culprit = ?culprit,
+                vote_a_validator = ?evidence.vote_a.validator,
+                vote_b_validator = ?evidence.vote_b.validator,
+                "Evidence votes are not from the claimed culprit"
+            );
+            return Err(ChainError::Consensus(
+                "Invalid evidence: votes are not from the claimed culprit".into(),
+            ));
+        }
+
+        // Verify the votes conflict (same height/round but different block_hash)
+        if evidence.vote_a.height != evidence.vote_b.height
+            || evidence.vote_a.round != evidence.vote_b.round
+            || evidence.vote_a.vote_type != evidence.vote_b.vote_type
+        {
+            warn!(
+                correlation_id = %correlation_id,
+                "Evidence votes are not for the same height/round/type"
+            );
+            return Err(ChainError::Consensus(
+                "Invalid evidence: votes must be for same height/round/type".into(),
+            ));
+        }
+
+        if evidence.vote_a.block_hash == evidence.vote_b.block_hash {
+            warn!(
+                correlation_id = %correlation_id,
+                "Evidence votes have same block_hash - not equivocation"
+            );
+            return Err(ChainError::Consensus(
+                "Invalid evidence: votes have same block_hash".into(),
+            ));
+        }
+
+        // Mark evidence as processed to prevent re-processing
+        {
+            let mut state = tendermint_state.write().await;
+            state.processed_evidence.insert(evidence_hash);
+        }
+
+        // Evidence is valid - log it prominently
+        error!(
+            correlation_id = %correlation_id,
+            height = height,
+            round = evidence.vote_a.round,
+            culprit = ?culprit,
+            kind = ?kind,
+            vote_a_hash = ?evidence.vote_a.block_hash,
+            vote_b_hash = ?evidence.vote_b.block_hash,
+            "EQUIVOCATION DETECTED: Validator {} double-voted at height {} round {}",
+            culprit.0,
+            height,
+            evidence.vote_a.round
+        );
+
+        // TODO: Store evidence for slashing/governance
+        // This would involve:
+        // 1. Storing to persistent evidence database
+        // 2. Triggering governance action to slash the validator
+        // 3. Broadcasting evidence to other validators who haven't seen it
+
+        Ok((culprit, height))
     }
 
     /// Commit a block after receiving 2/3+ precommits.

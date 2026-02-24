@@ -20,7 +20,7 @@ use super::types::*;
 use super::vote_set::VoteSet;
 use crate::block::ConsensusBlock;
 use lighthouse_wrapper::types::MainnetEthSpec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -120,6 +120,14 @@ pub struct TendermintState {
 
     /// Precommits we've sent: (round) -> block_hash
     pub sent_precommits: HashMap<Round, Option<BlockHash>>,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // EVIDENCE TRACKING - Prevent duplicate processing
+    // ═══════════════════════════════════════════════════════════════════
+    /// Evidence hashes we've already processed (broadcast or received)
+    /// Used to prevent re-broadcasting or re-processing the same evidence.
+    /// Key is the evidence_hash computed with chain_id for domain separation.
+    pub processed_evidence: HashSet<[u8; 32]>,
 }
 
 impl TendermintState {
@@ -172,6 +180,8 @@ impl TendermintState {
 
             sent_prevotes: HashMap::new(),
             sent_precommits: HashMap::new(),
+
+            processed_evidence: HashSet::new(),
         }
     }
 

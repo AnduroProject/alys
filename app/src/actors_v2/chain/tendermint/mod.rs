@@ -101,3 +101,7 @@ pub mod prelude {
     pub use super::vote_set::VoteSet;
     pub use super::wal::ConsensusWAL;
 }
+
+// Integration tests
+#[cfg(test)]
+pub mod tests;

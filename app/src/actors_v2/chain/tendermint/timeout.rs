@@ -355,6 +355,30 @@ impl TimeoutScheduler {
     pub fn config(&self) -> &TimeoutConfig {
         &self.config
     }
+
+    /// Get reference to the event sender for testing
+    #[cfg(test)]
+    pub fn event_sender(&self) -> &mpsc::Sender<TimeoutEvent> {
+        &self.event_tx
+    }
+
+    /// Inject a timeout event for testing purposes.
+    ///
+    /// This bypasses the normal timeout scheduling and directly sends
+    /// a timeout event, useful for deterministic testing of timeout handling.
+    #[cfg(test)]
+    pub async fn inject_timeout_for_testing(
+        &self,
+        height: Height,
+        round: Round,
+        step: TendermintStep,
+    ) -> Result<(), TimeoutError> {
+        let event = TimeoutEvent { height, round, step };
+        self.event_tx
+            .send(event)
+            .await
+            .map_err(|_| TimeoutError::ChannelClosed)
+    }
 }
 
 #[cfg(test)]

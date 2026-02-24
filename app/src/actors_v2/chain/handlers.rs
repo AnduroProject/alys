@@ -2204,6 +2204,32 @@ impl Handler<ChainMessage> for ChainActor {
                 })
             }
 
+            ChainMessage::TendermintEvidence {
+                evidence,
+                peer_id,
+                correlation_id,
+            } => {
+                let tendermint_enabled = self.tendermint_enabled;
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                if !tendermint_enabled {
+                    return Box::pin(async move {
+                        warn!("TendermintEvidence received but Tendermint mode not enabled");
+                        Err(ChainError::Configuration(
+                            "Tendermint mode not enabled".to_string(),
+                        ))
+                    });
+                }
+
+                let actor = self.clone();
+                Box::pin(async move {
+                    let (culprit, height) = actor
+                        .handle_tendermint_evidence(evidence, peer_id, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::TendermintEvidenceProcessed { culprit, height })
+                })
+            }
+
             ChainMessage::SetTendermintDriver { addr } => {
                 // Store the driver address for bidirectional communication
                 self.tendermint_driver = Some(addr);

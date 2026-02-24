@@ -1629,13 +1629,47 @@ impl NetworkActor {
             // Note: Local timeouts are handled by timeout_receiver, not gossip
         } else if topic.contains("evidence") {
             // Equivocation evidence
-            tracing::warn!(
-                peer_id = %source_peer,
-                topic = %topic,
-                data_len = data.len(),
-                "Received Tendermint equivocation evidence (processing not yet implemented)"
-            );
-            // TODO: Forward to ChainActor for evidence handling
+            use crate::actors_v2::chain::tendermint::EquivocationEvidence;
+
+            match rmp_serde::from_slice::<EquivocationEvidence>(&data) {
+                Ok(evidence) => {
+                    let height = evidence.height;
+                    let culprit = evidence.culprit;
+                    let kind = evidence.kind;
+
+                    tracing::warn!(
+                        correlation_id = %correlation_id,
+                        peer_id = %source_peer,
+                        height = height,
+                        culprit = ?culprit,
+                        kind = ?kind,
+                        "Received equivocation evidence via gossip"
+                    );
+
+                    // Forward to ChainActor for validation and processing
+                    let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintEvidence {
+                        evidence,
+                        peer_id: Some(source_peer.clone()),
+                        correlation_id: Some(correlation_id),
+                    };
+
+                    if let Err(e) = chain_actor.send(msg).await {
+                        tracing::error!(
+                            correlation_id = %correlation_id,
+                            error = %e,
+                            "Failed to forward equivocation evidence to ChainActor"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        peer_id = %source_peer,
+                        error = %e,
+                        data_len = data.len(),
+                        "Failed to deserialize equivocation evidence"
+                    );
+                }
+            }
         } else if topic.contains("newround") {
             // New round announcements (for round synchronization)
             tracing::debug!(

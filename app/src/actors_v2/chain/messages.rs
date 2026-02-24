@@ -124,6 +124,13 @@ pub enum ChainMessage {
         correlation_id: Option<Uuid>,
     },
 
+    /// Equivocation evidence received from network
+    TendermintEvidence {
+        evidence: crate::actors_v2::chain::tendermint::EquivocationEvidence,
+        peer_id: Option<String>,
+        correlation_id: Option<Uuid>,
+    },
+
     /// Set TendermintDriver address for bidirectional communication
     /// Allows ChainActor to notify the driver when blocks are committed
     SetTendermintDriver {
@@ -279,6 +286,12 @@ pub enum ChainResponse {
     /// Governance update applied
     TendermintGovernanceApplied {
         effective_height: u64,
+    },
+
+    /// Equivocation evidence processed
+    TendermintEvidenceProcessed {
+        culprit: crate::actors_v2::chain::tendermint::ValidatorId,
+        height: u64,
     },
 }
 
