@@ -2926,14 +2926,20 @@ impl Handler<ApplyRecoveredState> for ChainActor {
                 let recovery_height = recovered.start_height();
                 let current_height = state_guard.height;
 
-                // Only apply recovery if heights match or we need to advance
+                // Fix height mismatch: WAL recovery takes precedence over initial state
+                // This happens when TendermintState was initialized with stale height (e.g., from V0 storage)
+                // but WAL shows we were at a different height
                 if recovery_height != current_height {
                     tracing::info!(
                         correlation_id = %correlation_id,
                         recovery_height = recovery_height,
                         current_height = current_height,
-                        "WAL recovery height mismatch - state may have been reset"
+                        "WAL recovery height mismatch - advancing state to WAL height"
                     );
+                    // Reinitialize state machine at the correct height
+                    // This resets VoteSets, clears locks, etc. for the new height
+                    let validator_set = state_guard.validator_set.clone();
+                    state_guard.new_height(recovery_height, validator_set);
                 }
 
                 // Apply recovered round (if WAL shows we were at a higher round)

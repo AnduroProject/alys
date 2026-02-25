@@ -113,6 +113,10 @@ pub struct App {
     #[arg(long = "not-validator", default_value_t = false)]
     pub not_validator: bool,
 
+    /// Disable V0 sync and block production, use V2 Tendermint only
+    #[arg(long = "v2-only", default_value_t = false)]
+    pub v2_only: bool,
+
     #[arg(
         long = "full-log-context",
         env = "FULL_LOG_CONTEXT",
@@ -853,26 +857,33 @@ impl App {
 
         crate::metrics::start_server(self.metrics_port).await;
 
-        if (self.mine || self.dev || self.dev_regtest) && !self.no_mine {
-            info!("Spawning miner");
-            spawn_background_miner(chain.clone());
-        }
+        // V0 block production and sync (disabled when --v2-only is set)
+        if !self.v2_only {
+            if (self.mine || self.dev || self.dev_regtest) && !self.no_mine {
+                info!("Spawning miner");
+                spawn_background_miner(chain.clone());
+            }
 
-        chain.clone().monitor_gossip().await;
-        chain.clone().listen_for_peer_discovery().await;
-        chain.clone().listen_for_rpc_requests().await;
+            chain.clone().monitor_gossip().await;
+            chain.clone().listen_for_peer_discovery().await;
+            chain.clone().listen_for_rpc_requests().await;
 
-        info!("Triggering initial sync...");
-        let chain_clone = chain.clone();
-        tokio::spawn(async move {
-            chain_clone.sync().await;
-        });
+            info!("Triggering initial sync...");
+            let chain_clone = chain.clone();
+            tokio::spawn(async move {
+                chain_clone.sync().await;
+            });
 
-        if chain_spec.is_validator && !self.not_validator {
-            chain
-                .clone()
-                .monitor_bitcoin_blocks(bitcoin_start_height)
-                .await;
+            if chain_spec.is_validator && !self.not_validator {
+                chain
+                    .clone()
+                    .monitor_bitcoin_blocks(bitcoin_start_height)
+                    .await;
+            }
+        } else {
+            info!("V2-only mode: V0 sync and block production disabled");
+            // Still need RPC for V0 compatibility
+            chain.clone().listen_for_rpc_requests().await;
         }
 
         // Send the chain Arc for graceful shutdown handling

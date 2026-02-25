@@ -265,7 +265,15 @@ impl ChainActor {
         self.cached_last_commit = None;
         self.tendermint_enabled = true;
         // Store the timeout receiver (wrapped for Clone compatibility)
-        *self.timeout_receiver.blocking_lock() = Some(timeout_rx);
+        // Use try_lock since we're in a sync context but may be called from async runtime
+        match self.timeout_receiver.try_lock() {
+            Ok(mut guard) => *guard = Some(timeout_rx),
+            Err(_) => {
+                return Err(ChainError::Internal(
+                    "Failed to acquire timeout_receiver lock during initialization".to_string()
+                ));
+            }
+        }
 
         info!(
             our_validator_id = ?our_validator_id,
@@ -1481,6 +1489,9 @@ impl Actor for ChainActor {
                         Ok(false) => {
                             info!("Genesis block not found - creating from execution layer");
 
+                            // Clone authorities before chain_spec is moved
+                            let genesis_authorities = chain_spec.authorities.clone();
+
                             // Create genesis block from execution layer
                             match super::genesis::create_genesis_block(&engine_actor, chain_spec)
                                 .await
@@ -1508,6 +1519,47 @@ impl Actor for ChainActor {
                                         );
                                     } else {
                                         info!("Genesis block stored successfully");
+
+                                        // Store the initial validator set for height 0+
+                                        // This is required for Tendermint consensus to find validators
+                                        let initial_validator_set = ValidatorSet::with_equal_power(
+                                            genesis_authorities.clone()
+                                        );
+                                        let store_vs_msg = crate::actors_v2::storage::messages::StoreValidatorSetMessage {
+                                            effective_height: 0, // Effective from genesis
+                                            validator_set: initial_validator_set.clone(),
+                                            correlation_id: Some(Uuid::new_v4()),
+                                        };
+                                        if let Err(e) = storage_actor.send(store_vs_msg).await {
+                                            warn!(
+                                                error = ?e,
+                                                "Failed to store initial validator set"
+                                            );
+                                        } else {
+                                            info!(
+                                                validator_count = initial_validator_set.len(),
+                                                "Initial validator set stored successfully"
+                                            );
+                                        }
+
+                                        // Set genesis as finalized in EngineActor
+                                        // This is required for Tendermint to build blocks on genesis
+                                        let genesis_execution_hash = genesis.message.execution_payload.block_hash;
+                                        let set_finalized_msg = crate::actors_v2::engine::EngineMessage::SetFinalized {
+                                            block_hash: genesis_execution_hash,
+                                            correlation_id: Some(Uuid::new_v4()),
+                                        };
+                                        if let Err(e) = engine_actor.send(set_finalized_msg).await {
+                                            warn!(
+                                                error = ?e,
+                                                "Failed to set genesis as finalized in engine"
+                                            );
+                                        } else {
+                                            info!(
+                                                genesis_hash = %genesis_execution_hash,
+                                                "Genesis block set as finalized in execution layer"
+                                            );
+                                        }
                                     }
                                 }
                                 Err(e) => {

@@ -1259,8 +1259,9 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("StorageActor not configured".into()))?;
 
-        // 1. Get parent block hash from storage
-        let parent_hash = {
+        // 1. Get parent block hash and timestamp from storage/execution layer
+        // We need both to ensure timestamp monotonicity (Reth requires timestamp > parent.timestamp)
+        let (parent_hash, parent_timestamp) = {
             let head_result = storage
                 .send(GetChainHeadMessage {
                     correlation_id: Some(correlation_id),
@@ -1274,27 +1275,87 @@ impl ChainActor {
                     debug!(
                         correlation_id = %correlation_id,
                         parent_height = head.number,
-                        parent_hash = %head.hash,
+                        parent_consensus_hash = %head.hash,
+                        parent_execution_hash = %head.execution_hash,
                         "Found parent block"
                     );
-                    ExecutionBlockHash::from_root(lighthouse_wrapper::types::Hash256::from_slice(&head.hash.0))
+                    // IMPORTANT: Use execution_hash (not consensus hash) for Reth parent lookup
+                    // Reth only knows blocks by their execution layer hash, not the consensus block hash
+                    // Also need to get the parent's timestamp to ensure monotonicity
+                    let parent_payload = engine
+                        .send(EngineMessage::GetPayloadByTag {
+                            block_tag: "latest".to_string(),
+                            correlation_id: Some(correlation_id),
+                        })
+                        .await
+                        .map_err(|e| ChainError::Internal(format!("Engine mailbox error: {}", e)))?
+                        .map_err(|e| ChainError::Engine(format!("Failed to get latest block: {}", e)))?;
+
+                    let parent_ts = match parent_payload {
+                        EngineResponse::PayloadByTag { payload } => payload.timestamp(),
+                        _ => 0, // Fallback, shouldn't happen
+                    };
+                    (head.execution_hash, parent_ts)
                 }
                 None => {
                     // No head means we're building on genesis
-                    // Get genesis hash from engine
+                    // Query Reth for the actual genesis block hash (block 0)
                     debug!(
                         correlation_id = %correlation_id,
-                        "No chain head found, building on genesis"
+                        "No chain head found, querying Reth for genesis block"
                     );
-                    ExecutionBlockHash::zero()
+
+                    // Get genesis execution block from engine
+                    let genesis_result = engine
+                        .send(EngineMessage::GetPayloadByTag {
+                            block_tag: "earliest".to_string(),
+                            correlation_id: Some(correlation_id),
+                        })
+                        .await
+                        .map_err(|e| ChainError::Internal(format!("Engine mailbox error: {}", e)))?
+                        .map_err(|e| ChainError::Engine(format!("Failed to get genesis: {}", e)))?;
+
+                    match genesis_result {
+                        EngineResponse::PayloadByTag { payload } => {
+                            let genesis_hash = payload.block_hash();
+                            let genesis_ts = payload.timestamp();
+                            info!(
+                                correlation_id = %correlation_id,
+                                genesis_hash = %genesis_hash,
+                                genesis_timestamp = genesis_ts,
+                                "Using Reth genesis block as parent"
+                            );
+                            (genesis_hash, genesis_ts)
+                        }
+                        _ => {
+                            return Err(ChainError::Engine(
+                                "Reth not ready - cannot get genesis block".to_string()
+                            ));
+                        }
+                    }
                 }
             }
         };
 
         // 2. Calculate timestamp for the new block
-        let timestamp = SystemTime::now()
+        // CRITICAL: Reth requires timestamp > parent.timestamp (error -38003 if not)
+        // Use max(now, parent_timestamp + 1) to ensure strict monotonicity
+        let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::from_secs(0));
+            .unwrap_or(Duration::from_secs(0))
+            .as_secs();
+        let min_timestamp = parent_timestamp + 1;
+        let timestamp_secs = std::cmp::max(now_secs, min_timestamp);
+        let timestamp = Duration::from_secs(timestamp_secs);
+
+        if timestamp_secs > now_secs {
+            debug!(
+                correlation_id = %correlation_id,
+                parent_timestamp = parent_timestamp,
+                adjusted_timestamp = timestamp_secs,
+                "Adjusted timestamp to ensure monotonicity"
+            );
+        }
 
         // 3. Get optional queued AuxPoW header FIRST (from miners via submitauxblock)
         // Path B: AuxPoW header contains pegins, which we need for EVM balance credits
@@ -1728,7 +1789,8 @@ impl ChainActor {
 
         // Issue 2.2 FIX: Add our own vote to the VoteSet BEFORE WAL/broadcast
         // This ensures our vote counts towards the 2/3+ threshold immediately
-        {
+        // Also check if our vote completes the 2/3+ threshold for precommit
+        let should_precommit = {
             let state = tendermint_state.read().await;
             let mut prevotes = state.prevotes.write().await;
 
@@ -1739,6 +1801,7 @@ impl ChainActor {
                     error = %e,
                     "Failed to add own prevote to VoteSet"
                 );
+                None
             } else {
                 debug!(
                     correlation_id = %correlation_id,
@@ -1746,8 +1809,18 @@ impl ChainActor {
                     round = round,
                     "Added own prevote to VoteSet"
                 );
+
+                // Check if our vote completes the 2/3+ threshold
+                if let Some(majority_hash) = prevotes.two_thirds_majority() {
+                    Some(majority_hash)
+                } else if prevotes.has_two_thirds_nil() {
+                    // 2/3+ nil prevotes - will precommit nil
+                    Some(BlockHash::zero()) // Sentinel for nil
+                } else {
+                    None
+                }
             }
-        }
+        };
 
         // Write WAL entry BEFORE broadcast
         {
@@ -1777,6 +1850,50 @@ impl ChainActor {
             block_hash = ?block_hash,
             "Cast prevote"
         );
+
+        // If our vote completed the 2/3+ threshold, proceed to precommit
+        if let Some(majority_hash) = should_precommit {
+            // Determine the precommit target
+            let precommit_target = if majority_hash == BlockHash::zero() {
+                // Sentinel for nil
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    "2/3+ prevotes for NIL reached with our vote - precommitting NIL"
+                );
+                None
+            } else {
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    block_hash = %H256::from_slice(majority_hash.as_bytes()),
+                    "2/3+ prevotes reached with our vote - proceeding to precommit"
+                );
+
+                // Lock on the block before precommitting
+                {
+                    let mut state = tendermint_state.write().await;
+                    // Get locked block content from current proposal if available
+                    let locked_block_content = state
+                        .current_proposal
+                        .as_ref()
+                        .filter(|p| p.block_hash() == majority_hash)
+                        .map(|p| p.block.clone());
+
+                    state.lock_on_with_block(round, majority_hash, locked_block_content);
+                    state.set_valid(round, majority_hash);
+                    state.set_step(TendermintStep::Precommit);
+                }
+
+                Some(majority_hash)
+            };
+
+            // Cast the precommit
+            self.cast_precommit(height, round, precommit_target, correlation_id)
+                .await?;
+        }
 
         Ok(())
     }
@@ -2448,16 +2565,18 @@ impl ChainActor {
             "Block committed successfully"
         );
 
-        // 10. Notify TendermintDriver of commit
+        // 10. Initialize state machine for H+1 BEFORE notifying TendermintDriver
+        // This ensures the state machine is reset (locks cleared) before the driver
+        // tries to start consensus for the new height.
+        self.handle_tendermint_new_height(height + 1, correlation_id).await?;
+
+        // 11. Notify TendermintDriver of commit (after state machine is ready)
         if let Some(ref driver) = self.tendermint_driver {
             driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Committed {
                 height,
                 last_commit: commit.clone(),
             });
         }
-
-        // 11. Trigger NewHeight for H+1
-        self.handle_tendermint_new_height(height + 1, correlation_id).await?;
 
         Ok(())
     }
