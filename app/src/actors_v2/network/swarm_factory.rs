@@ -34,11 +34,58 @@ pub fn create_swarm(config: &NetworkConfig) -> Result<libp2p::Swarm<AlysNetworkB
 }
 
 /// Generate or load keypair from config
+///
+/// If `keypair_path` is set:
+///   - Loads existing keypair from file if it exists
+///   - Generates new keypair and saves to file if it doesn't exist
+/// Otherwise:
+///   - Generates ephemeral keypair (changes on each restart)
 fn generate_keypair(config: &NetworkConfig) -> Result<identity::Keypair> {
-    // For now, generate new keypair
-    // TODO Phase 4: Load from file if config.keypair_path is set
+    if let Some(path) = &config.keypair_path {
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .context(format!("Failed to create keypair directory: {:?}", parent))?;
+        }
+
+        if path.exists() {
+            // Load existing keypair
+            let bytes = std::fs::read(path)
+                .context(format!("Failed to read keypair from {:?}", path))?;
+            let keypair = identity::Keypair::from_protobuf_encoding(&bytes)
+                .context("Failed to decode keypair from protobuf")?;
+            let peer_id = PeerId::from(keypair.public());
+            tracing::info!(
+                "Loaded persistent V2 keypair from {:?} (peer_id: {})",
+                path,
+                peer_id
+            );
+            return Ok(keypair);
+        } else {
+            // Generate new keypair and save it
+            let keypair = identity::Keypair::generate_ed25519();
+            let bytes = keypair
+                .to_protobuf_encoding()
+                .context("Failed to encode keypair to protobuf")?;
+            std::fs::write(path, bytes)
+                .context(format!("Failed to write keypair to {:?}", path))?;
+            let peer_id = PeerId::from(keypair.public());
+            tracing::info!(
+                "Generated and saved new V2 keypair to {:?} (peer_id: {})",
+                path,
+                peer_id
+            );
+            return Ok(keypair);
+        }
+    }
+
+    // Fallback: ephemeral keypair (not recommended for production)
     let keypair = identity::Keypair::generate_ed25519();
-    tracing::debug!("Generated new Ed25519 keypair");
+    tracing::warn!(
+        "Generated ephemeral V2 keypair (peer_id: {}). \
+         Consider setting keypair_path for persistent identity.",
+        PeerId::from(keypair.public())
+    );
     Ok(keypair)
 }
 

@@ -26,6 +26,9 @@ pub struct NetworkConfig {
     pub discovery_interval: Duration,
     /// Automatically dial mDNS discovered peers (Phase 2 Task 2.4)
     pub auto_dial_mdns_peers: bool,
+    /// Path to store/load the node's persistent identity keypair
+    /// If None, generates ephemeral keypair each startup (not recommended for production)
+    pub keypair_path: Option<PathBuf>,
 
     // Phase 4: Connection limits
     /// Maximum connections from a single IP address
@@ -60,6 +63,7 @@ impl Default for NetworkConfig {
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),
             auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable auto-dial for local network discovery
+            keypair_path: None, // Ephemeral keypair by default
 
             // Phase 4: Connection limits (defaults)
             max_connections_per_ip: 5,

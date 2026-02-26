@@ -576,6 +576,8 @@ impl App {
 
             // 3. Initialize NetworkActor V2
             info!("🌐 Initializing NetworkActor V2...");
+            // Persistent keypair ensures stable peer ID across restarts
+            let v2_keypair_path = PathBuf::from(format!("{}/v2_identity/keypair", v2_data_path));
             let network_config = crate::actors_v2::network::NetworkConfig {
                 listen_addresses: vec![
                     format!("/ip4/{}/tcp/{}", v2_p2p_listen_addr, if v2_p2p_port == 0 { 0 } else { v2_p2p_port + 1000 })
@@ -600,6 +602,7 @@ impl App {
                 message_size_limit: 4 * 1024 * 1024, // 4MB
                 discovery_interval: Duration::from_secs(60),
                 auto_dial_mdns_peers: true, // Phase 2 Task 2.4: Enable mDNS auto-dial
+                keypair_path: Some(v2_keypair_path), // Persistent identity for stable peer connections
                 ..Default::default() // Phase 4: Use default values for rate limiting & connection limits
             };
             let network_actor = crate::actors_v2::network::NetworkActor::new(network_config.clone())
