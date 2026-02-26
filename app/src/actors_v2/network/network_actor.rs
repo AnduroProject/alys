@@ -1519,173 +1519,190 @@ impl NetworkActor {
 
     /// Handle Tendermint consensus gossip messages (async, spawned from event handler).
     ///
-    /// Routes incoming Tendermint messages to ChainActor based on topic:
-    /// - proposals: TendermintProposal message
-    /// - votes: TendermintVote message
-    /// - timeouts/evidence/newround: Logged for future handling
+    /// Deserializes TendermintWireMessage wrapper and routes to ChainActor:
+    /// - Proposal: Forward as TendermintProposal
+    /// - Vote: Forward as TendermintVote
+    /// - Evidence: Forward as TendermintEvidence
+    /// - Timeout/NewRound: Logged for future handling
     async fn handle_tendermint_gossip_async(
         topic: &str,
         data: Vec<u8>,
         source_peer: String,
         chain_actor: actix::Addr<crate::actors_v2::chain::ChainActor>,
     ) {
-        use crate::actors_v2::chain::tendermint::{Proposal, Vote};
+        use crate::actors_v2::chain::tendermint::TendermintMessage;
+        use crate::actors_v2::network::tendermint::TendermintWireMessage;
 
         let correlation_id = uuid::Uuid::new_v4();
 
-        // Route based on specific Tendermint topic
-        if topic.contains("proposals") {
-            // Deserialize proposal
-            match rmp_serde::from_slice::<Proposal>(&data) {
-                Ok(proposal) => {
-                    let height = proposal.height;
-                    let round = proposal.round;
-                    let proposer = proposal.proposer;
+        // First deserialize the wire message wrapper
+        let wire_msg = match TendermintWireMessage::from_bytes(&data) {
+            Ok(msg) => msg,
+            Err(e) => {
+                tracing::warn!(
+                    peer_id = %source_peer,
+                    topic = %topic,
+                    error = %e,
+                    data_len = data.len(),
+                    "Failed to deserialize Tendermint wire message"
+                );
+                return;
+            }
+        };
 
-                    tracing::info!(
+        // Extract the actual message from the wire wrapper
+        let tendermint_msg = match wire_msg.to_message() {
+            Ok(msg) => msg,
+            Err(e) => {
+                tracing::warn!(
+                    peer_id = %source_peer,
+                    topic = %topic,
+                    error = %e,
+                    msg_type = ?wire_msg.msg_type,
+                    "Failed to extract Tendermint message from wire format"
+                );
+                return;
+            }
+        };
+
+        // Route based on message type
+        match tendermint_msg {
+            TendermintMessage::Proposal(proposal) => {
+                let height = proposal.height;
+                let round = proposal.round;
+                let proposer = proposal.proposer;
+
+                tracing::info!(
+                    correlation_id = %correlation_id,
+                    peer_id = %source_peer,
+                    height = height,
+                    round = round,
+                    proposer = ?proposer,
+                    "Received Tendermint proposal via gossip"
+                );
+
+                // Forward to ChainActor
+                let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintProposal {
+                    proposal,
+                    peer_id: Some(source_peer.clone()),
+                    correlation_id: Some(correlation_id),
+                };
+
+                if let Err(e) = chain_actor.send(msg).await {
+                    tracing::error!(
                         correlation_id = %correlation_id,
-                        peer_id = %source_peer,
-                        height = height,
-                        round = round,
-                        proposer = ?proposer,
-                        "Received Tendermint proposal via gossip"
-                    );
-
-                    // Forward to ChainActor
-                    let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintProposal {
-                        proposal,
-                        peer_id: Some(source_peer.clone()),
-                        correlation_id: Some(correlation_id),
-                    };
-
-                    if let Err(e) = chain_actor.send(msg).await {
-                        tracing::error!(
-                            correlation_id = %correlation_id,
-                            error = %e,
-                            "Failed to forward Tendermint proposal to ChainActor"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        peer_id = %source_peer,
                         error = %e,
-                        data_len = data.len(),
-                        "Failed to deserialize Tendermint proposal"
+                        "Failed to forward Tendermint proposal to ChainActor"
                     );
                 }
             }
-        } else if topic.contains("votes") {
-            // Deserialize vote
-            match rmp_serde::from_slice::<Vote>(&data) {
-                Ok(vote) => {
-                    let height = vote.height;
-                    let round = vote.round;
-                    let voter = vote.validator;
-                    let vote_type = vote.vote_type;
 
-                    tracing::debug!(
+            TendermintMessage::Vote(vote) => {
+                let height = vote.height;
+                let round = vote.round;
+                let voter = vote.validator;
+                let vote_type = vote.vote_type;
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    peer_id = %source_peer,
+                    height = height,
+                    round = round,
+                    voter = ?voter,
+                    vote_type = ?vote_type,
+                    "Received Tendermint vote via gossip"
+                );
+
+                // Forward to ChainActor
+                let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintVote {
+                    vote,
+                    peer_id: Some(source_peer.clone()),
+                    correlation_id: Some(correlation_id),
+                };
+
+                if let Err(e) = chain_actor.send(msg).await {
+                    tracing::error!(
                         correlation_id = %correlation_id,
-                        peer_id = %source_peer,
-                        height = height,
-                        round = round,
-                        voter = ?voter,
-                        vote_type = ?vote_type,
-                        "Received Tendermint vote via gossip"
-                    );
-
-                    // Forward to ChainActor
-                    let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintVote {
-                        vote,
-                        peer_id: Some(source_peer.clone()),
-                        correlation_id: Some(correlation_id),
-                    };
-
-                    if let Err(e) = chain_actor.send(msg).await {
-                        tracing::error!(
-                            correlation_id = %correlation_id,
-                            error = %e,
-                            "Failed to forward Tendermint vote to ChainActor"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        peer_id = %source_peer,
                         error = %e,
-                        data_len = data.len(),
-                        "Failed to deserialize Tendermint vote"
+                        "Failed to forward Tendermint vote to ChainActor"
                     );
                 }
             }
-        } else if topic.contains("timeouts") {
-            // Timeout messages from other validators (informational)
-            tracing::debug!(
-                peer_id = %source_peer,
-                topic = %topic,
-                data_len = data.len(),
-                "Received Tendermint timeout notification"
-            );
-            // Note: Local timeouts are handled by timeout_receiver, not gossip
-        } else if topic.contains("evidence") {
-            // Equivocation evidence
-            use crate::actors_v2::chain::tendermint::EquivocationEvidence;
 
-            match rmp_serde::from_slice::<EquivocationEvidence>(&data) {
-                Ok(evidence) => {
-                    let height = evidence.height;
-                    let culprit = evidence.culprit;
-                    let kind = evidence.kind;
+            TendermintMessage::Evidence(evidence) => {
+                let height = evidence.height;
+                let culprit = evidence.culprit;
+                let kind = evidence.kind;
 
-                    tracing::warn!(
+                tracing::warn!(
+                    correlation_id = %correlation_id,
+                    peer_id = %source_peer,
+                    height = height,
+                    culprit = ?culprit,
+                    kind = ?kind,
+                    "Received equivocation evidence via gossip"
+                );
+
+                // Forward to ChainActor for validation and processing
+                let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintEvidence {
+                    evidence,
+                    peer_id: Some(source_peer.clone()),
+                    correlation_id: Some(correlation_id),
+                };
+
+                if let Err(e) = chain_actor.send(msg).await {
+                    tracing::error!(
                         correlation_id = %correlation_id,
-                        peer_id = %source_peer,
-                        height = height,
-                        culprit = ?culprit,
-                        kind = ?kind,
-                        "Received equivocation evidence via gossip"
-                    );
-
-                    // Forward to ChainActor for validation and processing
-                    let msg = crate::actors_v2::chain::messages::ChainMessage::TendermintEvidence {
-                        evidence,
-                        peer_id: Some(source_peer.clone()),
-                        correlation_id: Some(correlation_id),
-                    };
-
-                    if let Err(e) = chain_actor.send(msg).await {
-                        tracing::error!(
-                            correlation_id = %correlation_id,
-                            error = %e,
-                            "Failed to forward equivocation evidence to ChainActor"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        peer_id = %source_peer,
                         error = %e,
-                        data_len = data.len(),
-                        "Failed to deserialize equivocation evidence"
+                        "Failed to forward equivocation evidence to ChainActor"
                     );
                 }
             }
-        } else if topic.contains("newround") {
-            // New round announcements (for round synchronization)
-            tracing::debug!(
-                peer_id = %source_peer,
-                topic = %topic,
-                data_len = data.len(),
-                "Received Tendermint new round announcement"
-            );
-            // TODO: Forward to ChainActor for round sync
-        } else {
-            tracing::debug!(
-                peer_id = %source_peer,
-                topic = %topic,
-                data_len = data.len(),
-                "Received unknown Tendermint gossip topic"
-            );
+
+            TendermintMessage::Timeout(timeout) => {
+                // Timeout messages from other validators (informational)
+                tracing::debug!(
+                    peer_id = %source_peer,
+                    height = timeout.height,
+                    round = timeout.round,
+                    step = ?timeout.step,
+                    "Received Tendermint timeout notification"
+                );
+                // Note: Local timeouts are handled by timeout_receiver, not gossip
+            }
+
+            TendermintMessage::NewRound {
+                height,
+                round,
+                highest_known_round,
+            } => {
+                // New round announcements (for round synchronization)
+                tracing::debug!(
+                    peer_id = %source_peer,
+                    height = height,
+                    round = round,
+                    highest_known_round = highest_known_round,
+                    "Received Tendermint new round announcement"
+                );
+                // TODO: Forward to ChainActor for round sync
+            }
+
+            TendermintMessage::BlockRequest { height } => {
+                tracing::debug!(
+                    peer_id = %source_peer,
+                    height = height,
+                    "Received block request via gossip (should use request-response)"
+                );
+                // Block requests should use request-response protocol, not gossip
+            }
+
+            TendermintMessage::BlockResponse { .. } => {
+                tracing::debug!(
+                    peer_id = %source_peer,
+                    "Received block response via gossip (should use request-response)"
+                );
+                // Block responses should use request-response protocol, not gossip
+            }
         }
     }
 
