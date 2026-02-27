@@ -907,7 +907,7 @@ impl TendermintDriver {
 impl Actor for TendermintDriver {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         let mode = if self.is_validator() {
             "validator"
         } else {
@@ -920,34 +920,10 @@ impl Actor for TendermintDriver {
             "TendermintDriver started"
         );
 
-        // Query ChainActor for current height and start consensus
-        if let Some(chain_actor) = &self.chain_actor {
-            let chain_actor = chain_actor.clone();
-            let addr = ctx.address();
-
-            ctx.spawn(
-                async move {
-                    match chain_actor.send(ChainMessage::GetChainStatus).await {
-                        Ok(Ok(ChainResponse::ChainStatus(status))) => {
-                            if status.is_synced {
-                                let next_height = status.height + 1;
-                                let _ = addr
-                                    .send(TendermintDriverMessage::NewHeight {
-                                        height: next_height,
-                                    })
-                                    .await;
-                            } else {
-                                info!("Node is syncing, waiting for sync completion before starting consensus");
-                            }
-                        }
-                        _ => {
-                            error!("Failed to get chain status on startup");
-                        }
-                    }
-                }
-                .into_actor(self),
-            );
-        }
+        // Consensus startup is handled explicitly by app.rs after all actor wiring is complete.
+        // This avoids duplicate startup race conditions where both app.rs and this callback
+        // would send NewHeight messages, causing concurrent proposal builds that interfere
+        // with each other via the Engine API.
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
@@ -967,8 +943,17 @@ impl Handler<TendermintDriverMessage> for TendermintDriver {
     fn handle(&mut self, msg: TendermintDriverMessage, ctx: &mut Context<Self>) {
         match msg {
             TendermintDriverMessage::NewHeight { height } => {
-                if self.should_process_consensus() {
+                // Idempotency guard: only start consensus for heights we haven't reached yet.
+                // This prevents duplicate startup if multiple NewHeight messages arrive for
+                // the same height (e.g., from recovery or redundant startup paths).
+                if self.should_process_consensus() && height > self.current_height {
                     self.start_height(height, ctx);
+                } else if height <= self.current_height {
+                    debug!(
+                        current_height = self.current_height,
+                        requested_height = height,
+                        "Ignoring NewHeight for already-reached height"
+                    );
                 }
             }
 
