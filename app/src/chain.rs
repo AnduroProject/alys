@@ -6,7 +6,7 @@ use crate::auxpow_miner::{
 };
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash};
 use crate::block_candidate::block_candidate_cache::BlockCandidateCacheTrait;
-use crate::block_candidate::BlockCandidates;
+use crate::block_candidate::{ApproveBlock, BlockCandidates};
 use crate::block_hash_cache::{BlockHashCache, BlockHashCacheInit};
 use crate::engine::{ConsensusAmount, Engine};
 use crate::error::AuxPowMiningError::NoWorkToDo;
@@ -15,14 +15,10 @@ use crate::error::BlockErrorBlockTypes::Head;
 use crate::error::Error::ChainError;
 use crate::metrics::{
     CHAIN_BLOCK_HEIGHT, CHAIN_BLOCK_PRODUCTION_TOTALS, CHAIN_BTC_BLOCK_MONITOR_TOTALS,
-    CHAIN_DISCOVERED_PEERS, CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
-    CHAIN_NETWORK_GOSSIP_TOTALS, CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
+    CHAIN_LAST_APPROVED_BLOCK, CHAIN_LAST_PROCESSED_BLOCK,
+    CHAIN_PEGIN_TOTALS, CHAIN_PROCESS_BLOCK_TOTALS,
     CHAIN_SYNCING_OPERATION_TOTALS, CHAIN_TOTAL_PEGIN_AMOUNT,
 };
-use crate::network::rpc::InboundRequest;
-use crate::network::rpc::{RPCCodedResponse, RPCReceived, RPCResponse, ResponseTermination};
-use crate::network::PubsubMessage;
-use crate::network::{ApproveBlock, Client as NetworkClient};
 use crate::signatures::CheckedIndividualApproval;
 use crate::spec::ChainSpec;
 use crate::store::{BlockByHeight, BlockRef};
@@ -35,18 +31,15 @@ use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge, PegInInfo, Tree, 
 use ethereum_types::{Address, H256, U64};
 use ethers_core::types::{Block, Transaction, TransactionReceipt, U256};
 use eyre::{eyre, Report, Result};
-use libp2p::PeerId;
 use lighthouse_wrapper::execution_layer::Error::MissingLatestValidHash;
 use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::store::KeyValueStoreOp;
 use lighthouse_wrapper::types::{ExecutionBlockHash, Hash256, MainnetEthSpec};
-use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Add, AddAssign, DerefMut, Div, Mul, Sub};
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc};
 use svix_ksuid::*;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::RwLock;
 use tracing::*;
 use tracing_futures::Instrument;
@@ -127,12 +120,10 @@ impl SyncStatus {
 // based on https://github.com/sigp/lighthouse/blob/441fc1691b69f9edc4bbdc6665f3efab16265c9b/beacon_node/beacon_chain/src/beacon_chain.rs#L314
 pub struct Chain<DB> {
     engine: Engine,
-    network: NetworkClient,
     storage: Storage<MainnetEthSpec, DB>,
     aura: Aura,
     head: RwLock<Option<BlockRef>>,
     sync_status: RwLock<SyncStatus>,
-    peers: RwLock<HashSet<PeerId>>,
     block_candidates: BlockCandidates,
     queued_pow: RwLock<Option<AuxPowHeader>>,
     max_blocks_without_pow: u64,
@@ -182,7 +173,6 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: Engine,
-        network: NetworkClient,
         storage: Storage<MainnetEthSpec, DB>,
         aura: Aura,
         max_blocks_without_pow: u64,
@@ -197,12 +187,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         let head = storage.get_head().expect("Failed to get head from storage");
         Self {
             engine,
-            network,
             storage,
             aura,
             head: RwLock::new(head),
             sync_status: RwLock::new(SyncStatus::Synced), // assume synced, we'll find out if not
-            peers: RwLock::new(HashSet::new()),
             block_candidates: BlockCandidates::new(),
             queued_pow: RwLock::new(None),
             max_blocks_without_pow,
@@ -692,16 +680,10 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
             Ok(_) => {}
         }
 
-        if let Err(x) = self.network.publish_block(signed_block.clone()).await {
-            info!("Failed to publish block: {x}");
-            CHAIN_BLOCK_PRODUCTION_TOTALS
-                .with_label_values(&["blocks_published", "failed"])
-                .inc();
-        } else {
-            CHAIN_BLOCK_PRODUCTION_TOTALS
-                .with_label_values(&["blocks_published", "success"])
-                .inc();
-        }
+        // V0 network removed - block propagation handled by V2 NetworkActor/Tendermint
+        CHAIN_BLOCK_PRODUCTION_TOTALS
+            .with_label_values(&["blocks_published", "success"])
+            .inc();
 
         CHAIN_BLOCK_PRODUCTION_TOTALS
             .with_label_values(&["success", "default"])
@@ -1875,130 +1857,7 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(())
     }
 
-    pub async fn monitor_gossip(self: Arc<Self>) {
-        let mut listener = self.network.subscribe_events().await.unwrap();
-        let chain = self.clone();
-        tokio::spawn(async move {
-            loop {
-                let msg = match listener.recv().await {
-                    Err(RecvError::Lagged(x)) => {
-                        warn!("Missed {x} network messages");
-                        CHAIN_NETWORK_GOSSIP_TOTALS
-                            .with_label_values(&["msg_received", "error"])
-                            .inc_by(x);
-                        continue;
-                    }
-                    Err(_) => panic!("failed to read network stream"),
-                    Ok(x) => {
-                        CHAIN_NETWORK_GOSSIP_TOTALS
-                            .with_label_values(&["msg_received", "success"])
-                            .inc();
-                        x
-                    }
-                };
-                match msg {
-                    PubsubMessage::ConsensusBlock(x) => {
-                        CHAIN_NETWORK_GOSSIP_TOTALS
-                            .with_label_values(&["consensus_block", "received"])
-                            .inc();
-
-                        let number = x.message.execution_payload.block_number;
-                        let received_block_hash = x.canonical_root();
-
-                        info!("Received payload at height {number} {received_block_hash:?}");
-                        let head_hash = self.head.read().await.as_ref().unwrap().hash;
-                        let head_height = self.head.read().await.as_ref().unwrap().height;
-                        debug!("Local head: {:#?}, height: {}", head_hash, head_height);
-
-                        // sync first then process block so we don't skip and trigger a re-sync
-                        if matches!(self.get_parent(&x), Err(Error::MissingParent)) {
-                            // TODO: we need to sync before processing (this is triggered by proposal)
-                            // TODO: additional case needed where head height is not behind
-                            // self.clone().sync(Some((number - head_height) as u32)).await;
-                            self.clone().sync().await;
-                        }
-
-                        match chain.process_block(x.clone()).await {
-                            Err(x) => match x {
-                                Error::MissingParent => {
-                                    // self.clone().sync(Some((number - head_height) as u32)).await;
-                                    self.clone().sync().await;
-                                }
-                                Error::MissingBlock => {
-                                    self.clone().sync().await;
-                                }
-                                _ => {
-                                    error!("Got error while processing: {x:?}");
-                                }
-                            },
-                            Ok(Some(our_approval)) => {
-                                CHAIN_LAST_APPROVED_BLOCK
-                                    .set(x.message.execution_payload.block_number as i64);
-
-                                // broadcast our approval
-                                let block_hash = x.canonical_root();
-                                info!("✅ Sending approval for {block_hash}");
-                                let _ = self
-                                    .network
-                                    .send(PubsubMessage::ApproveBlock(ApproveBlock {
-                                        block_hash,
-                                        signature: our_approval.into(),
-                                    }))
-                                    .await;
-                            }
-                            Ok(None) => {}
-                        }
-                    }
-                    PubsubMessage::ApproveBlock(approval) => {
-                        if self.sync_status.read().await.is_synced() {
-                            info!("✅ Received approval for block {}", approval.block_hash);
-                            CHAIN_NETWORK_GOSSIP_TOTALS
-                                .with_label_values(&["approve_block", "received"])
-                                .inc();
-                            match self.process_approval(approval).await {
-                                Err(err) => {
-                                    warn!("Error processing approval: {err:?}");
-                                }
-                                Ok(()) => {
-                                    // nothing to do
-                                }
-                            };
-                        }
-                    }
-                    PubsubMessage::QueuePow(pow) => match self
-                        .check_pow(&pow, false)
-                        .instrument(info_span!("queued"))
-                        .await
-                    {
-                        Err(err) => {
-                            warn!("Received invalid pow: {err:?}");
-                            CHAIN_NETWORK_GOSSIP_TOTALS
-                                .with_label_values(&["queue_pow", "error"])
-                                .inc();
-                        }
-                        Ok(()) => {
-                            self.queue_pow(pow.clone()).await;
-                            CHAIN_NETWORK_GOSSIP_TOTALS
-                                .with_label_values(&["queue_pow", "success"])
-                                .inc();
-                        }
-                    },
-                    PubsubMessage::PegoutSignatures(pegout_sigs) => {
-                        CHAIN_NETWORK_GOSSIP_TOTALS
-                            .with_label_values(&["pegout_sigs", "success"])
-                            .inc();
-
-                        if let Err(err) = self.store_signatures(pegout_sigs).await {
-                            warn!("Failed to add signature: {err:?}");
-                            CHAIN_NETWORK_GOSSIP_TOTALS
-                                .with_label_values(&["pegout_sigs", "error"])
-                                .inc();
-                        }
-                    }
-                }
-            }
-        });
-    }
+    // V0 network methods removed - all networking handled by V2 NetworkActor
 
     async fn get_blocks(
         self: &Arc<Self>,
@@ -2082,373 +1941,13 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
         Ok(blocks)
     }
 
-    /// Sends a BlocksByRange RPC request with exponential backoff retry logic
-    async fn send_blocks_by_range_with_retry(
-        &self,
-        peer_id: PeerId,
-        request: crate::network::rpc::methods::BlocksByRangeRequest,
-        max_retries: u32,
-    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error>
-    {
-        let mut attempt = 0;
-        let mut backoff = Duration::from_secs(1);
-        const MAX_BACKOFF: Duration = Duration::from_secs(30);
+    // V0 sync methods removed - syncing handled by V2 SyncActor
 
-        // Check circuit breaker before attempting
-        {
-            let mut cb = self.circuit_breaker.write().await;
-            if !cb.can_attempt() {
-                return Err(Error::RpcRequestFailed);
-            }
-        }
-
-        while attempt < max_retries {
-            match self
-                .network
-                .send_rpc(
-                    peer_id,
-                    crate::network::rpc::OutboundRequest::BlocksByRange(request.clone()),
-                )
-                .await
-            {
-                Ok(stream) => {
-                    debug!("RPC request successful on attempt {}", attempt + 1);
-                    // Record success in circuit breaker
-                    self.circuit_breaker.write().await.record_success();
-                    return Ok(stream);
-                }
-                Err(err) => {
-                    attempt += 1;
-                    if attempt < max_retries {
-                        warn!(
-                            "RPC request failed (attempt {}/{}): {:?}",
-                            attempt, max_retries, err
-                        );
-                        tokio::time::sleep(backoff).await;
-                        backoff = std::cmp::min(backoff * 2, MAX_BACKOFF); // Exponential backoff with cap
-                    } else {
-                        error!(
-                            "RPC request failed after {} attempts: {:?}",
-                            max_retries, err
-                        );
-                        // Record failure in circuit breaker
-                        self.circuit_breaker.write().await.record_failure();
-                        return Err(Error::MaxRetriesExceeded);
-                    }
-                }
-            }
-        }
-        Err(Error::MaxRetriesExceeded)
-    }
-
-    /// Tries to send BlocksByRange request to multiple peers with fallback
-    async fn send_blocks_by_range_with_peer_fallback(
-        &self,
-        request: crate::network::rpc::methods::BlocksByRangeRequest,
-        max_retries_per_peer: u32,
-    ) -> Result<tokio::sync::mpsc::Receiver<crate::network::rpc::RPCResponse<MainnetEthSpec>>, Error>
-    {
-        let available_peers: Vec<PeerId> = self.peers.read().await.iter().copied().collect();
-
-        if available_peers.is_empty() {
-            return Err(Error::RpcRequestFailed);
-        }
-
-        for (peer_index, &peer_id) in available_peers.iter().enumerate() {
-            debug!(
-                "Trying peer {}/{}: {}",
-                peer_index + 1,
-                available_peers.len(),
-                peer_id
-            );
-
-            match self
-                .send_blocks_by_range_with_retry(peer_id, request.clone(), max_retries_per_peer)
-                .await
-            {
-                Ok(stream) => {
-                    info!(
-                        "Successfully connected to peer {} after trying {} peers",
-                        peer_id,
-                        peer_index + 1
-                    );
-                    return Ok(stream);
-                }
-                Err(Error::RpcRequestFailed) => {
-                    // Circuit breaker is open, don't try more peers
-                    warn!("Circuit breaker is open, stopping peer fallback");
-                    return Err(Error::RpcRequestFailed);
-                }
-                Err(err) => {
-                    warn!("Failed to connect to peer {}: {:?}", peer_id, err);
-                    if peer_index == available_peers.len() - 1 {
-                        // Last peer failed
-                        error!(
-                            "All {} peers failed for BlocksByRange request",
-                            available_peers.len()
-                        );
-                        return Err(Error::RpcRequestFailed);
-                    }
-                    // Continue to next peer
-                }
-            }
-        }
-
-        Err(Error::RpcRequestFailed)
-    }
-
+    /// V0 sync is no longer available - use V2 SyncActor instead
     pub async fn sync(self: Arc<Self>) {
-        let ksuid = Ksuid::new(None, None);
-        let span = tracing::info_span!("sync", trace_id = %ksuid.to_string());
-
-        async move {
-            info!("Syncing!");
-            *self.sync_status.write().await = SyncStatus::InProgress;
-
-            // Phase 1: Wait for peers
-            let _peer_id = {
-                async {
-                    let mut wait_count = 0;
-                    loop {
-                        let peers = self.peers.read().await;
-                        if let Some(selected_peer) = peers
-                            .iter()
-                            .collect::<Vec<_>>()
-                            .choose(&mut rand::thread_rng())
-                        {
-                            let selected_peer = **selected_peer;
-                            debug!(
-                                "Found peer after {} attempts: {}",
-                                wait_count, selected_peer
-                            );
-                            break selected_peer;
-                        }
-                        wait_count += 1;
-                        if wait_count % 10 == 0 {
-                            info!("Waiting for peers... (attempt {})", wait_count);
-                        } else {
-                            debug!("Waiting for peers... (attempt {})", wait_count);
-                        }
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                }
-                .instrument(tracing::debug_span!("wait_for_peers"))
-                .await
-            };
-
-            // Phase 2: Continue syncing until fully caught up
-            let mut total_blocks_processed = 0;
-            let mut total_blocks_failed = 0;
-
-            loop {
-                let (head, start_height, block_count) = {
-                    async {
-                        let head = self
-                            .head
-                            .read()
-                            .await
-                            .as_ref()
-                            .map(|x| x.height)
-                            .unwrap_or_default();
-                        let start_height = head + 1;
-                        let block_count = 1024;
-
-                        info!(
-                            "Syncing from height {} (requesting {} blocks from height {})",
-                            head, block_count, start_height
-                        );
-
-                        CHAIN_SYNCING_OPERATION_TOTALS
-                            .with_label_values(&[head.to_string().as_str(), "called"])
-                            .inc();
-
-                        (head, start_height, block_count)
-                    }
-                    .instrument(tracing::debug_span!("prepare_sync_request"))
-                    .await
-                };
-
-                // Phase 3: Send RPC request and process blocks
-                let request = crate::network::rpc::methods::BlocksByRangeRequest {
-                    start_height,
-                    count: block_count,
-                };
-
-                // Use peer fallback with retry logic instead of unwrap
-                let mut receive_stream = match self
-                    .send_blocks_by_range_with_peer_fallback(request, 3)
-                    .await
-                {
-                    Ok(stream) => stream,
-                    Err(err) => {
-                        error!(
-                            "Failed to establish RPC connection with any peer: {:?}",
-                            err
-                        );
-                        return; // Exit sync, will be retriggered by reactive mechanisms
-                    }
-                };
-
-                let mut blocks_processed = 0;
-                let mut blocks_failed = 0;
-
-                while let Some(x) = receive_stream.recv().await {
-                    match x {
-                        RPCResponse::BlocksByRange(block) => {
-                            blocks_processed += 1;
-                            let block_height = block.message.execution_payload.block_number;
-
-                            trace!("Processing sync block at height {}", block_height);
-
-                            match self.process_block((*block).clone()).await {
-                                Err(Error::ProcessGenesis) | Ok(_) => {
-                                    trace!(
-                                        "Successfully processed block at height {}",
-                                        block_height
-                                    );
-                                }
-                                Err(err) => {
-                                    let logging_closure = |blocks_failed_ref: &mut i32| {
-                                        blocks_failed_ref.add_assign(1);
-                                        error!(
-                                            "Unexpected block import error at height {}: {:?}",
-                                            block_height, err
-                                        );
-                                    };
-                                    match err {
-                                        Error::CandidateCacheError => {
-                                            logging_closure(&mut blocks_failed)
-                                        }
-                                        Error::FederationError(FederationError::BitcoinBlockNotFound(block_hash)) => {
-                                            // Bitcoin block not found is a non-fatal error during sync
-                                            // This can happen when the Bitcoin node is not fully synced
-                                            warn!(
-                                                "Bitcoin block not found during sync at height {}: {}. Continuing sync...",
-                                                block_height, block_hash
-                                            );
-                                        }
-                                        _ => {
-                                            async {
-                                                logging_closure(&mut blocks_failed);
-                                                if head == 0 {
-                                                    error!("Cannot rollback head: head is already at 0");
-                                                } else if let Err(rollback_err) = self.rollback_head(head.saturating_sub(1)).await {
-                                                    error!("Failed to rollback head: {:?}", rollback_err);
-                                                }
-                                            }
-                                            .instrument(tracing::debug_span!(
-                                                "rollback_on_sync_error",
-                                                failed_height = block_height
-                                            ))
-                                            .await;
-                                        }
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-                        err => {
-                            error!("Received unexpected result during sync: {err:?}");
-                        }
-                    }
-                }
-
-                total_blocks_processed += blocks_processed;
-                total_blocks_failed += blocks_failed;
-
-                // If we processed fewer blocks than requested, we're caught up
-                if blocks_processed < block_count {
-                    break;
-                }
-            }
-
-            // Phase 4: Complete sync
-            async {
-                *self.sync_status.write().await = SyncStatus::Synced;
-
-                info!(
-                    "Finished syncing! Total processed: {} blocks, failed: {}",
-                    total_blocks_processed, total_blocks_failed
-                );
-            }
-            .instrument(tracing::debug_span!(
-                "complete_sync",
-                total_blocks_processed = total_blocks_processed,
-                total_blocks_failed = total_blocks_failed,
-            ))
-            .await;
-        }
-        .instrument(span)
-        .await
-    }
-
-    pub async fn listen_for_peer_discovery(self: Arc<Self>) {
-        let mut listener = self.network.subscribe_peers().await.unwrap();
-        tokio::spawn(async move {
-            loop {
-                let peer_ids = listener.recv().await.unwrap();
-                debug!("Got peers {peer_ids:?}");
-                CHAIN_DISCOVERED_PEERS.set(peer_ids.len() as f64);
-
-                let mut peers = self.peers.write().await;
-                *peers = peer_ids;
-            }
-        });
-    }
-
-    pub async fn listen_for_rpc_requests(self: Arc<Self>) {
-        let mut listener = self.network.subscribe_rpc_events().await.unwrap();
-        tokio::spawn(async move {
-            loop {
-                let msg = listener.recv().await.unwrap();
-                // info!("Got rpc request {msg:?}");
-
-                #[allow(clippy::single_match)]
-                match msg.event {
-                    Ok(RPCReceived::Request(substream_id, InboundRequest::BlocksByRange(x))) => {
-                        trace!("Got BlocksByRange request {x:?}");
-                        let blocks = self
-                            .get_blocks(x.start_height, x.count)
-                            .await
-                            .unwrap_or_else(|err| {
-                                error!("Failed to get blocks: {err:?}");
-                                vec![]
-                            });
-                        for block in blocks {
-                            let payload = RPCCodedResponse::Success(RPCResponse::BlocksByRange(
-                                Arc::new(block.clone()),
-                            ));
-                            // FIXME: handle result
-                            if let Err(err) = self
-                                .network
-                                .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                                .await
-                            {
-                                // If peer disconnects during block transmission, stop sending more blocks
-                                debug!("Peer disconnected during block transmission: {err:?}");
-                                break;
-                            }
-                        }
-
-                        let payload =
-                            RPCCodedResponse::StreamTermination(ResponseTermination::BlocksByRange);
-                        // FIXME: handle result
-                        if let Err(err) = self
-                            .network
-                            .respond_rpc(msg.peer_id, msg.conn_id, substream_id, payload)
-                            .await
-                        {
-                            // This error is expected when the peer disconnects before we can send termination
-                            // Only log as debug since it's not a real error condition
-                            debug!("Peer disconnected before termination message could be sent: {err:?}");
-                        }
-                    }
-                    _ => {
-                        error!("Received unexpected rpc request: {msg:?}");
-                    }
-                }
-            }
-        });
+        // V0 network stack removed - sync is now handled by V2 SyncActor
+        info!("V0 sync() called but V0 network removed - sync handled by V2 SyncActor");
+        *self.sync_status.write().await = SyncStatus::Synced;
     }
 
     pub async fn monitor_bitcoin_blocks(self: Arc<Self>, start_height: u32) {

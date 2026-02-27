@@ -310,13 +310,6 @@ impl App {
         let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
         let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
 
-        let network = crate::network::spawn_network_handler(
-            self.p2p_listen_addr,
-            self.p2p_port,
-            self.remote_bootnode,
-        )
-        .await?;
-
         let chain_spec = self.chain_spec.expect("Chain spec is configured");
         let authorities = chain_spec.authorities.clone();
         let slot_duration = chain_spec.slot_duration;
@@ -409,7 +402,6 @@ impl App {
         // TODO: We probably just want to persist the chain_spec struct
         let chain = Arc::new(Chain::new(
             engine,
-            network,
             disk_store,
             aura,
             chain_spec.max_blocks_without_pow,
@@ -860,33 +852,16 @@ impl App {
 
         crate::metrics::start_server(self.metrics_port).await;
 
-        // V0 block production and sync (disabled when --v2-only is set)
-        if !self.v2_only {
-            if (self.mine || self.dev || self.dev_regtest) && !self.no_mine {
-                info!("Spawning miner");
-                spawn_background_miner(chain.clone());
-            }
+        // V0 network stack removed - all networking handled by V2 NetworkActor
+        // V0 block production uses V2 Tendermint consensus now
+        info!("V0 network removed - using V2 NetworkActor for all P2P communication");
 
-            chain.clone().monitor_gossip().await;
-            chain.clone().listen_for_peer_discovery().await;
-            chain.clone().listen_for_rpc_requests().await;
-
-            info!("Triggering initial sync...");
-            let chain_clone = chain.clone();
-            tokio::spawn(async move {
-                chain_clone.sync().await;
-            });
-
-            if chain_spec.is_validator && !self.not_validator {
-                chain
-                    .clone()
-                    .monitor_bitcoin_blocks(bitcoin_start_height)
-                    .await;
-            }
-        } else {
-            info!("V2-only mode: V0 sync and block production disabled");
-            // Still need RPC for V0 compatibility
-            chain.clone().listen_for_rpc_requests().await;
+        // Bitcoin block monitoring for peg-ins (still needed for bridge operations)
+        if chain_spec.is_validator && !self.not_validator {
+            chain
+                .clone()
+                .monitor_bitcoin_blocks(bitcoin_start_height)
+                .await;
         }
 
         // Send the chain Arc for graceful shutdown handling

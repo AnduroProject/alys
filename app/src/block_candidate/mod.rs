@@ -3,14 +3,22 @@ mod candidate_state;
 
 use crate::block::SignedConsensusBlock;
 use crate::error::Error;
-use crate::network::ApproveBlock;
+use crate::signatures::IndividualApproval;
 use async_trait::async_trait;
 use block_candidate_cache::{BlockCandidateCache, BlockCandidateCacheTrait};
 use candidate_state::CandidateState;
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::execution_layer::Hash256;
 use lighthouse_wrapper::store::MainnetEthSpec;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+
+/// Block approval message (moved from V0 network module)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveBlock {
+    pub block_hash: Hash256,
+    pub signature: IndividualApproval,
+}
 
 /// A wrapper around BlockCandidateCache that provides thread-safe access.
 #[derive(Default)]

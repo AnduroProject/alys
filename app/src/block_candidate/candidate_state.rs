@@ -1,6 +1,6 @@
 use crate::block::SignedConsensusBlock;
+use crate::block_candidate::ApproveBlock;
 use crate::error::Error;
-use crate::network::ApproveBlock;
 use crate::signatures::CheckedIndividualApproval;
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::store::MainnetEthSpec;

@@ -1,7 +1,7 @@
 use crate::block::SignedConsensusBlock;
 use crate::block_candidate::candidate_state::CandidateState;
+use crate::block_candidate::ApproveBlock;
 use crate::error::Error;
-use crate::network::ApproveBlock;
 use async_trait::async_trait;
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::types::{Hash256, MainnetEthSpec};
