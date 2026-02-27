@@ -1282,10 +1282,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
     pub async fn share_pow(&self, pow: AuxPowHeader) -> Result<(), Error> {
         info!("Sending pow for {}..{}", pow.range_start, pow.range_end);
-        let _ = self
-            .network
-            .send(PubsubMessage::QueuePow(pow.clone()))
-            .await;
+        // V0 network removed - AuxPoW broadcasting handled by V2 NetworkActor
+        // TODO: Integrate with V2 NetworkActor::BroadcastAuxPow when V0/V2 bridge is complete
+        warn!("V0 network removed - AuxPoW not broadcast to peers (local queue only)");
         self.queue_pow(pow).await;
         Ok(())
     }
@@ -1406,10 +1405,9 @@ impl<DB: ItemStore<MainnetEthSpec>> Chain<DB> {
 
         self.store_signatures(signatures.clone()).await.unwrap();
 
-        let _ = self
-            .network
-            .send(PubsubMessage::PegoutSignatures(signatures))
-            .await;
+        // V0 network removed - signature broadcasting handled by V2 NetworkActor
+        // TODO: Add pegout signature broadcasting to V2 NetworkActor when needed
+        warn!("V0 network removed - pegout signatures not broadcast to peers (stored locally)");
 
         Ok(())
     }
