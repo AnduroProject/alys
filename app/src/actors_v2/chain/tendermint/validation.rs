@@ -161,6 +161,85 @@ pub fn verify_proposal(
     Ok(())
 }
 
+/// Validate a proposal from a future round for storage.
+///
+/// This is a relaxed validation that allows proposals for future rounds
+/// to be stored and replayed when the node advances to that round.
+/// Unlike `verify_proposal`, this does NOT require round to match current.
+///
+/// # Checks
+///
+/// 1. Height matches expected value (must be current height)
+/// 2. Round is greater than current round (must be future)
+/// 3. Proposer is correct for (height, proposal.round) using round-robin selection
+/// 4. Proposer's BLS signature is valid
+///
+/// # Arguments
+///
+/// * `proposal` - The proposal to validate
+/// * `validator_set` - The current validator set
+/// * `expected_height` - The expected height (current height)
+/// * `current_round` - The node's current round
+/// * `chain_id` - Chain identifier for domain separation
+///
+/// # Returns
+///
+/// Ok(()) if the proposal is valid for storage, Err with details if invalid.
+pub fn verify_future_proposal(
+    proposal: &Proposal,
+    validator_set: &ValidatorSet,
+    expected_height: Height,
+    current_round: Round,
+    chain_id: &str,
+) -> Result<(), TendermintValidationError> {
+    // Check height - must match current height
+    if proposal.height != expected_height {
+        return Err(TendermintValidationError::InvalidHeight {
+            expected: expected_height,
+            actual: proposal.height,
+        });
+    }
+
+    // Check round is in the future
+    if proposal.round <= current_round {
+        return Err(TendermintValidationError::InvalidRound {
+            expected: current_round + 1, // Just indicate it should be > current
+            actual: proposal.round,
+        });
+    }
+
+    // Check validator set is not empty
+    if validator_set.is_empty() {
+        return Err(TendermintValidationError::EmptyValidatorSet);
+    }
+
+    // Check proposer is correct for this height and the PROPOSAL's round
+    let expected_proposer = validator_set.get_proposer(proposal.height, proposal.round);
+    if proposal.proposer != expected_proposer {
+        return Err(TendermintValidationError::WrongProposer {
+            expected: expected_proposer,
+            actual: proposal.proposer,
+            height: proposal.height,
+            round: proposal.round,
+        });
+    }
+
+    // Get public key for proposer
+    let public_key = validator_set
+        .get_public_key(&proposal.proposer)
+        .map_err(|_| TendermintValidationError::PublicKeyNotFound(proposal.proposer))?;
+
+    // Verify signature
+    if !proposal.verify_signature(public_key, chain_id) {
+        return Err(TendermintValidationError::InvalidSignature {
+            validator: proposal.proposer,
+            message_type: "Proposal".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 /// Validate a single vote (prevote or precommit).
 ///
 /// # Checks

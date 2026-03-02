@@ -1,0 +1,323 @@
+# Docker Compose Three-Node Tendermint Configuration
+# Purpose: Testing Tendermint BFT consensus with 3 validators (tolerates 0 byzantine faults)
+# Use Case: Multi-validator consensus testing, network partition simulation, block production
+#
+# Validator Set:
+#   Node 1: 0xaa15d371b3402f7ad41b1ef43f4a17d6171e0c1db5d6768954a8dbf782fb97dd...
+#   Node 2: 0xaaa6a0adaf9d51868b1c0d8f89d39d9e4315206c6d7e7c38d8d1da293e180ed1...
+#   Node 3: 0xb76f1e98787e7881d0a56aad6a8d42a86a42d4747f5b2f7e353f17f89e999f5f...
+#
+# BFT Properties (n=3, f=0):
+#   - Requires 3/3 validators for liveness (2f+1 = 1)
+#   - Can tolerate 0 byzantine failures (n >= 3f+1 → f = 0)
+#   - All nodes must be online for consensus to progress
+#
+# Usage:
+#   docker compose -f docker-compose.tendermint-3node.yml up -d
+#   docker compose -f docker-compose.tendermint-3node.yml logs -f alys-node-1 alys-node-2 alys-node-3
+
+services:
+  # Bitcoin Core - Shared regtest instance
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    platform: linux/amd64
+    container_name: bitcoin-core
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.30
+    ports:
+      - "18333:18333"  # P2P
+      - "18443:18443"  # RPC
+    volumes:
+      - ../data/tendermint-3node/bitcoin:/root/.bitcoin
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "getblockchaininfo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # Execution Layer - Shared Reth instance
+  execution:
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    platform: linux/amd64
+    container_name: execution
+    restart: unless-stopped
+    pid: host
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.20
+    ports:
+      - "8545:8545"    # HTTP RPC
+      - "8551:8551"    # Engine API
+      - "8456:8456"    # WebSocket
+      - "19001:19001"  # Metrics
+      - "30303:30303"  # ETH P2P
+    volumes:
+      - ../data/tendermint-3node/execution/data:/opt/alys/execution/data
+      - ../data/tendermint-3node/execution/logs:/opt/alys/execution/logs
+      - ./config:/opt/alys/execution/config
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+    command: >
+      node
+      --chain /opt/alys/execution/config/genesis.json
+      --log.file.directory /opt/alys/execution/logs
+      --datadir /opt/alys/execution/data
+      --config /opt/alys/execution/config/eth-config.toml
+      --metrics 0.0.0.0:19001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "debug,net,eth,web3,txpool"
+      --http.corsdomain "*"
+      --ws.api "eth,net,web3,debug,txpool"
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8545"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VALIDATOR NODES - Tendermint BFT Consensus
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Alys Node 1 - Validator (Proposer for height % 3 == 0)
+  alys-node-1:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: alys-node-1
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.10
+    ports:
+      - "3000:3000"    # V0 RPC
+      - "3001:3001"    # V2 RPC
+      - "9000:9000"    # V0 P2P
+      - "9090:9090"    # Prometheus Metrics
+      - "10000:10000"  # V2 P2P (libp2p)
+    volumes:
+      - ../data/tendermint-3node/node1/db:/lib/alys/data/db
+      - ../data/tendermint-3node/node1/wallet:/lib/alys/data/wallet
+      - ../logs/tendermint-3node/node1:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for peer discovery..."
+        sleep 5
+        echo "Starting Alys Node 1 (Validator)..."
+        /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 1 \
+          --v2-only \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 2d2026129eae1cb9543f0bc6245a08d17e0439cdd77dffd54e70d7335043e86f \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node1.log
+    depends_on:
+      execution:
+        condition: service_started
+      bitcoin-core:
+        condition: service_started
+
+  # Alys Node 2 - Validator (Proposer for height % 3 == 1)
+  alys-node-2:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: alys-node-2
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.11
+    ports:
+      - "3010:3000"    # V0 RPC
+      - "3011:3001"    # V2 RPC
+      - "9001:9000"    # V0 P2P
+      - "9091:9090"    # Prometheus Metrics
+      - "10001:10000"  # V2 P2P (libp2p)
+    volumes:
+      - ../data/tendermint-3node/node2/db:/lib/alys/data/db
+      - ../data/tendermint-3node/node2/wallet:/lib/alys/data/wallet
+      - ../logs/tendermint-3node/node2:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for peer discovery..."
+        sleep 5
+        echo "Starting Alys Node 2 (Validator)..."
+        /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 2 \
+          --v2-only \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 101d4ae7fd91d7dc658f8a59f028e499cf876c3a20cf21de5693cf72521f18a3 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node2.log
+    depends_on:
+      execution:
+        condition: service_started
+      bitcoin-core:
+        condition: service_started
+
+  # Alys Node 3 - Validator (Proposer for height % 3 == 2)
+  alys-node-3:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: alys-node-3
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.12
+    ports:
+      - "3020:3000"    # V0 RPC
+      - "3021:3001"    # V2 RPC
+      - "9002:9000"    # V0 P2P
+      - "9092:9090"    # Prometheus Metrics (note: conflicts with prometheus default)
+      - "10002:10000"  # V2 P2P (libp2p)
+    volumes:
+      - ../data/tendermint-3node/node3/db:/lib/alys/data/db
+      - ../data/tendermint-3node/node3/wallet:/lib/alys/data/wallet
+      - ../logs/tendermint-3node/node3:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for peer discovery..."
+        sleep 5
+        echo "Starting Alys Node 3 (Validator)..."
+        /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 3 \
+          --v2-only \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 6b971afc6708ec419ff72864740fa76586dd7174f95625fc656186ea0c8f0f80 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node3.log
+    depends_on:
+      execution:
+        condition: service_started
+      bitcoin-core:
+        condition: service_started
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MONITORING
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.40
+    ports:
+      - "9093:9090"  # Prometheus UI (using 9093 to avoid node conflict)
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../data/tendermint-3node/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - alys-node-1
+      - alys-node-2
+      - alys-node-3
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.41
+    ports:
+      - "3030:3000"  # Grafana UI
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../data/tendermint-3node/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+
+networks:
+  alys-tendermint-3:
+    name: alys-tendermint-3
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16

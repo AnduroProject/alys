@@ -30,10 +30,10 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::tendermint::{
-    check_for_equivocation, verify_proposal, verify_vote, BlockHash, Commit, CommitSig,
-    ConsensusAction, EquivocationEvidence, EquivocationType, FutureRoundAction, GovernanceUpdate,
-    PendingCommit, Proposal, TendermintMessage, TendermintStep, TendermintValidationError,
-    ValidatorId, Vote, VoteSet, VoteType, WALEntry,
+    check_for_equivocation, verify_future_proposal, verify_proposal, verify_vote, BlockHash,
+    Commit, CommitSig, ConsensusAction, EquivocationEvidence, EquivocationType, FutureRoundAction,
+    GovernanceUpdate, PendingCommit, Proposal, TendermintMessage, TendermintStep,
+    TendermintValidationError, ValidatorId, Vote, VoteSet, VoteType, WALEntry,
 };
 use std::cmp::Ordering;
 
@@ -368,8 +368,52 @@ impl ChainActor {
             (state.height, state.round, state.validator_set.clone())
         };
 
-        // Validate proposal (Issue 1.2: pass chain_id for domain separation)
         let chain_id_str = self.config.chain_id.to_string();
+
+        // Handle future round proposals - store for later replay
+        if height == current_height && round > current_round {
+            // Validate the proposal for the future round (proposer correct for THAT round, valid signature)
+            verify_future_proposal(
+                &proposal,
+                &validator_set,
+                current_height,
+                current_round,
+                &chain_id_str,
+            )
+            .map_err(|e| {
+                ChainError::Consensus(format!("Future proposal validation failed: {}", e))
+            })?;
+
+            // Store in future messages for replay when we reach that round
+            let stored = {
+                let mut state = tendermint_state.write().await;
+                state.future_messages.store_proposal(proposal.clone())
+            };
+
+            if stored {
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    current_round = current_round,
+                    proposer = ?proposer,
+                    block_hash = %H256::from_slice(block_hash.as_bytes()),
+                    "Stored future round proposal for later replay"
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    "Future proposal not stored (already have one for this round)"
+                );
+            }
+
+            // Return early - we'll process this when we reach the round
+            return Ok(H256::from_slice(block_hash.as_bytes()));
+        }
+
+        // Validate proposal for current round (Issue 1.2: pass chain_id for domain separation)
         verify_proposal(&proposal, &validator_set, current_height, current_round, &chain_id_str).map_err(
             |e| match e {
                 TendermintValidationError::InvalidHeight { expected, actual } => {
@@ -2902,15 +2946,27 @@ impl ChainActor {
             }
 
             // Apply stored proposal if exists
-            if let Some(proposal) = state.future_messages.take_proposal(target_round) {
-                state.current_proposal = Some(proposal.clone());
-                state
-                    .proposals
-                    .insert((target_round, proposal.proposer), proposal);
-            }
+            let had_stored_proposal =
+                if let Some(proposal) = state.future_messages.take_proposal(target_round) {
+                    info!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        round = target_round,
+                        proposer = ?proposal.proposer,
+                        block_hash = %H256::from_slice(proposal.block_hash().as_bytes()),
+                        "Replaying stored proposal from future round"
+                    );
+                    state.current_proposal = Some(proposal.clone());
+                    state
+                        .proposals
+                        .insert((target_round, proposal.proposer), proposal);
+                    true
+                } else {
+                    false
+                };
 
-            // Clear current_proposal if we're starting fresh
-            if target_step == TendermintStep::Propose {
+            // Clear current_proposal if we're starting fresh (but NOT if we just replayed one)
+            if target_step == TendermintStep::Propose && !had_stored_proposal {
                 state.current_proposal = None;
             }
         }
@@ -3027,18 +3083,73 @@ impl ChainActor {
             }
 
             TendermintStep::Propose => {
-                // Check if we are the proposer for this round
-                let should_propose = {
+                // Check if we already have a proposal (replayed from future storage)
+                let (has_proposal, should_propose) = {
                     let state = tendermint_state.read().await;
-                    if let Some(our_id) = state.our_validator_id {
+                    let has_proposal = state.current_proposal.is_some();
+                    let should_propose = if let Some(our_id) = state.our_validator_id {
                         let expected_proposer = state.validator_set.get_proposer(state.height, round);
-                        our_id == expected_proposer && state.current_proposal.is_none()
+                        our_id == expected_proposer && !has_proposal
                     } else {
                         false
-                    }
+                    };
+                    (has_proposal, should_propose)
                 };
 
-                if should_propose {
+                if has_proposal {
+                    // We have a replayed proposal - transition to Prevote and cast vote
+                    info!(
+                        correlation_id = %correlation_id,
+                        round = round,
+                        "Have replayed proposal - transitioning to Prevote step"
+                    );
+
+                    // Transition to Prevote step
+                    {
+                        let mut state = tendermint_state.write().await;
+                        state.set_step(TendermintStep::Prevote);
+                    }
+
+                    // Schedule prevote timeout
+                    if let Some(ref scheduler) = self.timeout_scheduler {
+                        let state = tendermint_state.read().await;
+                        let mut scheduler = scheduler.write().await;
+                        scheduler.set_position(state.height, round);
+                        let _ = scheduler.schedule(TendermintStep::Prevote);
+                    }
+
+                    // Cast prevote for the replayed proposal
+                    let (proposal, locked_block, height) = {
+                        let state = tendermint_state.read().await;
+                        (
+                            state.current_proposal.clone(),
+                            state.locked_block,
+                            state.height,
+                        )
+                    };
+
+                    if let Some(proposal) = proposal {
+                        // Validate execution payload before voting
+                        let execution_valid = self
+                            .validate_block_execution(&proposal.block, correlation_id)
+                            .await;
+
+                        let vote_block = if execution_valid {
+                            self.determine_prevote_block(&proposal, locked_block.as_ref())
+                                .await?
+                        } else {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                round = round,
+                                "Replayed proposal execution validation failed - voting NIL"
+                            );
+                            None
+                        };
+
+                        self.cast_prevote(height, round, vote_block, correlation_id)
+                            .await?;
+                    }
+                } else if should_propose {
                     debug!(
                         correlation_id = %correlation_id,
                         round = round,

@@ -835,6 +835,74 @@ impl App {
                     }
                 };
 
+                // Wait for peers before starting consensus (peer-readiness gating)
+                // This prevents nodes from starting consensus before they can communicate
+                {
+                    use crate::actors_v2::network::messages::{NetworkMessage, NetworkResponse};
+
+                    let min_peers = 1; // Minimum peers required before starting consensus
+                    let max_wait_secs = 60; // Maximum time to wait for peers
+                    let poll_interval_ms = 500; // How often to check for peers
+
+                    info!(
+                        min_peers = min_peers,
+                        max_wait_secs = max_wait_secs,
+                        "Waiting for peer connections before starting Tendermint consensus..."
+                    );
+
+                    let start_time = std::time::Instant::now();
+                    let mut peer_count = 0;
+
+                    loop {
+                        // Query NetworkActor for connected peers
+                        match network_actor.send(NetworkMessage::GetConnectedPeers).await {
+                            Ok(Ok(NetworkResponse::Peers(peers))) => {
+                                peer_count = peers.len();
+                                if peer_count >= min_peers {
+                                    info!(
+                                        peer_count = peer_count,
+                                        elapsed_secs = start_time.elapsed().as_secs(),
+                                        "Sufficient peers connected - starting Tendermint consensus"
+                                    );
+                                    break;
+                                }
+                            }
+                            Ok(Ok(other)) => {
+                                warn!("Unexpected response from NetworkActor: {:?}", other);
+                            }
+                            Ok(Err(e)) => {
+                                warn!("NetworkActor error getting peers: {:?}", e);
+                            }
+                            Err(e) => {
+                                warn!("Failed to query NetworkActor for peers: {:?}", e);
+                            }
+                        }
+
+                        // Check timeout
+                        if start_time.elapsed().as_secs() >= max_wait_secs as u64 {
+                            warn!(
+                                peer_count = peer_count,
+                                min_peers = min_peers,
+                                elapsed_secs = start_time.elapsed().as_secs(),
+                                "Peer wait timeout - starting Tendermint consensus anyway (may have sync issues)"
+                            );
+                            break;
+                        }
+
+                        // Log progress periodically
+                        if start_time.elapsed().as_secs() % 5 == 0 && start_time.elapsed().as_millis() % 1000 < poll_interval_ms as u128 {
+                            info!(
+                                peer_count = peer_count,
+                                min_peers = min_peers,
+                                elapsed_secs = start_time.elapsed().as_secs(),
+                                "Still waiting for peers..."
+                            );
+                        }
+
+                        tokio::time::sleep(std::time::Duration::from_millis(poll_interval_ms)).await;
+                    }
+                }
+
                 // Start consensus at the determined height
                 if let Err(e) = driver_addr.try_send(TendermintDriverMessage::NewHeight { height: start_height }) {
                     error!("Failed to send initial NewHeight to TendermintDriver: {:?}", e);
