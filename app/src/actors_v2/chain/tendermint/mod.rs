@@ -85,12 +85,25 @@ pub use validation::{
     TendermintValidationError,
 };
 
+// Round synchronization (future round handling)
+pub mod round_sync;
+pub use round_sync::{
+    analyze_future_round_votes, has_two_thirds, two_thirds_threshold, BlockRequest,
+    BlockResponse, FutureRoundAction, PendingCommit,
+};
+
+// Future message storage
+pub mod future_messages;
+pub use future_messages::{FutureMessageStore, FutureRoundVotes};
+
 /// Re-export common types for convenience
 pub mod prelude {
+    pub use super::future_messages::{FutureMessageStore, FutureRoundVotes};
     pub use super::governance::*;
     pub use super::messages::*;
     pub use super::params::*;
     pub use super::pegin::*;
+    pub use super::round_sync::{FutureRoundAction, PendingCommit};
     pub use super::state_machine::{ConsensusAction, ConsensusEvent, TendermintState};
     pub use super::timeout::{TimeoutConfig, TimeoutScheduler};
     pub use super::types::*;

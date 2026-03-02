@@ -2238,6 +2238,19 @@ impl Handler<ChainMessage> for ChainActor {
                     Ok(ChainResponse::Success)
                 })
             }
+
+            ChainMessage::TendermintBlockRequestTimeout {
+                block_hash,
+                correlation_id,
+            } => {
+                let actor = self.clone();
+                Box::pin(async move {
+                    actor
+                        .handle_block_request_timeout(block_hash, correlation_id)
+                        .await?;
+                    Ok(ChainResponse::Success)
+                })
+            }
         }
     }
 }

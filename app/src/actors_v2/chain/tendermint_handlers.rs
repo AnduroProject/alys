@@ -31,10 +31,11 @@ use uuid::Uuid;
 
 use super::tendermint::{
     check_for_equivocation, verify_proposal, verify_vote, BlockHash, Commit, CommitSig,
-    ConsensusAction, EquivocationEvidence, EquivocationType, GovernanceUpdate, Proposal,
-    TendermintMessage, TendermintStep, TendermintValidationError, ValidatorId, Vote, VoteType,
-    WALEntry,
+    ConsensusAction, EquivocationEvidence, EquivocationType, FutureRoundAction, GovernanceUpdate,
+    PendingCommit, Proposal, TendermintMessage, TendermintStep, TendermintValidationError,
+    ValidatorId, Vote, VoteSet, VoteType, WALEntry,
 };
+use std::cmp::Ordering;
 
 // Type alias for WAL entry BlockHash (H256)
 type WALBlockHash = ethereum_types::H256;
@@ -520,7 +521,40 @@ impl ChainActor {
             (state.height, state.round, state.validator_set.clone())
         };
 
-        // Validate vote (Issue 1.2: pass chain_id for domain separation)
+        // Validate height - must match current height for any vote
+        if vote.height != current_height {
+            debug!(
+                correlation_id = %correlation_id,
+                vote_height = vote.height,
+                current_height = current_height,
+                "Rejecting vote with wrong height"
+            );
+            return Err(ChainError::Consensus(format!(
+                "Vote height mismatch: expected {}, got {}",
+                current_height, vote.height
+            )));
+        }
+
+        // Handle vote based on round relationship
+        match vote.round.cmp(&current_round) {
+            Ordering::Greater => {
+                // Future round vote - validate signature and store for potential round advancement
+                return self
+                    .handle_future_round_vote(vote, current_round, &validator_set, correlation_id)
+                    .await;
+            }
+            Ordering::Less => {
+                // Past round vote - store for POL/evidence but don't process
+                return self
+                    .handle_past_round_vote(vote, current_round, correlation_id)
+                    .await;
+            }
+            Ordering::Equal => {
+                // Current round - continue with existing logic
+            }
+        }
+
+        // Validate vote for current round (Issue 1.2: pass chain_id for domain separation)
         let chain_id_str = self.config.chain_id.to_string();
         verify_vote(&vote, &validator_set, current_height, current_round, &chain_id_str).map_err(|e| {
             ChainError::Consensus(format!("Vote validation failed: {}", e))
@@ -2579,5 +2613,754 @@ impl ChainActor {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Round Synchronization - Future Round Vote Handling
+    // =========================================================================
+
+    /// Handle a vote from a future round.
+    ///
+    /// Per Tendermint spec, when we receive 2/3+ votes from a higher round,
+    /// we should advance to that round. This enables round synchronization
+    /// when nodes start at different times.
+    ///
+    /// # Actions
+    /// - Validate vote signature (must verify before storing)
+    /// - Store vote in future_messages
+    /// - Check if threshold reached for any action
+    /// - If threshold reached: advance to appropriate round/step
+    async fn handle_future_round_vote(
+        &self,
+        vote: Vote,
+        current_round: u32,
+        validator_set: &Arc<super::tendermint::ValidatorSet>,
+        correlation_id: Uuid,
+    ) -> TendermintResult<ValidatorId> {
+        let voter = vote.validator;
+        let vote_round = vote.round;
+        let vote_type = vote.vote_type;
+
+        // IMPORTANT: Validate signature before storing (HIGH-1 fix)
+        let chain_id_str = self.config.chain_id.to_string();
+
+        // Check voter is in validator set
+        if vote.validator.index() as usize >= validator_set.len() {
+            return Err(ChainError::Consensus(format!(
+                "Unknown validator: {:?}",
+                vote.validator
+            )));
+        }
+
+        // Verify signature
+        let public_key = validator_set
+            .get_public_key(&vote.validator)
+            .map_err(|e| ChainError::Consensus(format!("Validator public key error: {}", e)))?;
+
+        if !vote.verify_signature(public_key, &chain_id_str) {
+            warn!(
+                correlation_id = %correlation_id,
+                validator = ?vote.validator,
+                round = vote.round,
+                "Rejecting future vote with invalid signature"
+            );
+            return Err(ChainError::Consensus("Invalid vote signature".into()));
+        }
+
+        debug!(
+            correlation_id = %correlation_id,
+            vote_round = vote_round,
+            current_round = current_round,
+            vote_type = ?vote_type,
+            voter = ?voter,
+            "Storing validated vote for future round"
+        );
+
+        // Store vote and check if we should take action
+        let action = {
+            let tendermint_state = self.tendermint_state.as_ref().unwrap();
+            let mut state = tendermint_state.write().await;
+            state.future_messages.store_vote(vote)
+        };
+
+        // Handle the action based on what threshold was reached
+        match action {
+            FutureRoundAction::NoAction => {
+                // Not enough votes yet
+                Ok(voter)
+            }
+
+            FutureRoundAction::CommitBlock { round, block_hash } => {
+                // CRIT-4: 2/3+ precommits for a block = COMMIT
+                info!(
+                    correlation_id = %correlation_id,
+                    round = round,
+                    block_hash = %H256::from_slice(block_hash.as_bytes()),
+                    "Received 2/3+ precommits from future round - committing block"
+                );
+                self.commit_from_future_round(round, block_hash, correlation_id)
+                    .await?;
+                Ok(voter)
+            }
+
+            FutureRoundAction::AdvanceToNextRound {
+                nil_round,
+                target_round,
+            } => {
+                // 2/3+ NIL precommits - advance to NEXT round (not the NIL round)
+                info!(
+                    correlation_id = %correlation_id,
+                    nil_round = nil_round,
+                    target_round = target_round,
+                    "Received 2/3+ NIL precommits - advancing to next round"
+                );
+                self.advance_to_round(target_round, TendermintStep::Propose, correlation_id)
+                    .await?;
+                Ok(voter)
+            }
+
+            FutureRoundAction::AdvanceToPrevote { round, polka_block } => {
+                // CRIT-2 fix: Enter Prevote step, not Propose
+                info!(
+                    correlation_id = %correlation_id,
+                    target_round = round,
+                    polka_block = ?polka_block,
+                    "Received 2/3+ prevotes - advancing to Prevote step"
+                );
+                self.advance_to_round(round, TendermintStep::Prevote, correlation_id)
+                    .await?;
+                Ok(voter)
+            }
+
+            FutureRoundAction::AdvanceToPrecommit { round, block_hash } => {
+                // CRIT-2 fix: Enter Precommit step, not Propose
+                info!(
+                    correlation_id = %correlation_id,
+                    target_round = round,
+                    block_hash = ?block_hash,
+                    "Received 2/3+ precommits - advancing to Precommit step"
+                );
+                self.advance_to_round(round, TendermintStep::Precommit, correlation_id)
+                    .await?;
+                Ok(voter)
+            }
+        }
+    }
+
+    /// Handle a vote from a past round.
+    ///
+    /// Past round votes are stored for:
+    /// - POL (Proof-of-Lock) verification
+    /// - Equivocation evidence
+    async fn handle_past_round_vote(
+        &self,
+        vote: Vote,
+        current_round: u32,
+        correlation_id: Uuid,
+    ) -> TendermintResult<ValidatorId> {
+        let voter = vote.validator;
+
+        debug!(
+            correlation_id = %correlation_id,
+            vote_round = vote.round,
+            current_round = current_round,
+            voter = ?voter,
+            "Storing vote from past round for evidence/POL"
+        );
+
+        // Store in historical votes if we have a VoteSet for this round
+        let tendermint_state = self.tendermint_state.as_ref().unwrap();
+        let state = tendermint_state.read().await;
+
+        if let Some(historical) = state.historical_prevotes.get(&vote.round) {
+            // Add to historical prevotes (for POL verification)
+            let mut prevotes = historical.write().await;
+            let _ = prevotes.add_vote(vote);
+        }
+
+        Ok(voter)
+    }
+
+    /// Advance to a higher round with proper locking state handling.
+    ///
+    /// This implements CRIT-3: PoLC verification for unlocking during round skip.
+    async fn advance_to_round(
+        &self,
+        target_round: u32,
+        target_step: TendermintStep,
+        correlation_id: Uuid,
+    ) -> TendermintResult<u32> {
+        let tendermint_state = self
+            .tendermint_state
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("State not initialized".into()))?;
+
+        let timeout_scheduler = self
+            .timeout_scheduler
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("Scheduler not initialized".into()))?;
+
+        let wal = self
+            .consensus_wal
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
+
+        let (current_round, height) = {
+            let state = tendermint_state.read().await;
+            (state.round, state.height)
+        };
+
+        if target_round <= current_round {
+            debug!(
+                correlation_id = %correlation_id,
+                target_round = target_round,
+                current_round = current_round,
+                "Ignoring advancement to non-future round"
+            );
+            return Ok(current_round);
+        }
+
+        info!(
+            correlation_id = %correlation_id,
+            current_round = current_round,
+            target_round = target_round,
+            target_step = ?target_step,
+            "Advancing to higher round via future round votes"
+        );
+
+        // MED-2 FIX: Write WAL BEFORE state update (write-ahead logging)
+        {
+            let mut wal_guard = wal.write().await;
+            wal_guard
+                .write(WALEntry::NewRound {
+                    height,
+                    round: target_round,
+                })
+                .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+        }
+
+        // Update state with proper locking handling
+        {
+            let mut state = tendermint_state.write().await;
+
+            // CRIT-3: Check for PoLC that would allow unlocking
+            if let Some(locked_round) = state.locked_round {
+                if let Some(locked_block) = &state.locked_block {
+                    // Check intermediate rounds for PoLC on a different block
+                    if let Some((polc_round, polc_block)) = state
+                        .future_messages
+                        .find_polc_for_unlock(locked_round, locked_block, target_round)
+                    {
+                        info!(
+                            correlation_id = %correlation_id,
+                            locked_round = locked_round,
+                            polc_round = polc_round,
+                            polc_block = %H256::from_slice(polc_block.as_bytes()),
+                            "Unlocking due to PoLC from intermediate round"
+                        );
+                        state.unlock();
+                    }
+                }
+            }
+
+            // Advance future message store
+            state.future_messages.advance_to_round(target_round);
+
+            // Update round and step
+            state.round = target_round;
+            state.step = target_step;
+
+            // Create new vote sets for the new round
+            state.prevotes = Arc::new(tokio::sync::RwLock::new(VoteSet::new(
+                state.height,
+                target_round,
+                VoteType::Prevote,
+                state.validator_set.clone(),
+            )));
+            state.precommits = Arc::new(tokio::sync::RwLock::new(VoteSet::new(
+                state.height,
+                target_round,
+                VoteType::Precommit,
+                state.validator_set.clone(),
+            )));
+
+            // Apply any stored votes for this round
+            if let Some(future_votes) = state.future_messages.take_votes(target_round) {
+                for vote in future_votes.prevotes() {
+                    // Re-validate against current validator set
+                    if (vote.validator.index() as usize) < state.validator_set.len() {
+                        let mut prevotes = state.prevotes.write().await;
+                        let _ = prevotes.add_vote(vote.clone());
+                    }
+                }
+                for vote in future_votes.precommits() {
+                    if (vote.validator.index() as usize) < state.validator_set.len() {
+                        let mut precommits = state.precommits.write().await;
+                        let _ = precommits.add_vote(vote.clone());
+                    }
+                }
+            }
+
+            // Apply stored proposal if exists
+            if let Some(proposal) = state.future_messages.take_proposal(target_round) {
+                state.current_proposal = Some(proposal.clone());
+                state
+                    .proposals
+                    .insert((target_round, proposal.proposer), proposal);
+            }
+
+            // Clear current_proposal if we're starting fresh
+            if target_step == TendermintStep::Propose {
+                state.current_proposal = None;
+            }
+        }
+
+        // Update timeout scheduler
+        {
+            let mut scheduler = timeout_scheduler.write().await;
+            scheduler.set_position(height, target_round);
+            let _ = scheduler.schedule(target_step);
+        }
+
+        // Notify TendermintDriver of round change
+        if let Some(ref driver) = self.tendermint_driver {
+            driver.do_send(
+                crate::actors_v2::tendermint_driver::TendermintDriverMessage::RoundAdvanced {
+                    round: target_round,
+                    step: target_step,
+                },
+            );
+        }
+
+        // After advancing, check if we should take any action in the new step
+        self.check_step_actions_after_advance(target_round, target_step, correlation_id)
+            .await?;
+
+        Ok(target_round)
+    }
+
+    /// Check if we need to take action after advancing to a new round/step.
+    ///
+    /// When we skip to a higher round via future round votes, we may already have
+    /// enough information to immediately vote.
+    async fn check_step_actions_after_advance(
+        &self,
+        round: u32,
+        step: TendermintStep,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        let tendermint_state = self.tendermint_state.as_ref().unwrap();
+
+        match step {
+            TendermintStep::Prevote => {
+                // If we have a proposal and haven't voted, we should prevote
+                let should_prevote = {
+                    let state = tendermint_state.read().await;
+                    state.current_proposal.is_some() && !state.sent_prevotes.contains_key(&round)
+                };
+
+                if should_prevote {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        round = round,
+                        "Triggering prevote after round advancement"
+                    );
+
+                    let (proposal, locked_block) = {
+                        let state = tendermint_state.read().await;
+                        (state.current_proposal.clone(), state.locked_block)
+                    };
+
+                    if let Some(proposal) = proposal {
+                        // Determine what to vote for based on locking rules
+                        let vote_block = self
+                            .determine_prevote_block(&proposal, locked_block.as_ref())
+                            .await?;
+
+                        // Cast the prevote
+                        let state = tendermint_state.read().await;
+                        self.cast_prevote(state.height, round, vote_block, correlation_id)
+                            .await?;
+                    }
+                }
+            }
+
+            TendermintStep::Precommit => {
+                // Check if we have 2/3+ prevotes for a block and should precommit
+                let (should_precommit, precommit_block) = {
+                    let state = tendermint_state.read().await;
+                    let prevotes = state.prevotes.read().await;
+                    let has_polka = prevotes.has_two_thirds_any();
+                    let block = prevotes.two_thirds_majority();
+                    let not_voted = !state.sent_precommits.contains_key(&round);
+                    (has_polka && not_voted, block)
+                };
+
+                if should_precommit {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        round = round,
+                        block_hash = ?precommit_block,
+                        "Triggering precommit after round advancement"
+                    );
+
+                    let state = tendermint_state.read().await;
+                    self.cast_precommit(state.height, round, precommit_block, correlation_id)
+                        .await?;
+
+                    // If we precommitted for a block, update our lock
+                    if let Some(block_hash) = precommit_block {
+                        drop(state);
+                        let mut state = tendermint_state.write().await;
+                        // Only update lock if this is a newer round
+                        if state.locked_round.map_or(true, |lr| round > lr) {
+                            state.lock_on(round, block_hash);
+                            debug!(
+                                correlation_id = %correlation_id,
+                                round = round,
+                                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                                "Updated lock after precommit"
+                            );
+                        }
+                    }
+                }
+            }
+
+            TendermintStep::Propose => {
+                // Check if we are the proposer for this round
+                let should_propose = {
+                    let state = tendermint_state.read().await;
+                    if let Some(our_id) = state.our_validator_id {
+                        let expected_proposer = state.validator_set.get_proposer(state.height, round);
+                        our_id == expected_proposer && state.current_proposal.is_none()
+                    } else {
+                        false
+                    }
+                };
+
+                if should_propose {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        round = round,
+                        "We are proposer after round advancement - creating proposal"
+                    );
+                    let state = tendermint_state.read().await;
+                    self.handle_tendermint_propose(state.height, round, correlation_id)
+                        .await?;
+                }
+            }
+
+            TendermintStep::Commit => {
+                // Nothing to do - commit step is handled separately
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Determine what block to prevote for based on Tendermint locking rules.
+    async fn determine_prevote_block(
+        &self,
+        proposal: &Proposal,
+        locked_block: Option<&BlockHash>,
+    ) -> TendermintResult<Option<BlockHash>> {
+        // Tendermint locking rules:
+        // 1. If we're locked on a block, we must prevote for it (unless unlocked via PoLC)
+        // 2. If not locked, we can prevote for the proposed block if valid
+        // 3. If proposal is invalid, prevote NIL
+
+        if let Some(locked) = locked_block {
+            let proposal_hash = proposal.block_hash();
+            if &proposal_hash == locked {
+                // Proposal matches lock - vote for it
+                return Ok(Some(proposal_hash));
+            }
+            // We're locked on a different block - vote for our locked block
+            return Ok(Some(*locked));
+        }
+
+        // Not locked - vote for the proposed block
+        Ok(Some(proposal.block_hash()))
+    }
+
+    /// Commit a block discovered from future round votes.
+    async fn commit_from_future_round(
+        &self,
+        round: u32,
+        block_hash: BlockHash,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        info!(
+            correlation_id = %correlation_id,
+            round = round,
+            block_hash = %H256::from_slice(block_hash.as_bytes()),
+            "Committing block from future round precommits"
+        );
+
+        let tendermint_state = self.tendermint_state.as_ref().unwrap();
+        let state = tendermint_state.read().await;
+        let height = state.height;
+
+        // Try to find the block in stored proposals
+        let block = state
+            .proposals
+            .values()
+            .find(|p| p.block_hash() == block_hash)
+            .map(|p| p.block.clone());
+
+        drop(state);
+
+        if let Some(_block) = block {
+            // We have the block - commit it
+            self.commit_block(height, round, block_hash, correlation_id)
+                .await
+        } else {
+            // We don't have the block - need to request it
+            warn!(
+                correlation_id = %correlation_id,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Need to fetch block for commit - block not in local storage"
+            );
+            // Request block from peers and commit when received
+            self.request_block_for_commit(block_hash, round, correlation_id)
+                .await
+        }
+    }
+
+    /// Request a block from peers when we need to commit but don't have the block data.
+    ///
+    /// This also schedules a timeout that will trigger retry logic if the block
+    /// isn't received in time.
+    async fn request_block_for_commit(
+        &self,
+        block_hash: BlockHash,
+        round: u32,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        info!(
+            correlation_id = %correlation_id,
+            block_hash = %H256::from_slice(block_hash.as_bytes()),
+            round = round,
+            "Requesting block for pending commit"
+        );
+
+        // Store the pending commit state (only on first request, not retries)
+        {
+            let tendermint_state = self.tendermint_state.as_ref().unwrap();
+            let mut state = tendermint_state.write().await;
+            if state.pending_commit.is_none() {
+                state.pending_commit = Some(PendingCommit::new(block_hash, round, correlation_id));
+            }
+            // Note: If pending_commit exists, this is a retry - keep existing state with updated retry_count
+        }
+
+        // Send block request to network
+        if let Some(ref network) = self.network_actor {
+            let height = {
+                let state = self.tendermint_state.as_ref().unwrap().read().await;
+                state.height
+            };
+
+            // Use existing BlockRequest mechanism
+            let message = TendermintMessage::BlockRequest { height };
+
+            network
+                .send(crate::actors_v2::network::messages::NetworkMessage::BroadcastTendermint {
+                    message,
+                    correlation_id: Some(correlation_id),
+                })
+                .await
+                .map_err(|e| ChainError::Internal(format!("Failed to send block request: {}", e)))?;
+
+            debug!(
+                correlation_id = %correlation_id,
+                height = height,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Sent block request to network"
+            );
+        } else {
+            return Err(ChainError::Configuration(
+                "Network actor not available for block request".into(),
+            ));
+        }
+
+        // Schedule timeout for block request
+        if let Some(ref driver) = self.tendermint_driver {
+            let driver = driver.clone();
+            let timeout_duration = std::time::Duration::from_secs(Self::BLOCK_REQUEST_TIMEOUT_SECS);
+
+            tokio::spawn(async move {
+                tokio::time::sleep(timeout_duration).await;
+                driver.do_send(
+                    crate::actors_v2::tendermint_driver::TendermintDriverMessage::BlockRequestTimeout {
+                        block_hash,
+                        correlation_id,
+                    },
+                );
+            });
+
+            debug!(
+                correlation_id = %correlation_id,
+                timeout_secs = Self::BLOCK_REQUEST_TIMEOUT_SECS,
+                "Scheduled block request timeout"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Handle a received block that we requested for a pending commit.
+    pub async fn handle_requested_block_for_commit(
+        &self,
+        block_hash: BlockHash,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        let tendermint_state = self
+            .tendermint_state
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("State not initialized".into()))?;
+
+        // Check if this block matches our pending commit
+        let pending_commit = {
+            let state = tendermint_state.read().await;
+            state.pending_commit.clone()
+        };
+
+        if let Some(pending) = pending_commit {
+            if block_hash == pending.block_hash {
+                info!(
+                    correlation_id = %correlation_id,
+                    block_hash = %H256::from_slice(block_hash.as_bytes()),
+                    round = pending.round,
+                    "Received requested block for pending commit"
+                );
+
+                // Clear the pending commit
+                {
+                    let mut state = tendermint_state.write().await;
+                    state.pending_commit = None;
+                }
+
+                // Get height and commit the block
+                let height = {
+                    let state = tendermint_state.read().await;
+                    state.height
+                };
+
+                self.commit_block(height, pending.round, block_hash, pending.correlation_id)
+                    .await
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    expected_hash = %H256::from_slice(pending.block_hash.as_bytes()),
+                    received_hash = %H256::from_slice(block_hash.as_bytes()),
+                    "Received block doesn't match pending commit"
+                );
+                Ok(())
+            }
+        } else {
+            debug!(
+                correlation_id = %correlation_id,
+                "Received block but no pending commit"
+            );
+            Ok(())
+        }
+    }
+
+    /// Maximum number of block request retries before giving up.
+    const MAX_BLOCK_REQUEST_RETRIES: u32 = 3;
+
+    /// Timeout duration for block requests (in seconds).
+    const BLOCK_REQUEST_TIMEOUT_SECS: u64 = 10;
+
+    /// Handle timeout when block request doesn't receive a response.
+    ///
+    /// This implements retry logic for pending commits:
+    /// - If under MAX_BLOCK_REQUEST_RETRIES, retry the request
+    /// - If max retries exceeded, clear pending_commit and log error
+    pub async fn handle_block_request_timeout(
+        &self,
+        block_hash: BlockHash,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        let tendermint_state = self
+            .tendermint_state
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("State not initialized".into()))?;
+
+        // Check if this timeout is for our current pending commit
+        let pending_commit = {
+            let state = tendermint_state.read().await;
+            state.pending_commit.clone()
+        };
+
+        let Some(pending) = pending_commit else {
+            // No pending commit - timeout is stale
+            debug!(
+                correlation_id = %correlation_id,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Block request timeout but no pending commit - ignoring"
+            );
+            return Ok(());
+        };
+
+        // Check if this timeout matches our pending commit
+        if pending.block_hash != block_hash {
+            debug!(
+                correlation_id = %correlation_id,
+                expected_hash = %H256::from_slice(pending.block_hash.as_bytes()),
+                timeout_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Block request timeout for different block - ignoring"
+            );
+            return Ok(());
+        }
+
+        // Increment retry count
+        let retry_count = {
+            let mut state = tendermint_state.write().await;
+            if let Some(ref mut pc) = state.pending_commit {
+                pc.retry_count += 1;
+                pc.retry_count
+            } else {
+                return Ok(()); // Pending commit was cleared while we were waiting
+            }
+        };
+
+        if retry_count < Self::MAX_BLOCK_REQUEST_RETRIES {
+            // Retry the request
+            warn!(
+                correlation_id = %correlation_id,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                retry_count = retry_count,
+                max_retries = Self::MAX_BLOCK_REQUEST_RETRIES,
+                "Block request timed out - retrying"
+            );
+
+            // Re-request the block (this will also schedule a new timeout)
+            self.request_block_for_commit(block_hash, pending.round, correlation_id)
+                .await
+        } else {
+            // Max retries exceeded - give up
+            error!(
+                correlation_id = %correlation_id,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                retry_count = retry_count,
+                "Failed to fetch block after {} retries - clearing pending commit",
+                Self::MAX_BLOCK_REQUEST_RETRIES
+            );
+
+            // Clear the pending commit
+            {
+                let mut state = tendermint_state.write().await;
+                state.pending_commit = None;
+            }
+
+            // This is a serious issue - the node saw 2/3+ precommits but can't get the block
+            // The block will eventually be synced via normal block sync
+            Err(ChainError::Consensus(format!(
+                "Failed to fetch block {:?} for commit after {} retries - network may be partitioned",
+                block_hash, Self::MAX_BLOCK_REQUEST_RETRIES
+            )))
+        }
     }
 }

@@ -136,6 +136,13 @@ pub enum ChainMessage {
     SetTendermintDriver {
         addr: actix::Addr<crate::actors_v2::tendermint_driver::TendermintDriver>,
     },
+
+    /// Block request timeout for pending commit
+    /// Triggered when we're waiting for a block to commit but haven't received it
+    TendermintBlockRequestTimeout {
+        block_hash: H256,
+        correlation_id: Uuid,
+    },
 }
 
 /// ChainManager interface messages (for future EngineActor/AuxPowActor coordination)

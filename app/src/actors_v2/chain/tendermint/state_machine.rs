@@ -15,7 +15,9 @@
 //! └── Validator Set: current validators and their powers
 //! ```
 
+use super::future_messages::FutureMessageStore;
 use super::messages::Proposal;
+use super::round_sync::PendingCommit;
 use super::types::*;
 use super::vote_set::VoteSet;
 use crate::block::ConsensusBlock;
@@ -128,6 +130,22 @@ pub struct TendermintState {
     /// Used to prevent re-broadcasting or re-processing the same evidence.
     /// Key is the evidence_hash computed with chain_id for domain separation.
     pub processed_evidence: HashSet<[u8; 32]>,
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ROUND SYNCHRONIZATION - Future round message handling
+    // ═══════════════════════════════════════════════════════════════════
+    /// Storage for messages from future rounds.
+    ///
+    /// When we receive votes/proposals from rounds higher than our current round,
+    /// they are stored here and applied when we advance to that round.
+    pub future_messages: FutureMessageStore,
+
+    /// Pending commit awaiting block retrieval.
+    ///
+    /// Set when we receive 2/3+ precommits for a block from a future round,
+    /// but we don't have the block data (missed the proposal). We must
+    /// request the block from peers before we can finalize the commit.
+    pub pending_commit: Option<PendingCommit>,
 }
 
 impl TendermintState {
@@ -157,6 +175,9 @@ impl TendermintState {
             validator_set.clone(),
         )));
 
+        // Create future_messages before moving validator_set into the struct
+        let future_messages = FutureMessageStore::new(validator_set.clone());
+
         Self {
             height,
             round: 0,
@@ -182,6 +203,9 @@ impl TendermintState {
             sent_precommits: HashMap::new(),
 
             processed_evidence: HashSet::new(),
+
+            future_messages,
+            pending_commit: None,
         }
     }
 
@@ -223,6 +247,9 @@ impl TendermintState {
         )));
 
         self.current_proposal = None;
+
+        // Advance future message store to clean up old messages
+        self.future_messages.advance_to_round(round);
 
         // Note: locked_round and locked_block are NOT reset!
         // Locking persists across rounds until height changes
@@ -275,6 +302,12 @@ impl TendermintState {
             VoteType::Precommit,
             self.validator_set.clone(),
         )));
+
+        // Reset future message store for new height
+        self.future_messages.reset(self.validator_set.clone());
+
+        // Clear any pending commit from previous height
+        self.pending_commit = None;
     }
 
     /// Set the step to a new value

@@ -121,6 +121,19 @@ pub enum TendermintDriverMessage {
         activation_height: u64,
     },
 
+    /// Notification that we advanced to a higher round via future round votes
+    /// (triggered by 2/3+ votes from that round)
+    RoundAdvanced {
+        round: u32,
+        step: TendermintStep,
+    },
+
+    /// Block request timeout - need to retry or give up
+    BlockRequestTimeout {
+        block_hash: ethereum_types::H256,
+        correlation_id: uuid::Uuid,
+    },
+
     /// Stop the driver
     Stop,
 }
@@ -995,6 +1008,57 @@ impl Handler<TendermintDriverMessage> for TendermintDriver {
                 activation_height,
             } => {
                 self.update_validator_set(validator_set, activation_height);
+            }
+
+            TendermintDriverMessage::RoundAdvanced { round, step } => {
+                // Round was advanced via future round votes in ChainActor
+                // Cancel any pending timeout and update our tracking
+                info!(
+                    round = round,
+                    step = ?step,
+                    "Round advanced via future round votes"
+                );
+
+                // Cancel pending timeout for old round
+                if let Some(handle) = self.pending_timeout.take() {
+                    ctx.cancel_future(handle);
+                }
+
+                // Update current position
+                self.current_round = round;
+                self.current_step = step;
+
+                // Schedule timeout for the new step
+                self.schedule_timeout(ctx);
+            }
+
+            TendermintDriverMessage::BlockRequestTimeout {
+                block_hash,
+                correlation_id,
+            } => {
+                // Forward to ChainActor for retry handling
+                debug!(
+                    block_hash = %block_hash,
+                    correlation_id = %correlation_id,
+                    "Block request timeout - forwarding to ChainActor"
+                );
+
+                if let Some(ref chain_actor) = self.chain_actor {
+                    let chain_actor = chain_actor.clone();
+                    ctx.spawn(
+                        async move {
+                            let _ = chain_actor
+                                .send(
+                                    crate::actors_v2::chain::messages::ChainMessage::TendermintBlockRequestTimeout {
+                                        block_hash,
+                                        correlation_id,
+                                    },
+                                )
+                                .await;
+                        }
+                        .into_actor(self),
+                    );
+                }
             }
 
             TendermintDriverMessage::Stop => {
