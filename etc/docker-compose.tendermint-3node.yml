@@ -108,6 +108,13 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-1
     restart: unless-stopped
+    labels:
+      chaos.role: "validator"
+      chaos.validator_id: "0"
+      chaos.network: "alys-tendermint-3"
+      chaos.rpc_port: "3001"
+    cap_add:
+      - NET_ADMIN  # Required for tc (traffic control) chaos injection
     networks:
       alys-tendermint-3:
         ipv4_address: 172.22.0.10
@@ -126,8 +133,8 @@ services:
       RUST_LOG: debug
       RUST_BACKTRACE: full
       TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
-      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
-      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -163,6 +170,13 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-2
     restart: unless-stopped
+    labels:
+      chaos.role: "validator"
+      chaos.validator_id: "1"
+      chaos.network: "alys-tendermint-3"
+      chaos.rpc_port: "3011"
+    cap_add:
+      - NET_ADMIN  # Required for tc (traffic control) chaos injection
     networks:
       alys-tendermint-3:
         ipv4_address: 172.22.0.11
@@ -181,8 +195,8 @@ services:
       RUST_LOG: debug
       RUST_BACKTRACE: full
       TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
-      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
-      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -218,6 +232,13 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-3
     restart: unless-stopped
+    labels:
+      chaos.role: "validator"
+      chaos.validator_id: "2"
+      chaos.network: "alys-tendermint-3"
+      chaos.rpc_port: "3021"
+    cap_add:
+      - NET_ADMIN  # Required for tc (traffic control) chaos injection
     networks:
       alys-tendermint-3:
         ipv4_address: 172.22.0.12
@@ -236,8 +257,8 @@ services:
       RUST_LOG: debug
       RUST_BACKTRACE: full
       TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
-      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
-      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

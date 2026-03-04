@@ -46,8 +46,8 @@ impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
             propose_timeout: Duration::from_millis(3000),
-            prevote_timeout: Duration::from_millis(1000),
-            precommit_timeout: Duration::from_millis(1000),
+            prevote_timeout: Duration::from_millis(2000),
+            precommit_timeout: Duration::from_millis(2000),
             timeout_delta: Duration::from_millis(500),
             max_timeout: Duration::from_secs(30),
         }

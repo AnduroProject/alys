@@ -71,7 +71,8 @@ impl Default for NetworkConfig {
             max_outbound_connections: 500,
 
             // Phase 4: Rate limits (defaults)
-            max_messages_per_peer_per_second: 100,
+            // Increased from 100 to 500 to handle Tendermint consensus message bursts
+            max_messages_per_peer_per_second: 500,
             max_bytes_per_peer_per_second: 1024 * 1024, // 1MB/s
             rate_limit_window: Duration::from_secs(1),
         }
