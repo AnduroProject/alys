@@ -1,6 +1,10 @@
 name: Tendermint Chaos Testing
 
 on:
+  # TEMPORARY: Run on push to feature/tendermint for testing
+  push:
+    branches:
+      - feature/tendermint
   schedule:
     # Run tier1 daily at 2 AM UTC
     - cron: '0 2 * * *'
@@ -85,14 +89,17 @@ jobs:
           SCENARIO="${{ github.event.inputs.scenario || 'tier1' }}"
           echo "Running scenario: $SCENARIO"
 
+          # Run tests and capture exit code properly
+          set +e
           ./tendermint-chaos.sh \
             --scenario "$SCENARIO" \
             --verbose \
             --output-dir "$GITHUB_WORKSPACE/chaos-results" \
-            | tee "$GITHUB_WORKSPACE/chaos-results/output.log"
+            2>&1 | tee "$GITHUB_WORKSPACE/chaos-results/output.log"
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
 
-          # Capture exit code
-          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
 
       - name: Collect container logs
         if: always()
@@ -162,7 +169,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -176,7 +183,7 @@ jobs:
       - name: Run Tendermint chaos unit tests
         working-directory: app
         run: |
-          cargo test --package alys --lib actors_v2::testing::chaos --no-fail-fast -- --nocapture
+          cargo test --package app --lib actors_v2::testing::chaos --no-fail-fast -- --nocapture
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: debug
@@ -184,6 +191,6 @@ jobs:
       - name: Run Tendermint state machine tests
         working-directory: app
         run: |
-          cargo test --package alys --lib actors_v2::chain::tendermint --no-fail-fast -- --nocapture
+          cargo test --package app --lib actors_v2::chain::tendermint --no-fail-fast -- --nocapture
         env:
           RUST_BACKTRACE: 1
