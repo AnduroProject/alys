@@ -46,10 +46,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq bc
 
+      - name: Build Docker Image
+        run: |
+          docker build -t ghcr.io/anduroproject/alys:feature-tendermint -f etc/Dockerfile .
+
       - name: Start Tendermint Testnet
         working-directory: etc
         run: |
-          docker compose -f ${{ env.COMPOSE_FILE }} pull
           docker compose -f ${{ env.COMPOSE_FILE }} up -d
 
           # Wait for consensus to stabilize
