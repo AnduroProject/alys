@@ -1,0 +1,189 @@
+name: Tendermint Chaos Testing
+
+on:
+  schedule:
+    # Run tier1 daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Scenario to run (tier1, tier2, validator, network, timing, wal, external, liveness, all)'
+        required: false
+        default: 'tier1'
+      timeout_minutes:
+        description: 'Timeout in minutes'
+        required: false
+        default: '60'
+
+env:
+  COMPOSE_FILE: docker-compose.tendermint-3node.yml
+
+jobs:
+  chaos-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event.inputs.timeout_minutes || 60 }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+
+      - name: Start Tendermint Testnet
+        working-directory: etc
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} pull
+          docker compose -f ${{ env.COMPOSE_FILE }} up -d
+
+          # Wait for consensus to stabilize
+          cd chaos-testing
+          ./wait-for-consensus.sh --timeout 180 --min-blocks 10 --verbose
+
+      - name: Verify testnet health
+        working-directory: etc
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} ps
+
+          # Check all 3 validators are running
+          RUNNING=$(docker ps --filter "name=alys-node-" --format '{{.Names}}' | wc -l)
+          if [ "$RUNNING" -lt 3 ]; then
+            echo "ERROR: Only $RUNNING validators running, expected 3"
+            exit 1
+          fi
+
+          # Check consensus height
+          HEIGHT=$(curl -s -X POST http://localhost:3001 \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","method":"tendermint_consensusState","params":[],"id":1}' \
+            | jq -r '.result.height // 0')
+          echo "Current consensus height: $HEIGHT"
+
+          if [ "$HEIGHT" -lt 5 ]; then
+            echo "WARNING: Consensus height is low ($HEIGHT), waiting longer..."
+            sleep 30
+          fi
+
+      - name: Run Chaos Tests
+        id: chaos
+        working-directory: etc/chaos-testing
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/chaos-results
+
+          SCENARIO="${{ github.event.inputs.scenario || 'tier1' }}"
+          echo "Running scenario: $SCENARIO"
+
+          ./tendermint-chaos.sh \
+            --scenario "$SCENARIO" \
+            --verbose \
+            --output-dir "$GITHUB_WORKSPACE/chaos-results" \
+            | tee "$GITHUB_WORKSPACE/chaos-results/output.log"
+
+          # Capture exit code
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Collect container logs
+        if: always()
+        working-directory: etc
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/chaos-results/logs
+
+          for container in alys-node-1 alys-node-2 alys-node-3 execution bitcoin-core; do
+            docker logs "$container" > "$GITHUB_WORKSPACE/chaos-results/logs/${container}.log" 2>&1 || true
+          done
+
+      - name: Generate summary
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE/chaos-results
+
+          # Extract results from output log
+          echo "## Tendermint Chaos Test Results" > summary.md
+          echo "" >> summary.md
+          echo "**Scenario:** ${{ github.event.inputs.scenario || 'tier1' }}" >> summary.md
+          echo "**Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> summary.md
+          echo "" >> summary.md
+
+          if [ -f output.log ]; then
+            echo "### Test Results" >> summary.md
+            echo '```' >> summary.md
+            grep -E "^\[(PASS|FAIL)\]" output.log >> summary.md || echo "No results found" >> summary.md
+            echo '```' >> summary.md
+            echo "" >> summary.md
+
+            # Extract summary
+            echo "### Summary" >> summary.md
+            echo '```' >> summary.md
+            tail -20 output.log | grep -E "(Total|Passed|Failed)" >> summary.md || true
+            echo '```' >> summary.md
+          fi
+
+          # Output to GitHub Step Summary
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-test-results-${{ github.run_id }}
+          path: chaos-results/
+          retention-days: 30
+
+      - name: Stop testnet
+        if: always()
+        working-directory: etc
+        run: |
+          docker compose -f ${{ env.COMPOSE_FILE }} down -v
+
+      - name: Check for failures
+        if: steps.chaos.outputs.exit_code != '0'
+        run: |
+          echo "Chaos tests failed with exit code ${{ steps.chaos.outputs.exit_code }}"
+          exit 1
+
+  rust-chaos-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-chaos-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run Tendermint chaos unit tests
+        working-directory: app
+        run: |
+          cargo test --package alys --lib actors_v2::testing::chaos --no-fail-fast -- --nocapture
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: debug
+
+      - name: Run Tendermint state machine tests
+        working-directory: app
+        run: |
+          cargo test --package alys --lib actors_v2::chain::tendermint --no-fail-fast -- --nocapture
+        env:
+          RUST_BACKTRACE: 1
