@@ -12,7 +12,8 @@ use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use super::error::{JsonRpcError, RpcError};
 use super::handlers::{
     CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, DeprecatedAuraHandler,
-    ParamsHandler, PendingGovernanceHandler, SubmitAuxBlockHandler, ValidatorsHandler,
+    EvidenceHandler, ParamsHandler, PendingGovernanceHandler, SubmitAuxBlockHandler,
+    ValidatorsHandler,
 };
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
 use crate::actors_v2::chain::ChainActor;
@@ -196,6 +197,7 @@ impl RpcActor {
             "tendermint_pendingGovernanceUpdates" => {
                 PendingGovernanceHandler::handle(req.params, state.chain_actor).await
             }
+            "tendermint_evidence" => EvidenceHandler::handle(req.params, state.chain_actor).await,
 
             // Deprecated Aura methods (Phase 4: Document 12)
             // These return deprecation errors with migration guidance

@@ -10,10 +10,11 @@ use uuid::Uuid;
 use super::error::RpcError;
 use super::tendermint_types::{
     ConsensusStateResponse, VotesInfo, ValidatorsResponse, ValidatorInfo, PubKeyInfo,
+    EvidenceListResponse, EvidenceItem, ValidatorEvidenceInfo, EvidenceVoteInfo,
 };
 use crate::actors_v2::chain::messages::{
-    CreateAuxBlock, GetChainParams, GetCommit, GetPendingGovernance, GetTendermintState,
-    GetValidatorSet, SubmitAuxBlock,
+    CreateAuxBlock, GetChainParams, GetCommit, GetEvidence, GetPendingGovernance,
+    GetTendermintState, GetValidatorSet, SubmitAuxBlock,
 };
 use crate::actors_v2::chain::ChainActor;
 use crate::auxpow::AuxPow;
@@ -709,5 +710,94 @@ impl PendingGovernanceHandler {
         );
 
         Ok(response)
+    }
+}
+
+/// tendermint_evidence RPC handler
+pub struct EvidenceHandler;
+
+impl EvidenceHandler {
+    /// Handle tendermint_evidence request
+    ///
+    /// Returns list of detected equivocation evidence.
+    /// Used by chaos testing to verify equivocation detection.
+    ///
+    /// # Parameters (optional)
+    /// - params[0].max_age_blocks: Maximum age in blocks to include
+    ///
+    /// # Returns
+    /// JSON object with:
+    /// - evidence: Array of detected equivocation evidence
+    /// - total: Total evidence count
+    pub async fn handle(
+        params: Vec<Value>,
+        chain_actor: Addr<ChainActor>,
+    ) -> Result<Value, RpcError> {
+        let correlation_id = Uuid::new_v4();
+
+        // Parse optional max_age_blocks parameter
+        let max_age_blocks = params
+            .get(0)
+            .and_then(|v| v.as_object())
+            .and_then(|o| o.get("max_age_blocks"))
+            .and_then(|v| v.as_u64());
+
+        tracing::debug!(
+            correlation_id = %correlation_id,
+            max_age_blocks = ?max_age_blocks,
+            "tendermint_evidence request received"
+        );
+
+        let message = GetEvidence {
+            max_age_blocks,
+            correlation_id: Some(correlation_id),
+        };
+
+        let result = chain_actor
+            .send(message)
+            .await
+            .map_err(|e| RpcError::MailboxError(e.to_string()))?
+            .map_err(RpcError::ChainError)?;
+
+        // Convert to RPC format
+        let evidence_items: Vec<EvidenceItem> = result
+            .evidence
+            .iter()
+            .map(|e| EvidenceItem {
+                evidence_type: e.evidence_type.clone(),
+                validator: ValidatorEvidenceInfo {
+                    address: e.validator_address.clone(),
+                    power: 1, // Default voting power (to be populated from state)
+                },
+                height: e.height,
+                round: e.round,
+                vote_a: EvidenceVoteInfo {
+                    block_hash: e.vote_a_block_hash.clone(),
+                    signature: String::new(), // Signature not exposed in summary
+                    timestamp: e.detected_at.clone(),
+                },
+                vote_b: EvidenceVoteInfo {
+                    block_hash: e.vote_b_block_hash.clone(),
+                    signature: String::new(),
+                    timestamp: e.detected_at.clone(),
+                },
+                detected_at: e.detected_at.clone(),
+                total_voting_power: 1,
+            })
+            .collect();
+
+        let response = EvidenceListResponse {
+            evidence: evidence_items,
+            total: result.total as u32,
+        };
+
+        tracing::debug!(
+            correlation_id = %correlation_id,
+            evidence_count = result.total,
+            "tendermint_evidence completed"
+        );
+
+        serde_json::to_value(&response)
+            .map_err(|e| RpcError::Internal(format!("Serialization error: {}", e)))
     }
 }

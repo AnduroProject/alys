@@ -569,6 +569,44 @@ pub struct PendingGovernanceUpdate {
     pub proposed_at_height: u64,
 }
 
+/// Get detected equivocation evidence (for RPC: tendermint_evidence)
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<EvidenceResponse, crate::actors_v2::chain::ChainError>")]
+pub struct GetEvidence {
+    /// Maximum age in blocks to include (None = all)
+    pub max_age_blocks: Option<u64>,
+    /// Correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
+/// Response for GetEvidence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceResponse {
+    /// List of detected equivocation evidence
+    pub evidence: Vec<EvidenceInfo>,
+    /// Total evidence count
+    pub total: usize,
+}
+
+/// Evidence information for RPC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceInfo {
+    /// Evidence type: "DoublePrevote" | "DoublePrecommit" | "DoubleProposal"
+    pub evidence_type: String,
+    /// Validator who equivocated (hex-encoded address)
+    pub validator_address: String,
+    /// Height at which equivocation occurred
+    pub height: u64,
+    /// Round at which equivocation occurred
+    pub round: u32,
+    /// Block hash of first vote
+    pub vote_a_block_hash: Option<String>,
+    /// Block hash of second (conflicting) vote
+    pub vote_b_block_hash: Option<String>,
+    /// Timestamp when evidence was detected (RFC3339 formatted)
+    pub detected_at: String,
+}
+
 // ============================================================================
 // Issue 3.2: Internal State Query Messages (for TendermintDriver)
 // ============================================================================

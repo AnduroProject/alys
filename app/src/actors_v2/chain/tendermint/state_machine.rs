@@ -16,7 +16,7 @@
 //! ```
 
 use super::future_messages::FutureMessageStore;
-use super::messages::Proposal;
+use super::messages::{EquivocationEvidence, Proposal};
 use super::round_sync::PendingCommit;
 use super::types::*;
 use super::vote_set::VoteSet;
@@ -131,6 +131,10 @@ pub struct TendermintState {
     /// Key is the evidence_hash computed with chain_id for domain separation.
     pub processed_evidence: HashSet<[u8; 32]>,
 
+    /// Detected equivocation evidence (for chaos testing and slashing)
+    /// Stores the actual evidence data for RPC queries and later processing.
+    pub detected_evidence: Vec<EquivocationEvidence>,
+
     // ═══════════════════════════════════════════════════════════════════
     // ROUND SYNCHRONIZATION - Future round message handling
     // ═══════════════════════════════════════════════════════════════════
@@ -203,6 +207,7 @@ impl TendermintState {
             sent_precommits: HashMap::new(),
 
             processed_evidence: HashSet::new(),
+            detected_evidence: Vec::new(),
 
             future_messages,
             pending_commit: None,

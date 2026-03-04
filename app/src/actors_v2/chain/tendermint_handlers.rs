@@ -614,20 +614,25 @@ impl ChainActor {
             match vote_type {
                 VoteType::Prevote => {
                     // Check for equivocation before adding
-                    let prevotes = state.prevotes.read().await;
-                    if let Some(existing) = prevotes.get_vote_by_validator(&voter) {
-                        if let Some(evidence) = check_for_equivocation(&vote, &[(voter, existing.clone())].into_iter().collect()) {
+                    // Clone existing vote and release lock before mutating state
+                    let existing_vote = {
+                        let prevotes = state.prevotes.read().await;
+                        prevotes.get_vote_by_validator(&voter).cloned()
+                    };
+
+                    if let Some(existing) = existing_vote {
+                        if let Some(evidence) = check_for_equivocation(&vote, &[(voter, existing)].into_iter().collect()) {
                             warn!(
                                 correlation_id = %correlation_id,
                                 voter = ?voter,
                                 "Detected prevote equivocation: {:?}",
                                 evidence
                             );
-                            // Capture evidence to broadcast after releasing locks
+                            // Store evidence in state for RPC queries and capture for broadcast
+                            state.detected_evidence.push(evidence.clone());
                             detected_evidence = Some(evidence);
                         }
                     }
-                    drop(prevotes);
 
                     // Add vote to prevote set
                     let mut prevotes = state.prevotes.write().await;
@@ -686,20 +691,25 @@ impl ChainActor {
 
                 VoteType::Precommit => {
                     // Check for equivocation before adding
-                    let precommits_read = state.precommits.read().await;
-                    if let Some(existing) = precommits_read.get_vote_by_validator(&voter) {
-                        if let Some(evidence) = check_for_equivocation(&vote, &[(voter, existing.clone())].into_iter().collect()) {
+                    // Clone existing vote and release lock before mutating state
+                    let existing_vote = {
+                        let precommits = state.precommits.read().await;
+                        precommits.get_vote_by_validator(&voter).cloned()
+                    };
+
+                    if let Some(existing) = existing_vote {
+                        if let Some(evidence) = check_for_equivocation(&vote, &[(voter, existing)].into_iter().collect()) {
                             warn!(
                                 correlation_id = %correlation_id,
                                 voter = ?voter,
                                 "Detected precommit equivocation: {:?}",
                                 evidence
                             );
-                            // Capture evidence to broadcast after releasing locks
+                            // Store evidence in state for RPC queries and capture for broadcast
+                            state.detected_evidence.push(evidence.clone());
                             detected_evidence = Some(evidence);
                         }
                     }
-                    drop(precommits_read);
 
                     // Add vote to precommit set
                     let mut precommits = state.precommits.write().await;

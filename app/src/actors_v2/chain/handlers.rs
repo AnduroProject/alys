@@ -2576,6 +2576,7 @@ use crate::actors_v2::chain::messages::{
     GetChainParams, ChainParamsResponse,
     QueryTendermintPosition, TendermintPositionSnapshot,
     GetPendingGovernance, PendingGovernanceResponse, PendingGovernanceUpdate,
+    GetEvidence, EvidenceResponse, EvidenceInfo,
     ApplyRecoveredState, ApplyRecoveredStateResponse,
     SetSyncValidator,
 };
@@ -3059,5 +3060,71 @@ impl Handler<SetSyncValidator> for ChainActor {
     fn handle(&mut self, msg: SetSyncValidator, _ctx: &mut Self::Context) -> Self::Result {
         info!("Setting TendermintSyncValidator reference for governance notifications");
         self.tendermint_sync_validator = Some(msg.validator);
+    }
+}
+
+// ============================================================================
+// Chaos Testing: Evidence Query Handler
+// ============================================================================
+
+impl Handler<GetEvidence> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<EvidenceResponse, ChainError>>;
+
+    fn handle(&mut self, msg: GetEvidence, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
+        let tendermint_state = self.tendermint_state.clone();
+        let max_age_blocks = msg.max_age_blocks;
+
+        Box::pin(
+            async move {
+                let state = tendermint_state
+                    .ok_or_else(|| ChainError::Configuration("Tendermint not initialized".into()))?;
+
+                let state_guard = state.read().await;
+                let current_height = state_guard.height;
+
+                // Get detected evidence from state
+                // Evidence is stored in TendermintState.detected_evidence
+                let evidence_list = &state_guard.detected_evidence;
+
+                // Filter by max age if specified
+                let filtered: Vec<EvidenceInfo> = evidence_list
+                    .iter()
+                    .filter(|e| {
+                        if let Some(max_age) = max_age_blocks {
+                            current_height.saturating_sub(e.height) <= max_age
+                        } else {
+                            true
+                        }
+                    })
+                    .map(|e| {
+                        EvidenceInfo {
+                            evidence_type: format!("{:?}", e.kind),
+                            validator_address: format!("{:?}", e.culprit),
+                            height: e.height,
+                            round: e.round,
+                            vote_a_block_hash: e.vote_a.block_hash.map(|h| format!("{:?}", h)),
+                            vote_b_block_hash: e.vote_b.block_hash.map(|h| format!("{:?}", h)),
+                            detected_at: chrono::Utc::now().to_rfc3339(),
+                        }
+                    })
+                    .collect();
+
+                let total = filtered.len();
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    evidence_count = total,
+                    max_age_blocks = ?max_age_blocks,
+                    "GetEvidence query completed"
+                );
+
+                Ok(EvidenceResponse {
+                    evidence: filtered,
+                    total,
+                })
+            }
+            .into_actor(self),
+        )
     }
 }

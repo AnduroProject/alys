@@ -294,6 +294,58 @@ pub struct PendingUpdate {
     pub proposed_by: String,
 }
 
+/// Response for `tendermint_evidence`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceListResponse {
+    /// List of detected equivocation evidence
+    pub evidence: Vec<EvidenceItem>,
+    /// Total evidence count
+    pub total: u32,
+}
+
+/// Individual evidence item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceItem {
+    /// Evidence type: "DoublePrevote" | "DoublePrecommit" | "DoubleProposal"
+    #[serde(rename = "type")]
+    pub evidence_type: String,
+    /// Validator who equivocated
+    pub validator: ValidatorEvidenceInfo,
+    /// Height at which equivocation occurred
+    pub height: u64,
+    /// Round at which equivocation occurred
+    pub round: u32,
+    /// First vote information
+    pub vote_a: EvidenceVoteInfo,
+    /// Second (conflicting) vote information
+    pub vote_b: EvidenceVoteInfo,
+    /// Timestamp when evidence was detected (RFC3339)
+    pub detected_at: String,
+    /// Total voting power affected (for slashing calculations)
+    pub total_voting_power: u64,
+}
+
+/// Validator info in evidence context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorEvidenceInfo {
+    /// Validator address
+    pub address: String,
+    /// Voting power at time of equivocation
+    pub power: u64,
+}
+
+/// Vote information within evidence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceVoteInfo {
+    /// Block hash voted for (None = NIL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,
+    /// Base64-encoded signature
+    pub signature: String,
+    /// Timestamp of the vote
+    pub timestamp: String,
+}
+
 /// Tendermint-specific error codes
 pub mod error_codes {
     /// Consensus not initialized or still syncing
@@ -306,4 +358,6 @@ pub mod error_codes {
     pub const VALIDATOR_NOT_FOUND: i32 = -32053;
     /// Query during governance transition
     pub const GOVERNANCE_UPDATE_PENDING: i32 = -32054;
+    /// No evidence found
+    pub const EVIDENCE_NOT_FOUND: i32 = -32055;
 }
