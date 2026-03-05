@@ -1,8 +1,11 @@
 name: Tendermint Chaos Testing
 
 on:
-  # TEMPORARY: Run on push to feature/tendermint for testing
-  push:
+  # Run after Docker publish workflow completes
+  workflow_run:
+    workflows: ["Docker"]
+    types:
+      - completed
     branches:
       - feature/tendermint
   schedule:
@@ -26,6 +29,8 @@ jobs:
   chaos-test:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event.inputs.timeout_minutes || 60 }}
+    # Skip if triggered by workflow_run and the workflow failed
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout code
@@ -46,7 +51,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq bc
 
-      - name: Build Docker Image
+      - name: Pull Docker Image (from workflow_run)
+        if: github.event_name == 'workflow_run'
+        run: |
+          docker pull ghcr.io/anduroproject/alys:feature-tendermint
+
+      - name: Build Docker Image (fallback for schedule/dispatch)
+        if: github.event_name != 'workflow_run'
         run: |
           docker build -t ghcr.io/anduroproject/alys:feature-tendermint -f etc/Dockerfile .
 
@@ -166,6 +177,7 @@ jobs:
   rust-chaos-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout code
