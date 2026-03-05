@@ -1,11 +1,15 @@
 name: Tendermint Chaos Testing
 
 on:
-  # Run after Docker publish workflow completes
+  # Run after Docker publish workflow completes (works after merge to main)
   workflow_run:
     workflows: ["Docker"]
     types:
       - completed
+    branches:
+      - feature/tendermint
+  # TEMPORARY: Direct push trigger for feature branch (workflow_run uses main's workflow file)
+  push:
     branches:
       - feature/tendermint
   schedule:
