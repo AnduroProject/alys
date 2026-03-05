@@ -159,7 +159,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            max_blocks_per_request: 128,
+            max_blocks_per_request: 100, // Must match NetworkActor validation limit (1-100)
             sync_timeout: Duration::from_secs(30),
             max_concurrent_requests: 4,
             block_validation_timeout: Duration::from_secs(10),
