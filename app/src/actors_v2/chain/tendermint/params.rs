@@ -336,7 +336,7 @@ impl Default for ChainParams {
             min_peg_amount: 10_000,
             max_peg_amount: 100_000_000,
             federation_threshold: 11,
-            propose_timeout_ms: 3000,
+            propose_timeout_ms: 5000, // Increased from 3000 to allow time for block building (~1s) + broadcast (~2s)
             prevote_timeout_ms: 2000,
             precommit_timeout_ms: 2000,
             timeout_delta_ms: 500,

@@ -789,6 +789,38 @@ impl ChainActor {
                     let _ = scheduler.schedule(TendermintStep::Propose);
                 }
 
+                // Issue 4.1 FIX: Check if we're the proposer and trigger proposal creation
+                // This was missing - when round advancement occurs via receiving 2/3+ nil precommits,
+                // we need to trigger proposal creation if we're the new round's proposer
+                let is_proposer = {
+                    let state = tendermint_state.read().await;
+                    state.is_proposer()
+                };
+
+                if is_proposer {
+                    info!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        new_round = new_round,
+                        "We are proposer for new round (via vote handler) - creating proposal"
+                    );
+
+                    // Trigger proposal creation
+                    if let Err(e) = self
+                        .handle_tendermint_propose(height, new_round, correlation_id)
+                        .await
+                    {
+                        warn!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            new_round = new_round,
+                            error = %e,
+                            "Failed to create proposal for new round"
+                        );
+                        // Don't return error - the propose timeout will trigger and we'll cast nil prevote
+                    }
+                }
+
                 info!(
                     correlation_id = %correlation_id,
                     height = height,

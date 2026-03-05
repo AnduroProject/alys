@@ -132,7 +132,7 @@ services:
     environment:
       RUST_LOG: debug
       RUST_BACKTRACE: full
-      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
@@ -194,7 +194,7 @@ services:
     environment:
       RUST_LOG: debug
       RUST_BACKTRACE: full
-      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
@@ -256,7 +256,7 @@ services:
     environment:
       RUST_LOG: debug
       RUST_BACKTRACE: full
-      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
     entrypoint: ["/bin/sh", "-c"]
