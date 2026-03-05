@@ -174,6 +174,11 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
 
+        let timeout_scheduler = self
+            .timeout_scheduler
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("Timeout scheduler not initialized".into()))?;
+
         let keypair = self
             .validator_keypair
             .as_ref()
@@ -302,6 +307,19 @@ impl ChainActor {
 
         // Broadcast proposal via NetworkActor
         self.broadcast_tendermint_proposal(proposal.clone()).await?;
+
+        // Transition to Prevote step (must happen before casting prevote)
+        {
+            let mut state = tendermint_state.write().await;
+            state.set_step(TendermintStep::Prevote);
+        }
+
+        // Schedule prevote timeout
+        {
+            let mut scheduler = timeout_scheduler.write().await;
+            scheduler.set_position(height, round);
+            let _ = scheduler.schedule(TendermintStep::Prevote);
+        }
 
         // Cast our own prevote for the block
         self.cast_prevote(height, round, Some(block_hash), correlation_id)
@@ -910,13 +928,15 @@ impl ChainActor {
             return Ok(current_round);
         }
 
-        // Only process timeout if we're at or before the timeout step
-        if step as u8 > current_step as u8 {
+        // Only process timeout if we're at exactly this step
+        // Any step mismatch means the timeout is stale (either we've moved past it,
+        // or it's for a future step which shouldn't happen but we guard against it)
+        if current_step as u8 != step as u8 {
             debug!(
                 correlation_id = %correlation_id,
                 timeout_step = ?step,
                 current_step = ?current_step,
-                "Ignoring timeout for future step"
+                "Ignoring stale timeout - step mismatch"
             );
             return Ok(current_round);
         }
@@ -1954,10 +1974,13 @@ impl ChainActor {
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
         }
 
-        // Record the vote (for double-vote prevention tracking)
+        // Record the vote and transition to Prevote step
+        // Step transition here ensures we're in Prevote regardless of how we got here
+        // (via proposal reception or timeout), making late propose timeouts stale
         {
             let mut state = tendermint_state.write().await;
             state.record_prevote(block_hash);
+            state.set_step(TendermintStep::Prevote);
         }
 
         // Broadcast vote
@@ -2123,10 +2146,13 @@ impl ChainActor {
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
         }
 
-        // Record the vote (for double-vote prevention tracking)
+        // Record the vote and transition to Precommit step
+        // Step transition here ensures we're in Precommit regardless of how we got here
+        // (via 2/3+ prevotes or timeout), making late prevote timeouts stale
         {
             let mut state = tendermint_state.write().await;
             state.record_precommit(block_hash);
+            state.set_step(TendermintStep::Precommit);
         }
 
         // Broadcast vote
