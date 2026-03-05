@@ -738,7 +738,7 @@ impl App {
             // 6. Initialize RPC server
             info!("🔌 Starting V2 RPC server on port 3001...");
             let rpc_config = RpcConfig {
-                bind_address: "127.0.0.1:3001".parse().expect("Valid address"),
+                bind_address: "0.0.0.0:3001".parse().expect("Valid address"),
                 request_timeout: Duration::from_secs(30),
                 enable_logging: true,
                 enable_metrics: true,

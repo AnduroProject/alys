@@ -21,7 +21,7 @@ pub struct RpcConfig {
 impl Default for RpcConfig {
     fn default() -> Self {
         Self {
-            bind_address: "127.0.0.1:3001".parse().expect("Valid socket address"),
+            bind_address: "0.0.0.0:3001".parse().expect("Valid socket address"),
             request_timeout: Duration::from_secs(30),
             enable_logging: true,
             enable_metrics: true,
