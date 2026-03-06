@@ -51,7 +51,7 @@ impl Handler<UpdateChainHeadMessage> for StorageActor {
 
         let new_head = msg.new_head;
         let database = self.database.clone();
-        let mut metrics = self.metrics.clone();
+        let metrics = self.metrics.clone();
 
         Box::pin(async move {
             database.put_chain_head(&new_head).await?;
@@ -77,14 +77,18 @@ impl Handler<GetStatsMessage> for StorageActor {
             let cache_stats = cache.get_stats().await;
             let hit_rates = cache.get_hit_rates().await;
 
+            // Use accessor methods for atomic counter values
+            let blocks_stored = metrics.get_blocks_stored();
+            let state_updates = metrics.state_updates.load(std::sync::atomic::Ordering::Relaxed);
+
             let db_stats = match database.get_stats().await {
                 Ok(stats) => stats,
                 Err(e) => {
                     error!("Failed to get database stats: {}", e);
                     return StorageStats {
-                        blocks_stored: metrics.blocks_stored,
+                        blocks_stored,
                         blocks_cached: 0,
-                        state_entries: metrics.state_updates,
+                        state_entries: state_updates,
                         state_cached: 0,
                         cache_hit_rate: 0.0,
                         pending_writes: pending_writes_count as u64,
@@ -94,9 +98,9 @@ impl Handler<GetStatsMessage> for StorageActor {
             };
 
             StorageStats {
-                blocks_stored: metrics.blocks_stored,
+                blocks_stored,
                 blocks_cached: cache_stats.block_cache_bytes / 256, // Rough estimate
-                state_entries: metrics.state_updates,
+                state_entries: state_updates,
                 state_cached: cache_stats.state_cache_bytes / 64, // Rough estimate
                 cache_hit_rate: hit_rates.get("overall").copied().unwrap_or(0.0),
                 pending_writes: pending_writes_count as u64,

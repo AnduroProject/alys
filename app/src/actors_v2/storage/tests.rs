@@ -205,7 +205,7 @@ mod tests {
         let config = create_test_config();
         let mut storage = StorageActor::new(config).await.unwrap();
 
-        let initial_blocks_stored = storage.metrics.blocks_stored;
+        let initial_blocks_stored = storage.metrics.get_blocks_stored();
 
         // Store a test block
         let test_block = create_test_block(300);
@@ -213,7 +213,7 @@ mod tests {
 
         // Check metrics updated
         assert!(
-            storage.metrics.blocks_stored > initial_blocks_stored,
+            storage.metrics.get_blocks_stored() > initial_blocks_stored,
             "Metrics should be updated"
         );
     }

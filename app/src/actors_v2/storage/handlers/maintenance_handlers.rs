@@ -102,7 +102,7 @@ impl Handler<AnalyzeDatabaseMessage> for StorageActor {
 
             let analysis = DatabaseAnalysis {
                 total_size_bytes: db_stats.total_size_bytes,
-                total_blocks: metrics.blocks_stored,
+                total_blocks: metrics.get_blocks_stored(),
                 total_transactions: 0, // Placeholder
                 column_family_sizes: db_stats.column_family_sizes,
                 index_inconsistencies: consistency_issues,

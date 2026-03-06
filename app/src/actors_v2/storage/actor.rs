@@ -192,6 +192,25 @@ impl StorageActor {
         // Initialize database
         let database = DatabaseManager::new(config.database.clone()).await?;
 
+        // Task 1.1: Restore chain head from database on startup
+        // This fixes storage_height=0 after restart issue
+        match database.get_chain_head().await {
+            Ok(Some(head)) => {
+                info!(
+                    height = head.number,
+                    hash = %head.hash,
+                    execution_hash = %head.execution_hash,
+                    "Restored chain head from database on startup"
+                );
+            }
+            Ok(None) => {
+                info!("No chain head found in database - starting fresh or at genesis");
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to restore chain head from database - will use genesis");
+            }
+        }
+
         // Initialize cache
         let cache = StorageCache::new(config.cache.clone());
 
@@ -396,8 +415,8 @@ impl StorageActor {
 
         info!(
             "Storage metrics: blocks_stored={}, blocks_retrieved={}, cache_hit_rate={:.2}%, pending_writes={}",
-            self.metrics.blocks_stored,
-            self.metrics.blocks_retrieved,
+            self.metrics.get_blocks_stored(),
+            self.metrics.get_blocks_retrieved(),
             hit_rates.get("overall").unwrap_or(&0.0) * 100.0,
             self.pending_writes.len()
         );

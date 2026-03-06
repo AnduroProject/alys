@@ -24,7 +24,7 @@ impl Handler<StoreBlockMessage> for StorageActor {
         let cache = self.cache.clone();
         let database = self.database.clone();
         let indexing = self.indexing.clone();
-        let mut metrics = self.metrics.clone();
+        let metrics = self.metrics.clone();
 
         Box::pin(async move {
             let block_hash = block.message.block_hash().to_block_hash();
@@ -82,7 +82,7 @@ impl Handler<GetBlockMessage> for StorageActor {
         let block_hash = msg.block_hash;
         let cache = self.cache.clone();
         let database = self.database.clone();
-        let mut metrics = self.metrics.clone();
+        let metrics = self.metrics.clone();
 
         Box::pin(async move {
             debug!("Retrieving block: {}", block_hash);
@@ -152,11 +152,44 @@ impl Handler<GetBlockRangeMessage> for StorageActor {
 
         Box::pin(async move {
             let mut blocks = Vec::new();
+            let mut missing_heights = Vec::new();
+            let expected_count = end_height.saturating_sub(start_height) + 1;
+
             for height in start_height..=end_height {
-                if let Some(block) = database.get_block_by_height(height).await? {
-                    blocks.push(block);
+                match database.get_block_by_height(height).await? {
+                    Some(block) => blocks.push(block),
+                    None => missing_heights.push(height),
                 }
             }
+
+            // Task 2.2: Add explicit logging when blocks are missing in range
+            // This helps diagnose sync issues where empty responses are returned
+            if !missing_heights.is_empty() {
+                warn!(
+                    start_height = start_height,
+                    end_height = end_height,
+                    expected_count = expected_count,
+                    found_count = blocks.len(),
+                    missing_count = missing_heights.len(),
+                    first_missing = ?missing_heights.first(),
+                    last_missing = ?missing_heights.last(),
+                    "GetBlockRange: {} blocks missing in requested range {}-{}",
+                    missing_heights.len(),
+                    start_height,
+                    end_height
+                );
+            } else {
+                debug!(
+                    start_height = start_height,
+                    end_height = end_height,
+                    count = blocks.len(),
+                    "GetBlockRange: returning {} blocks",
+                    blocks.len()
+                );
+            }
+
+            // Return partial results instead of silently returning empty
+            // This allows sync to make progress with available blocks
             Ok(blocks)
         })
     }

@@ -219,7 +219,7 @@ async fn test_database_metrics_tracking() {
     harness.setup().await.unwrap();
 
     let initial_metrics = harness.get_storage_metrics().await.unwrap();
-    let initial_blocks_stored = initial_metrics.blocks_stored;
+    let initial_blocks_stored = initial_metrics.get_blocks_stored();
 
     // Store a test block
     let test_block = harness.test_blocks[0].clone();
@@ -234,7 +234,7 @@ async fn test_database_metrics_tracking() {
     // Check metrics updated
     let updated_metrics = harness.get_storage_metrics().await.unwrap();
     assert!(
-        updated_metrics.blocks_stored > initial_blocks_stored,
+        updated_metrics.get_blocks_stored() > initial_blocks_stored,
         "Metrics should be updated after storing block"
     );
 

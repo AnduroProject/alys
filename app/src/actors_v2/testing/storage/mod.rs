@@ -251,7 +251,7 @@ impl ActorTestHarness for StorageTestHarness {
         // Note: This would require actual cache verification methods
 
         // Verify metrics are being collected
-        if actor_guard.metrics.blocks_stored == 0 && self.base.get_metrics().messages_sent > 0 {
+        if actor_guard.metrics.get_blocks_stored() == 0 && self.base.get_metrics().messages_sent > 0 {
             return Err(StorageTestError::StateVerification(
                 "Metrics not being updated".to_string(),
             ));

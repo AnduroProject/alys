@@ -8,6 +8,7 @@ use prometheus::{
     register_counter, register_gauge, register_histogram, register_int_counter, register_int_gauge,
     Counter, Gauge, Histogram, IntCounter, IntGauge,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tracing::*;
 
@@ -152,17 +153,38 @@ lazy_static! {
 }
 
 /// Storage actor metrics collector
-#[derive(Debug, Clone)]
+///
+/// Task 1.2: Uses atomic counters for thread-safe updates from async contexts.
+/// This fixes the metrics clone loss issue where cloning for async blocks
+/// would create separate copies that didn't update the original.
+#[derive(Debug)]
 pub struct StorageActorMetrics {
-    pub blocks_stored: u64,
-    pub blocks_retrieved: u64,
-    pub state_updates: u64,
-    pub state_queries: u64,
-    pub cache_hits: u64,
-    pub cache_misses: u64,
-    pub write_operations: u64,
-    pub write_failures: u64,
-    pub batch_operations: u64,
+    pub blocks_stored: AtomicU64,
+    pub blocks_retrieved: AtomicU64,
+    pub state_updates: AtomicU64,
+    pub state_queries: AtomicU64,
+    pub cache_hits: AtomicU64,
+    pub cache_misses: AtomicU64,
+    pub write_operations: AtomicU64,
+    pub write_failures: AtomicU64,
+    pub batch_operations: AtomicU64,
+}
+
+impl Clone for StorageActorMetrics {
+    fn clone(&self) -> Self {
+        // Clone by loading current values atomically
+        Self {
+            blocks_stored: AtomicU64::new(self.blocks_stored.load(Ordering::Relaxed)),
+            blocks_retrieved: AtomicU64::new(self.blocks_retrieved.load(Ordering::Relaxed)),
+            state_updates: AtomicU64::new(self.state_updates.load(Ordering::Relaxed)),
+            state_queries: AtomicU64::new(self.state_queries.load(Ordering::Relaxed)),
+            cache_hits: AtomicU64::new(self.cache_hits.load(Ordering::Relaxed)),
+            cache_misses: AtomicU64::new(self.cache_misses.load(Ordering::Relaxed)),
+            write_operations: AtomicU64::new(self.write_operations.load(Ordering::Relaxed)),
+            write_failures: AtomicU64::new(self.write_failures.load(Ordering::Relaxed)),
+            batch_operations: AtomicU64::new(self.batch_operations.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 /// Alert thresholds for storage monitoring
@@ -179,33 +201,33 @@ impl StorageActorMetrics {
     /// Create a new metrics collector
     pub fn new() -> Self {
         Self {
-            blocks_stored: 0,
-            blocks_retrieved: 0,
-            state_updates: 0,
-            state_queries: 0,
-            cache_hits: 0,
-            cache_misses: 0,
-            write_operations: 0,
-            write_failures: 0,
-            batch_operations: 0,
+            blocks_stored: AtomicU64::new(0),
+            blocks_retrieved: AtomicU64::new(0),
+            state_updates: AtomicU64::new(0),
+            state_queries: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            write_operations: AtomicU64::new(0),
+            write_failures: AtomicU64::new(0),
+            batch_operations: AtomicU64::new(0),
         }
     }
 
     /// Record actor startup
-    pub fn record_startup(&mut self) {
+    pub fn record_startup(&self) {
         ACTOR_STARTS.inc();
         info!("Storage actor startup recorded");
     }
 
     /// Record actor shutdown
-    pub fn record_shutdown(&mut self) {
+    pub fn record_shutdown(&self) {
         ACTOR_STOPS.inc();
         info!("Storage actor shutdown recorded");
     }
 
     /// Record a block storage operation
-    pub fn record_block_stored(&mut self, height: u64, duration: Duration, canonical: bool) {
-        self.blocks_stored += 1;
+    pub fn record_block_stored(&self, height: u64, duration: Duration, canonical: bool) {
+        self.blocks_stored.fetch_add(1, Ordering::Relaxed);
         BLOCKS_STORED.inc();
         BLOCK_STORAGE_DURATION.observe(duration.as_secs_f64());
 
@@ -220,16 +242,16 @@ impl StorageActorMetrics {
     }
 
     /// Record a block retrieval operation
-    pub fn record_block_retrieved(&mut self, duration: Duration, from_cache: bool) {
-        self.blocks_retrieved += 1;
+    pub fn record_block_retrieved(&self, duration: Duration, from_cache: bool) {
+        self.blocks_retrieved.fetch_add(1, Ordering::Relaxed);
         BLOCKS_RETRIEVED.inc();
         BLOCK_RETRIEVAL_DURATION.observe(duration.as_secs_f64());
 
         if from_cache {
-            self.cache_hits += 1;
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
             CACHE_HITS.inc();
         } else {
-            self.cache_misses += 1;
+            self.cache_misses.fetch_add(1, Ordering::Relaxed);
             CACHE_MISSES.inc();
         }
 
@@ -240,15 +262,15 @@ impl StorageActorMetrics {
     }
 
     /// Record a block not found
-    pub fn record_block_not_found(&mut self) {
+    pub fn record_block_not_found(&self) {
         BLOCK_NOT_FOUND.inc();
-        self.cache_misses += 1;
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
         CACHE_MISSES.inc();
     }
 
     /// Record a state update operation
-    pub fn record_state_update(&mut self, duration: Duration) {
-        self.state_updates += 1;
+    pub fn record_state_update(&self, duration: Duration) {
+        self.state_updates.fetch_add(1, Ordering::Relaxed);
         STATE_UPDATES.inc();
         STATE_UPDATE_DURATION.observe(duration.as_secs_f64());
 
@@ -256,16 +278,16 @@ impl StorageActorMetrics {
     }
 
     /// Record a state query operation
-    pub fn record_state_query(&mut self, duration: Duration, from_cache: bool) {
-        self.state_queries += 1;
+    pub fn record_state_query(&self, duration: Duration, from_cache: bool) {
+        self.state_queries.fetch_add(1, Ordering::Relaxed);
         STATE_QUERIES.inc();
         STATE_QUERY_DURATION.observe(duration.as_secs_f64());
 
         if from_cache {
-            self.cache_hits += 1;
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
             CACHE_HITS.inc();
         } else {
-            self.cache_misses += 1;
+            self.cache_misses.fetch_add(1, Ordering::Relaxed);
             CACHE_MISSES.inc();
         }
 
@@ -276,15 +298,15 @@ impl StorageActorMetrics {
     }
 
     /// Record a state not found
-    pub fn record_state_not_found(&mut self) {
+    pub fn record_state_not_found(&self) {
         STATE_NOT_FOUND.inc();
-        self.cache_misses += 1;
+        self.cache_misses.fetch_add(1, Ordering::Relaxed);
         CACHE_MISSES.inc();
     }
 
     /// Record a batch operation
-    pub fn record_batch_operation(&mut self, batch_size: usize, duration: Duration) {
-        self.batch_operations += 1;
+    pub fn record_batch_operation(&self, batch_size: usize, duration: Duration) {
+        self.batch_operations.fetch_add(1, Ordering::Relaxed);
         BATCH_OPERATIONS.inc();
         BATCH_SIZE.observe(batch_size as f64);
         BATCH_DURATION.observe(duration.as_secs_f64());
@@ -296,20 +318,20 @@ impl StorageActorMetrics {
     }
 
     /// Record a write completion
-    pub fn record_write_completion(&mut self) {
-        self.write_operations += 1;
+    pub fn record_write_completion(&self) {
+        self.write_operations.fetch_add(1, Ordering::Relaxed);
         WRITE_OPERATIONS.inc();
     }
 
     /// Record a write failure
-    pub fn record_write_failure(&mut self) {
-        self.write_failures += 1;
+    pub fn record_write_failure(&self) {
+        self.write_failures.fetch_add(1, Ordering::Relaxed);
         WRITE_FAILURES.inc();
         warn!("Write operation failure recorded");
     }
 
     /// Record chain head update
-    pub fn record_chain_head_update(&mut self) {
+    pub fn record_chain_head_update(&self) {
         CHAIN_HEAD_UPDATES.inc();
         debug!("Chain head update recorded");
     }
@@ -337,9 +359,11 @@ impl StorageActorMetrics {
 
     /// Calculate cache hit rate
     pub fn cache_hit_rate(&self) -> f64 {
-        let total = self.cache_hits + self.cache_misses;
+        let hits = self.cache_hits.load(Ordering::Relaxed);
+        let misses = self.cache_misses.load(Ordering::Relaxed);
+        let total = hits + misses;
         if total > 0 {
-            self.cache_hits as f64 / total as f64
+            hits as f64 / total as f64
         } else {
             0.0
         }
@@ -347,9 +371,11 @@ impl StorageActorMetrics {
 
     /// Calculate write failure rate
     pub fn write_failure_rate(&self) -> f64 {
-        let total = self.write_operations + self.write_failures;
+        let operations = self.write_operations.load(Ordering::Relaxed);
+        let failures = self.write_failures.load(Ordering::Relaxed);
+        let total = operations + failures;
         if total > 0 {
-            self.write_failures as f64 / total as f64
+            failures as f64 / total as f64
         } else {
             0.0
         }
@@ -384,12 +410,22 @@ impl StorageActorMetrics {
     pub fn summary(&self) -> String {
         format!(
             "StorageMetrics {{ blocks_stored: {}, blocks_retrieved: {}, state_updates: {}, cache_hit_rate: {:.2}%, write_failure_rate: {:.2}% }}",
-            self.blocks_stored,
-            self.blocks_retrieved,
-            self.state_updates,
+            self.blocks_stored.load(Ordering::Relaxed),
+            self.blocks_retrieved.load(Ordering::Relaxed),
+            self.state_updates.load(Ordering::Relaxed),
             self.cache_hit_rate() * 100.0,
             self.write_failure_rate() * 100.0
         )
+    }
+
+    /// Get blocks stored count (for logging)
+    pub fn get_blocks_stored(&self) -> u64 {
+        self.blocks_stored.load(Ordering::Relaxed)
+    }
+
+    /// Get blocks retrieved count (for logging)
+    pub fn get_blocks_retrieved(&self) -> u64 {
+        self.blocks_retrieved.load(Ordering::Relaxed)
     }
 }
 

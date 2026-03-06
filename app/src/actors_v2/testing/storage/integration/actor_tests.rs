@@ -40,7 +40,7 @@ async fn test_full_actor_lifecycle() {
     // Check metrics
     let storage_metrics = harness.get_storage_metrics().await.unwrap();
     assert!(
-        storage_metrics.blocks_stored >= 5,
+        storage_metrics.get_blocks_stored() >= 5,
         "Expected at least 5 blocks stored"
     );
 

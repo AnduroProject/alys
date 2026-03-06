@@ -2860,16 +2860,23 @@ impl Handler<NetworkMessage> for NetworkActor {
                     }
                 };
 
-                // Validate response
+                // Task 2.3: Handle empty block response without penalizing peer
+                // An empty response doesn't mean protocol error - the peer may legitimately
+                // not have those blocks (e.g., during initial sync, after restart, storage gap).
+                // Only penalize for actual protocol violations, not for storage gaps.
                 if blocks.is_empty() {
-                    tracing::warn!(
+                    tracing::debug!(
                         correlation_id = %correlation_id,
                         request_id = %request_id,
-                        "Peer returned empty block response"
+                        peer_id = %peer_id,
+                        start_height = request.start_height,
+                        count = request.count,
+                        "Peer returned empty block response - may not have these blocks yet (not penalizing)"
                     );
-                    self.peer_manager.record_peer_failure(&peer_id);
-                    self.metrics.record_block_response_error();
-                    return Err(NetworkError::Protocol("Empty block response".to_string()));
+                    // Don't record as failure - peer may simply not have these blocks
+                    // self.peer_manager.record_peer_failure(&peer_id);  // Removed
+                    // Still return error to let caller retry with different peer
+                    return Err(NetworkError::Protocol("Empty block response (peer may not have blocks)".to_string()));
                 }
 
                 if blocks.len() as u32 > request.count {

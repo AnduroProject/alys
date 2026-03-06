@@ -1812,6 +1812,18 @@ impl Handler<ChainMessage> for ChainActor {
                     "Sync completed, transitioning to synced state"
                 );
 
+                // Task 3.2: Resume consensus after sync completion
+                // Send Resume message to TendermintDriver to restart consensus at the synced height
+                if let Some(ref driver) = self.tendermint_driver {
+                    info!(
+                        final_height = final_height,
+                        "Resuming consensus after sync completion"
+                    );
+                    driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
+                        height: final_height + 1,
+                    });
+                }
+
                 // Update sync status - node is now synced
                 // Note: The actual is_synced flag is managed by ChainActor state
                 // This notification allows ChainActor to take any post-sync actions
@@ -1902,6 +1914,8 @@ impl Handler<ChainMessage> for ChainActor {
                 let sync_status = self.state.sync_status.clone();
                 let storage_actor = self.storage_actor.clone();
                 let sync_actor = self.sync_actor.clone();
+                // Task 3.2: Clone tendermint_driver for consensus pause during sync
+                let tendermint_driver = self.tendermint_driver.clone();
 
                 Box::pin(async move {
                     // Skip if already syncing
@@ -1969,6 +1983,13 @@ impl Handler<ChainMessage> for ChainActor {
                             "🚨 Node falling behind! Triggering catch-up sync"
                         );
 
+                        // Task 3.2: Pause consensus before starting catch-up sync
+                        // This prevents voting at incorrect heights during sync
+                        if let Some(ref driver) = tendermint_driver {
+                            info!("Pausing consensus before catch-up sync");
+                            driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Pause);
+                        }
+
                         // Trigger sync
                         if let Some(ref sync) = sync_actor {
                             let msg = crate::actors_v2::network::SyncMessage::StartSync {
@@ -1981,9 +2002,21 @@ impl Handler<ChainMessage> for ChainActor {
                                 }
                                 Ok(Err(e)) => {
                                     error!("Failed to trigger catch-up sync: {:?}", e);
+                                    // Resume consensus if sync failed to start
+                                    if let Some(ref driver) = tendermint_driver {
+                                        driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
+                                            height: storage_height + 1,
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     error!("Sync actor mailbox error when triggering sync: {}", e);
+                                    // Resume consensus if sync failed to start
+                                    if let Some(ref driver) = tendermint_driver {
+                                        driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
+                                            height: storage_height + 1,
+                                        });
+                                    }
                                 }
                             }
                         }
