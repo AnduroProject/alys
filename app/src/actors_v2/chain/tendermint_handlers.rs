@@ -2596,12 +2596,24 @@ impl ChainActor {
         };
 
         // 3. Write commit WAL entry BEFORE any state changes
+        // Also write NewRound entry for H+1 to ensure clean recovery
         {
             let mut wal_guard = wal.write().await;
             wal_guard
                 .write(WALEntry::Commit {
                     height,
                     block_hash,
+                })
+                .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+
+            // Immediately write NewRound for next height to ensure clean recovery.
+            // This ensures that after crash recovery, we start at the correct
+            // height and round (H+1, round 0) instead of being stuck at the
+            // committed height with round 0.
+            wal_guard
+                .write(WALEntry::NewRound {
+                    height: height + 1,
+                    round: 0,
                 })
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
         }
@@ -2710,6 +2722,21 @@ impl ChainActor {
             commit_signatures = commit.signatures.len(),
             "Block committed successfully"
         );
+
+        // 9b. Disable recovery mode after successful commit
+        // Once we've committed a block, we've rejoined consensus and no longer
+        // need the extended future round acceptance window.
+        {
+            let mut state = tendermint_state.write().await;
+            if state.future_messages.is_recovery_mode() {
+                state.future_messages.disable_recovery_mode();
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "Recovery mode disabled after successful commit"
+                );
+            }
+        }
 
         // 10. Initialize state machine for H+1 BEFORE notifying TendermintDriver
         // This ensures the state machine is reset (locks cleared) before the driver

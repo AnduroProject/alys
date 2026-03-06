@@ -204,7 +204,38 @@ impl StorageActor {
                 );
             }
             Ok(None) => {
-                info!("No chain head found in database - starting fresh or at genesis");
+                // Chain head missing - try to reconstruct from existing blocks.
+                // This handles the case where SIGKILL occurred before chain_head was synced
+                // but blocks were successfully written.
+                info!("No chain head found - attempting to reconstruct from existing blocks");
+                match database.find_highest_block().await {
+                    Ok(Some(highest_block)) => {
+                        let block_hash = highest_block.message.block_hash();
+                        let height = highest_block.message.execution_payload.block_number;
+                        let execution_hash = highest_block.message.execution_payload.block_hash;
+                        let reconstructed_head = BlockRef {
+                            hash: block_hash.to_block_hash(),
+                            number: height,
+                            execution_hash,
+                        };
+                        // Store the reconstructed chain head
+                        if let Err(e) = database.put_chain_head(&reconstructed_head).await {
+                            warn!(error = ?e, "Failed to store reconstructed chain head");
+                        } else {
+                            info!(
+                                height = height,
+                                hash = %block_hash.to_block_hash(),
+                                "Reconstructed chain head from existing blocks"
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        info!("No blocks found in database - starting fresh at genesis");
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "Failed to scan for existing blocks during chain head reconstruction");
+                    }
+                }
             }
             Err(e) => {
                 warn!(error = ?e, "Failed to restore chain head from database - will use genesis");

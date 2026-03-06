@@ -3027,6 +3027,13 @@ impl Handler<ApplyRecoveredState> for ChainActor {
                     state_guard.step = new_step;
                 }
 
+                // Enable recovery mode for faster round catch-up after restart.
+                // This allows the node to accept votes from up to 100 rounds in the
+                // future, enabling rapid catch-up when rejoining after being offline.
+                // Recovery mode will be automatically disabled by TendermintDriver
+                // after the node has caught up to the network's current round.
+                state_guard.future_messages.enable_recovery_mode();
+
                 tracing::info!(
                     correlation_id = %correlation_id,
                     height = state_guard.height,
@@ -3035,7 +3042,8 @@ impl Handler<ApplyRecoveredState> for ChainActor {
                     lock_restored = lock_restored,
                     prevotes_restored = prevotes_restored,
                     precommits_restored = precommits_restored,
-                    "WAL recovery applied to TendermintState"
+                    recovery_mode = true,
+                    "WAL recovery applied to TendermintState with recovery mode enabled"
                 );
 
                 Ok(ApplyRecoveredStateResponse {

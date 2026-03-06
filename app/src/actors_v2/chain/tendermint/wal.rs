@@ -576,7 +576,10 @@ impl RecoveredState {
                     state.sent_precommits.clear();
                     state.locked_round = None;
                     state.locked_block = None;
-                    current_height = None;
+                    // After commit, next height starts at round 0
+                    // This ensures recovery starts at the correct round after crash
+                    state.current_round = Some(0);
+                    current_height = Some(height + 1);
                 }
 
                 WALEntry::SentProposal { .. } => {
@@ -703,6 +706,38 @@ mod tests {
         assert_eq!(recovered.start_height(), 101);
         // Lock state cleared after commit
         assert!(recovered.locked_block.is_none());
+        // After commit, round should be 0 for next height
+        assert_eq!(recovered.current_round, Some(0));
+    }
+
+    #[test]
+    fn test_recovery_round_after_commit() {
+        // Test that after commit, recovery correctly starts at H+1, round 0
+        let entries = vec![
+            WALEntry::NewRound {
+                height: 100,
+                round: 0,
+            },
+            WALEntry::Commit {
+                height: 100,
+                block_hash: BlockHash::repeat_byte(0xAB),
+            },
+            // NewRound for H+1 is written immediately after commit
+            WALEntry::NewRound {
+                height: 101,
+                round: 0,
+            },
+        ];
+
+        let recovered = RecoveredState::from_wal_entries(entries);
+
+        // Should be at height 101 (after commit at 100, NewRound at 101)
+        assert_eq!(recovered.last_committed_height, Some(100));
+        assert_eq!(recovered.start_height(), 101);
+        assert_eq!(recovered.current_round, Some(0));
+        // Votes should be clear for new height
+        assert!(recovered.sent_prevotes.is_empty());
+        assert!(recovered.sent_precommits.is_empty());
     }
 
     #[test]

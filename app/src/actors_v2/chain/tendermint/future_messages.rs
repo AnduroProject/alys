@@ -24,11 +24,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
 
-/// Maximum number of future rounds to store (prevents memory exhaustion)
+/// Default maximum number of future rounds to store (prevents memory exhaustion)
 ///
 /// 20 rounds is generous - even at 1 second per round, this is 20 seconds
 /// of messages, far more than typical network delays.
-const MAX_FUTURE_ROUNDS: u32 = 20;
+const DEFAULT_MAX_FUTURE_ROUNDS: u32 = 20;
+
+/// Extended maximum for recovery mode after restart.
+///
+/// When a node restarts after being offline, it may be many rounds behind.
+/// During recovery mode, we accept votes from up to 100 rounds in the future
+/// to allow rapid catch-up to the network's current round.
+const RECOVERY_MAX_FUTURE_ROUNDS: u32 = 100;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUTURE ROUND VOTES
@@ -190,6 +197,7 @@ impl FutureRoundVotes {
 /// - Proposal storage (one per round)
 /// - Cleanup when advancing rounds
 /// - PoLC verification for unlocking
+/// - Dynamic recovery mode for post-restart catch-up
 #[derive(Debug)]
 pub struct FutureMessageStore {
     /// Proposals indexed by round
@@ -203,6 +211,12 @@ pub struct FutureMessageStore {
 
     /// Current validator set
     validator_set: Arc<ValidatorSet>,
+
+    /// Maximum future rounds to accept (configurable for recovery mode)
+    max_future_rounds: u32,
+
+    /// Whether recovery mode is enabled (extended future round acceptance)
+    recovery_mode: bool,
 }
 
 impl FutureMessageStore {
@@ -213,7 +227,53 @@ impl FutureMessageStore {
             votes: HashMap::new(),
             current_round: 0,
             validator_set,
+            max_future_rounds: DEFAULT_MAX_FUTURE_ROUNDS,
+            recovery_mode: false,
         }
+    }
+
+    /// Enable recovery mode for faster round catch-up after restart.
+    ///
+    /// In recovery mode, the store accepts votes from up to 100 rounds in the
+    /// future instead of the default 20. This allows nodes that restart after
+    /// being offline to quickly catch up to the network's current round.
+    ///
+    /// Recovery mode should be disabled after the node has caught up (typically
+    /// after 30-60 seconds or after receiving votes from the current round).
+    pub fn enable_recovery_mode(&mut self) {
+        if !self.recovery_mode {
+            self.max_future_rounds = RECOVERY_MAX_FUTURE_ROUNDS;
+            self.recovery_mode = true;
+            debug!(
+                max_future_rounds = RECOVERY_MAX_FUTURE_ROUNDS,
+                "Recovery mode enabled - accepting extended future rounds"
+            );
+        }
+    }
+
+    /// Disable recovery mode and return to normal operation.
+    ///
+    /// This should be called after the node has caught up to the network's
+    /// current round to prevent excessive memory usage.
+    pub fn disable_recovery_mode(&mut self) {
+        if self.recovery_mode {
+            self.max_future_rounds = DEFAULT_MAX_FUTURE_ROUNDS;
+            self.recovery_mode = false;
+            debug!(
+                max_future_rounds = DEFAULT_MAX_FUTURE_ROUNDS,
+                "Recovery mode disabled - using default future round limit"
+            );
+
+            // Clean up any messages that are now too far in the future
+            let max_round = self.current_round.saturating_add(DEFAULT_MAX_FUTURE_ROUNDS);
+            self.proposals.retain(|&r, _| r <= max_round);
+            self.votes.retain(|&r, _| r <= max_round);
+        }
+    }
+
+    /// Check if recovery mode is enabled
+    pub fn is_recovery_mode(&self) -> bool {
+        self.recovery_mode
     }
 
     /// Update validator set (e.g., at height change)
@@ -235,7 +295,7 @@ impl FutureMessageStore {
         self.votes.retain(|&r, _| r > round);
 
         // Clean up messages too far in the future
-        let max_round = round.saturating_add(MAX_FUTURE_ROUNDS);
+        let max_round = round.saturating_add(self.max_future_rounds);
         self.proposals.retain(|&r, _| r <= max_round);
         self.votes.retain(|&r, _| r <= max_round);
     }
@@ -246,6 +306,7 @@ impl FutureMessageStore {
         self.votes.clear();
         self.current_round = 0;
         self.validator_set = validator_set;
+        // Note: recovery_mode is preserved across height changes
     }
 
     /// Store a vote for a future round (vote must be pre-validated!)
@@ -256,11 +317,12 @@ impl FutureMessageStore {
             return FutureRoundAction::NoAction;
         }
 
-        if vote.round > self.current_round.saturating_add(MAX_FUTURE_ROUNDS) {
+        if vote.round > self.current_round.saturating_add(self.max_future_rounds) {
             debug!(
                 vote_round = vote.round,
                 current_round = self.current_round,
-                max_future = MAX_FUTURE_ROUNDS,
+                max_future = self.max_future_rounds,
+                recovery_mode = self.recovery_mode,
                 "Rejecting vote too far in future"
             );
             return FutureRoundAction::NoAction;
@@ -282,7 +344,7 @@ impl FutureMessageStore {
             return false;
         }
 
-        if proposal.round > self.current_round.saturating_add(MAX_FUTURE_ROUNDS) {
+        if proposal.round > self.current_round.saturating_add(self.max_future_rounds) {
             return false;
         }
 
@@ -643,5 +705,68 @@ mod tests {
         let vote = create_test_vote(5, 2, Some(block_hash), VoteType::Prevote);
         votes.add_vote(vote);
         assert!(votes.has_polc_for_block(&block_hash));
+    }
+
+    #[test]
+    fn test_recovery_mode_extends_future_round_limit() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // By default, votes for round 50 should be rejected (default limit is 20)
+        let vote = create_test_vote(50, 0, Some(test_hash(1)), VoteType::Prevote);
+        let action = store.store_vote(vote);
+        assert_eq!(action, FutureRoundAction::NoAction);
+        assert!(store.is_empty());
+        assert!(!store.is_recovery_mode());
+
+        // Enable recovery mode
+        store.enable_recovery_mode();
+        assert!(store.is_recovery_mode());
+
+        // Now votes for round 50 should be accepted (recovery limit is 100)
+        let vote = create_test_vote(50, 0, Some(test_hash(1)), VoteType::Prevote);
+        let action = store.store_vote(vote);
+        assert_eq!(action, FutureRoundAction::NoAction); // Not enough votes for threshold
+        assert_eq!(store.vote_round_count(), 1); // But vote was stored
+    }
+
+    #[test]
+    fn test_recovery_mode_disable_cleans_up() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // Enable recovery mode and store votes for far future rounds
+        store.enable_recovery_mode();
+
+        // Store votes at rounds 25, 50, 75 (beyond default limit of 20)
+        for round in [25, 50, 75] {
+            let vote = create_test_vote(round, 0, Some(test_hash(1)), VoteType::Prevote);
+            store.store_vote(vote);
+        }
+        assert_eq!(store.vote_round_count(), 3);
+
+        // Disable recovery mode
+        store.disable_recovery_mode();
+        assert!(!store.is_recovery_mode());
+
+        // Votes beyond default limit (20) should be cleaned up
+        // Round 25 is beyond limit, rounds 50 and 75 are definitely beyond
+        assert_eq!(store.vote_round_count(), 0);
+    }
+
+    #[test]
+    fn test_recovery_mode_preserved_across_reset() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set.clone());
+
+        // Enable recovery mode
+        store.enable_recovery_mode();
+        assert!(store.is_recovery_mode());
+
+        // Reset for new height
+        store.reset(validator_set);
+
+        // Recovery mode should be preserved
+        assert!(store.is_recovery_mode());
     }
 }

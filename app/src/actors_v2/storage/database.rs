@@ -8,7 +8,7 @@ use super::messages::WriteOperation;
 use crate::auxpow_miner::BlockIndex;
 use crate::block::ConvertBlockHash;
 use lighthouse_wrapper::types::Hash256;
-use rocksdb::{ColumnFamilyDescriptor, Options, WriteBatch, DB};
+use rocksdb::{ColumnFamilyDescriptor, Options, WriteBatch, WriteOptions, DB};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -340,6 +340,57 @@ impl DatabaseManager {
         }
     }
 
+    /// Find the highest block stored in the database.
+    ///
+    /// This is used for chain head reconstruction when the chain_head marker
+    /// is missing but blocks exist in storage. Scans the BLOCK_HEIGHTS column
+    /// family in reverse order to find the highest stored block.
+    pub async fn find_highest_block(&self) -> Result<Option<AlysConsensusBlock>, StorageError> {
+        // First, find the highest block hash (without holding references across await)
+        let block_hash = {
+            let db = self.main_db.read().await;
+            let height_cf = db
+                .cf_handle(column_families::BLOCK_HEIGHTS)
+                .ok_or_else(|| {
+                    StorageError::Database("BLOCK_HEIGHTS column family not found".to_string())
+                })?;
+
+            // Iterate from the end to find the highest height
+            let mut iter = db.raw_iterator_cf(&height_cf);
+            iter.seek_to_last();
+
+            if iter.valid() {
+                if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
+                    // Key is height in big-endian
+                    if key.len() == 8 {
+                        let height = u64::from_be_bytes(key.try_into().unwrap());
+                        // Value is block hash
+                        if value.len() >= 32 {
+                            let mut hash_bytes = [0u8; 32];
+                            hash_bytes.copy_from_slice(&value[..32]);
+                            debug!(height = height, "Found highest block in database");
+                            Some(Hash256::from(hash_bytes))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        // Now fetch the block with a fresh database read
+        match block_hash {
+            Some(hash) => self.get_block(&hash).await,
+            None => Ok(None),
+        }
+    }
+
     /// Store state data
     pub async fn put_state(&self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
@@ -364,7 +415,11 @@ impl DatabaseManager {
             .map_err(|e| StorageError::Database(format!("Failed to retrieve state: {}", e)))
     }
 
-    /// Store chain head
+    /// Store chain head with synchronous write for crash safety.
+    ///
+    /// This uses sync writes to ensure the chain head survives SIGKILL (docker kill).
+    /// The chain head is critical for recovery - without it, nodes lose track of
+    /// their current position and may trigger unnecessary full resyncs.
     pub async fn put_chain_head(&self, head: &BlockRef) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
         let cf = db.cf_handle(column_families::CHAIN_HEAD).ok_or_else(|| {
@@ -374,7 +429,13 @@ impl DatabaseManager {
         let value =
             serde_json::to_vec(head).map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        db.put_cf(&cf, b"current", value)
+        // Use sync writes for chain head to ensure durability across SIGKILL.
+        // This is critical for crash recovery - without a durable chain head,
+        // nodes will report height 0 on restart and trigger full resync.
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+
+        db.put_cf_opt(&cf, b"current", value, &write_opts)
             .map_err(|e| StorageError::Database(format!("Failed to store chain head: {}", e)))?;
 
         Ok(())
@@ -779,9 +840,13 @@ impl DatabaseManager {
     }
 
     /// Execute batch write operations
+    ///
+    /// Uses synchronous writes when the batch includes a chain head update
+    /// to ensure durability across SIGKILL.
     pub async fn batch_write(&self, operations: Vec<WriteOperation>) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
         let mut batch = WriteBatch::default();
+        let mut has_head_update = false;
 
         for operation in operations {
             match operation {
@@ -817,6 +882,7 @@ impl DatabaseManager {
                     let value = serde_json::to_vec(&head)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?;
                     batch.put_cf(&cf, b"current", value);
+                    has_head_update = true;
                 }
                 _ => {
                     warn!("Unsupported batch operation: {:?}", operation);
@@ -824,8 +890,16 @@ impl DatabaseManager {
             }
         }
 
-        db.write(batch)
-            .map_err(|e| StorageError::Database(format!("Failed to execute batch write: {}", e)))?;
+        // Use sync writes when updating chain head to ensure durability
+        if has_head_update {
+            let mut write_opts = WriteOptions::default();
+            write_opts.set_sync(true);
+            db.write_opt(batch, &write_opts)
+                .map_err(|e| StorageError::Database(format!("Failed to execute batch write: {}", e)))?;
+        } else {
+            db.write(batch)
+                .map_err(|e| StorageError::Database(format!("Failed to execute batch write: {}", e)))?;
+        }
 
         Ok(())
     }
