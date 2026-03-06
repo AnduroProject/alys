@@ -1495,6 +1495,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                 let state = std::sync::Arc::clone(&self.state);
                 let data_dir = self.config.data_dir.clone();
+                let storage_actor = self.storage_actor.clone();
 
                 ctx.spawn(
                     async move {
@@ -1549,24 +1550,78 @@ impl Handler<SyncMessage> for SyncActor {
                                 s.metrics.record_checkpoint_loaded(checkpoint.blocks_synced);
                             }
                             Ok(None) => {
-                                tracing::debug!("No checkpoint file found - starting fresh");
+                                // No checkpoint file - query StorageActor for actual chain head
+                                // This prevents re-syncing from genesis after restart
+                                let storage_height = if let Some(storage) = storage_actor.as_ref() {
+                                    match storage.send(GetChainHeadMessage { correlation_id: None }).await {
+                                        Ok(Ok(Some(head))) => {
+                                            tracing::info!(
+                                                storage_height = head.number,
+                                                "No checkpoint found - using StorageActor chain head"
+                                            );
+                                            head.number
+                                        }
+                                        Ok(Ok(None)) => {
+                                            tracing::debug!("No checkpoint and no chain head in storage - starting fresh");
+                                            0
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "Failed to query StorageActor for chain head - starting fresh"
+                                            );
+                                            0
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "StorageActor mailbox error - starting fresh"
+                                            );
+                                            0
+                                        }
+                                    }
+                                } else {
+                                    tracing::debug!("No checkpoint and no StorageActor configured - starting fresh");
+                                    0
+                                };
 
-                                // Initialize with genesis state
                                 let mut s = state.write().unwrap();
-                                s.current_height = 0;
-                                s.target_height = 0;
+                                s.current_height = storage_height;
+                                s.target_height = 0; // Will be discovered via peer queries
                                 s.transition_to_state(SyncState::Stopped);
                                 s.is_running = false;
+
+                                if storage_height > 0 {
+                                    tracing::info!(
+                                        current_height = storage_height,
+                                        "Initialized SyncActor from StorageActor chain head"
+                                    );
+                                }
                             }
                             Err(e) => {
                                 tracing::error!(
                                     error = %e,
-                                    "Failed to load checkpoint - starting fresh"
+                                    "Failed to load checkpoint - querying StorageActor"
                                 );
 
-                                // On error, start fresh (safe fallback)
+                                // On checkpoint error, try StorageActor as fallback
+                                let storage_height = if let Some(storage) = storage_actor.as_ref() {
+                                    match storage.send(GetChainHeadMessage { correlation_id: None }).await {
+                                        Ok(Ok(Some(head))) => {
+                                            tracing::info!(
+                                                storage_height = head.number,
+                                                "Checkpoint error - using StorageActor chain head"
+                                            );
+                                            head.number
+                                        }
+                                        _ => 0
+                                    }
+                                } else {
+                                    0
+                                };
+
                                 let mut s = state.write().unwrap();
-                                s.current_height = 0;
+                                s.current_height = storage_height;
                                 s.target_height = 0;
                                 s.transition_to_state(SyncState::Stopped);
                                 s.is_running = false;
