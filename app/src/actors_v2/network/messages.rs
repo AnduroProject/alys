@@ -160,12 +160,6 @@ pub enum SyncMessage {
         /// Map of peer_id -> (height, head_hash)
         peer_heights: Vec<(PeerId, u64, [u8; 32])>,
     },
-    /// Load checkpoint on startup (Phase 5)
-    LoadCheckpoint,
-    /// Save checkpoint during sync (Phase 5)
-    SaveCheckpoint,
-    /// Clear checkpoint after sync completion (Phase 5)
-    ClearCheckpoint,
 
     // Network height monitoring messages (Active Height Monitoring feature)
     /// Force refresh of network height from peers (used after reconnection)

@@ -18,7 +18,6 @@ pub mod protocols;
 pub mod rpc;
 pub mod swarm_factory;
 pub mod sync_actor;
-pub mod sync_checkpoint;
 pub mod tendermint;
 pub mod tendermint_sync;
 
@@ -31,7 +30,6 @@ pub use metrics::{NetworkMetrics, SyncMetrics};
 pub use network_actor::NetworkActor;
 pub use rpc::{NetworkRpcHandler, NetworkRpcRequest, NetworkRpcResponse, NetworkSubsystem};
 pub use sync_actor::SyncActor;
-pub use sync_checkpoint::SyncCheckpoint;
 pub use tendermint::{
     TendermintNetworkConfig, TendermintNetworkHandler, TendermintWireMessage, TendermintWireType,
 };

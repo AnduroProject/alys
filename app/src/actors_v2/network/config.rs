@@ -129,7 +129,7 @@ pub struct SyncConfig {
     pub block_validation_timeout: Duration,
     /// Maximum sync peers to use
     pub max_sync_peers: usize,
-    /// Data directory for checkpoint persistence (Phase 5)
+    /// Data directory for sync-related persistence (reserved for future use)
     pub data_dir: PathBuf,
 
     // Network height monitoring configuration (Active Height Monitoring feature)

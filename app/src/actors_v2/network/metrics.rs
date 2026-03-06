@@ -688,16 +688,6 @@ impl SyncMetrics {
         }
     }
 
-    pub fn record_checkpoint_loaded(&mut self, blocks_synced: u64) {
-        self.blocks_synced = blocks_synced;
-        self.last_updated = SystemTime::now();
-        tracing::debug!(
-            blocks_synced = blocks_synced,
-            "Checkpoint loaded metrics recorded"
-        );
-        // Note: SYNC_BLOCKS_SYNCED is a counter (can't be set), checkpoint just records context
-    }
-
     pub fn record_sync_complete(&mut self, final_height: u64) {
         self.current_height = final_height;
         self.is_syncing = false;

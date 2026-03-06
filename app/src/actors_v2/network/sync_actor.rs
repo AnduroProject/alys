@@ -14,7 +14,6 @@ use std::time::{Duration, Instant, SystemTime};
 use super::{
     messages::{Block, NetworkMessage, PeerId, SyncStatus},
     metrics::update_prometheus_sync_state,
-    sync_checkpoint::SyncCheckpoint,
     tendermint_sync::{TendermintSyncConfig, TendermintSyncValidator},
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
@@ -448,12 +447,43 @@ impl Actor for SyncActor {
     fn started(&mut self, ctx: &mut Self::Context) {
         tracing::info!("SyncActor V2 started (Arc<RwLock> pattern)");
 
-        // Load checkpoint on startup
-        let addr = ctx.address();
+        // Initialize current_height from StorageActor on startup
+        // This replaces the old checkpoint system - we just query the authoritative source
+        let state = std::sync::Arc::clone(&self.state);
+        let storage_actor = self.storage_actor.clone();
         tokio::spawn(async move {
-            if let Err(e) = addr.send(SyncMessage::LoadCheckpoint).await {
-                tracing::error!("Failed to load checkpoint: {}", e);
-            }
+            let storage_height = if let Some(storage) = storage_actor.as_ref() {
+                match storage.send(GetChainHeadMessage { correlation_id: None }).await {
+                    Ok(Ok(Some(head))) => {
+                        tracing::info!(
+                            storage_height = head.number,
+                            "Initialized SyncActor from StorageActor chain head"
+                        );
+                        head.number
+                    }
+                    Ok(Ok(None)) => {
+                        tracing::debug!("No chain head in storage - starting fresh");
+                        0
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "Failed to query StorageActor - starting fresh");
+                        0
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "StorageActor mailbox error - starting fresh");
+                        0
+                    }
+                }
+            } else {
+                tracing::debug!("No StorageActor configured - starting fresh");
+                0
+            };
+
+            let mut s = state.write().unwrap();
+            s.current_height = storage_height;
+            s.target_height = 0; // Will be discovered via peer queries
+            s.transition_to_state(SyncState::Stopped);
+            s.is_running = false;
         });
 
         // Periodic timeout checking
@@ -483,28 +513,6 @@ impl Actor for SyncActor {
                     );
                 }
             });
-        });
-
-        // Periodic checkpoint saving (every 30 seconds during sync)
-        ctx.run_interval(Duration::from_secs(30), |act, ctx| {
-            let addr_clone = ctx.address();
-
-            // Check state synchronously (RwLockReadGuard is not Send)
-            let should_save = {
-                let s = act.state.read().unwrap();
-                s.is_running && matches!(
-                    s.sync_state,
-                    SyncState::RequestingBlocks | SyncState::ProcessingBlocks
-                )
-            };
-
-            if should_save {
-                tokio::spawn(async move {
-                    if let Err(e) = addr_clone.send(SyncMessage::SaveCheckpoint).await {
-                        tracing::error!("Failed to save checkpoint: {}", e);
-                    }
-                });
-            }
         });
 
         // Network height query: Poll for network height when in QueryingNetworkHeight state
@@ -1487,206 +1495,6 @@ impl Handler<SyncMessage> for SyncActor {
                         "Network height not yet discovered".to_string(),
                     ))
                 }
-            }
-
-            // Phase 5: Checkpoint/Resume handlers
-            SyncMessage::LoadCheckpoint => {
-                tracing::debug!("Loading sync checkpoint");
-
-                let state = std::sync::Arc::clone(&self.state);
-                let data_dir = self.config.data_dir.clone();
-                let storage_actor = self.storage_actor.clone();
-
-                ctx.spawn(
-                    async move {
-                        match SyncCheckpoint::load(&data_dir).await {
-                            Ok(Some(checkpoint)) => {
-                                tracing::info!(
-                                    current_height = checkpoint.current_height,
-                                    target_height = checkpoint.target_height,
-                                    blocks_synced = checkpoint.blocks_synced,
-                                    "Loaded sync checkpoint successfully"
-                                );
-
-                                // Restore state from checkpoint
-                                let mut s = state.write().unwrap();
-
-                                s.current_height = checkpoint.current_height;
-                                s.target_height = checkpoint.target_height;
-
-                                // Determine if we should resume syncing
-                                const SYNC_THRESHOLD: u64 = 2;
-                                let needs_sync = checkpoint.target_height > 0
-                                    && checkpoint.current_height + SYNC_THRESHOLD < checkpoint.target_height;
-
-                                if needs_sync {
-                                    // Resume sync - transition to Starting
-                                    s.transition_to_state(SyncState::Starting);
-                                    s.is_running = true;
-
-                                    tracing::info!(
-                                        resume_from = checkpoint.current_height,
-                                        target = checkpoint.target_height,
-                                        remaining = checkpoint.target_height - checkpoint.current_height,
-                                        "Resuming sync from checkpoint"
-                                    );
-
-                                    // Transition to DiscoveringPeers
-                                    // UpdatePeers or GetConnectedPeers will populate peers
-                                    s.transition_to_state(SyncState::DiscoveringPeers);
-                                } else {
-                                    // Sync was complete or nearly complete
-                                    s.transition_to_state(SyncState::Synced);
-                                    s.is_running = false;
-                                    s.last_sync_completed_at = Some(Instant::now());
-
-                                    tracing::info!(
-                                        current_height = checkpoint.current_height,
-                                        "Checkpoint indicates sync complete"
-                                    );
-                                }
-
-                                // Update metrics with checkpoint info
-                                s.metrics.record_checkpoint_loaded(checkpoint.blocks_synced);
-                            }
-                            Ok(None) => {
-                                // No checkpoint file - query StorageActor for actual chain head
-                                // This prevents re-syncing from genesis after restart
-                                let storage_height = if let Some(storage) = storage_actor.as_ref() {
-                                    match storage.send(GetChainHeadMessage { correlation_id: None }).await {
-                                        Ok(Ok(Some(head))) => {
-                                            tracing::info!(
-                                                storage_height = head.number,
-                                                "No checkpoint found - using StorageActor chain head"
-                                            );
-                                            head.number
-                                        }
-                                        Ok(Ok(None)) => {
-                                            tracing::debug!("No checkpoint and no chain head in storage - starting fresh");
-                                            0
-                                        }
-                                        Ok(Err(e)) => {
-                                            tracing::warn!(
-                                                error = %e,
-                                                "Failed to query StorageActor for chain head - starting fresh"
-                                            );
-                                            0
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                error = %e,
-                                                "StorageActor mailbox error - starting fresh"
-                                            );
-                                            0
-                                        }
-                                    }
-                                } else {
-                                    tracing::debug!("No checkpoint and no StorageActor configured - starting fresh");
-                                    0
-                                };
-
-                                let mut s = state.write().unwrap();
-                                s.current_height = storage_height;
-                                s.target_height = 0; // Will be discovered via peer queries
-                                s.transition_to_state(SyncState::Stopped);
-                                s.is_running = false;
-
-                                if storage_height > 0 {
-                                    tracing::info!(
-                                        current_height = storage_height,
-                                        "Initialized SyncActor from StorageActor chain head"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    error = %e,
-                                    "Failed to load checkpoint - querying StorageActor"
-                                );
-
-                                // On checkpoint error, try StorageActor as fallback
-                                let storage_height = if let Some(storage) = storage_actor.as_ref() {
-                                    match storage.send(GetChainHeadMessage { correlation_id: None }).await {
-                                        Ok(Ok(Some(head))) => {
-                                            tracing::info!(
-                                                storage_height = head.number,
-                                                "Checkpoint error - using StorageActor chain head"
-                                            );
-                                            head.number
-                                        }
-                                        _ => 0
-                                    }
-                                } else {
-                                    0
-                                };
-
-                                let mut s = state.write().unwrap();
-                                s.current_height = storage_height;
-                                s.target_height = 0;
-                                s.transition_to_state(SyncState::Stopped);
-                                s.is_running = false;
-                            }
-                        }
-                    }
-                    .into_actor(self),
-                );
-
-                Ok(SyncResponse::Started)
-            }
-
-            SyncMessage::SaveCheckpoint => {
-                tracing::trace!("Saving sync checkpoint");
-
-                let state = std::sync::Arc::clone(&self.state);
-                let data_dir = self.config.data_dir.clone();
-
-                ctx.spawn(
-                    async move {
-                        let s = state.read().unwrap();
-
-                        // Only save if actively syncing
-                        if matches!(
-                            s.sync_state,
-                            SyncState::RequestingBlocks | SyncState::ProcessingBlocks
-                        ) {
-                            let checkpoint = SyncCheckpoint::new(
-                                s.current_height,
-                                s.target_height,
-                                s.current_height,
-                            );
-
-                            drop(s); // Release read lock before async I/O
-
-                            if let Err(e) = checkpoint.save(&data_dir).await {
-                                tracing::error!("Failed to save checkpoint: {}", e);
-                            } else {
-                                tracing::trace!("Checkpoint saved successfully");
-                            }
-                        }
-                    }
-                    .into_actor(self),
-                );
-
-                Ok(SyncResponse::Started)
-            }
-
-            SyncMessage::ClearCheckpoint => {
-                tracing::debug!("Clearing sync checkpoint");
-
-                let data_dir = self.config.data_dir.clone();
-
-                ctx.spawn(
-                    async move {
-                        if let Err(e) = SyncCheckpoint::delete(&data_dir).await {
-                            tracing::error!("Failed to clear checkpoint: {}", e);
-                        } else {
-                            tracing::debug!("Checkpoint cleared successfully");
-                        }
-                    }
-                    .into_actor(self),
-                );
-
-                Ok(SyncResponse::Started)
             }
 
             SyncMessage::ReportPeerHeights { peer_heights } => {
