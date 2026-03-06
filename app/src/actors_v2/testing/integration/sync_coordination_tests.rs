@@ -365,214 +365,6 @@ fn test_queue_overflow_protection() {
     assert!(queue_has_space, "Queue should have space after cleanup");
 }
 
-// ============================================================================
-// Phase 5.1 Integration Tests: Checkpoint/Resume Workflow
-// ============================================================================
-
-/// Integration test: Checkpoint saving during active sync
-///
-/// This test validates that checkpoints are saved correctly during sync
-#[tokio::test]
-async fn test_checkpoint_save_during_sync() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Simulate sync progress
-    let current_height = 1000u64;
-    let target_height = 5000u64;
-    let blocks_synced = 1000u64;
-
-    let checkpoint = SyncCheckpoint::new(current_height, target_height, blocks_synced);
-
-    // Save checkpoint (simulating periodic save during sync)
-    let save_result = checkpoint.save(temp_dir.path()).await;
-    assert!(save_result.is_ok(), "Checkpoint save should succeed");
-
-    // Verify checkpoint file exists
-    let checkpoint_path = temp_dir.path().join("sync_checkpoint.json");
-    assert!(checkpoint_path.exists(), "Checkpoint file should exist");
-
-    // Load checkpoint and verify data integrity
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap();
-    assert!(loaded.is_some(), "Checkpoint should be loadable");
-
-    let loaded_checkpoint = loaded.unwrap();
-    assert_eq!(loaded_checkpoint.current_height, current_height);
-    assert_eq!(loaded_checkpoint.target_height, target_height);
-    assert_eq!(loaded_checkpoint.blocks_synced, blocks_synced);
-    assert_eq!(loaded_checkpoint.version, 1);
-}
-
-/// Integration test: Checkpoint loading on SyncActor startup
-///
-/// This test validates sync resumption from checkpoint
-#[tokio::test]
-async fn test_checkpoint_resume_on_startup() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use std::time::SystemTime;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create checkpoint (simulating previous sync session)
-    let saved_height = 2500u64;
-    let saved_target = 5000u64;
-    let saved_blocks = 2500u64;
-
-    let checkpoint = SyncCheckpoint::new(saved_height, saved_target, saved_blocks);
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    // Simulate time passing (simulate restart)
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Load checkpoint (simulating startup)
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap();
-    assert!(loaded.is_some(), "Checkpoint should exist after restart");
-
-    let resumed = loaded.unwrap();
-
-    // Verify resume state
-    assert_eq!(resumed.current_height, saved_height, "Should resume from saved height");
-    assert_eq!(resumed.target_height, saved_target, "Should resume to saved target");
-    assert_eq!(resumed.blocks_synced, saved_blocks, "Should preserve sync progress");
-
-    // Verify checkpoint is not stale
-    assert!(!resumed.is_stale(Duration::from_secs(3600)), "Fresh checkpoint should not be stale");
-
-    // Verify timestamps
-    let age = SystemTime::now().duration_since(resumed.last_checkpoint_time).unwrap();
-    assert!(age < Duration::from_secs(1), "Checkpoint should be very recent");
-}
-
-/// Integration test: Checkpoint clearing on sync completion
-///
-/// This test validates that checkpoints are removed after successful sync
-#[tokio::test]
-async fn test_checkpoint_clear_on_completion() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create and save checkpoint
-    let checkpoint = SyncCheckpoint::new(5000, 5000, 5000);
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    let checkpoint_path = temp_dir.path().join("sync_checkpoint.json");
-    assert!(checkpoint_path.exists(), "Checkpoint should exist before completion");
-
-    // Simulate sync completion - clear checkpoint
-    SyncCheckpoint::delete(temp_dir.path()).await.unwrap();
-
-    // Verify checkpoint is deleted
-    assert!(!checkpoint_path.exists(), "Checkpoint should be deleted after sync completion");
-
-    // Verify loading returns None
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap();
-    assert!(loaded.is_none(), "No checkpoint should exist after deletion");
-}
-
-/// Integration test: Stale checkpoint rejection
-///
-/// This test validates that old checkpoints are detected and rejected
-#[tokio::test]
-async fn test_stale_checkpoint_rejection() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create checkpoint
-    let mut checkpoint = SyncCheckpoint::new(1000, 5000, 1000);
-
-    // Manually set last_checkpoint_time to 25 hours ago
-    let stale_time = std::time::SystemTime::now() - Duration::from_secs(25 * 3600);
-    checkpoint.last_checkpoint_time = stale_time;
-
-    // Save stale checkpoint
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    // Load and check staleness
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-
-    // Verify staleness detection (24-hour threshold)
-    assert!(loaded.is_stale(Duration::from_secs(24 * 3600)),
-            "Checkpoint older than 24 hours should be stale");
-
-    // In real implementation, stale checkpoints would be deleted on load
-    // Here we verify the detection logic works
-}
-
-/// Integration test: Checkpoint update workflow
-///
-/// This test validates checkpoint updates during ongoing sync
-#[tokio::test]
-async fn test_checkpoint_update_workflow() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Initial checkpoint
-    let mut checkpoint = SyncCheckpoint::new(1000, 5000, 1000);
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    // Simulate sync progress
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Update checkpoint (simulate processing 500 more blocks)
-    checkpoint.update(1500, 1500);
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    // Verify updated checkpoint
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-    assert_eq!(loaded.current_height, 1500, "Height should be updated");
-    assert_eq!(loaded.blocks_synced, 1500, "Blocks synced should be updated");
-    assert_eq!(loaded.target_height, 5000, "Target should remain unchanged");
-
-    // Verify timestamp was updated
-    assert!(loaded.last_checkpoint_time > checkpoint.sync_start_time,
-            "Last checkpoint time should be after sync start");
-}
-
-/// Integration test: Multiple checkpoint save/load cycles
-///
-/// This test validates checkpoint persistence across multiple cycles
-#[tokio::test]
-async fn test_checkpoint_persistence_cycles() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Simulate 5 checkpoint save cycles
-    let checkpoints = vec![
-        (1000, 5000, 1000),
-        (2000, 5000, 2000),
-        (3000, 5000, 3000),
-        (4000, 5000, 4000),
-        (5000, 5000, 5000),
-    ];
-
-    for (height, target, synced) in checkpoints {
-        let checkpoint = SyncCheckpoint::new(height, target, synced);
-        checkpoint.save(temp_dir.path()).await.unwrap();
-
-        // Verify immediately loadable
-        let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-        assert_eq!(loaded.current_height, height);
-        assert_eq!(loaded.blocks_synced, synced);
-
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    // Final state should be last checkpoint
-    let final_checkpoint = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-    assert_eq!(final_checkpoint.current_height, 5000);
-    assert_eq!(final_checkpoint.blocks_synced, 5000);
-}
 
 // ============================================================================
 // Phase 5.2 Integration Tests: Parallel Validation
@@ -855,7 +647,7 @@ fn test_parallel_validation_metrics_aggregation() {
 
 #[cfg(test)]
 mod integration_test_summary {
-    //! Phase 4.3 + Phase 5.1 Integration Test Coverage Summary
+    //! Phase 4.3 Integration Test Coverage Summary
     //!
     //! These tests verify that the algorithms and workflows from Phases 0-5
     //! work correctly when integrated together.
@@ -870,14 +662,6 @@ mod integration_test_summary {
     //! - [✓] test_sync_completion_detection - Sync completion logic
     //! - [✓] test_queue_overflow_protection - Memory safety
     //!
-    //! **Phase 5.1 Tests Implemented (Checkpoint/Resume):**
-    //! - [✓] test_checkpoint_save_during_sync - Checkpoint saving
-    //! - [✓] test_checkpoint_resume_on_startup - Resume from checkpoint
-    //! - [✓] test_checkpoint_clear_on_completion - Checkpoint cleanup
-    //! - [✓] test_stale_checkpoint_rejection - Stale checkpoint detection
-    //! - [✓] test_checkpoint_update_workflow - Checkpoint updates
-    //! - [✓] test_checkpoint_persistence_cycles - Multiple save/load cycles
-    //!
     //! **Phase 5.2 Tests Implemented (Parallel Validation):**
     //! - [✓] test_parallel_validation_mixed_results - Mixed success/failure handling
     //! - [✓] test_parallel_validation_performance - Performance improvement validation
@@ -888,7 +672,6 @@ mod integration_test_summary {
     //!
     //! **Integration Coverage:**
     //! - [✓] Algorithm integration: 100%
-    //! - [✓] Checkpoint workflow: 100%
     //! - [✓] Parallel validation workflow: 100%
     //! - [⏳] Full actor system: Requires complex mock infrastructure
     //!

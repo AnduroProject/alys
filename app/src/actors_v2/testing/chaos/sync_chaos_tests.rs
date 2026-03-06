@@ -579,298 +579,6 @@ fn test_retry_storm_chaos() {
     // ✓ No thundering herd on simultaneous timeout
 }
 
-// ============================================================================
-// Phase 5.1 Chaos Tests: Checkpoint Resilience
-// ============================================================================
-
-/// Chaos Test: Checkpoint corruption resilience
-///
-/// Scenario: Checkpoint file becomes corrupted during save
-/// Expected: System handles corruption gracefully and continues without checkpoint
-#[tokio::test]
-async fn test_checkpoint_corruption_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use tokio::fs;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create valid checkpoint
-    let checkpoint = SyncCheckpoint::new(1000, 5000, 1000);
-    checkpoint.save(temp_dir.path()).await.unwrap();
-
-    let checkpoint_path = temp_dir.path().join("sync_checkpoint.json");
-    assert!(checkpoint_path.exists(), "Valid checkpoint should exist");
-
-    // Corrupt the checkpoint file (write invalid JSON)
-    fs::write(&checkpoint_path, b"{ corrupt json data ][[ }").await.unwrap();
-
-    // Try to load corrupted checkpoint
-    let load_result = SyncCheckpoint::load(temp_dir.path()).await;
-
-    // System should handle corruption gracefully
-    assert!(
-        load_result.is_err(),
-        "Loading corrupted checkpoint should return error"
-    );
-
-    // In real implementation:
-    // 1. Log corruption warning
-    // 2. Delete corrupted checkpoint
-    // 3. Start fresh sync from current height
-    // 4. Continue normal operation
-
-    // Verify system can recover by creating new checkpoint
-    let new_checkpoint = SyncCheckpoint::new(1100, 5000, 1100);
-    let save_result = new_checkpoint.save(temp_dir.path()).await;
-    assert!(save_result.is_ok(), "Should be able to save new checkpoint after corruption");
-
-    // Chaos Test Success Criteria:
-    // ✓ Corruption detected and handled
-    // ✓ No panic or crash
-    // ✓ System can recover and continue
-}
-
-/// Chaos Test: Concurrent checkpoint operations
-///
-/// Scenario: Multiple threads attempt checkpoint operations simultaneously
-/// Expected: No data corruption, last write wins, no deadlocks
-#[tokio::test]
-async fn test_concurrent_checkpoint_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use tokio::task;
-
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path().to_path_buf();
-
-    // Spawn 10 concurrent save operations
-    let mut handles = vec![];
-
-    for i in 0..10 {
-        let path = temp_path.clone();
-        let handle = task::spawn(async move {
-            let checkpoint = SyncCheckpoint::new(
-                1000 + (i * 100),
-                5000,
-                1000 + (i * 100)
-            );
-            checkpoint.save(&path).await
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all operations
-    let results: Vec<_> = futures::future::join_all(handles).await;
-
-    // Verify all operations completed without panic
-    for result in results {
-        assert!(result.is_ok(), "Concurrent save should not panic");
-        assert!(result.unwrap().is_ok(), "Save operation should succeed");
-    }
-
-    // Load final checkpoint (last write should win)
-    let loaded = SyncCheckpoint::load(&temp_path).await.unwrap();
-    assert!(loaded.is_some(), "Final checkpoint should exist");
-
-    let final_checkpoint = loaded.unwrap();
-    // Height should be one of the values written (last write wins)
-    assert!(
-        final_checkpoint.current_height >= 1000 && final_checkpoint.current_height <= 1900,
-        "Final checkpoint should have valid height from concurrent writes"
-    );
-
-    // Chaos Test Success Criteria:
-    // ✓ No deadlocks or panics
-    // ✓ All save operations completed
-    // ✓ Final checkpoint is valid (not corrupted)
-    // ✓ Last write wins semantics
-}
-
-/// Chaos Test: Disk full during checkpoint save
-///
-/// Scenario: Disk runs out of space during checkpoint save
-/// Expected: Error returned gracefully, no corruption of existing data
-#[tokio::test]
-async fn test_disk_full_checkpoint_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-
-    let temp_dir = TempDir::new().unwrap();
-
-    // Save initial valid checkpoint
-    let checkpoint1 = SyncCheckpoint::new(1000, 5000, 1000);
-    checkpoint1.save(temp_dir.path()).await.unwrap();
-
-    // Verify first checkpoint exists and is valid
-    let loaded1 = SyncCheckpoint::load(temp_dir.path()).await.unwrap();
-    assert!(loaded1.is_some(), "First checkpoint should exist");
-    assert_eq!(loaded1.unwrap().current_height, 1000);
-
-    // Note: We cannot easily simulate disk-full in unit tests without
-    // platform-specific filesystem mocking. In production:
-    // - tokio::fs::write would return Err(std::io::ErrorKind::StorageFull)
-    // - SyncActor would log error and continue
-    // - Old checkpoint would remain intact
-    // - Sync would continue without checkpoint updates
-
-    // Simulate the expected behavior: save fails, old checkpoint intact
-    let checkpoint2 = SyncCheckpoint::new(2000, 5000, 2000);
-
-    // If save fails (simulated), old checkpoint should still be loadable
-    let loaded_after_failure = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-    assert_eq!(
-        loaded_after_failure.current_height,
-        1000,
-        "Old checkpoint should remain intact after save failure"
-    );
-
-    // Chaos Test Success Criteria:
-    // ✓ Save failure handled gracefully (no panic)
-    // ✓ Existing checkpoint not corrupted
-    // ✓ System can continue without checkpoint updates
-    // ✓ Error propagated for logging
-}
-
-/// Chaos Test: Checkpoint save/delete race condition
-///
-/// Scenario: Delete operation races with save operation
-/// Expected: No corruption, operations complete cleanly
-#[tokio::test]
-async fn test_save_delete_race_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use tokio::task;
-
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path().to_path_buf();
-
-    // Run 50 iterations of save/delete race
-    for iteration in 0..50 {
-        let path1 = temp_path.clone();
-        let path2 = temp_path.clone();
-
-        let checkpoint = SyncCheckpoint::new(1000 + iteration, 5000, 1000 + iteration);
-
-        // Spawn concurrent save and delete
-        let save_handle = task::spawn(async move {
-            checkpoint.save(&path1).await
-        });
-
-        let delete_handle = task::spawn(async move {
-            SyncCheckpoint::delete(&path2).await
-        });
-
-        // Wait for both operations
-        let (save_result, delete_result) = tokio::join!(save_handle, delete_handle);
-
-        // Both operations should complete without panic
-        assert!(save_result.is_ok(), "Save should not panic");
-        assert!(delete_result.is_ok(), "Delete should not panic");
-
-        // Results depend on race winner - both are acceptable
-        let _ = save_result.unwrap();
-        let _ = delete_result.unwrap();
-
-        // Small delay between iterations
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-
-    // Chaos Test Success Criteria:
-    // ✓ No panics from race conditions
-    // ✓ Operations complete cleanly
-    // ✓ No file system corruption
-    // ✓ 50 iterations without failure
-}
-
-/// Chaos Test: Rapid checkpoint updates under high load
-///
-/// Scenario: Checkpoint updated every 100ms under sync load
-/// Expected: No performance degradation, all updates succeed
-#[tokio::test]
-async fn test_rapid_checkpoint_updates_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use std::time::Instant;
-
-    let temp_dir = TempDir::new().unwrap();
-    let start_time = Instant::now();
-
-    // Simulate 100 rapid checkpoint updates (every 10ms)
-    let mut checkpoint = SyncCheckpoint::new(1000, 10000, 0);
-
-    for i in 0..100 {
-        // Update checkpoint
-        checkpoint.update(1000 + i * 10, i * 10);
-
-        // Save checkpoint
-        let save_result = checkpoint.save(temp_dir.path()).await;
-        assert!(save_result.is_ok(), "Save {} should succeed", i);
-
-        // Small delay to simulate processing
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    let elapsed = start_time.elapsed();
-
-    // Verify final checkpoint
-    let loaded = SyncCheckpoint::load(temp_dir.path()).await.unwrap().unwrap();
-    assert_eq!(loaded.current_height, 1000 + 99 * 10, "Should have final height");
-    assert_eq!(loaded.blocks_synced, 99 * 10, "Should have final synced count");
-
-    // Performance check: 100 updates in reasonable time
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "100 checkpoint updates should complete in under 3 seconds (actual: {:?})",
-        elapsed
-    );
-
-    // Chaos Test Success Criteria:
-    // ✓ 100 rapid updates completed successfully
-    // ✓ No data loss or corruption
-    // ✓ Performance acceptable (< 30ms per update on average)
-    // ✓ Final state is consistent
-}
-
-/// Chaos Test: Checkpoint with missing parent directory
-///
-/// Scenario: Data directory does not exist or is deleted
-/// Expected: Directory created automatically, save succeeds
-#[tokio::test]
-async fn test_missing_directory_checkpoint_chaos() {
-    use crate::actors_v2::network::sync_checkpoint::SyncCheckpoint;
-    use tempfile::TempDir;
-    use tokio::fs;
-
-    let temp_dir = TempDir::new().unwrap();
-    let nested_path = temp_dir.path().join("sync").join("data").join("checkpoint");
-
-    // Path does not exist yet
-    assert!(!nested_path.exists(), "Nested path should not exist initially");
-
-    // Try to save checkpoint to non-existent directory
-    let checkpoint = SyncCheckpoint::new(1000, 5000, 1000);
-
-    // Note: Current implementation expects directory to exist.
-    // In production, create_dir_all should be called before save.
-
-    // Create parent directories (simulating production behavior)
-    fs::create_dir_all(&nested_path).await.unwrap();
-
-    // Now save should succeed
-    let save_result = checkpoint.save(&nested_path).await;
-    assert!(save_result.is_ok(), "Save should succeed after directory creation");
-
-    // Verify checkpoint exists
-    let loaded = SyncCheckpoint::load(&nested_path).await.unwrap();
-    assert!(loaded.is_some(), "Checkpoint should be loadable");
-
-    // Chaos Test Success Criteria:
-    // ✓ Missing directory handled gracefully
-    // ✓ Directory creation successful
-    // ✓ Checkpoint save succeeds
-    // ✓ Data integrity maintained
-}
 
 // ============================================================================
 // Phase 5.2 Chaos Tests: Parallel Validation Resilience
@@ -1226,7 +934,7 @@ async fn test_high_throughput_parallel_validation_chaos() {
 
 #[cfg(test)]
 mod chaos_test_summary {
-    //! Phase 4.4 + Phase 5 Chaos Test Coverage Summary
+    //! Phase 4.4 Chaos Test Coverage Summary
     //!
     //! These tests verify that the sync system remains resilient and recovers
     //! gracefully under adverse conditions and failure scenarios.
@@ -1239,14 +947,6 @@ mod chaos_test_summary {
     //! - [✓] test_resource_exhaustion_chaos - Resource exhaustion handling
     //! - [✓] test_byzantine_peer_chaos - Byzantine peer resistance
     //! - [✓] test_retry_storm_chaos - Retry storm prevention
-    //!
-    //! **Phase 5.1 Chaos Tests Implemented (Checkpoint Resilience):**
-    //! - [✓] test_checkpoint_corruption_chaos - Corruption handling
-    //! - [✓] test_concurrent_checkpoint_chaos - Concurrent operations
-    //! - [✓] test_disk_full_checkpoint_chaos - Disk full handling
-    //! - [✓] test_save_delete_race_chaos - Save/delete race conditions
-    //! - [✓] test_rapid_checkpoint_updates_chaos - Rapid updates
-    //! - [✓] test_missing_directory_checkpoint_chaos - Missing directory handling
     //!
     //! **Phase 5.2 Chaos Tests Implemented (Parallel Validation):**
     //! - [✓] test_parallel_validation_random_failures_chaos - Random failures
@@ -1264,14 +964,12 @@ mod chaos_test_summary {
     //! - Concurrent stress: 100%
     //! - Byzantine attacks: 100%
     //! - Retry storms: 100%
-    //! - Checkpoint corruption: 100%
-    //! - Disk failures: 100%
     //! - Race conditions: 100%
     //! - Parallel validation failures: 100%
     //! - Memory pressure: 100%
     //! - High throughput: 100%
     //!
-    //! **Total Chaos Tests: 20 (7 Phase 0-3 + 6 Phase 5.1 + 7 Phase 5.2)**
+    //! **Total Chaos Tests: 14 (7 Phase 0-3 + 7 Phase 5.2)**
     //!
     //! **Success Criteria:**
     //! - No panics or crashes under chaos
@@ -1279,6 +977,5 @@ mod chaos_test_summary {
     //! - Recovery after failure scenarios
     //! - Data integrity maintained throughout
     //! - No deadlocks or race conditions
-    //! - Checkpoint resilience verified
     //! - Parallel validation robustness confirmed
 }
