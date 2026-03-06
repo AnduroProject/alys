@@ -18,6 +18,7 @@ use super::{
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
 use crate::actors_v2::storage::{StorageActor, messages::GetChainHeadMessage};
+use crate::actors_v2::chain::{ChainActor, messages::ChainMessage};
 
 /// Simplified sync states (linear progression)
 #[derive(Debug, Clone, PartialEq)]
@@ -558,8 +559,8 @@ impl Actor for SyncActor {
                 // FALLBACK: Also check local ChainActor for blocks received via gossipsub
                 // This catches blocks that arrived and were successfully imported,
                 // as well as blocks that were received but cached as orphans
-                if let Some(chain_actor) = chain_actor {
-                    match chain_actor
+                if let Some(ref ca) = chain_actor {
+                    match ca
                         .send(crate::actors_v2::chain::messages::ChainMessage::GetChainStatus)
                         .await
                     {
@@ -617,6 +618,15 @@ impl Actor for SyncActor {
                     s.is_running = false;
                     s.last_sync_completed_at = Some(Instant::now());
                     s.metrics.record_sync_complete(height);
+
+                    // Notify ChainActor of sync completion so consensus can resume
+                    drop(s); // Release lock before async call
+                    if let Some(ref ca) = chain_actor {
+                        tracing::info!(final_height = height, "Notifying ChainActor of sync completion (timeout path)");
+                        ca.do_send(ChainMessage::SyncCompleted { final_height: height });
+                    } else {
+                        tracing::warn!("Cannot notify ChainActor of sync completion - no ChainActor reference");
+                    }
                 }
             });
         });
@@ -688,6 +698,7 @@ impl Actor for SyncActor {
         // Sync completion detection: Check if we've reached target
         ctx.run_interval(Duration::from_secs(5), |act, _ctx| {
             let state = std::sync::Arc::clone(&act.state);
+            let chain_actor_for_complete = act.chain_actor.clone();
 
             tokio::spawn(async move {
                 let mut s = state.write().unwrap();
@@ -726,6 +737,15 @@ impl Actor for SyncActor {
                     s.is_running = false;
                     s.last_sync_completed_at = Some(Instant::now());
                     s.metrics.record_sync_complete(current);
+
+                    // Notify ChainActor of sync completion so consensus can resume
+                    drop(s); // Release lock before async call
+                    if let Some(ref ca) = chain_actor_for_complete {
+                        tracing::info!(final_height = current, "Notifying ChainActor of sync completion (main path)");
+                        ca.do_send(ChainMessage::SyncCompleted { final_height: current });
+                    } else {
+                        tracing::warn!("Cannot notify ChainActor of sync completion - no ChainActor reference");
+                    }
                 }
             });
         });
@@ -843,14 +863,22 @@ impl Handler<SyncMessage> for SyncActor {
                         if s.target_height > 0
                             && s.current_height + SYNC_THRESHOLD >= s.target_height
                         {
+                            let height = s.current_height;
                             tracing::info!(
-                                current_height = s.current_height,
+                                current_height = height,
                                 target_height = s.target_height,
                                 "Already synced (within threshold)"
                             );
                             s.transition_to_state(SyncState::Synced);
                             s.is_running = false;
                             s.last_sync_completed_at = Some(Instant::now());
+
+                            // Notify ChainActor of sync completion so consensus can resume
+                            drop(s); // Release lock before async call
+                            if let Some(ref ca) = chain_actor {
+                                tracing::info!(final_height = height, "Notifying ChainActor of sync completion (already synced at start)");
+                                ca.do_send(ChainMessage::SyncCompleted { final_height: height });
+                            }
                             return;
                         }
 
@@ -865,6 +893,7 @@ impl Handler<SyncMessage> for SyncActor {
                         // Query NetworkActor for connected peers
                         if let Some(network_actor) = network_actor {
                             let state_clone = state.clone();
+                            let chain_actor_clone = chain_actor.clone();
 
                             tokio::spawn(async move {
                                 match network_actor
@@ -908,6 +937,13 @@ impl Handler<SyncMessage> for SyncActor {
                                                 s.is_running = false;
                                                 s.last_sync_completed_at = Some(Instant::now());
                                                 s.metrics.record_sync_complete(height);
+
+                                                // Notify ChainActor of sync completion so consensus can resume
+                                                drop(s); // Release lock before async call
+                                                if let Some(ref ca) = chain_actor_clone {
+                                                    tracing::info!(final_height = height, "Notifying ChainActor of sync completion (within threshold path)");
+                                                    ca.do_send(ChainMessage::SyncCompleted { final_height: height });
+                                                }
                                             } else {
                                                 // We have a known target and we're behind it
                                                 s.transition_to_state(SyncState::RequestingBlocks);
@@ -1383,6 +1419,7 @@ impl Handler<SyncMessage> for SyncActor {
                 );
 
                 let state = std::sync::Arc::clone(&self.state);
+                let chain_actor_for_peers = self.chain_actor.clone();
 
                 ctx.spawn(
                     async move {
@@ -1436,6 +1473,15 @@ impl Handler<SyncMessage> for SyncActor {
                                     s.is_running = false;
                                     s.last_sync_completed_at = Some(Instant::now());
                                     s.metrics.record_sync_complete(height);
+
+                                    // Notify ChainActor of sync completion so consensus can resume
+                                    drop(s); // Release lock before notification
+                                    if let Some(ref ca) = chain_actor_for_peers {
+                                        tracing::info!(final_height = height, "Notifying ChainActor of sync completion (peers discovered path)");
+                                        ca.do_send(ChainMessage::SyncCompleted { final_height: height });
+                                    }
+                                    // Return early since we dropped the lock and are done
+                                    return;
                                 } else {
                                     // We have a known target and we're behind it
                                     s.transition_to_state(SyncState::RequestingBlocks);

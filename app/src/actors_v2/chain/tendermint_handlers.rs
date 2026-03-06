@@ -583,19 +583,28 @@ impl ChainActor {
             (state.height, state.round, state.validator_set.clone())
         };
 
-        // Validate height - must match current height for any vote
-        if vote.height != current_height {
+        // Handle votes based on height relationship to our current height
+        if vote.height < current_height {
+            // Past height vote - ignore silently (don't error, just skip processing)
+            // This can happen when we've already committed a block that others are still voting on
             debug!(
                 correlation_id = %correlation_id,
                 vote_height = vote.height,
                 current_height = current_height,
-                "Rejecting vote with wrong height"
+                "Ignoring vote for past height (already processed)"
             );
-            return Err(ChainError::Consensus(format!(
-                "Vote height mismatch: expected {}, got {}",
-                current_height, vote.height
-            )));
+            return Ok(voter);
         }
+
+        if vote.height > current_height {
+            // Future height vote - this node may be behind
+            // Use debounced sync triggering to catch up
+            return self
+                .handle_future_height_vote(vote.height, current_height, voter, correlation_id)
+                .await;
+        }
+
+        // vote.height == current_height - continue with normal processing
 
         // Handle vote based on round relationship
         match vote.round.cmp(&current_round) {
@@ -2752,6 +2761,145 @@ impl ChainActor {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Height Synchronization - Future Height Vote Handling
+    // =========================================================================
+
+    /// Handle a vote from a future height (node may be behind).
+    ///
+    /// When we receive votes for heights we haven't reached yet, it indicates
+    /// that other nodes have committed blocks we haven't seen. This triggers
+    /// catch-up sync with debouncing to avoid thrashing.
+    ///
+    /// # Debounce Logic
+    /// - Trigger sync after: 3+ future votes OR 500ms since first vote
+    /// - Cooldown: 5 seconds between sync triggers
+    /// - Max gap check: Log warning if gap > 100 blocks
+    ///
+    /// # Actions
+    /// - Update future height tracker
+    /// - Check debounce conditions
+    /// - If conditions met: pause consensus and trigger sync
+    async fn handle_future_height_vote(
+        &self,
+        vote_height: u64,
+        current_height: u64,
+        voter: ValidatorId,
+        correlation_id: Uuid,
+    ) -> TendermintResult<ValidatorId> {
+        // Configuration constants
+        const MIN_VOTES_FOR_SYNC: u32 = 3;
+        const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_millis(500);
+        const SYNC_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+        const MAX_REASONABLE_GAP: u64 = 100;
+
+        let height_gap = vote_height.saturating_sub(current_height);
+
+        // Log warning for unusually large gaps
+        if height_gap > MAX_REASONABLE_GAP {
+            warn!(
+                correlation_id = %correlation_id,
+                vote_height = vote_height,
+                current_height = current_height,
+                gap = height_gap,
+                "Received vote with very large height gap - may indicate serious sync issue"
+            );
+        }
+
+        // Update tracker and check if we should trigger sync
+        let should_trigger_sync = {
+            let mut tracker = self.future_height_tracker.write().await;
+
+            // Track the vote
+            if vote_height > tracker.max_observed_height {
+                tracker.max_observed_height = vote_height;
+            }
+            tracker.vote_count += 1;
+
+            // Set first vote timestamp if not already set
+            if tracker.first_vote_at.is_none() {
+                tracker.first_vote_at = Some(std::time::Instant::now());
+            }
+
+            let now = std::time::Instant::now();
+
+            // Check cooldown
+            if let Some(last_trigger) = tracker.last_sync_trigger_at {
+                if now.duration_since(last_trigger) < SYNC_COOLDOWN {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        vote_height = vote_height,
+                        current_height = current_height,
+                        vote_count = tracker.vote_count,
+                        "Future height vote - still in cooldown period"
+                    );
+                    return Ok(voter);
+                }
+            }
+
+            // Check if debounce conditions are met
+            let votes_threshold_met = tracker.vote_count >= MIN_VOTES_FOR_SYNC;
+            let time_threshold_met = tracker.first_vote_at
+                .map(|t| now.duration_since(t) >= DEBOUNCE_DURATION)
+                .unwrap_or(false);
+
+            if votes_threshold_met || time_threshold_met {
+                // Mark sync trigger time
+                tracker.last_sync_trigger_at = Some(now);
+                true
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    vote_height = vote_height,
+                    current_height = current_height,
+                    vote_count = tracker.vote_count,
+                    "Future height vote - debouncing (waiting for more votes or time)"
+                );
+                false
+            }
+        };
+
+        if should_trigger_sync {
+            info!(
+                correlation_id = %correlation_id,
+                vote_height = vote_height,
+                current_height = current_height,
+                gap = height_gap,
+                "Detected future height votes - triggering catch-up sync"
+            );
+
+            // Pause consensus before starting sync
+            if let Some(ref driver) = self.tendermint_driver {
+                info!(
+                    correlation_id = %correlation_id,
+                    "Pausing consensus before catch-up sync"
+                );
+                driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Pause);
+            }
+
+            // Trigger sync to catch up
+            if let Some(ref sync_actor) = self.sync_actor {
+                info!(
+                    correlation_id = %correlation_id,
+                    target_height = vote_height,
+                    "Starting catch-up sync to height {}", vote_height
+                );
+                sync_actor.do_send(crate::actors_v2::network::SyncMessage::StartSync {
+                    start_height: current_height,
+                    target_height: Some(vote_height),
+                });
+            } else {
+                warn!(
+                    correlation_id = %correlation_id,
+                    "Cannot trigger catch-up sync - no SyncActor reference"
+                );
+            }
+        }
+
+        // Return voter - we don't process the vote, but don't error either
+        Ok(voter)
     }
 
     // =========================================================================

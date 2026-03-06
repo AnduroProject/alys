@@ -72,6 +72,48 @@ pub struct GapFillRequest {
     pub retry_count: u32,
 }
 
+/// Tracks future height votes for sync debouncing.
+/// When a node receives votes for heights it hasn't reached yet, this indicates
+/// the node may be behind and needs to sync. The tracker implements debouncing
+/// to avoid thrashing sync on transient conditions.
+#[derive(Debug, Clone)]
+pub struct FutureHeightTracker {
+    /// Maximum observed vote height from peers
+    pub max_observed_height: u64,
+    /// Count of future height votes received
+    pub vote_count: u32,
+    /// When the first future height vote was received (for debounce timing)
+    pub first_vote_at: Option<Instant>,
+    /// When sync was last triggered due to future height votes (cooldown)
+    pub last_sync_trigger_at: Option<Instant>,
+}
+
+impl FutureHeightTracker {
+    /// Create a new tracker with default values
+    pub fn new() -> Self {
+        Self {
+            max_observed_height: 0,
+            vote_count: 0,
+            first_vote_at: None,
+            last_sync_trigger_at: None,
+        }
+    }
+
+    /// Reset the tracker (e.g., after sync completes)
+    pub fn reset(&mut self) {
+        self.max_observed_height = 0;
+        self.vote_count = 0;
+        self.first_vote_at = None;
+        // Note: Don't reset last_sync_trigger_at - that's for cooldown
+    }
+}
+
+impl Default for FutureHeightTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Simplified ChainActor - core blockchain functionality (Clone-enabled for async handlers)
 #[derive(Clone)]
 pub struct ChainActor {
@@ -153,6 +195,11 @@ pub struct ChainActor {
     /// to notify the sync validator so it can track validator sets for sync verification.
     /// Note: Uses std::sync::RwLock to match SyncActor's validator type
     pub(crate) tendermint_sync_validator: Option<Arc<std::sync::RwLock<crate::actors_v2::network::tendermint_sync::TendermintSyncValidator>>>,
+
+    /// Tracks future height votes for sync debouncing.
+    /// When votes for heights beyond our current height arrive, this helps determine
+    /// if we've fallen behind and need to trigger catch-up sync.
+    pub(crate) future_height_tracker: Arc<RwLock<FutureHeightTracker>>,
 }
 
 impl ChainActor {
@@ -201,6 +248,8 @@ impl ChainActor {
             timeout_receiver: Arc::new(tokio::sync::Mutex::new(None)),
             tendermint_driver: None,
             tendermint_sync_validator: None,
+            // Future height vote tracking for sync detection
+            future_height_tracker: Arc::new(RwLock::new(FutureHeightTracker::new())),
         }
     }
 

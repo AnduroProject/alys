@@ -2385,6 +2385,9 @@ async fn create_aux_block_helper(
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
         tendermint_sync_validator: None,
+        future_height_tracker: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::actor::FutureHeightTracker::new(),
+        )),
     };
 
     actor.create_aux_block(miner_address).await
@@ -2433,6 +2436,9 @@ async fn submit_aux_block_helper(
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
         tendermint_sync_validator: None,
+        future_height_tracker: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::actor::FutureHeightTracker::new(),
+        )),
     };
 
     actor
