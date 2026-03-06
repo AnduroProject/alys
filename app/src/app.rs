@@ -443,14 +443,25 @@ impl App {
         // Start V2 JSON-RPC server on port 3001
         info!("Starting V2 RPC server on port 3001 (sharing state with V0 Chain)...");
 
+        // Create shutdown channel for V2 actor system
+        // Option 4: Graceful shutdown coordination for V2 StorageActor
+        let (v2_shutdown_tx, v2_shutdown_rx) = oneshot::channel::<()>();
+
+        // Store sender for shutdown sequence
+        let v2_shutdown_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(v2_shutdown_tx)));
+        let v2_shutdown_tx_clone = v2_shutdown_tx.clone();
+
         // Spawn V2 actor system in LocalSet (required for Actix !Send actors)
         // Use std::thread instead of spawn_blocking to create a dedicated runtime
-        std::thread::spawn(move || {
+        let v2_thread_handle = std::thread::spawn(move || {
             // Create a new Tokio runtime for V2 actors
             let rt = tokio::runtime::Runtime::new().expect("Failed to create V2 runtime");
             rt.block_on(async move {
                 let local = tokio::task::LocalSet::new();
                 local.run_until(async move {
+                    // Move shutdown receiver into async context
+                    let v2_shutdown_rx = v2_shutdown_rx;
+
                     info!("🚀 Starting V2 Actor System initialization...");
 
                     // Clone values for slot worker before Aura consumes them
@@ -909,11 +920,22 @@ impl App {
                 }
             }
 
-                    // Keep actors alive - this task runs indefinitely
-                    loop {
-                        // tokio::time::sleep(Duration::from_secs(3600)).await;
-                        std::future::pending::<()>().await;
+                    // Option 4: Wait for shutdown signal instead of running forever
+                    // This allows graceful shutdown with database flush
+                    info!("V2 actor system initialized. Waiting for shutdown signal...");
+                    let _ = v2_shutdown_rx.await;
+
+                    // Graceful shutdown: flush V2 StorageActor
+                    info!("V2 shutdown signal received. Flushing StorageActor...");
+                    match storage_actor.send(
+                        crate::actors_v2::storage::messages::FlushDatabaseMessage { correlation_id: None }
+                    ).await {
+                        Ok(Ok(())) => info!("✓ V2 StorageActor flushed successfully"),
+                        Ok(Err(e)) => error!("✗ V2 StorageActor flush failed: {:?}", e),
+                        Err(e) => error!("✗ V2 StorageActor mailbox error during flush: {:?}", e),
                     }
+
+                    info!("V2 actor system shutdown complete");
                 }).await;
             });
         });
@@ -941,6 +963,23 @@ impl App {
         info!("Application initialized successfully. Running until shutdown signal...");
         let _ = shutdown_rx.await;
         info!("Shutdown signal received in execute task");
+
+        // Option 4: Signal V2 actor system to flush storage and shutdown gracefully
+        info!("Signaling V2 actor system shutdown...");
+        // Extract the sender without holding the lock across await
+        let v2_sender = v2_shutdown_tx_clone.lock().unwrap().take();
+        if let Some(tx) = v2_sender {
+            if tx.send(()).is_ok() {
+                info!("V2 shutdown signal sent - waiting for StorageActor flush...");
+                // Give V2 time to flush (the flush is async and should complete quickly)
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                info!("V2 shutdown grace period complete");
+            } else {
+                warn!("V2 shutdown signal failed - V2 may have already exited");
+            }
+        } else {
+            warn!("V2 shutdown sender already taken - V2 may have already exited");
+        }
 
         Ok(())
     }

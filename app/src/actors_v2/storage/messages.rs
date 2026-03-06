@@ -448,6 +448,17 @@ pub struct FlushCacheMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message to flush database to disk
+///
+/// Forces all in-memory data (memtables) to be written to persistent storage.
+/// Should be called during graceful shutdown to prevent data loss.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct FlushDatabaseMessage {
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 // =============================================================================
 // ADVANCED INDEXING OPERATIONS
 // =============================================================================

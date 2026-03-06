@@ -47,6 +47,23 @@ impl Handler<FlushCacheMessage> for StorageActor {
     }
 }
 
+impl Handler<FlushDatabaseMessage> for StorageActor {
+    type Result = ResponseFuture<Result<(), StorageError>>;
+
+    fn handle(&mut self, msg: FlushDatabaseMessage, _: &mut Context<Self>) -> Self::Result {
+        let _correlation_id = msg.correlation_id;
+        info!("Handling FlushDatabaseMessage - flushing RocksDB to disk");
+
+        let database = self.database.clone();
+
+        Box::pin(async move {
+            database.flush_async().await?;
+            info!("Database flush completed - all memtables written to disk");
+            Ok(())
+        })
+    }
+}
+
 impl Handler<RebuildIndexMessage> for StorageActor {
     type Result = ResponseFuture<Result<(), StorageError>>;
 

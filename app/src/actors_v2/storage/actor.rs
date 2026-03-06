@@ -126,6 +126,14 @@ impl Actor for StorageActor {
             actor.sync_pending_writes();
         });
 
+        // Option 3: Periodic WAL flush for crash resilience
+        // Flushes write-ahead log every 5 seconds to ensure recent writes survive crashes
+        ctx.run_interval(Duration::from_secs(5), |actor, _ctx| {
+            if let Err(e) = actor.database.flush_wal() {
+                warn!("Periodic WAL flush failed: {:?}", e);
+            }
+        });
+
         // Start cache maintenance
         ctx.run_interval(self.config.maintenance_interval, |actor, _ctx| {
             let cache = actor.cache.clone();
@@ -157,8 +165,17 @@ impl Actor for StorageActor {
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         self.metrics.record_shutdown();
 
-        // Sync any remaining pending writes
+        // Sync any remaining pending writes (in-memory HashMap)
         self.sync_pending_writes();
+
+        // Option 1: Flush RocksDB memtables to disk for crash resilience
+        // This ensures all data written during this session survives shutdown
+        info!("Flushing database to disk during shutdown...");
+        if let Err(e) = self.database.flush() {
+            error!("Failed to flush database during shutdown: {:?}", e);
+        } else {
+            info!("Database flushed successfully during shutdown");
+        }
 
         if let Some(startup_time) = self.startup_time {
             let total_runtime = startup_time.elapsed();

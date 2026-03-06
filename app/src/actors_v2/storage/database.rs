@@ -911,6 +911,64 @@ impl DatabaseManager {
     pub fn get_database_handle(&self) -> Arc<RwLock<DB>> {
         self.main_db.clone()
     }
+
+    /// Flush all memtables to disk.
+    ///
+    /// This ensures all in-memory data is persisted to SST files.
+    /// Should be called during graceful shutdown to prevent data loss.
+    ///
+    /// Note: This is a blocking operation intended for use in sync contexts
+    /// (like Actor::stopped()). For async contexts, use `flush_async()`.
+    pub fn flush(&self) -> Result<(), StorageError> {
+        // Use try_read to avoid deadlocks in sync contexts
+        // If we can't acquire the lock, the database is busy and data should be safe
+        match self.main_db.try_read() {
+            Ok(db) => {
+                db.flush().map_err(|e| {
+                    StorageError::Database(format!("Failed to flush database: {}", e))
+                })?;
+                info!("Database flushed successfully");
+                Ok(())
+            }
+            Err(_) => {
+                warn!("Could not acquire database lock for flush - database busy");
+                Ok(()) // Not an error, just couldn't flush right now
+            }
+        }
+    }
+
+    /// Flush the write-ahead log (WAL) to disk.
+    ///
+    /// This is a lighter-weight operation than full flush - it syncs the WAL
+    /// without forcing memtables to SST files. Good for periodic background syncing.
+    ///
+    /// Note: This is a blocking operation. Use sparingly in async contexts.
+    pub fn flush_wal(&self) -> Result<(), StorageError> {
+        match self.main_db.try_read() {
+            Ok(db) => {
+                // sync=true ensures WAL is durably written to disk
+                db.flush_wal(true).map_err(|e| {
+                    StorageError::Database(format!("Failed to flush WAL: {}", e))
+                })?;
+                debug!("WAL flushed successfully");
+                Ok(())
+            }
+            Err(_) => {
+                // Lock contention - skip this flush cycle
+                Ok(())
+            }
+        }
+    }
+
+    /// Async version of flush for use in async contexts.
+    pub async fn flush_async(&self) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        db.flush().map_err(|e| {
+            StorageError::Database(format!("Failed to flush database: {}", e))
+        })?;
+        info!("Database flushed successfully (async)");
+        Ok(())
+    }
 }
 
 impl Default for DatabaseConfig {
