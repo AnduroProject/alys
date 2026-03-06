@@ -24,7 +24,6 @@ use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 use crate::actors_v2::storage::actor::BlockRef;
-use crate::aura::Aura;
 use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::block::AuxPowHeader;
 use crate::block_hash_cache::BlockHashCache;
@@ -87,16 +86,18 @@ impl SyncStatus {
 ///
 /// ## Field Categories
 ///
-/// - **Read-only**: `aura`, `federation`, `is_validator`, `retarget_params`, `max_blocks_without_pow`
+/// - **Read-only**: `federation`, `is_validator`, `retarget_params`, `max_blocks_without_pow`
 /// - **Mutable (Arc<RwLock>)**: All other fields that may be modified during operation
+///
+/// ## Consensus Note
+///
+/// With Tendermint-only consensus, block finality is proven via `last_commit` containing
+/// 2/3+ validator precommit signatures. Aura (PoA) is no longer used.
 #[derive(Clone)]
 pub struct ChainState {
     // ========================================================================
     // Read-Only Components (no Arc<RwLock> needed)
     // ========================================================================
-
-    /// Core blockchain state (derived from chain.rs) - Read-only Arc-wrapped V0 components
-    pub aura: Arc<Aura>, // ✅ Read-only: consensus validation only
 
     /// Federation members (read-only after initialization)
     pub federation: Vec<Address>,
@@ -237,7 +238,6 @@ impl std::fmt::Debug for ChainState {
             .field("block_hash_cache", &self.block_hash_cache)
             .field("cumulative_difficulty", &"<Arc<RwLock<u128>>>")
             .field("difficulty_cache", &"<LruCache<u64, u128>>")
-            .field("aura", &"<Aura>")
             .field("bridge", &"<Bridge>")
             .field("bitcoin_wallet", &"<BitcoinWallet>")
             .field(
@@ -254,8 +254,10 @@ impl std::fmt::Debug for ChainState {
 
 impl ChainState {
     /// Create new chain state with Arc-wrapped components for async handler compatibility
+    ///
+    /// Note: Tendermint-only consensus - Aura is no longer required.
+    /// Block finality is proven via last_commit with 2/3+ validator signatures.
     pub fn new(
-        aura: Aura,
         federation: Vec<Address>,
         bridge: Bridge,
         bitcoin_wallet: BitcoinWallet,
@@ -268,7 +270,6 @@ impl ChainState {
     ) -> Self {
         Self {
             // Read-only components
-            aura: Arc::new(aura),
             federation,
             is_validator,
             retarget_params,

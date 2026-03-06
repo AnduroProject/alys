@@ -357,61 +357,11 @@ impl SubmitAuxBlockHandler {
 }
 
 // ============================================================================
-// Deprecated Aura Handlers (Phase 4: Document 12)
-// ============================================================================
-
-/// Handler for deprecated Aura endpoints
-pub struct DeprecatedAuraHandler;
-
-impl DeprecatedAuraHandler {
-    /// Handle deprecated aura_currentAuthorities
-    ///
-    /// Returns error with migration guidance to tendermint_validators.
-    pub async fn handle_current_authorities(_params: Vec<Value>) -> Result<Value, RpcError> {
-        Err(RpcError::Deprecated {
-            method: "aura_currentAuthorities".to_string(),
-            replacement: Some("tendermint_validators".to_string()),
-            message: "Aura consensus has been replaced by Tendermint BFT. Use tendermint_validators to query the current validator set.".to_string(),
-        })
-    }
-
-    /// Handle deprecated aura_currentSlot
-    ///
-    /// Returns error with migration guidance to tendermint_consensusState.
-    pub async fn handle_current_slot(_params: Vec<Value>) -> Result<Value, RpcError> {
-        Err(RpcError::Deprecated {
-            method: "aura_currentSlot".to_string(),
-            replacement: Some("tendermint_consensusState".to_string()),
-            message: "Aura slot-based consensus has been replaced by Tendermint BFT. Use tendermint_consensusState for height/round information.".to_string(),
-        })
-    }
-
-    /// Handle deprecated aura_nextSlotTime
-    ///
-    /// Returns error without replacement (no longer applicable).
-    pub async fn handle_next_slot_time(_params: Vec<Value>) -> Result<Value, RpcError> {
-        Err(RpcError::Deprecated {
-            method: "aura_nextSlotTime".to_string(),
-            replacement: None,
-            message: "Tendermint consensus is event-driven rather than slot-based. There is no fixed slot time in the new consensus model.".to_string(),
-        })
-    }
-
-    /// Handle deprecated aura_slotDuration
-    ///
-    /// Returns error without replacement (no longer applicable).
-    pub async fn handle_slot_duration(_params: Vec<Value>) -> Result<Value, RpcError> {
-        Err(RpcError::Deprecated {
-            method: "aura_slotDuration".to_string(),
-            replacement: None,
-            message: "Tendermint consensus does not use fixed slot durations. Block production is driven by consensus rounds.".to_string(),
-        })
-    }
-}
-
-// ============================================================================
 // Tendermint RPC Handlers (Phase 4: Document 12)
 // ============================================================================
+
+// Note: Aura RPC handlers have been removed. Tendermint is the only consensus mechanism.
+// Use tendermint_* RPC methods instead.
 
 /// tendermint_consensusState RPC handler
 pub struct ConsensusStateHandler;

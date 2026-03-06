@@ -568,22 +568,21 @@ impl GenesisConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aura::Authority;
     use lighthouse_wrapper::bls::Keypair;
 
     #[test]
     fn test_genesis_has_zero_height() {
         use crate::block::ConsensusBlock;
+        use crate::signatures::AggregateApproval;
 
         let block = ConsensusBlock::default();
-        let keypair = Keypair::random();
-        let authority = Authority {
-            signer: keypair.clone(),
-            index: 0,
-        };
 
-        // Create a signed block with default values
-        let signed_block = block.sign_block(&authority);
+        // Create a signed block with empty signature (Tendermint-only consensus)
+        // Block finality is proven via last_commit, not the signature field.
+        let signed_block = SignedConsensusBlock {
+            message: block,
+            signature: AggregateApproval::new(),
+        };
 
         // Default ConsensusBlock should have height 0
         assert_eq!(
@@ -595,16 +594,16 @@ mod tests {
     #[test]
     fn test_genesis_has_zero_parent_hash() {
         use crate::block::ConsensusBlock;
+        use crate::signatures::AggregateApproval;
         use ethereum_types::H256;
 
         let block = ConsensusBlock::default();
-        let keypair = Keypair::random();
-        let authority = Authority {
-            signer: keypair.clone(),
-            index: 0,
-        };
 
-        let signed_block = block.sign_block(&authority);
+        // Create a signed block with empty signature (Tendermint-only consensus)
+        let signed_block = SignedConsensusBlock {
+            message: block,
+            signature: AggregateApproval::new(),
+        };
 
         // Genesis parent hash should be zero
         assert_eq!(

@@ -502,8 +502,9 @@ impl App {
             let shared_sig_collector = BitcoinSignatureCollector::new(v2_bitcoin_federation);
             let shared_signer = v2_maybe_bitcoin_sk.map(BitcoinSigner::new);
 
+            // Note: Aura is no longer needed - Tendermint-only consensus.
+            // Block finality is proven via last_commit with 2/3+ validator signatures.
             let v2_state = crate::actors_v2::chain::state::ChainState::new(
-                v2_aura,
                 v2_federation.clone(),
                 shared_bridge,
                 shared_wallet,

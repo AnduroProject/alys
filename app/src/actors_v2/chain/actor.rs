@@ -135,8 +135,8 @@ pub struct ChainActor {
     /// Cached last commit for embedding in next block's last_commit field
     pub(crate) cached_last_commit: Option<Arc<RwLock<Commit>>>,
 
-    /// Whether Tendermint consensus mode is enabled
-    pub(crate) tendermint_enabled: bool,
+    // Note: tendermint_enabled field removed - Tendermint is always enabled.
+    // Block finality is proven via last_commit with 2/3+ validator signatures.
 
     /// Receiver for timeout events from the TimeoutScheduler
     /// Used to trigger TendermintTimeout messages when consensus phases expire.
@@ -190,14 +190,14 @@ impl ChainActor {
             gap_fill_requests: Arc::new(RwLock::new(HashMap::new())),
             // Active Height Monitoring (Layer 3): Initialize error counter
             payload_unavailable_count: 0,
-            // Tendermint state (initialized as disabled, enable via configure_tendermint)
+            // Tendermint state (always enabled, configured via configure_tendermint)
             tendermint_state: None,
             timeout_scheduler: None,
             consensus_wal: None,
             validator_keypair: None,
             validator_set: None,
             cached_last_commit: None,
-            tendermint_enabled: false,
+            // Note: tendermint_enabled field removed - Tendermint is always enabled
             timeout_receiver: Arc::new(tokio::sync::Mutex::new(None)),
             tendermint_driver: None,
             tendermint_sync_validator: None,
@@ -263,7 +263,7 @@ impl ChainActor {
         self.validator_keypair = validator_keypair.map(Arc::new);
         self.validator_set = Some(Arc::new(RwLock::new(validator_set_for_state)));
         self.cached_last_commit = None;
-        self.tendermint_enabled = true;
+        // Note: tendermint_enabled field removed - Tendermint is always enabled
         // Store the timeout receiver (wrapped for Clone compatibility)
         // Use try_lock since we're in a sync context but may be called from async runtime
         match self.timeout_receiver.try_lock() {
@@ -1387,7 +1387,8 @@ impl ChainActor {
     /// This is critical for consensus liveness - timeouts drive round advancement
     /// when proposals or votes are not received in time.
     fn start_tendermint_timeout_loop(&self, ctx: &mut Context<Self>) {
-        if !self.tendermint_enabled {
+        // Check if Tendermint is configured (tendermint_state will be Some after configure_tendermint)
+        if self.tendermint_state.is_none() {
             return;
         }
 
@@ -1462,10 +1463,22 @@ impl Actor for ChainActor {
         let storage = self.storage_actor.clone();
         let engine = self.engine_actor.clone();
 
-        // Construct ChainSpec from state (Aura has authorities and slot_duration)
+        // Get authorities from validator_set (Tendermint consensus)
+        // With Tendermint-only consensus, authorities come from the validator set.
+        let authorities: Vec<lighthouse_wrapper::bls::PublicKey> = self.validator_set
+            .as_ref()
+            .map(|vs| {
+                // Use try_read to avoid blocking in sync context
+                vs.try_read()
+                    .map(|guard| guard.iter().map(|(_, pk, _)| pk.clone()).collect())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // Construct ChainSpec from state (using Tendermint validator set)
         let chain_spec = crate::spec::ChainSpec {
-            slot_duration: self.state.aura.slot_duration,
-            authorities: self.state.aura.authorities.clone(),
+            slot_duration: 12, // Fixed 12-second slot duration (standard Tendermint)
+            authorities,
             federation: self.state.federation.clone(),
             federation_bitcoin_pubkeys: Vec::new(), // Not needed for genesis
             bits: self.state.retarget_params.pow_limit,

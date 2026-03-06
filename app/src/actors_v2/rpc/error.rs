@@ -25,13 +25,6 @@ pub enum RpcError {
 
     /// Server not running
     ServerNotRunning,
-
-    /// Deprecated method (Phase 4: Document 12)
-    Deprecated {
-        method: String,
-        replacement: Option<String>,
-        message: String,
-    },
 }
 
 impl fmt::Display for RpcError {
@@ -44,13 +37,6 @@ impl fmt::Display for RpcError {
             RpcError::ChainError(err) => write!(f, "Chain error: {:?}", err),
             RpcError::MailboxError(msg) => write!(f, "Mailbox error: {}", msg),
             RpcError::ServerNotRunning => write!(f, "RPC server not running"),
-            RpcError::Deprecated { method, replacement, message } => {
-                if let Some(repl) = replacement {
-                    write!(f, "Method '{}' is deprecated. Use '{}' instead. {}", method, repl, message)
-                } else {
-                    write!(f, "Method '{}' is deprecated. {}", method, message)
-                }
-            }
         }
     }
 }
@@ -101,11 +87,6 @@ impl RpcError {
             RpcError::ServerNotRunning => JsonRpcError {
                 code: -32000,
                 message: "RPC server not running".to_string(),
-            },
-            // Deprecated methods use code -32000 (server error) per Document 12
-            RpcError::Deprecated { .. } => JsonRpcError {
-                code: -32000,
-                message: self.to_string(),
             },
         }
     }

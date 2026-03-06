@@ -12,7 +12,6 @@ use ethereum_types::Address;
 use tempfile::TempDir;
 
 use crate::actors_v2::chain::{ChainConfig, ChainError};
-use crate::aura::Aura;
 use crate::auxpow_miner::BitcoinConsensusParams;
 use crate::engine::Engine;
 use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge};
@@ -20,13 +19,15 @@ use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge};
 pub(crate) type BitcoinWallet = bridge::UtxoManager<bridge::Tree>;
 
 /// Comprehensive ChainActor test harness with all required components
+///
+/// Note: With Tendermint-only consensus, Aura is no longer needed.
+/// Block finality is proven via last_commit with 2/3+ validator signatures.
 pub struct ChainTestHarness {
     pub temp_dir: TempDir,
     pub config: ChainConfig,
 
     // Core blockchain components
     pub engine: Engine,
-    pub aura: Aura,
     pub federation: Vec<Address>,
 
     // Bridge and Bitcoin components
@@ -39,13 +40,14 @@ pub struct ChainTestHarness {
 
 impl ChainTestHarness {
     /// Create new test harness with all components
+    ///
+    /// Note: With Tendermint-only consensus, Aura is no longer needed.
     pub async fn new() -> Result<Self, ChainTestError> {
         let temp_dir = TempDir::new().map_err(|e| ChainTestError::Setup(e.to_string()))?;
         let config = ChainConfig::default();
 
         // Create mock components for testing
         let engine = Self::create_mock_engine()?;
-        let aura = Self::create_mock_aura()?;
         let federation = Self::create_mock_federation();
         let bridge = Self::create_mock_bridge()?;
         let bitcoin_wallet = Self::create_mock_bitcoin_wallet()?;
@@ -57,7 +59,6 @@ impl ChainTestHarness {
             temp_dir,
             config,
             engine,
-            aura,
             federation,
             bridge,
             bitcoin_wallet,
@@ -113,6 +114,8 @@ impl ChainTestHarness {
 
     /// Create ChainState consuming the harness components
     /// This avoids the need to clone non-Clone types
+    ///
+    /// Note: With Tendermint-only consensus, Aura is no longer needed.
     pub fn into_chain_state(
         self,
         is_validator: bool,
@@ -121,7 +124,6 @@ impl ChainTestHarness {
     ) -> crate::actors_v2::chain::ChainState {
         use crate::actors_v2::chain::ChainState;
         ChainState::new(
-            self.aura,
             self.federation,
             self.bridge,
             self.bitcoin_wallet,
@@ -135,6 +137,7 @@ impl ChainTestHarness {
     }
 
     // Mock component creation methods
+
     fn create_mock_engine() -> Result<Engine, ChainTestError> {
         // Create a mock Engine for testing with mock RPC endpoints
         use lighthouse_wrapper::execution_layer::HttpJsonRpc;
@@ -150,23 +153,7 @@ impl ChainTestHarness {
         Ok(Engine::new(mock_api, mock_execution_api))
     }
 
-    fn create_mock_aura() -> Result<Aura, ChainTestError> {
-        // Create a mock Aura for testing without a real signer
-        use lighthouse_wrapper::bls::PublicKey;
-        // Create a valid mock PublicKey using a known test key
-        // This corresponds to secret key: 0000000000000000000000000000000000000000000000000000000000000001
-        let mock_pubkey_hex = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb";
-        let mock_pubkey_bytes = hex::decode(mock_pubkey_hex).map_err(|e| {
-            ChainTestError::Setup(format!("Failed to decode mock pubkey hex: {:?}", e))
-        })?;
-        let mock_pubkey = PublicKey::deserialize(&mock_pubkey_bytes)
-            .map_err(|e| ChainTestError::Setup(format!("Failed to create mock pubkey: {:?}", e)))?;
-        Ok(Aura::new(
-            vec![mock_pubkey], // Mock federation with valid PublicKey
-            12,                // 12 second slot duration
-            None,              // No keypair for testing
-        ))
-    }
+    // Note: create_mock_aura() removed - Tendermint-only consensus doesn't use Aura
 
     fn create_mock_federation() -> Vec<Address> {
         vec![

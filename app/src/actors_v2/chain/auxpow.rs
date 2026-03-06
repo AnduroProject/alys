@@ -14,6 +14,7 @@ use crate::actors_v2::common::serialization::calculate_block_hash;
 use crate::auxpow::AuxPow; // For aggregate_hash calculation
 use crate::auxpow_miner::AuxBlock; // V0 Bitcoin-compatible type for RPC responses
 use crate::block::{AuxPowHeader, ConsensusBlock, ConvertBlockHash, SignedConsensusBlock};
+use crate::signatures::AggregateApproval;
 use lighthouse_wrapper::types::MainnetEthSpec;
 use std::time::SystemTime;
 
@@ -50,11 +51,14 @@ impl ChainActor {
                 let mut block_with_auxpow = consensus_block;
                 block_with_auxpow.auxpow_header = Some(auxpow_header.clone());
 
-                // Step 4: Sign the block with V0 Aura authority
-                let authority = self.state.aura.authority.as_ref().ok_or_else(|| {
-                    ChainError::Configuration("No authority configured for signing".to_string())
-                })?;
-                let signed_block = block_with_auxpow.sign_block(authority);
+                // Step 4: Create signed block with empty signature
+                // With Tendermint consensus, block finality is proven via last_commit
+                // containing 2/3+ validator precommit signatures. The signature field
+                // is empty/unused - this matches the pattern used by commit_block.
+                let signed_block = SignedConsensusBlock {
+                    message: block_with_auxpow,
+                    signature: AggregateApproval::new(), // Empty - finality via last_commit
+                };
 
                 let block_hash = calculate_block_hash(&signed_block);
 
@@ -100,10 +104,12 @@ impl ChainActor {
         }
 
         // Step 8: Create regular signed block (no AuxPoW)
-        let authority = self.state.aura.authority.as_ref().ok_or_else(|| {
-            ChainError::Configuration("No authority configured for signing".to_string())
-        })?;
-        let signed_block = consensus_block.sign_block(authority);
+        // With Tendermint consensus, finality is proven via last_commit.
+        // The signature field is empty/unused.
+        let signed_block = SignedConsensusBlock {
+            message: consensus_block,
+            signature: AggregateApproval::new(), // Empty - finality via last_commit
+        };
 
         // Increment counter for blocks produced without AuxPoW
         self.state.increment_blocks_without_pow().await;

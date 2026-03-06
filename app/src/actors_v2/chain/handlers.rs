@@ -857,22 +857,9 @@ impl Handler<ChainMessage> for ChainActor {
                             "Block passed structural validation"
                         );
 
-                        // Step 1.5: Signature verification (Phase 3)
-                        if let Err(signature_error) = crate::actors_v2::common::validation::verify_block_signature(&block, &self_clone.state.aura) {
-                            error!(
-                                correlation_id = %correlation_id,
-                                block_hash = %block_hash,
-                                error = ?signature_error,
-                                "Block failed signature verification"
-                            );
-                            return Err(signature_error);
-                        }
-
-                        debug!(
-                            correlation_id = %correlation_id,
-                            block_hash = %block_hash,
-                            "Block signature verified successfully"
-                        );
+                        // Note: With Tendermint-only consensus, block finality is proven via
+                        // last_commit field containing 2/3+ validator precommit signatures.
+                        // Aura signature verification is no longer needed.
 
                         // Step 1.7: Parent hash validation (Phase 3)
                         // With Tendermint instant finality, blocks must arrive in order.
@@ -1004,28 +991,10 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
-                        // Step 2: Consensus validation
-                        // With Tendermint enabled, validation is handled via commit signatures.
-                        // For backward compatibility during transition, we still check Aura signatures
-                        // on blocks that were produced under the old consensus.
-                        if !self_clone.tendermint_enabled {
-                            if let Err(aura_error) = self_clone.state.aura.check_signed_by_author(&block) {
-                                error!(
-                                    correlation_id = %correlation_id,
-                                    block_hash = %block_hash,
-                                    error = ?aura_error,
-                                    "Block failed Aura consensus validation"
-                                );
-                                return Err(ChainError::Consensus(format!("Aura validation failed: {:?}", aura_error)));
-                            }
-
-                            debug!(
-                                correlation_id = %correlation_id,
-                                block_hash = %block_hash,
-                                "Block passed Aura consensus validation"
-                            );
-                        } else {
-                            // Tendermint validation: verify last_commit and commit signatures
+                        // Step 2: Tendermint consensus validation
+                        // Block finality is proven via last_commit containing 2/3+ validator precommit signatures.
+                        // Aura is no longer used - all blocks are validated through Tendermint.
+                        {
                             use crate::actors_v2::chain::tendermint::validation::{
                                 validate_last_commit, verify_commit,
                             };
@@ -2068,14 +2037,14 @@ impl Handler<ChainMessage> for ChainActor {
                 height,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintNewHeight received but Tendermint mode not enabled");
+                        warn!("TendermintNewHeight received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2094,14 +2063,14 @@ impl Handler<ChainMessage> for ChainActor {
                 round,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintPropose received but Tendermint mode not enabled");
+                        warn!("TendermintPropose received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2124,14 +2093,14 @@ impl Handler<ChainMessage> for ChainActor {
                 peer_id,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintProposal received but Tendermint mode not enabled");
+                        warn!("TendermintProposal received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2157,14 +2126,14 @@ impl Handler<ChainMessage> for ChainActor {
                 peer_id,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintVote received but Tendermint mode not enabled");
+                        warn!("TendermintVote received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2191,14 +2160,14 @@ impl Handler<ChainMessage> for ChainActor {
                 step,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintTimeout received but Tendermint mode not enabled");
+                        warn!("TendermintTimeout received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2216,14 +2185,14 @@ impl Handler<ChainMessage> for ChainActor {
                 update,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintGovernanceUpdate received but Tendermint mode not enabled");
+                        warn!("TendermintGovernanceUpdate received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2242,14 +2211,14 @@ impl Handler<ChainMessage> for ChainActor {
                 peer_id,
                 correlation_id,
             } => {
-                let tendermint_enabled = self.tendermint_enabled;
+                let tendermint_configured = self.tendermint_state.is_some();
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
-                if !tendermint_enabled {
+                if !tendermint_configured {
                     return Box::pin(async move {
-                        warn!("TendermintEvidence received but Tendermint mode not enabled");
+                        warn!("TendermintEvidence received but Tendermint not configured");
                         Err(ChainError::Configuration(
-                            "Tendermint mode not enabled".to_string(),
+                            "Tendermint not configured".to_string(),
                         ))
                     });
                 }
@@ -2405,14 +2374,14 @@ async fn create_aux_block_helper(
         )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,
-        // Tendermint state (disabled for this helper)
+        // Tendermint state (not configured for this helper - Tendermint is always enabled
+        // but requires explicit configuration via configure_tendermint)
         tendermint_state: None,
         timeout_scheduler: None,
         consensus_wal: None,
         validator_keypair: None,
         validator_set: None,
         cached_last_commit: None,
-        tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
         tendermint_sync_validator: None,
@@ -2453,14 +2422,14 @@ async fn submit_aux_block_helper(
         )),
         // Active Height Monitoring (Layer 3)
         payload_unavailable_count: 0,
-        // Tendermint state (disabled for this helper)
+        // Tendermint state (not configured for this helper - Tendermint is always enabled
+        // but requires explicit configuration via configure_tendermint)
         tendermint_state: None,
         timeout_scheduler: None,
         consensus_wal: None,
         validator_keypair: None,
         validator_set: None,
         cached_last_commit: None,
-        tendermint_enabled: false,
         timeout_receiver: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         tendermint_driver: None,
         tendermint_sync_validator: None,

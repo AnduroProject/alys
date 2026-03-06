@@ -11,9 +11,8 @@ use super::config::RpcConfig;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use super::error::{JsonRpcError, RpcError};
 use super::handlers::{
-    CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, DeprecatedAuraHandler,
-    EvidenceHandler, ParamsHandler, PendingGovernanceHandler, SubmitAuxBlockHandler,
-    ValidatorsHandler,
+    CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, EvidenceHandler, ParamsHandler,
+    PendingGovernanceHandler, SubmitAuxBlockHandler, ValidatorsHandler,
 };
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
 use crate::actors_v2::chain::ChainActor;
@@ -199,14 +198,7 @@ impl RpcActor {
             }
             "tendermint_evidence" => EvidenceHandler::handle(req.params, state.chain_actor).await,
 
-            // Deprecated Aura methods (Phase 4: Document 12)
-            // These return deprecation errors with migration guidance
-            "aura_currentAuthorities" => {
-                DeprecatedAuraHandler::handle_current_authorities(req.params).await
-            }
-            "aura_currentSlot" => DeprecatedAuraHandler::handle_current_slot(req.params).await,
-            "aura_nextSlotTime" => DeprecatedAuraHandler::handle_next_slot_time(req.params).await,
-            "aura_slotDuration" => DeprecatedAuraHandler::handle_slot_duration(req.params).await,
+            // Note: Aura RPC methods have been removed. Tendermint is the only consensus.
 
             _ => Err(RpcError::MethodNotFound(req.method)),
         }
