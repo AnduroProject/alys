@@ -2583,7 +2583,7 @@ impl ChainActor {
         correlation_id: Uuid,
     ) -> TendermintResult<()> {
         use crate::actors_v2::engine::{EngineMessage, EngineResponse};
-        use crate::actors_v2::storage::messages::{StoreBlockMessage, UpdateChainHeadMessage};
+        use crate::actors_v2::storage::messages::AtomicCommitBlockMessage;
         use crate::actors_v2::storage::actor::BlockRef;
         use lighthouse_wrapper::types::ExecutionPayload;
 
@@ -2680,36 +2680,32 @@ impl ChainActor {
             lighthouse_wrapper::types::ExecutionBlockHash::zero()
         };
 
-        // 5. Store block to StorageActor
+        // 5. Atomically store block + update chain head (survives SIGKILL)
+        //
+        // This uses a single WriteBatch with sync to ensure block data, height index,
+        // and chain head are all written atomically. This prevents WAL-storage mismatch
+        // where WAL shows committed blocks but storage reports height 0 after crash.
         if let Some(ref storage) = self.storage_actor {
             let signed_block = crate::block::SignedConsensusBlock {
                 message: block.clone(),
                 signature: crate::signatures::AggregateApproval::new(),
             };
 
-            storage.send(StoreBlockMessage {
-                block: signed_block,
-                canonical: true, // Tendermint blocks are always canonical
-                correlation_id: Some(correlation_id),
-            }).await
-                .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
-                .map_err(|e| ChainError::Storage(format!("Block storage failed: {}", e)))?;
-
-            // 6. Update chain head
             let block_ref = BlockRef {
                 hash: H256::from_slice(block_hash.as_bytes()),
                 number: height,
                 execution_hash,
             };
 
-            storage.send(UpdateChainHeadMessage {
+            storage.send(AtomicCommitBlockMessage {
+                block: signed_block,
                 new_head: block_ref.clone(),
                 correlation_id: Some(correlation_id),
             }).await
                 .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
-                .map_err(|e| ChainError::Storage(format!("Head update failed: {}", e)))?;
+                .map_err(|e| ChainError::Storage(format!("Atomic commit failed: {}", e)))?;
 
-            // Update local state
+            // Update local state after storage confirms
             self.state.update_head(block_ref).await;
 
             // 6b. Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)

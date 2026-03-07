@@ -289,6 +289,81 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Atomically commit a block with all related data.
+    ///
+    /// Writes the following in a single atomic batch with sync:
+    /// 1. Block data (BLOCKS column family)
+    /// 2. Height index (BLOCK_HEIGHTS column family)
+    /// 3. Chain head (CHAIN_HEAD column family)
+    ///
+    /// The batch is committed with `set_sync(true)` to ensure all data
+    /// survives SIGKILL. This is critical for WAL-storage consistency -
+    /// without atomic sync writes, the WAL may show committed blocks while
+    /// storage reports height 0 after a crash.
+    ///
+    /// # Arguments
+    /// * `block` - The block to store
+    /// * `head` - The new chain head reference
+    ///
+    /// # Performance
+    ///
+    /// Single fsync per block instead of multiple. While sync writes are
+    /// slower than async writes, the atomicity guarantee is essential for
+    /// crash recovery.
+    pub async fn atomic_commit_block(
+        &self,
+        block: &AlysConsensusBlock,
+        head: &BlockRef,
+    ) -> Result<(), StorageError> {
+        let db = self.main_db.read().await;
+        let mut batch = WriteBatch::default();
+
+        // 1. Block data
+        let blocks_cf = db
+            .cf_handle(column_families::BLOCKS)
+            .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
+
+        let block_hash = block.message.block_hash().to_block_hash();
+        let block_key = block_hash.as_bytes();
+        let block_value = serde_json::to_vec(block)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        batch.put_cf(&blocks_cf, block_key, block_value);
+
+        // 2. Height index
+        let height_cf = db
+            .cf_handle(column_families::BLOCK_HEIGHTS)
+            .ok_or_else(|| StorageError::Database("BLOCK_HEIGHTS column family not found".to_string()))?;
+
+        let height = block.message.execution_payload.block_number;
+        let height_key = height.to_be_bytes();
+        batch.put_cf(&height_cf, &height_key, block_key);
+
+        // 3. Chain head
+        let chain_head_cf = db
+            .cf_handle(column_families::CHAIN_HEAD)
+            .ok_or_else(|| StorageError::Database("CHAIN_HEAD column family not found".to_string()))?;
+
+        let head_value = serde_json::to_vec(head)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        batch.put_cf(&chain_head_cf, b"current", head_value);
+
+        // 4. Write atomically with sync
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+
+        db.write_opt(batch, &write_opts).map_err(|e| {
+            StorageError::Database(format!("Failed to atomically commit block: {}", e))
+        })?;
+
+        debug!(
+            block_hash = %block_hash,
+            height = height,
+            "Atomically committed block with sync"
+        );
+
+        Ok(())
+    }
+
     /// Retrieve a block from the database by hash
     pub async fn get_block(
         &self,

@@ -72,6 +72,59 @@ impl Handler<StoreBlockMessage> for StorageActor {
     }
 }
 
+impl Handler<AtomicCommitBlockMessage> for StorageActor {
+    type Result = ResponseFuture<Result<(), StorageError>>;
+
+    fn handle(&mut self, msg: AtomicCommitBlockMessage, _: &mut Context<Self>) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        let height = msg.block.message.execution_payload.block_number;
+
+        info!(
+            correlation_id = ?correlation_id,
+            height = height,
+            hash = %msg.new_head.hash,
+            "Handling AtomicCommitBlockMessage"
+        );
+
+        let block = msg.block;
+        let new_head = msg.new_head;
+        let cache = self.cache.clone();
+        let database = self.database.clone();
+        let indexing = self.indexing.clone();
+        let metrics = self.metrics.clone();
+
+        Box::pin(async move {
+            let block_hash = block.message.block_hash().to_block_hash();
+            let start_time = std::time::Instant::now();
+
+            // Update cache first for fast access
+            cache.put_block(block_hash, block.clone()).await;
+
+            // Atomically commit block + height index + chain head with sync
+            database.atomic_commit_block(&block, &new_head).await?;
+
+            // Index the block (non-critical - failure shouldn't stop commit)
+            if let Err(e) = indexing.write().await.index_block(&block).await {
+                error!("Failed to index block {}: {}", block_hash, e);
+            }
+
+            // Record metrics
+            let storage_time = start_time.elapsed();
+            metrics.record_block_stored(height, storage_time, true);
+            metrics.record_chain_head_update();
+
+            info!(
+                block_hash = %block_hash,
+                height = height,
+                duration_ms = storage_time.as_millis(),
+                "Atomically committed block successfully"
+            );
+
+            Ok(())
+        })
+    }
+}
+
 impl Handler<GetBlockMessage> for StorageActor {
     type Result = ResponseFuture<Result<Option<AlysConsensusBlock>, StorageError>>;
 

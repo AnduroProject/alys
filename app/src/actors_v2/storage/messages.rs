@@ -31,6 +31,36 @@ pub struct StoreBlockMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message to atomically commit a block with chain head update.
+///
+/// This ensures block data, height index, and chain head are written
+/// atomically with sync (fsync) to survive SIGKILL. Critical for
+/// WAL-storage consistency - prevents the scenario where WAL shows
+/// committed blocks but storage reports height 0 after crash.
+///
+/// # Atomicity Guarantees
+///
+/// The following are written in a single RocksDB WriteBatch with sync:
+/// 1. Block data (BLOCKS column family)
+/// 2. Height index (BLOCK_HEIGHTS column family)
+/// 3. Chain head (CHAIN_HEAD column family)
+///
+/// # When to Use
+///
+/// Use this instead of separate `StoreBlockMessage` + `UpdateChainHeadMessage`
+/// when committing finalized blocks in Tendermint consensus. The separate
+/// messages are non-atomic and can lead to data loss on SIGKILL.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<(), StorageError>")]
+pub struct AtomicCommitBlockMessage {
+    /// The block to store
+    pub block: AlysConsensusBlock,
+    /// The new chain head reference
+    pub new_head: BlockRef,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 /// Message to get a block from storage by hash
 #[derive(Message, Debug, Clone)]
 #[rtype(result = "Result<Option<AlysConsensusBlock>, StorageError>")]
