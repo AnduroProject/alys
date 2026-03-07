@@ -97,6 +97,38 @@ impl FutureRoundVotes {
     ///
     /// The vote should be pre-validated (signature verified) before calling this method.
     pub fn add_vote(&mut self, vote: Vote) -> FutureRoundAction {
+        self.add_vote_with_self_power(vote, None)
+    }
+
+    /// Add a vote with self-power for threshold calculation.
+    ///
+    /// When a node receives future round votes from other validators, it should
+    /// include its own voting power when calculating whether the threshold is met.
+    /// This is because once the node advances to this round, it WILL vote
+    /// (guaranteed by the Tendermint protocol).
+    ///
+    /// This is critical for n=3 networks where the 2/3+ threshold is 100%.
+    /// Without including self-power, a restarting node at round 0 cannot advance
+    /// even when it receives votes from all other validators (2/3 = 66% < 100%).
+    ///
+    /// # Arguments
+    ///
+    /// * `vote` - The vote to add (must be pre-validated)
+    /// * `our_power` - Our voting power to include in threshold calculation.
+    ///   Pass `None` if we're not a validator or don't want to include self-power.
+    ///
+    /// # Safety
+    ///
+    /// This is safe because:
+    /// 1. We're not counting our vote twice - we haven't voted yet
+    /// 2. Once we advance, we WILL vote (Tendermint protocol guarantee)
+    /// 3. This only affects OUR decision to advance; other nodes decide independently
+    /// 4. Byzantine nodes cannot exploit this - they can't forge our intention
+    pub fn add_vote_with_self_power(
+        &mut self,
+        vote: Vote,
+        our_power: Option<VotingPower>,
+    ) -> FutureRoundAction {
         // Get validator's voting power
         let power = self
             .validator_set
@@ -130,6 +162,11 @@ impl FutureRoundVotes {
             }
         }
 
+        // Calculate effective power including our future vote.
+        // We include our power because once we advance to this round,
+        // we WILL vote - this is guaranteed by the Tendermint protocol.
+        let self_power = our_power.unwrap_or(0);
+
         // Check if we've reached any threshold
         let max_block_precommit = self
             .precommit_power_by_block
@@ -139,10 +176,10 @@ impl FutureRoundVotes {
 
         analyze_future_round_votes(
             self.round,
-            self.prevote_power,
-            self.precommit_power,
+            self.prevote_power + self_power,
+            self.precommit_power + self_power,
             max_block_precommit,
-            self.precommit_nil_power,
+            self.precommit_nil_power, // NIL doesn't include our future vote
             self.validator_set.total_power(),
         )
     }
@@ -313,6 +350,39 @@ impl FutureMessageStore {
     ///
     /// Returns the action to take if a threshold is reached.
     pub fn store_vote(&mut self, vote: Vote) -> FutureRoundAction {
+        self.store_vote_with_self_power(vote, None)
+    }
+
+    /// Store a vote for a future round, including our own power for threshold calculation.
+    ///
+    /// This variant includes our voting power when calculating whether thresholds are met.
+    /// This is critical for n=3 networks where the 2/3+ threshold is 100% (all 3 validators).
+    ///
+    /// # The Problem This Solves
+    ///
+    /// When a node restarts, it starts at round 0 while other nodes may be at round N.
+    /// The restarting node receives future round votes from the other validators.
+    /// Without including self-power:
+    /// - n=3, threshold = 3 (100%)
+    /// - Node receives 2 votes from peers
+    /// - 2 < 3 → NoAction → deadlock!
+    ///
+    /// With self-power:
+    /// - Node receives 2 votes from peers
+    /// - 2 peer votes + 1 self = 3 = threshold met
+    /// - Node advances to round N and votes
+    /// - Consensus resumes
+    ///
+    /// # Arguments
+    ///
+    /// * `vote` - The vote to store (must be pre-validated)
+    /// * `our_power` - Our voting power to include in threshold calculation.
+    ///   Pass `None` for observer nodes or when self-power shouldn't be counted.
+    pub fn store_vote_with_self_power(
+        &mut self,
+        vote: Vote,
+        our_power: Option<VotingPower>,
+    ) -> FutureRoundAction {
         if vote.round <= self.current_round {
             return FutureRoundAction::NoAction;
         }
@@ -333,7 +403,7 @@ impl FutureMessageStore {
             .entry(vote.round)
             .or_insert_with(|| FutureRoundVotes::new(vote.round, self.validator_set.clone()));
 
-        round_votes.add_vote(vote)
+        round_votes.add_vote_with_self_power(vote, our_power)
     }
 
     /// Store a proposal for a future round
@@ -768,5 +838,147 @@ mod tests {
 
         // Recovery mode should be preserved
         assert!(store.is_recovery_mode());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SELF-POWER TESTS (TM-A1 chaos test fix)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_self_power_enables_n3_threshold_with_2_peer_votes() {
+        // This is the TM-A1 chaos test scenario:
+        // - 3 validators, threshold = 3 (100%)
+        // - Node restarts at round 0, others at round N
+        // - Without self-power: 2 peer votes < 3 threshold → deadlock
+        // - With self-power: 2 peer votes + 1 self = 3 = threshold → advance
+
+        let validator_set = create_test_validator_set(3);
+        let mut votes = FutureRoundVotes::new(5, validator_set);
+        let block_hash = test_hash(1);
+
+        // Add 2 prevotes from peer validators (not validator 0, which is us)
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, Some(block_hash), VoteType::Prevote);
+            let action = votes.add_vote_with_self_power(vote, Some(1)); // our_power = 1
+
+            if i < 2 {
+                // First peer vote: 1 peer + 1 self = 2 < 3 threshold
+                assert_eq!(action, FutureRoundAction::NoAction);
+            } else {
+                // Second peer vote: 2 peers + 1 self = 3 = threshold met!
+                assert!(matches!(action, FutureRoundAction::AdvanceToPrevote { round: 5, .. }),
+                    "Expected AdvanceToPrevote, got {:?}", action);
+            }
+        }
+    }
+
+    #[test]
+    fn test_self_power_none_behaves_like_original() {
+        // When our_power is None, behavior should match the original add_vote()
+        let validator_set = create_test_validator_set(3);
+        let block_hash = test_hash(1);
+
+        // Test with our_power = None
+        let mut votes_none = FutureRoundVotes::new(5, validator_set.clone());
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, Some(block_hash), VoteType::Prevote);
+            let action = votes_none.add_vote_with_self_power(vote, None);
+
+            // Without self-power: 2 votes < 3 threshold → no action
+            assert_eq!(action, FutureRoundAction::NoAction);
+        }
+
+        // Compare with original add_vote()
+        let mut votes_orig = FutureRoundVotes::new(5, validator_set);
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, Some(block_hash), VoteType::Prevote);
+            let action = votes_orig.add_vote(vote);
+            assert_eq!(action, FutureRoundAction::NoAction);
+        }
+    }
+
+    #[test]
+    fn test_store_vote_with_self_power() {
+        // Test the FutureMessageStore variant
+        let validator_set = create_test_validator_set(3);
+        let mut store = FutureMessageStore::new(validator_set);
+        let block_hash = test_hash(1);
+
+        // Store 2 votes for round 5 with self-power = 1
+        let vote1 = create_test_vote(5, 1, Some(block_hash), VoteType::Prevote);
+        let action1 = store.store_vote_with_self_power(vote1, Some(1));
+        assert_eq!(action1, FutureRoundAction::NoAction);
+
+        let vote2 = create_test_vote(5, 2, Some(block_hash), VoteType::Prevote);
+        let action2 = store.store_vote_with_self_power(vote2, Some(1));
+        // 2 peer votes + 1 self = 3 = threshold met
+        assert!(matches!(action2, FutureRoundAction::AdvanceToPrevote { round: 5, .. }));
+    }
+
+    #[test]
+    fn test_self_power_precommit_threshold() {
+        // Test that self-power works for precommit thresholds.
+        // Note: Self-power is added to total precommit_power, not per-block power.
+        // This means we get AdvanceToPrecommit (Priority 3), not CommitBlock (Priority 1).
+        // This is correct because we can't know which block we'll precommit until we vote.
+        let validator_set = create_test_validator_set(3);
+        let mut votes = FutureRoundVotes::new(5, validator_set);
+        let block_hash = test_hash(1);
+
+        // Add 2 precommits from peer validators
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, Some(block_hash), VoteType::Precommit);
+            let action = votes.add_vote_with_self_power(vote, Some(1));
+
+            if i < 2 {
+                assert_eq!(action, FutureRoundAction::NoAction);
+            } else {
+                // 2 peers + 1 self = 3 = threshold reached
+                // We get AdvanceToPrecommit because per-block power (2) < threshold,
+                // but total precommit_power + self_power (3) >= threshold
+                assert!(matches!(action, FutureRoundAction::AdvanceToPrecommit { round: 5, .. }),
+                    "Expected AdvanceToPrecommit, got {:?}", action);
+            }
+        }
+    }
+
+    #[test]
+    fn test_self_power_with_nil_precommits() {
+        // When peers precommit NIL, self-power still enables round advancement.
+        // This is correct because we should advance to participate in consensus,
+        // even if the round will likely fail (we can then start the next round).
+        let validator_set = create_test_validator_set(3);
+        let mut votes = FutureRoundVotes::new(5, validator_set);
+
+        // Add 2 NIL precommits from peer validators
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, None, VoteType::Precommit); // NIL precommit
+            let action = votes.add_vote_with_self_power(vote, Some(1));
+
+            if i < 2 {
+                assert_eq!(action, FutureRoundAction::NoAction);
+            } else {
+                // 2 peers + 1 self = 3 = threshold reached via precommit_power
+                // We advance to Precommit step to participate
+                assert!(matches!(action, FutureRoundAction::AdvanceToPrecommit { round: 5, .. }),
+                    "Expected AdvanceToPrecommit for NIL precommits, got {:?}", action);
+            }
+        }
+    }
+
+    #[test]
+    fn test_self_power_observer_node() {
+        // Observer nodes (our_power = 0) should not affect thresholds
+        let validator_set = create_test_validator_set(3);
+        let mut votes = FutureRoundVotes::new(5, validator_set);
+        let block_hash = test_hash(1);
+
+        // Add 2 prevotes, but we're an observer (power = 0)
+        for i in 1..3 {
+            let vote = create_test_vote(5, i, Some(block_hash), VoteType::Prevote);
+            let action = votes.add_vote_with_self_power(vote, Some(0));
+            assert_eq!(action, FutureRoundAction::NoAction,
+                "Observer nodes shouldn't reach threshold with only 2 votes");
+        }
     }
 }

@@ -2995,11 +2995,23 @@ impl ChainActor {
             "Storing validated vote for future round"
         );
 
-        // Store vote and check if we should take action
+        // Store vote and check if we should take action.
+        // Include our voting power in threshold calculation - this is critical for
+        // n=3 networks where 2/3+ threshold is 100%. When we're behind (e.g., just
+        // restarted at round 0 while others are at round N), we need to recognize
+        // that "peer votes + our future vote = threshold" so we can advance.
         let action = {
             let tendermint_state = self.tendermint_state.as_ref().unwrap();
             let mut state = tendermint_state.write().await;
-            state.future_messages.store_vote(vote)
+
+            // Get our voting power to include in threshold calculation.
+            // Once we advance to this round, we WILL vote (Tendermint guarantee),
+            // so it's safe to include our power when deciding whether to advance.
+            let our_power = state.our_validator_id.and_then(|id| {
+                state.validator_set.get_power(&id).ok()
+            });
+
+            state.future_messages.store_vote_with_self_power(vote, our_power)
         };
 
         // Handle the action based on what threshold was reached
