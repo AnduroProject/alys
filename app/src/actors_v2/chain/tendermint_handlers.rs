@@ -920,20 +920,52 @@ impl ChainActor {
             .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
 
         // Verify timeout is for current state
-        let (current_height, current_round, current_step) = {
+        let (mut current_height, mut current_round, mut current_step) = {
             let state = tendermint_state.read().await;
             (state.height, state.round, state.step)
         };
 
-        if height != current_height || round != current_round {
-            debug!(
+        // FIX: Handle race where timeout arrives before TendermintNewHeight message
+        // This can happen during resume when messages are delivered out of order.
+        // If the timeout is for exactly the next height, initialize state first.
+        if height == current_height + 1 && round == 0 {
+            info!(
                 correlation_id = %correlation_id,
                 timeout_height = height,
-                timeout_round = round,
                 current_height = current_height,
-                current_round = current_round,
-                "Ignoring stale timeout"
+                "Timeout for next height arrived before NewHeight - initializing state"
             );
+            // Initialize state for this height
+            self.handle_tendermint_new_height(height, correlation_id).await?;
+
+            // Re-read state after initialization
+            let state = tendermint_state.read().await;
+            current_height = state.height;
+            current_round = state.round;
+            current_step = state.step;
+        }
+
+        if height != current_height || round != current_round {
+            // Enhanced logging for diagnosis
+            if height > current_height {
+                warn!(
+                    correlation_id = %correlation_id,
+                    timeout_height = height,
+                    timeout_round = round,
+                    current_height = current_height,
+                    current_round = current_round,
+                    "Timeout for future height - ChainActor may not have received TendermintNewHeight yet"
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    timeout_height = height,
+                    timeout_round = round,
+                    current_height = current_height,
+                    current_round = current_round,
+                    "Ignoring stale timeout"
+                );
+            }
             return Ok(current_round);
         }
 

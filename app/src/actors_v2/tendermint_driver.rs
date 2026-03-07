@@ -505,6 +505,16 @@ impl TendermintDriver {
         // Apply any pending validator set updates for this height
         self.apply_pending_validator_updates(height);
 
+        // CRITICAL FIX: Notify ChainActor of new height BEFORE scheduling timeout
+        // This ensures ChainActor's tendermint_state is synchronized with Driver's position.
+        // Without this, ChainActor rejects timeouts as "stale" because its height doesn't match.
+        if let Some(ref chain_actor) = self.chain_actor {
+            chain_actor.do_send(ChainMessage::TendermintNewHeight {
+                height,
+                correlation_id: Some(Uuid::new_v4()),
+            });
+        }
+
         // If we're the proposer, trigger proposal
         if self.is_proposer(height, 0) {
             self.trigger_propose(height, 0, ctx);
