@@ -108,6 +108,7 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-1
     restart: unless-stopped
+    stop_grace_period: 30s
     labels:
       chaos.role: "validator"
       chaos.validator_id: "0"
@@ -170,6 +171,7 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-2
     restart: unless-stopped
+    stop_grace_period: 30s
     labels:
       chaos.role: "validator"
       chaos.validator_id: "1"
@@ -232,6 +234,7 @@ services:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: alys-node-3
     restart: unless-stopped
+    stop_grace_period: 30s
     labels:
       chaos.role: "validator"
       chaos.validator_id: "2"

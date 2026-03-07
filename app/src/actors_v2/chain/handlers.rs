@@ -1274,7 +1274,9 @@ impl Handler<ChainMessage> for ChainActor {
                         }
 
                         // Step 6: Update chain head if this is the next sequential block
-                        if block_height == current_height + 1 {
+                        // BUG FIX: Use storage_current_height (actual storage state) instead of current_height
+                        // (captured from TendermintState which may be stale after WAL recovery)
+                        if block_height == storage_current_height + 1 {
                             if let Some(ref storage_actor) = storage_actor {
                                 let new_head = crate::actors_v2::storage::actor::BlockRef {
                                     hash: lighthouse_wrapper::types::Hash256::from_slice(block_hash.as_bytes()),
@@ -2920,6 +2922,8 @@ impl Handler<ApplyRecoveredState> for ChainActor {
         let correlation_id = msg.correlation_id.unwrap_or_else(Uuid::new_v4);
         let recovered = msg.recovered;
         let tendermint_state = self.tendermint_state.clone();
+        let storage_actor = self.storage_actor.clone();
+        let sync_actor = self.sync_actor.clone();
 
         Box::pin(
             async move {
@@ -2937,6 +2941,85 @@ impl Handler<ApplyRecoveredState> for ChainActor {
                         prevotes_restored: 0,
                         precommits_restored: 0,
                     });
+                }
+
+                // WAL-Storage mismatch safeguard: Verify storage has the blocks WAL says we committed
+                // If storage is behind WAL's committed height, database was corrupted or blocks were lost.
+                // In this case, we must NOT apply WAL state (which would start consensus at wrong height)
+                // but instead trigger a resync to recover the missing blocks.
+                if let Some(wal_committed_height) = recovered.last_committed_height {
+                    let storage_height = if let Some(ref storage) = storage_actor {
+                        match storage.send(crate::actors_v2::storage::messages::GetChainHeightMessage {
+                            correlation_id: Some(correlation_id),
+                        }).await {
+                            Ok(Ok(h)) => h,
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "Failed to get storage height for WAL validation - proceeding with recovery"
+                                );
+                                wal_committed_height // Assume storage is consistent if query fails
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    error = %e,
+                                    "StorageActor communication error during WAL validation - proceeding with recovery"
+                                );
+                                wal_committed_height // Assume storage is consistent if unreachable
+                            }
+                        }
+                    } else {
+                        tracing::warn!(
+                            correlation_id = %correlation_id,
+                            "StorageActor not available for WAL validation - proceeding with recovery"
+                        );
+                        wal_committed_height // No storage actor, assume consistent
+                    };
+
+                    if storage_height < wal_committed_height {
+                        tracing::warn!(
+                            correlation_id = %correlation_id,
+                            storage_height = storage_height,
+                            wal_committed_height = wal_committed_height,
+                            gap = wal_committed_height - storage_height,
+                            "WAL-Storage mismatch detected! Storage is behind WAL committed height. \
+                             Triggering resync to recover missing blocks."
+                        );
+
+                        // Trigger ForceResync to recover missing blocks
+                        if let Some(ref sync) = sync_actor {
+                            let resync_msg = crate::actors_v2::network::messages::SyncMessage::ForceResync {
+                                reason: format!(
+                                    "WAL-Storage mismatch: storage at {} but WAL committed {}",
+                                    storage_height, wal_committed_height
+                                ),
+                            };
+                            if let Err(e) = sync.send(resync_msg).await {
+                                tracing::error!(
+                                    correlation_id = %correlation_id,
+                                    error = %e,
+                                    "Failed to send ForceResync to SyncActor"
+                                );
+                            } else {
+                                tracing::info!(
+                                    correlation_id = %correlation_id,
+                                    "ForceResync triggered due to WAL-Storage mismatch"
+                                );
+                            }
+                        }
+
+                        // Return applied: false to prevent consensus from starting at wrong height
+                        return Ok(ApplyRecoveredStateResponse {
+                            applied: false,
+                            height: storage_height,
+                            round: 0,
+                            lock_restored: false,
+                            prevotes_restored: 0,
+                            precommits_restored: 0,
+                        });
+                    }
                 }
 
                 let state = tendermint_state

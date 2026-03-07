@@ -972,8 +972,9 @@ impl App {
         if let Some(tx) = v2_sender {
             if tx.send(()).is_ok() {
                 info!("V2 shutdown signal sent - waiting for StorageActor flush...");
-                // Give V2 time to flush (the flush is async and should complete quickly)
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                // Give V2 time to flush - increased from 2s to 15s to prevent database corruption
+                // on container stop (SIGKILL can arrive if flush takes longer than grace period)
+                tokio::time::sleep(Duration::from_secs(15)).await;
                 info!("V2 shutdown grace period complete");
             } else {
                 warn!("V2 shutdown signal failed - V2 may have already exited");

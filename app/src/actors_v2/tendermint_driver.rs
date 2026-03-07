@@ -351,14 +351,25 @@ impl TendermintDriver {
                         .await
                     {
                         Ok(Ok(response)) => {
-                            info!(
-                                height = response.height,
-                                round = response.round,
-                                lock_restored = response.lock_restored,
-                                prevotes = response.prevotes_restored,
-                                precommits = response.precommits_restored,
-                                "WAL recovery applied to ChainActor"
-                            );
+                            if response.applied {
+                                info!(
+                                    height = response.height,
+                                    round = response.round,
+                                    lock_restored = response.lock_restored,
+                                    prevotes = response.prevotes_restored,
+                                    precommits = response.precommits_restored,
+                                    "WAL recovery applied to ChainActor"
+                                );
+                            } else {
+                                // WAL-Storage mismatch detected - consensus will NOT start
+                                // until sync recovers the missing blocks
+                                warn!(
+                                    storage_height = response.height,
+                                    "WAL recovery NOT applied due to WAL-Storage mismatch. \
+                                     Consensus paused until sync recovers missing blocks. \
+                                     Node will resume consensus automatically after sync completion."
+                                );
+                            }
                         }
                         Ok(Err(e)) => {
                             error!(error = ?e, "Failed to apply WAL recovery to ChainActor");
