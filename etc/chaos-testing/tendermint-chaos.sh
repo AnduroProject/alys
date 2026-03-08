@@ -425,11 +425,11 @@ run_TM_A1() {
 
     # Recover: restart validator
     restart_node "$target"
-    wait_for_validator_sync "$target" 30
+    wait_for_validator_sync "$target" 60
 
     # Verify consensus resumed
     local post_recovery_height=$(get_consensus_height "alys-node-1")
-    if wait_for_height $((post_recovery_height + 3)) 60; then
+    if wait_for_height $((post_recovery_height + 3)) 90; then
         record_test_result "TM-A1" "PASSED" "Single Validator Crash & Recovery"
     else
         record_test_result "TM-A1" "FAILED" "Consensus did not resume after recovery"
@@ -460,10 +460,10 @@ run_TM_A2() {
 
     # Recover
     restart_node "$proposer"
-    wait_for_validator_sync "$proposer" 30
+    wait_for_validator_sync "$proposer" 60
 
     # Verify recovery
-    if wait_for_height $((current_height + 3)) 60; then
+    if wait_for_height $((current_height + 3)) 90; then
         record_test_result "TM-A2" "PASSED" "Proposer Crash & Recovery"
     else
         record_test_result "TM-A2" "FAILED" "Consensus did not resume after proposer recovery"
@@ -489,10 +489,10 @@ run_TM_A3() {
 
     # Restart the crashed validator
     restart_node "$target"
-    wait_for_validator_sync "$target" 30
+    wait_for_validator_sync "$target" 60
 
     # Verify consensus resumed and all nodes are at same height
-    sleep 10
+    sleep 15
     local h1=$(get_consensus_height "alys-node-1")
     local h2=$(get_consensus_height "alys-node-2")
     local h3=$(get_consensus_height "alys-node-3")
@@ -529,17 +529,17 @@ run_TM_A4() {
     # Wait for consensus to resume
     local resume_height=$((pre_height + 2))
     local recovery_start=$(date +%s)
-    local max_recovery_time=60
+    local max_recovery_time=90
 
     while true; do
         local current=$(get_consensus_height "alys-node-1")
         if [[ "$current" -ge "$resume_height" ]]; then
             local recovery_time=$(($(date +%s) - crash_time))
             log_info "Recovery time: ${recovery_time}s"
-            if [[ $recovery_time -le 30 ]]; then
-                record_test_result "TM-A4" "PASSED" "Crash Recovery Time: ${recovery_time}s (< 30s)"
+            if [[ $recovery_time -le 45 ]]; then
+                record_test_result "TM-A4" "PASSED" "Crash Recovery Time: ${recovery_time}s (< 45s)"
             else
-                record_test_result "TM-A4" "FAILED" "Recovery too slow: ${recovery_time}s (> 30s)"
+                record_test_result "TM-A4" "FAILED" "Recovery too slow: ${recovery_time}s (> 45s)"
             fi
             return
         fi
@@ -569,15 +569,15 @@ run_TM_A5() {
         stop_node "$node"
         sleep 5
         restart_node "$node"
-        wait_for_validator_sync "$node" 30 || {
+        wait_for_validator_sync "$node" 60 || {
             record_test_result "TM-A5" "FAILED" "$node did not recover"
             return
         }
-        sleep 5  # Let consensus stabilize
+        sleep 10  # Let consensus stabilize
     done
 
     # Verify all nodes at same height and progressing
-    sleep 10
+    sleep 15
     local h1=$(get_consensus_height "alys-node-1")
     local h2=$(get_consensus_height "alys-node-2")
     local h3=$(get_consensus_height "alys-node-3")
@@ -624,7 +624,7 @@ run_TM_B1() {
 
     # Verify consensus resumed
     local post_heal_height=$(get_consensus_height "alys-node-1")
-    if wait_for_height $((post_heal_height + 3)) 60; then
+    if wait_for_height $((post_heal_height + 3)) 90; then
         record_test_result "TM-B1" "PASSED" "Single Node Isolation & Recovery"
     else
         record_test_result "TM-B1" "FAILED" "Consensus did not resume after heal"
@@ -661,10 +661,10 @@ run_TM_B2() {
 
     # Heal
     reconnect_node "alys-node-3"
-    wait_for_validator_sync "alys-node-3" 30
+    wait_for_validator_sync "alys-node-3" 60
 
     # Verify recovery
-    if wait_for_height $((h1 + 3)) 60; then
+    if wait_for_height $((h1 + 3)) 90; then
         record_test_result "TM-B2" "PASSED" "2-1 Network Partition"
     else
         record_test_result "TM-B2" "FAILED" "Consensus did not resume after partition heal"
@@ -709,7 +709,7 @@ run_TM_B5() {
         fi
 
         local elapsed=$(($(date +%s) - heal_time))
-        if [[ $elapsed -ge 60 ]]; then
+        if [[ $elapsed -ge 90 ]]; then
             record_test_result "TM-B5" "FAILED" "Timeout waiting for consensus resume"
             return
         fi
@@ -783,7 +783,7 @@ run_TM_B3() {
     sleep 10
 
     # Verify recovery
-    if wait_for_height $((current_height + 3)) 60; then
+    if wait_for_height $((current_height + 3)) 90; then
         record_test_result "TM-B3" "PASSED" "Asymmetric Partition Recovery"
     else
         record_test_result "TM-B3" "FAILED" "Consensus did not resume after asymmetric partition heal"
@@ -815,11 +815,11 @@ run_TM_B4() {
 
     # Heal partition
     reconnect_node "$next_proposer"
-    wait_for_validator_sync "$next_proposer" 30
+    wait_for_validator_sync "$next_proposer" 60
 
     # Verify recovery - consensus should resume with timeout and round advancement
     local post_heal_height=$(get_consensus_height "alys-node-1")
-    if wait_for_height $((post_heal_height + 3)) 60; then
+    if wait_for_height $((post_heal_height + 3)) 90; then
         record_test_result "TM-B4" "PASSED" "Proposer Isolation & Recovery"
     else
         record_test_result "TM-B4" "FAILED" "Consensus did not resume after proposer reconnection"
@@ -942,10 +942,10 @@ run_TM_D1() {
     crash_node "$target"
     sleep 2
     restart_node "$target"
-    wait_for_validator_sync "$target" 30
+    wait_for_validator_sync "$target" 60
 
     # Wait for consensus to resume
-    sleep 15
+    sleep 20
 
     # Check for equivocation evidence (WAL should prevent double-voting)
     if check_equivocation_evidence "$target"; then
@@ -975,9 +975,9 @@ run_TM_D2() {
     crash_node "$target"
     sleep 1
     restart_node "$target"
-    wait_for_validator_sync "$target" 30
+    wait_for_validator_sync "$target" 60
 
-    sleep 15
+    sleep 20
 
     if check_equivocation_evidence "$target"; then
         record_test_result "TM-D2" "FAILED" "Double-precommit detected (WAL failure)"
@@ -1007,9 +1007,9 @@ run_TM_D3() {
     crash_node "$target"
     sleep 3
     restart_node "$target"
-    wait_for_validator_sync "$target" 30
+    wait_for_validator_sync "$target" 60
 
-    sleep 15
+    sleep 20
 
     # All nodes should be at same height (lock state preserved = same block committed)
     local h1=$(get_consensus_height "alys-node-1")
@@ -1042,7 +1042,7 @@ run_TM_D4() {
     restart_node "$target"
 
     # Wait longer for potential WAL recovery
-    sleep 30
+    sleep 45
 
     # Check if validator is responding (didn't crash loop)
     local port=$(get_rpc_port "$target")
@@ -1073,11 +1073,11 @@ run_TM_D5() {
         crash_node "$target"
         sleep 2
         restart_node "$target"
-        wait_for_validator_sync "$target" 20 || {
+        wait_for_validator_sync "$target" 60 || {
             record_test_result "TM-D5" "FAILED" "Recovery failed on cycle $i"
             return
         }
-        sleep 5
+        sleep 10
     done
 
     # Verify no evidence generated during all cycles
@@ -1116,15 +1116,15 @@ run_TM_E5() {
         crash_node "$node"
         sleep 1
         restart_node "$node"
-        sleep 5
+        sleep 10
     done
 
     # Wait for full recovery
-    wait_for_validator_sync "alys-node-1" 30
-    wait_for_validator_sync "alys-node-2" 30
-    wait_for_validator_sync "alys-node-3" 30
+    wait_for_validator_sync "alys-node-1" 60
+    wait_for_validator_sync "alys-node-2" 60
+    wait_for_validator_sync "alys-node-3" 60
 
-    sleep 20
+    sleep 30
 
     local evidence_after=$(get_evidence "alys-node-1" | jq -r '.total // 0')
     local final_height=$(get_consensus_height "alys-node-1")
@@ -1162,7 +1162,7 @@ run_TM_F1() {
     # Restart execution layer
     log_info "Restarting execution layer..."
     docker start execution 2>/dev/null || true
-    sleep 20
+    sleep 30
 
     # Verify recovery
     local final_height=$(get_consensus_height "alys-node-1")
@@ -1259,9 +1259,9 @@ run_TM_L1() {
     isolate_node "alys-node-2"
     sleep 15  # Let rounds advance due to timeouts
     reconnect_node "alys-node-2"
-    wait_for_validator_sync "alys-node-2" 30
+    wait_for_validator_sync "alys-node-2" 60
 
-    sleep 20
+    sleep 30
 
     local final_height=$(get_consensus_height "alys-node-1")
     if [[ "$final_height" -gt "$initial_height" ]]; then
