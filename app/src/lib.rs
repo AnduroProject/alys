@@ -6,14 +6,11 @@ pub mod auxpow_miner;
 pub mod block;
 mod block_candidate;
 mod block_hash_cache;
-mod chain;
 mod engine;
 mod error;
 mod metrics;
-mod rpc;
 mod signatures;
 mod spec;
-mod store;
 
 // for main.rs
 pub use app::run;

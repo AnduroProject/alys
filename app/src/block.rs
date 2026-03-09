@@ -2,13 +2,13 @@ use crate::{
     actors_v2::chain::tendermint::pegin::PegInInfo,
     actors_v2::chain::tendermint::Commit,
     actors_v2::chain::tendermint::GovernanceUpdate,
+    actors_v2::storage::actor::BlockRef,
     aura::Authority,
     auxpow::AuxPow,
     auxpow_miner::BlockIndex,
     error::Error,
     signatures::{AggregateApproval, CheckedIndividualApproval, IndividualApproval},
     spec::ChainSpec,
-    store::BlockRef,
 };
 use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction};
 use lighthouse_wrapper::bls::PublicKey;
@@ -330,7 +330,8 @@ impl SignedConsensusBlock<MainnetEthSpec> {
     pub fn block_ref(&self) -> BlockRef {
         BlockRef {
             hash: self.canonical_root(),
-            height: self.message.execution_payload.block_number,
+            number: self.message.execution_payload.block_number,
+            execution_hash: self.message.execution_payload.block_hash,
         }
     }
 

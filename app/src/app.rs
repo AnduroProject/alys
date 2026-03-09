@@ -1,20 +1,15 @@
 #![allow(clippy::manual_div_ceil)]
 
 use crate::actors_v2::network::{NetworkMessage, SyncMessage};
-use crate::aura::Aura;
-use crate::auxpow_miner::spawn_background_miner;
-use crate::block_hash_cache::BlockHashCacheInit;
-use crate::chain::{BitcoinWallet, Chain};
 use crate::engine::*;
 use crate::spec::{
     genesis_value_parser, hex_file_parser, ChainSpec, DEV_BITCOIN_SECRET_KEY,
     DEV_REGTEST_AURA_SECRET_KEY_NODE1, DEV_REGTEST_AURA_SECRET_KEY_NODE2,
     DEV_REGTEST_BITCOIN_SECRET_KEY_NODE1, DEV_REGTEST_BITCOIN_SECRET_KEY_NODE2, DEV_SECRET_KEY,
 };
-use crate::store::{Storage, DEFAULT_ROOT_DIR};
 use bridge::{
     bitcoin::Network, BitcoinCore, BitcoinSecretKey, BitcoinSignatureCollector, BitcoinSigner,
-    Bridge, Federation,
+    Bridge, Federation, UtxoManager, Tree,
 };
 use clap::builder::ArgPredicate;
 use clap::Parser;
@@ -22,15 +17,19 @@ use eyre::Result;
 use futures::pin_mut;
 use lighthouse_wrapper::bls::{Keypair, SecretKey};
 use lighthouse_wrapper::execution_layer::auth::JwtKey;
-use lighthouse_wrapper::store::LevelDB;
-use lighthouse_wrapper::types::MainnetEthSpec;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 use tokio::sync::oneshot;
 use tracing::*;
 use tracing_subscriber::{prelude::*, EnvFilter};
+
+/// Default root directory for V2 data
+pub const DEFAULT_ROOT_DIR: &str = "etc/data/consensus/node_0";
+
+/// Bitcoin wallet type alias (moved from chain.rs)
+pub type BitcoinWallet = UtxoManager<Tree>;
 
 // V2 RPC imports
 use crate::actors_v2::rpc::{RpcActor, RpcConfig, StartRpcServer};
@@ -201,15 +200,13 @@ impl App {
         self.init_tracing();
         let tokio_runtime = tokio_runtime()?;
 
-        // Create channels for shutdown coordination
+        // Create channel for shutdown coordination
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let (chain_tx, chain_rx) =
-            oneshot::channel::<Arc<Chain<LevelDB<MainnetEthSpec>>>>();
 
         // Run the application with graceful shutdown
         let result = tokio_runtime.block_on(async {
             // Spawn the main application
-            let execute_handle = tokio::spawn(self.execute_with_shutdown(shutdown_rx, chain_tx));
+            let execute_handle = tokio::spawn(self.execute_with_shutdown(shutdown_rx));
 
             // Wait for shutdown signal
             let signal = run_until_ctrl_c(async {
@@ -225,20 +222,8 @@ impl App {
             // Signal shutdown to the execute task
             let _ = shutdown_tx.send(());
 
-            // Perform graceful shutdown if we have the chain
-            if let Ok(chain) = chain_rx.await {
-                info!("Performing graceful shutdown...");
-
-                // Sync storage to disk
-                if let Err(e) = chain.sync_storage() {
-                    error!("Failed to sync storage during shutdown: {:?}", e);
-                } else {
-                    info!("Storage synced successfully during graceful shutdown");
-                }
-            } else {
-                warn!("Could not retrieve chain for graceful shutdown - storage may not be synced");
-            }
-
+            // V2 StorageActor handles graceful shutdown via FlushDatabaseMessage
+            // (sent in execute_with_shutdown when shutdown signal is received)
             info!("Shutdown complete (signal: {:?})", signal);
             Ok::<(), eyre::Error>(())
         });
@@ -280,7 +265,6 @@ impl App {
     async fn execute_with_shutdown(
         self,
         shutdown_rx: oneshot::Receiver<()>,
-        chain_tx: oneshot::Sender<Arc<Chain<LevelDB<MainnetEthSpec>>>>,
     ) -> Result<()> {
         // Log dev-regtest node information
         if self.dev_regtest {
@@ -290,7 +274,7 @@ impl App {
             );
         }
 
-        // Clone values needed for V2 actor system BEFORE V0 takes ownership
+        // V2 configuration values
         let v2_db_path = self.db_path.clone();
         let v2_geth_url = self.geth_url.clone();
         let v2_geth_execution_url = self.geth_execution_url.clone();
@@ -299,24 +283,9 @@ impl App {
         let v2_p2p_port = self.p2p_port;
         let v2_remote_bootnode = self.remote_bootnode.clone();
 
-        let disk_store = Storage::new_disk(self.db_path);
-
-        info!("Head: {:?}", disk_store.get_head());
-        info!("Finalized: {:?}", disk_store.get_latest_pow_block());
-
-        // TODO: Combine instantiation of engine & execution apis into Engine::new
-        let http_engine_json_rpc =
-            new_http_engine_json_rpc(self.geth_url, JwtKey::from_slice(&self.jwt_secret).unwrap());
-        let public_execution_json_rpc = new_http_public_execution_json_rpc(self.geth_execution_url);
-        let engine = Engine::new(http_engine_json_rpc, public_execution_json_rpc);
-
         let chain_spec = self.chain_spec.expect("Chain spec is configured");
         let authorities = chain_spec.authorities.clone();
         let slot_duration = chain_spec.slot_duration;
-        let bitcoin_start_height = disk_store
-            .get_bitcoin_scan_start_height()
-            .unwrap()
-            .unwrap_or(chain_spec.bitcoin_start_height);
 
         let mut bitcoin_addresses = Vec::new();
 
@@ -324,7 +293,7 @@ impl App {
             ((federation_bitcoin_pubkeys_len * 2) + 2) / 3
         }
 
-        let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2rds majority, rounded up
+        let threshold = calculate_threshold(chain_spec.federation_bitcoin_pubkeys.len()); // 2/3rds majority, rounded up
         let bitcoin_federation = Federation::new(
             chain_spec.federation_bitcoin_pubkeys.clone(),
             threshold,
@@ -337,18 +306,10 @@ impl App {
 
         bitcoin_addresses.push(bitcoin_federation.taproot_address.clone());
 
-        let wallet_path = self
-            .wallet_path
-            .clone()
-            .unwrap_or(format!("{DEFAULT_ROOT_DIR}/wallet"));
-        let bitcoin_wallet = BitcoinWallet::new(&wallet_path, bitcoin_federation.clone())?;
-        let bitcoin_signature_collector =
-            BitcoinSignatureCollector::new(bitcoin_federation.clone());
-
-        let (maybe_aura_signer, maybe_bitcoin_signer);
+        let (maybe_aura_signer, _maybe_bitcoin_signer);
         if chain_spec.is_validator && !self.not_validator {
-            (maybe_aura_signer, maybe_bitcoin_signer) =
-                match (self.aura_secret_key, self.bitcoin_secret_key) {
+            (maybe_aura_signer, _maybe_bitcoin_signer) =
+                match (self.aura_secret_key.clone(), self.bitcoin_secret_key) {
                     (Some(aura_sk), Some(bitcoin_sk)) => {
                         let aura_pk = aura_sk.public_key();
                         info!("Using aura public key {aura_pk}");
@@ -369,19 +330,13 @@ impl App {
                     }
                 };
         } else {
-            (maybe_aura_signer, maybe_bitcoin_signer) = (None, None);
+            (maybe_aura_signer, _maybe_bitcoin_signer) = (None, None);
         }
-
-        let aura = Aura::new(
-            authorities.clone(),
-            slot_duration,
-            maybe_aura_signer.clone(),
-        );
 
         // Log entire chain_spec
         info!("****** Chain spec: {:?}", chain_spec);
 
-        // Clone values for V2 RPC before V0 Chain takes ownership
+        // V2 configuration values
         let v2_bitcoin_rpc_url = self.bitcoin_rpc_url.clone();
         let v2_bitcoin_rpc_user = self.bitcoin_rpc_user.clone();
         let v2_bitcoin_rpc_pass = self.bitcoin_rpc_pass.clone();
@@ -397,51 +352,10 @@ impl App {
         let v2_max_blocks_without_pow = chain_spec.max_blocks_without_pow;
         let v2_required_confirmations = chain_spec.required_btc_txn_confirmations;
         let v2_slot_duration = slot_duration;
-        let v2_wallet_path = format!("{DEFAULT_ROOT_DIR}/wallet_v2"); // wallet_path.clone();
+        let v2_wallet_path = format!("{DEFAULT_ROOT_DIR}/wallet_v2");
 
-        // TODO: We probably just want to persist the chain_spec struct
-        let chain = Arc::new(Chain::new(
-            engine,
-            disk_store,
-            aura,
-            chain_spec.max_blocks_without_pow,
-            chain_spec.federation.clone(),
-            Bridge::new(
-                BitcoinCore::new(
-                    &self.bitcoin_rpc_url.expect("RPC URL is configured"),
-                    self.bitcoin_rpc_user.expect("RPC user is configured"),
-                    self.bitcoin_rpc_pass.expect("RPC password is configured"),
-                ),
-                bitcoin_addresses,
-                chain_spec.required_btc_txn_confirmations,
-            ),
-            bitcoin_wallet,
-            bitcoin_signature_collector,
-            maybe_bitcoin_signer,
-            chain_spec.retarget_params.clone(),
-            chain_spec.is_validator && !self.not_validator,
-        ));
-
-        // import genesis block without signatures or verification
-        chain
-            .store_genesis(chain_spec.clone())
-            .await
-            .expect("Should store genesis");
-
-        // Initialize the block hash cache
-        chain.init_block_hash_cache().await?;
-
-        // start json-rpc v0 server
-        crate::rpc::run_server(
-            chain.clone(),
-            bitcoin_federation.taproot_address,
-            chain_spec.retarget_params,
-            self.rpc_port,
-        )
-        .await;
-
-        // Start V2 JSON-RPC server on port 3001
-        info!("Starting V2 RPC server on port 3001 (sharing state with V0 Chain)...");
+        // Start V2 JSON-RPC server
+        info!("Starting V2 RPC server on port 3001...");
 
         // Create shutdown channel for V2 actor system
         // Option 4: Graceful shutdown coordination for V2 StorageActor
@@ -464,26 +378,15 @@ impl App {
 
                     info!("🚀 Starting V2 Actor System initialization...");
 
-                    // Clone values for slot worker before Aura consumes them
+                    // Clone values for Tendermint validator setup
                     let v2_authorities_for_slot_worker = v2_authorities.clone();
                     let v2_maybe_aura_signer_for_slot_worker = v2_maybe_aura_signer.clone();
 
-                    // Create V2 Aura (separate instance for V2 consensus)
-                    let v2_aura = Aura::new(v2_authorities, v2_slot_duration, v2_maybe_aura_signer);
+                    // Tendermint-only consensus - no Aura needed
+                    // Block finality is proven via last_commit with 2/3+ validator signatures
+                    let _ = (v2_authorities, v2_slot_duration, v2_maybe_aura_signer); // suppress unused warnings
 
-            // STATE SHARING STRATEGY:
-            // V0 Chain owns Bridge/Wallet directly (not Arc-wrapped)
-            // V2 ChainState expects Arc<RwLock<>> wrappers for async access
-            //
-            // Current approach: Create separate instances but share filesystem state
-            // - Bridge: Separate instances, synced via Bitcoin blockchain state
-            // - Wallet: SAME wallet file (disk-level sharing)
-            // - SignatureCollector: Separate instances (stateless, deterministic)
-            //
-            // TODO: Future optimization - wrap V0 Chain's components in Arc<RwLock<>>
-            // to enable true in-memory state sharing (requires V0 Chain refactor)
-
-            // Create V2 Bridge (separate instance, eventually consistent via Bitcoin)
+            // V2 owns Bridge/Wallet/SignatureCollector directly
             let shared_bridge = Bridge::new(
                 BitcoinCore::new(&v2_bitcoin_rpc_url.expect("RPC URL"),
                                v2_bitcoin_rpc_user.expect("RPC user"),
@@ -492,9 +395,8 @@ impl App {
                 v2_required_confirmations,
             );
 
-            // Create V2 Wallet using SAME filesystem path as V0 (disk-level sharing)
             let shared_wallet = BitcoinWallet::new(
-                &v2_wallet_path,  // SAME path as V0 - disk-level state sharing
+                &v2_wallet_path,
                 v2_bitcoin_federation.clone(),
             )
             .expect("V2 wallet creation");
@@ -537,7 +439,7 @@ impl App {
 
             // 1. Initialize StorageActor V2
             info!("📦 Initializing StorageActor V2...");
-            let v2_data_path = v2_db_path.unwrap_or_else(|| format!("{}/v2", crate::store::DEFAULT_ROOT_DIR));
+            let v2_data_path = v2_db_path.unwrap_or_else(|| format!("{}/v2", DEFAULT_ROOT_DIR));
             let storage_config = crate::actors_v2::storage::StorageConfig {
                 database: crate::actors_v2::storage::database::DatabaseConfig {
                     main_path: v2_data_path.clone(),
@@ -945,20 +847,10 @@ impl App {
 
         // V0 network stack removed - all networking handled by V2 NetworkActor
         // V0 block production uses V2 Tendermint consensus now
-        info!("V0 network removed - using V2 NetworkActor for all P2P communication");
+        info!("V2-only mode - using V2 NetworkActor for all P2P communication");
 
-        // Bitcoin block monitoring for peg-ins (still needed for bridge operations)
-        if chain_spec.is_validator && !self.not_validator {
-            chain
-                .clone()
-                .monitor_bitcoin_blocks(bitcoin_start_height)
-                .await;
-        }
-
-        // Send the chain Arc for graceful shutdown handling
-        if chain_tx.send(chain.clone()).is_err() {
-            warn!("Failed to send chain for graceful shutdown - receiver dropped");
-        }
+        // Bitcoin block monitoring for peg-ins is now handled by V2 ChainActor
+        // via the tendermint pegin module
 
         // Keep the application running until shutdown signal
         info!("Application initialized successfully. Running until shutdown signal...");

@@ -4,18 +4,15 @@ use crate::error::{BlockErrorBlockTypes, Error};
 use crate::metrics::{
     AUXPOW_CREATE_BLOCK_CALLS, AUXPOW_HASHES_PROCESSED, AUXPOW_SUBMIT_BLOCK_CALLS,
 };
-use crate::{auxpow::AuxPow, chain::Chain};
+use crate::auxpow::AuxPow;
 use bitcoin::consensus::Encodable;
 use bitcoin::{consensus::Decodable, string::FromHexStr, BlockHash, CompactTarget, Target};
 use ethereum_types::Address as EvmAddress;
 use eyre::{eyre, Result};
-use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::types::{MainnetEthSpec, Uint256};
 use rust_decimal::prelude::*; // Includes the `dec` macro when feature specified
 use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, thread, time::Duration};
-use tokio::runtime::Handle;
-use tokio::time::sleep;
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 use tracing::*;
 
 fn compact_target_to_hex<S>(bits: &CompactTarget, s: S) -> Result<S::Ok, S::Error>
@@ -527,35 +524,8 @@ impl<BI: BlockIndex, CM: ChainManager<BI>> AuxPowMiner<BI, CM> {
     }
 }
 
-pub fn spawn_background_miner<DB: ItemStore<MainnetEthSpec>>(chain: Arc<Chain<DB>>) {
-    let task = async move {
-        let mut miner = AuxPowMiner::new(chain.clone(), chain.retarget_params.clone());
-        loop {
-            trace!("Calling create_aux_block");
-            // TODO: set miner address
-            if let Ok(aux_block) = miner.create_aux_block(EvmAddress::zero()).await {
-                trace!("Created AuxBlock for hash {}", aux_block.hash);
-                let auxpow = AuxPow::mine(aux_block.hash, aux_block.bits, aux_block.chain_id).await;
-                trace!("Calling submit_aux_block");
-                match miner.submit_aux_block(aux_block.hash, auxpow).await {
-                    Ok(_) => {
-                        trace!("AuxPow submitted successfully");
-                    }
-                    Err(e) => {
-                        trace!("Error submitting auxpow: {}", e);
-                    }
-                }
-            } else {
-                trace!("No aux block created");
-                sleep(Duration::from_millis(250)).await;
-                continue;
-            }
-        }
-    };
-
-    let handle = Handle::current();
-    thread::spawn(move || handle.spawn(task));
-}
+// spawn_background_miner removed - V2 ChainActor handles AuxPoW mining coordination
+// via createauxblock/submitauxblock RPC handlers
 
 #[cfg(test)]
 mod test {

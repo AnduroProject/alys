@@ -1,5 +1,4 @@
 use crate::block::SignedConsensusBlock;
-use crate::chain::Chain;
 use crate::error::Error;
 use crate::metrics::{
     AURA_CURRENT_SLOT, AURA_LATEST_SLOT_AUTHOR, AURA_PRODUCED_BLOCKS, AURA_SLOT_AUTHOR_RETRIEVALS,
@@ -7,9 +6,7 @@ use crate::metrics::{
 };
 use futures_timer::Delay;
 use lighthouse_wrapper::bls::{Keypair, PublicKey};
-use lighthouse_wrapper::store::ItemStore;
 use lighthouse_wrapper::types::MainnetEthSpec;
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::*;
 
@@ -178,110 +175,8 @@ pub fn time_until_next_slot(slot_duration: Duration) -> Duration {
     Duration::from_millis(remaining_millis as u64)
 }
 
-pub struct AuraSlotWorker<DB> {
-    last_slot: u64,
-    slot_duration: Duration,
-    until_next_slot: Option<Delay>,
-    authorities: Vec<PublicKey>,
-    maybe_signer: Option<Keypair>,
-    chain: Arc<Chain<DB>>,
-}
-
-impl<DB: ItemStore<MainnetEthSpec>> AuraSlotWorker<DB> {
-    pub fn new(
-        slot_duration: Duration,
-        authorities: Vec<PublicKey>,
-        maybe_signer: Option<Keypair>,
-        chain: Arc<Chain<DB>>,
-    ) -> Self {
-        Self {
-            last_slot: 0,
-            slot_duration,
-            until_next_slot: None,
-            authorities,
-            maybe_signer,
-            chain,
-        }
-    }
-
-    fn claim_slot(&self, slot: u64, authorities: &[PublicKey]) -> Option<PublicKey> {
-        AURA_SLOT_CLAIM_TOTALS.with_label_values(&["called"]).inc();
-        let expected_author = slot_author(slot, authorities);
-        expected_author.and_then(|(_, p)| {
-            if self
-                .maybe_signer
-                .as_ref()
-                .expect("Only called by signer")
-                .pk
-                .eq(p)
-            {
-                AURA_SLOT_CLAIM_TOTALS.with_label_values(&["success"]).inc();
-                Some(p.clone())
-            } else {
-                AURA_SLOT_CLAIM_TOTALS.with_label_values(&["failure"]).inc();
-                None
-            }
-        })
-    }
-
-    async fn on_slot(&self, slot: u64) -> Option<Result<(), Error>> {
-        AURA_CURRENT_SLOT.set(slot as f64);
-
-        let _ = self.claim_slot(slot, &self.authorities[..])?;
-        debug!("My turn");
-
-        let res = self.chain.produce_block(slot, duration_now()).await;
-        match res {
-            Ok(_) => {
-                AURA_PRODUCED_BLOCKS.with_label_values(&["success"]).inc();
-                Some(Ok(()))
-            }
-            Err(e) => {
-                error!("Failed to produce block: {:?}", e);
-                AURA_PRODUCED_BLOCKS.with_label_values(&["error"]).inc();
-                Some(Err(e))
-            }
-        }
-    }
-
-    async fn next_slot(&mut self) -> u64 {
-        loop {
-            self.until_next_slot
-                .take()
-                .unwrap_or_else(|| {
-                    let wait_dur = time_until_next_slot(self.slot_duration);
-                    Delay::new(wait_dur)
-                })
-                .await;
-
-            let wait_dur = time_until_next_slot(self.slot_duration);
-            self.until_next_slot = Some(Delay::new(wait_dur));
-
-            // https://github.com/paritytech/substrate/blob/033d4e86cc7eff0066cd376b9375f815761d653c/bin/node/cli/src/service.rs#L462-L468
-            let slot = slot_from_timestamp(
-                duration_now().as_millis() as u64,
-                self.slot_duration.as_millis() as u64,
-            );
-
-            if slot > self.last_slot {
-                self.last_slot = slot;
-
-                break slot;
-            }
-        }
-    }
-
-    pub async fn start_slot_worker(&mut self) {
-        loop {
-            let slot_info = self.next_slot().await;
-            if self.maybe_signer.is_some() {
-                let _ = self.on_slot(slot_info).await;
-            } else {
-                // nothing to do
-            }
-        }
-    }
-}
+// V0 AuraSlotWorker removed - Tendermint consensus handles block production via TendermintDriver
+// The Aura struct is kept for legacy signature verification utilities
 
 #[cfg(test)]
 mod test {

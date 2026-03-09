@@ -13,7 +13,7 @@ use uuid::Uuid;
 pub use crate::auxpow::AuxPow;
 pub use crate::auxpow_miner::AuxBlock;
 pub use crate::block::{AuxPowHeader, ConsensusBlock, SignedConsensusBlock};
-pub use crate::store::BlockRef;
+pub use crate::actors_v2::storage::actor::BlockRef;
 pub use bridge::PegInInfo;
 pub use lighthouse_wrapper::types::MainnetEthSpec;
 

@@ -57,8 +57,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }  # V2 NetworkActor: Acti
 tokio-io-timeout = "1"
 async-trait = "0.1"
 
-# storage
-leveldb = { version = "0.8" }
+# storage (V2 uses RocksDB only)
 rocksdb = "0.21"
 actix = "0.13"
 uuid = { version = "1.0", features = ["v4", "serde"] }
