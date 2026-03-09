@@ -1,10 +1,8 @@
 pub mod actors_v2;
 mod app;
-mod aura;
 mod auxpow;
 pub mod auxpow_miner;
 pub mod block;
-mod block_candidate;
 mod block_hash_cache;
 mod engine;
 mod error;

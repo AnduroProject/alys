@@ -21,48 +21,6 @@ lazy_static! {
 
 // Register metrics with the `alys` registry
 lazy_static! {
-    pub static ref AURA_PRODUCED_BLOCKS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "aura_produced_blocks_total",
-        "Total number of blocks produced by the node via the Aura consensus",
-        &["status"],
-        ALYS_REGISTRY
-    )
-    .unwrap();
-    pub static ref AURA_CURRENT_SLOT: Gauge = register_gauge_with_registry!(
-        "aura_current_slot",
-        "Tracks the current slot number processed by the node",
-        ALYS_REGISTRY
-    )
-    .unwrap();
-    pub static ref AURA_SLOT_AUTHOR_RETRIEVALS: IntCounterVec =
-        register_int_counter_vec_with_registry!(
-            "aura_slot_author_retrievals",
-            "Number of slot author retrievals",
-            &["status", "authority_index"],
-            ALYS_REGISTRY
-        )
-        .unwrap();
-    pub static ref AURA_LATEST_SLOT_AUTHOR: Gauge = register_gauge_with_registry!(
-        "aura_latest_slot_author",
-        "The index of the latest slot author",
-        ALYS_REGISTRY
-    )
-    .unwrap();
-    pub static ref AURA_VERIFY_SIGNED_BLOCK: IntCounterVec =
-        register_int_counter_vec_with_registry!(
-            "aura_verify_signed_block_total",
-            "Number of times the proposed block is verified",
-            &["status"],
-            ALYS_REGISTRY
-        )
-        .unwrap();
-    pub static ref AURA_SLOT_CLAIM_TOTALS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "aura_slot_claim_totals",
-        "Number of slot claims",
-        &["status"],
-        ALYS_REGISTRY
-    )
-    .unwrap();
     pub static ref AUXPOW_CREATE_BLOCK_CALLS: IntCounterVec =
         register_int_counter_vec_with_registry!(
             "create_aux_block_calls_total",

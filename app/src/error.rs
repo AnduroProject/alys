@@ -1,4 +1,3 @@
-use crate::aura::AuraError;
 use bridge::Error as FederationError;
 use lighthouse_wrapper::execution_layer;
 use std::time::SystemTimeError;
@@ -15,7 +14,6 @@ pub enum Error {
     // NOTE: error type not exported by lighthouse
     EngineApiError(String),
     TimeError(SystemTimeError),
-    AuraError(AuraError),
     FederationError(FederationError),
     ExecutionHashChainIncontiguous,
     MissingParent,
@@ -104,12 +102,6 @@ impl From<AuxPowMiningError> for Error {
 impl From<SystemTimeError> for Error {
     fn from(e: SystemTimeError) -> Self {
         Error::TimeError(e)
-    }
-}
-
-impl From<AuraError> for Error {
-    fn from(e: AuraError) -> Self {
-        Error::AuraError(e)
     }
 }
 

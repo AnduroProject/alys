@@ -3,13 +3,13 @@ use crate::{
     actors_v2::chain::tendermint::Commit,
     actors_v2::chain::tendermint::GovernanceUpdate,
     actors_v2::storage::actor::BlockRef,
-    aura::Authority,
     auxpow::AuxPow,
     auxpow_miner::BlockIndex,
     error::Error,
     signatures::{AggregateApproval, CheckedIndividualApproval, IndividualApproval},
     spec::ChainSpec,
 };
+use lighthouse_wrapper::bls::Keypair;
 use bitcoin::{hashes::Hash, BlockHash, Transaction as BitcoinTransaction};
 use lighthouse_wrapper::bls::PublicKey;
 use lighthouse_wrapper::types::{
@@ -17,6 +17,14 @@ use lighthouse_wrapper::types::{
     Hash256, MainnetEthSpec, Transactions, Uint256, VariableList, Withdrawals,
 };
 use serde_derive::{Deserialize, Serialize};
+
+/// Block signing authority with keypair and validator index.
+/// Moved from aura.rs after Tendermint migration.
+#[derive(Clone)]
+pub struct Authority {
+    pub signer: Keypair,
+    pub index: u8,
+}
 
 pub trait ConvertBlockHash<H> {
     fn to_block_hash(&self) -> H;
