@@ -254,10 +254,17 @@ impl DatabaseManager {
         cf_map
     }
 
-    /// Store a block in the database
+    /// Store a block in the database with sync writes for durability.
+    ///
+    /// Uses a WriteBatch with `set_sync(true)` to ensure both the block data
+    /// and height index are atomically written and fsynced to disk. This prevents
+    /// data loss on crash/SIGTERM that was causing WAL-storage mismatches.
     pub async fn put_block(&self, block: &AlysConsensusBlock) -> Result<(), StorageError> {
         let db = self.main_db.read().await;
-        let cf = db
+        let mut batch = WriteBatch::default();
+
+        // 1. Block data
+        let blocks_cf = db
             .cf_handle(column_families::BLOCKS)
             .ok_or_else(|| StorageError::Database("BLOCKS column family not found".to_string()))?;
 
@@ -266,10 +273,9 @@ impl DatabaseManager {
         let value =
             serde_json::to_vec(block).map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        db.put_cf(&cf, key, value)
-            .map_err(|e| StorageError::Database(format!("Failed to store block: {}", e)))?;
+        batch.put_cf(&blocks_cf, key, &value);
 
-        // Also store by height for efficient lookups
+        // 2. Height index for efficient lookups
         let height_cf = db
             .cf_handle(column_families::BLOCK_HEIGHTS)
             .ok_or_else(|| {
@@ -277,13 +283,19 @@ impl DatabaseManager {
             })?;
 
         let height_key = block.message.execution_payload.block_number.to_be_bytes();
-        db.put_cf(&height_cf, &height_key, key).map_err(|e| {
-            StorageError::Database(format!("Failed to store block height index: {}", e))
+        batch.put_cf(&height_cf, &height_key, key);
+
+        // 3. Write atomically with sync to prevent data loss on crash
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+
+        db.write_opt(batch, &write_opts).map_err(|e| {
+            StorageError::Database(format!("Failed to store block: {}", e))
         })?;
 
         debug!(
-            "Stored block {} at height {}",
-            block.message.block_hash().to_block_hash(),
+            "Stored block {} at height {} (synced)",
+            block_hash,
             block.message.execution_payload.block_number
         );
         Ok(())
