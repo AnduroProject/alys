@@ -334,7 +334,10 @@ crash_node() {
 stop_node() {
     local node="$1"
     log_info "Stopping $node..."
-    docker stop "$node" 2>/dev/null || true
+    # Use 30s timeout to match docker-compose stop_grace_period
+    # Default docker stop timeout is only 10s which may not be enough
+    # for graceful database shutdown
+    docker stop -t 30 "$node" 2>/dev/null || true
 }
 
 restart_node() {

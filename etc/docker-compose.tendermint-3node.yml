@@ -139,6 +139,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # Forward SIGTERM to child processes for graceful shutdown
+        trap 'kill -TERM $PID; wait $PID' TERM INT
         echo "Waiting for peer discovery..."
         sleep 5
         echo "Starting Alys Node 1 (Validator)..."
@@ -159,7 +161,9 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node1.log
+          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node1.log &
+        PID=$!
+        wait $PID
     depends_on:
       execution:
         condition: service_started
@@ -202,6 +206,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # Forward SIGTERM to child processes for graceful shutdown
+        trap 'kill -TERM $PID; wait $PID' TERM INT
         echo "Waiting for peer discovery..."
         sleep 5
         echo "Starting Alys Node 2 (Validator)..."
@@ -222,7 +228,9 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node2.log
+          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node2.log &
+        PID=$!
+        wait $PID
     depends_on:
       execution:
         condition: service_started
@@ -265,6 +273,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # Forward SIGTERM to child processes for graceful shutdown
+        trap 'kill -TERM $PID; wait $PID' TERM INT
         echo "Waiting for peer discovery..."
         sleep 5
         echo "Starting Alys Node 3 (Validator)..."
@@ -285,7 +295,9 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | tee /opt/alys/logs/node3.log
+          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node3.log &
+        PID=$!
+        wait $PID
     depends_on:
       execution:
         condition: service_started
