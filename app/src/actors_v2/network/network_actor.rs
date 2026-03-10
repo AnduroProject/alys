@@ -499,6 +499,23 @@ impl NetworkActor {
                 // This indicates partition recovery where mesh re-formation is needed
                 let is_recent_reconnection = self.recently_disconnected_peers.remove(&peer_id);
 
+                // PARTITION RECOVERY FIX: Detect duplicate connection (peer reconnects while
+                // our TCP socket is still lingering from before the partition).
+                // ConnectionClosed never fires in this case, so recently_disconnected_peers
+                // won't contain this peer. Check must happen BEFORE add_peer updates the entry.
+                let is_duplicate_connection =
+                    self.peer_manager.get_peer(&peer_id.to_string()).is_some();
+
+                if is_duplicate_connection {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "Duplicate connection detected - peer reconnected while previous TCP socket lingering (partition recovery)"
+                    );
+                }
+
+                // Determine if mesh reformation is needed (either path indicates partition recovery)
+                let needs_mesh_reform = is_recent_reconnection || is_duplicate_connection;
+
                 // IMPORTANT: Only store addresses from Dialer (outgoing) connections.
                 // For Listener (incoming) connections, get_remote_address() returns the
                 // ephemeral send_back_addr (e.g., port 34990) NOT the peer's listen port
@@ -536,14 +553,16 @@ impl NetworkActor {
                         );
                     }
 
-                    // CRITICAL FIX FOR TM-B1: Trigger mesh re-formation ONLY on recent reconnection
+                    // CRITICAL FIX FOR TM-B1: Trigger mesh re-formation on partition recovery
                     // Initial connections form meshes naturally via gossipsub heartbeat.
                     // Partition recovery needs explicit GRAFT forcing via subscription cycling
                     // because add_explicit_peer alone does not trigger GRAFT messages.
-                    if is_recent_reconnection {
+                    if needs_mesh_reform {
                         tracing::info!(
                             peer_id = %peer_id,
-                            "Recent reconnection detected - triggering mesh re-formation"
+                            is_recent_reconnection = is_recent_reconnection,
+                            is_duplicate_connection = is_duplicate_connection,
+                            "Partition recovery detected - triggering mesh re-formation"
                         );
 
                         let tendermint_topics = vec![
