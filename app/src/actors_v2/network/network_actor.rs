@@ -233,6 +233,10 @@ pub struct NetworkActor {
     /// Used to detect partition recovery scenarios where mesh re-formation is needed
     /// Entries are removed when peer reconnects
     recently_disconnected_peers: HashSet<PeerId>,
+    /// Timestamp when the NetworkActor started (for startup grace period)
+    /// Duplicate connection detection is disabled during the first 30 seconds
+    /// to avoid false positives from multiple parallel connections on fresh startup
+    startup_time: Instant,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -288,6 +292,7 @@ impl NetworkActor {
             shutdown_requested: false,
             last_v2_reconnection_attempt: None,
             recently_disconnected_peers: HashSet::new(),
+            startup_time: Instant::now(),
         })
     }
 
@@ -503,8 +508,16 @@ impl NetworkActor {
                 // our TCP socket is still lingering from before the partition).
                 // ConnectionClosed never fires in this case, so recently_disconnected_peers
                 // won't contain this peer. Check must happen BEFORE add_peer updates the entry.
-                let is_duplicate_connection =
-                    self.peer_manager.get_peer(&peer_id.to_string()).is_some();
+                //
+                // IMPORTANT: Only check after startup grace period (30 seconds) to avoid
+                // false positives from multiple parallel connections during initial startup.
+                // During fresh startup, libp2p often establishes multiple connections to
+                // the same peer (both nodes dial each other, or multiple transports).
+                const STARTUP_GRACE_PERIOD: Duration = Duration::from_secs(30);
+                let past_startup_grace = self.startup_time.elapsed() > STARTUP_GRACE_PERIOD;
+
+                let is_duplicate_connection = past_startup_grace
+                    && self.peer_manager.get_peer(&peer_id.to_string()).is_some();
 
                 if is_duplicate_connection {
                     tracing::info!(
