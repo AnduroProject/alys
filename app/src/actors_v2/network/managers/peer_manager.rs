@@ -188,7 +188,7 @@ impl PeerManager {
         }
     }
 
-    /// Add a new peer connection
+    /// Add a new peer connection with a known good address (from outgoing/Dialer connections)
     pub fn add_peer(&mut self, peer_id: PeerId, address: String) {
         // Check if peer already exists - if so, just update the address
         if self.connected_peers.contains_key(&peer_id) {
@@ -203,6 +203,50 @@ impl PeerManager {
         self.connected_peers
             .insert(peer_id.clone(), peer_info.clone());
         self.known_peers.insert(peer_id, peer_info);
+
+        // Update Prometheus per-peer reputation metrics
+        self.update_prometheus_metrics();
+    }
+
+    /// Track an incoming peer connection without overwriting existing address.
+    /// For incoming (Listener) connections, the send_back_addr is an ephemeral port
+    /// that cannot be used for reconnection. We only use it as a placeholder if
+    /// we have no existing address for this peer.
+    pub fn add_peer_incoming(&mut self, peer_id: PeerId, send_back_addr: String) {
+        // If peer already connected, just update activity timestamp
+        if let Some(peer_info) = self.connected_peers.get_mut(&peer_id) {
+            peer_info.last_seen = std::time::SystemTime::now();
+            peer_info.last_activity = std::time::Instant::now();
+            tracing::debug!(
+                peer_id = %peer_id,
+                "Incoming connection from already-connected peer - keeping existing address"
+            );
+            return;
+        }
+
+        // Check if we have this peer in known_peers with a good address
+        if let Some(known_peer) = self.known_peers.get(&peer_id) {
+            // Reuse the known address (likely from a previous outgoing connection)
+            let mut peer_info = known_peer.clone();
+            peer_info.last_seen = std::time::SystemTime::now();
+            peer_info.last_activity = std::time::Instant::now();
+            tracing::info!(
+                peer_id = %peer_id,
+                address = %peer_info.address,
+                "Incoming connection - using known address for reconnection"
+            );
+            self.connected_peers.insert(peer_id, peer_info);
+        } else {
+            // New peer we've never seen - use send_back_addr as placeholder
+            // (reconnection may fail, but at least we track the peer)
+            let peer_info = PeerInfo::new(peer_id.clone(), send_back_addr);
+            tracing::info!(
+                peer_id = %peer_id,
+                "Added incoming peer connection (address may be ephemeral)"
+            );
+            self.connected_peers.insert(peer_id.clone(), peer_info.clone());
+            self.known_peers.insert(peer_id, peer_info);
+        }
 
         // Update Prometheus per-peer reputation metrics
         self.update_prometheus_metrics();

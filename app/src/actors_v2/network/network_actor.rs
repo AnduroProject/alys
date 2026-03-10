@@ -499,10 +499,23 @@ impl NetworkActor {
                 // This indicates partition recovery where mesh re-formation is needed
                 let is_recent_reconnection = self.recently_disconnected_peers.remove(&peer_id);
 
-                self.peer_manager.add_peer(
-                    peer_id.to_string(),
-                    endpoint.get_remote_address().to_string(),
-                );
+                // IMPORTANT: Only store addresses from Dialer (outgoing) connections.
+                // For Listener (incoming) connections, get_remote_address() returns the
+                // ephemeral send_back_addr (e.g., port 34990) NOT the peer's listen port
+                // (e.g., port 10000). Storing ephemeral ports causes reconnection failures.
+                if endpoint.is_dialer() {
+                    // Outgoing connection - address is the actual listen address (reliable)
+                    self.peer_manager.add_peer(
+                        peer_id.to_string(),
+                        endpoint.get_remote_address().to_string(),
+                    );
+                } else {
+                    // Incoming connection - don't overwrite good addresses with ephemeral ports
+                    self.peer_manager.add_peer_incoming(
+                        peer_id.to_string(),
+                        endpoint.get_remote_address().to_string(),
+                    );
+                }
                 self.metrics.record_connection_established();
 
                 // CRITICAL FIX FOR ISSUE #2: Add peer as explicit gossipsub peer immediately
