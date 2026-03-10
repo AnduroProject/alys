@@ -79,6 +79,10 @@ pub enum SwarmCommand {
     },
     /// Add peer as explicit gossipsub peer for immediate mesh formation
     AddExplicitPeer { peer_id: PeerId },
+    /// Force mesh re-formation by cycling subscriptions for specific topics
+    /// This is needed after network partition recovery because add_explicit_peer
+    /// alone does not trigger GRAFT messages for mesh formation
+    ReformMesh { peer_id: PeerId, topics: Vec<String> },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -444,6 +448,13 @@ impl NetworkActor {
         let v2_count = self.peer_manager.connected_v2_peer_count();
         let total_connected = self.peer_manager.get_connected_peers().len();
 
+        // Log mesh health state for debugging partition recovery
+        tracing::debug!(
+            v2_peer_count = v2_count,
+            total_connected = total_connected,
+            "Mesh health check"
+        );
+
         tracing::trace!(
             v2_peer_count = v2_count,
             total_connected = total_connected,
@@ -501,6 +512,11 @@ impl NetworkActor {
                             "Sent AddExplicitPeer command for immediate mesh formation"
                         );
                     }
+
+                    // NOTE: ReformMesh (subscription cycling) is NOT triggered here automatically.
+                    // Cycling subscriptions during initial connection breaks gossipsub mesh formation.
+                    // ReformMesh should only be triggered explicitly during partition recovery
+                    // when we detect that the mesh is unhealthy after reconnection.
                 }
             }
 
@@ -2102,6 +2118,44 @@ impl Handler<NetworkMessage> for NetworkActor {
                                             peer_id = %peer_id,
                                             "Added peer as explicit gossipsub peer for immediate mesh formation"
                                         );
+                                    }
+
+                                    Some(SwarmCommand::ReformMesh { peer_id, topics }) => {
+                                        use libp2p::gossipsub::IdentTopic;
+
+                                        tracing::info!(
+                                            peer_id = %peer_id,
+                                            topics_count = topics.len(),
+                                            "Forcing mesh re-formation for reconnected peer"
+                                        );
+
+                                        let gossipsub = &mut swarm.behaviour_mut().gossipsub;
+
+                                        for topic_str in &topics {
+                                            let topic = IdentTopic::new(topic_str);
+                                            let topic_hash = topic.hash();
+
+                                            // Check if peer is already in mesh for this topic
+                                            let in_mesh = gossipsub
+                                                .mesh_peers(&topic_hash)
+                                                .any(|p| *p == peer_id);
+
+                                            if !in_mesh {
+                                                tracing::debug!(
+                                                    peer_id = %peer_id,
+                                                    topic = %topic_str,
+                                                    "Peer not in mesh - cycling subscription to trigger GRAFT"
+                                                );
+
+                                                // Cycle subscription: unsubscribe then resubscribe
+                                                // This forces gossipsub to send GRAFT to connected peers
+                                                let _ = gossipsub.unsubscribe(&topic);
+                                                let _ = gossipsub.subscribe(&topic);
+                                            }
+                                        }
+
+                                        // Also add as explicit peer (belt and suspenders)
+                                        gossipsub.add_explicit_peer(&peer_id);
                                     }
 
                                     None => {
