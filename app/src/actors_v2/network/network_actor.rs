@@ -16,7 +16,7 @@ use libp2p::{
     Multiaddr, PeerId,
 };
 use lru::LruCache;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -229,6 +229,10 @@ pub struct NetworkActor {
     shutdown_requested: bool,
     /// Last V2 peer reconnection attempt (for cooldown)
     last_v2_reconnection_attempt: Option<Instant>,
+    /// Peers that were recently disconnected (for reconnection detection)
+    /// Used to detect partition recovery scenarios where mesh re-formation is needed
+    /// Entries are removed when peer reconnects
+    recently_disconnected_peers: HashSet<PeerId>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -283,6 +287,7 @@ impl NetworkActor {
             is_running: false,
             shutdown_requested: false,
             last_v2_reconnection_attempt: None,
+            recently_disconnected_peers: HashSet::new(),
         })
     }
 
@@ -489,6 +494,11 @@ impl NetworkActor {
                     endpoint = ?endpoint,
                     "Connection established"
                 );
+
+                // Check if this is a reconnection to a recently disconnected peer
+                // This indicates partition recovery where mesh re-formation is needed
+                let is_recent_reconnection = self.recently_disconnected_peers.remove(&peer_id);
+
                 self.peer_manager.add_peer(
                     peer_id.to_string(),
                     endpoint.get_remote_address().to_string(),
@@ -513,10 +523,37 @@ impl NetworkActor {
                         );
                     }
 
-                    // NOTE: ReformMesh (subscription cycling) is NOT triggered here automatically.
-                    // Cycling subscriptions during initial connection breaks gossipsub mesh formation.
-                    // ReformMesh should only be triggered explicitly during partition recovery
-                    // when we detect that the mesh is unhealthy after reconnection.
+                    // CRITICAL FIX FOR TM-B1: Trigger mesh re-formation ONLY on recent reconnection
+                    // Initial connections form meshes naturally via gossipsub heartbeat.
+                    // Partition recovery needs explicit GRAFT forcing via subscription cycling
+                    // because add_explicit_peer alone does not trigger GRAFT messages.
+                    if is_recent_reconnection {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "Recent reconnection detected - triggering mesh re-formation"
+                        );
+
+                        let tendermint_topics = vec![
+                            "alys-tendermint-proposals".to_string(),
+                            "alys-tendermint-votes".to_string(),
+                            "alys-tendermint-timeouts".to_string(),
+                            "alys-tendermint-evidence".to_string(),
+                            "alys-tendermint-newround".to_string(),
+                        ];
+
+                        let reform_cmd = SwarmCommand::ReformMesh {
+                            peer_id,
+                            topics: tendermint_topics,
+                        };
+
+                        if let Err(e) = cmd_tx.try_send(reform_cmd) {
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                error = ?e,
+                                "Failed to send ReformMesh command"
+                            );
+                        }
+                    }
                 }
             }
 
@@ -526,6 +563,11 @@ impl NetworkActor {
                     cause = ?cause,
                     "Connection closed"
                 );
+
+                // Track for reconnection detection (partition recovery)
+                // Only peers disconnected in THIS session need mesh recovery when they reconnect
+                self.recently_disconnected_peers.insert(peer_id);
+
                 self.peer_manager.remove_peer(&peer_id.to_string());
                 self.metrics.record_connection_closed();
             }
