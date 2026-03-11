@@ -87,6 +87,26 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("WAL not initialized".into()))?;
 
+        // CRITICAL FIX: Skip re-initialization if already at this height
+        // This prevents a race condition where:
+        // 1. handle_tendermint_commit() calls handle_tendermint_new_height(H+1)
+        // 2. Then notifies TendermintDriver of the commit
+        // 3. TendermintDriver sends ANOTHER TendermintNewHeight message
+        // Without this guard, the second call clears vote sets that may have already
+        // received votes from faster nodes, causing consensus failures.
+        {
+            let state = tendermint_state.read().await;
+            if state.height == height {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    current_round = state.round,
+                    "Height already initialized, skipping duplicate initialization"
+                );
+                return Ok((height, state.round));
+            }
+        }
+
         // Load validator set from storage
         let validator_set = self.load_validator_set_for_height(height).await?;
         let validator_set = Arc::new(validator_set);
@@ -1011,13 +1031,33 @@ impl ChainActor {
             }
 
             TendermintStep::Prevote => {
-                // Not enough prevotes received - cast nil precommit
-                info!(
-                    correlation_id = %correlation_id,
-                    height = height,
-                    round = round,
-                    "Prevote timeout - casting nil precommit"
-                );
+                // CRITICAL FIX: Check if we're locked on a block
+                // According to Tendermint protocol:
+                // - If locked on a block, we MUST precommit for that block
+                // - Only precommit nil if NOT locked
+                // This ensures that once a node locks, it continues to vote for
+                // the locked block, enabling eventual consensus even after timeouts.
+                let precommit_target = {
+                    let state = tendermint_state.read().await;
+                    state.locked_block
+                };
+
+                if let Some(locked_hash) = precommit_target {
+                    info!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        round = round,
+                        locked_block = %H256::from_slice(locked_hash.as_bytes()),
+                        "Prevote timeout - precommitting for locked block"
+                    );
+                } else {
+                    info!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        round = round,
+                        "Prevote timeout - casting nil precommit (not locked)"
+                    );
+                }
 
                 {
                     let mut state = tendermint_state.write().await;
@@ -1031,7 +1071,7 @@ impl ChainActor {
                     let _ = scheduler.schedule(TendermintStep::Precommit);
                 }
 
-                self.cast_precommit(height, round, None, correlation_id)
+                self.cast_precommit(height, round, precommit_target, correlation_id)
                     .await?;
 
                 Ok(round)
