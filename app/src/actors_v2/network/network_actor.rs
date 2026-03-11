@@ -2630,24 +2630,27 @@ impl Handler<NetworkMessage> for NetworkActor {
                                     Some(SwarmCommand::ReformMesh { peer_id, topics }) => {
                                         use libp2p::gossipsub::IdentTopic;
 
-                                        // TM-B1 FIX: Subscription cycling IS needed for mesh formation.
-                                        // The feedback loop was caused by GossipPeerSubscribed handler
-                                        // triggering more ReformMesh commands - that handler has been
-                                        // removed. Now subscription cycling only happens once per
-                                        // reconnection (triggered from ConnectionEstablished with
-                                        // deduplication).
+                                        // TM-B2 FIX: DO NOT use subscription cycling!
                                         //
-                                        // How this works:
-                                        // 1. unsubscribe() removes us from topic
-                                        // 2. subscribe() re-joins topic, triggering mesh rebuild
-                                        // 3. Gossipsub sends GRAFT to connected peers for mesh formation
-                                        // 4. Remote peer receives SUBSCRIBE but no longer triggers ReformMesh
-                                        //    (GossipPeerSubscribed handler was removed)
+                                        // Log analysis from chaos test TM-A1 shows that subscription
+                                        // cycling (unsubscribe/subscribe) is DESTRUCTIVE:
+                                        // - It sends LEAVE messages to ALL mesh peers for each topic
+                                        // - This destroys existing working meshes with other peers
+                                        // - The mesh rebuild via GRAFT is not guaranteed
+                                        // - Result: node ends up with NO mesh peers after ReformMesh
+                                        //
+                                        // Instead, we ONLY call add_explicit_peer() which:
+                                        // - Marks the peer for inclusion in the mesh
+                                        // - Does NOT affect meshes with other peers
+                                        // - Gossipsub will GRAFT this peer during heartbeat (1s interval)
+                                        //
+                                        // For faster mesh formation after partition recovery, we also
+                                        // send publish_many_peers to trigger immediate IWANT/IHAVE
+                                        // exchanges which can help establish mesh connections.
 
                                         let gossipsub = &mut swarm.behaviour_mut().gossipsub;
 
-                                        // Check current mesh status
-                                        let mut needs_reform = false;
+                                        // Check current mesh status for logging
                                         let mut missing_topics = Vec::new();
                                         for topic_str in &topics {
                                             let topic = IdentTopic::new(topic_str);
@@ -2656,25 +2659,16 @@ impl Handler<NetworkMessage> for NetworkActor {
                                                 .mesh_peers(&topic_hash)
                                                 .any(|p| *p == peer_id);
                                             if !in_mesh {
-                                                needs_reform = true;
                                                 missing_topics.push(topic_str.clone());
                                             }
                                         }
 
-                                        if needs_reform {
+                                        if !missing_topics.is_empty() {
                                             tracing::info!(
                                                 peer_id = %peer_id,
-                                                topics_count = topics.len(),
                                                 missing_topics = ?missing_topics,
-                                                "ReformMesh: cycling subscriptions to trigger GRAFT"
+                                                "ReformMesh: adding explicit peer (no subscription cycling)"
                                             );
-
-                                            // Cycle subscriptions to trigger mesh rebuild with GRAFT
-                                            for topic_str in &topics {
-                                                let topic = IdentTopic::new(topic_str);
-                                                let _ = gossipsub.unsubscribe(&topic);
-                                                let _ = gossipsub.subscribe(&topic);
-                                            }
                                         } else {
                                             tracing::debug!(
                                                 peer_id = %peer_id,
@@ -2682,7 +2676,9 @@ impl Handler<NetworkMessage> for NetworkActor {
                                             );
                                         }
 
-                                        // Also add as explicit peer for reliable message delivery
+                                        // Add as explicit peer - this is the ONLY safe mesh formation method
+                                        // Explicit peers are always included in publish fanout and will
+                                        // receive GRAFT during the next gossipsub heartbeat
                                         gossipsub.add_explicit_peer(&peer_id);
                                     }
 
