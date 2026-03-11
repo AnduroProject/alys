@@ -823,10 +823,55 @@ impl ChainActor {
             }
 
             ConsensusAction::NewRound(new_round) => {
-                // Advance to new round
+                // Advance to new round and replay any stored future votes
                 {
                     let mut state = tendermint_state.write().await;
                     state.new_round(new_round);
+
+                    // Replay stored future votes for this round (same fix as timeout handler)
+                    if let Some(future_votes) = state.future_messages.take_votes(new_round) {
+                        let mut replayed_prevotes = 0usize;
+                        let mut replayed_precommits = 0usize;
+
+                        for vote in future_votes.prevotes() {
+                            if (vote.validator.index() as usize) < state.validator_set.len() {
+                                let mut prevotes = state.prevotes.write().await;
+                                let _ = prevotes.add_vote(vote.clone());
+                                replayed_prevotes += 1;
+                            }
+                        }
+                        for vote in future_votes.precommits() {
+                            if (vote.validator.index() as usize) < state.validator_set.len() {
+                                let mut precommits = state.precommits.write().await;
+                                let _ = precommits.add_vote(vote.clone());
+                                replayed_precommits += 1;
+                            }
+                        }
+
+                        if replayed_prevotes > 0 || replayed_precommits > 0 {
+                            debug!(
+                                correlation_id = %correlation_id,
+                                height = height,
+                                new_round = new_round,
+                                replayed_prevotes = replayed_prevotes,
+                                replayed_precommits = replayed_precommits,
+                                "Replayed stored future votes after vote-triggered round advancement"
+                            );
+                        }
+                    }
+
+                    // Also replay stored proposal if exists
+                    if let Some(proposal) = state.future_messages.take_proposal(new_round) {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            new_round = new_round,
+                            proposer = ?proposal.proposer,
+                            "Replaying stored proposal after vote-triggered round advancement"
+                        );
+                        state.current_proposal = Some(proposal.clone());
+                        state.proposals.insert((new_round, proposal.proposer), proposal);
+                    }
                 }
 
                 // Schedule propose timeout for new round (Issue 3.3: set position before scheduling)
@@ -1099,10 +1144,60 @@ impl ChainActor {
                         .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
                 }
 
-                // Advance state to new round
+                // Advance state to new round and replay any stored future votes
                 {
                     let mut state = tendermint_state.write().await;
                     state.new_round(new_round);
+
+                    // CRITICAL FIX: Replay stored future votes for this round.
+                    // When we receive votes from peers who are ahead of us, we store them
+                    // in future_messages. When we advance to that round via timeout, we
+                    // must replay those votes into the new vote sets, otherwise we'll
+                    // never reach 2/3 majority even if we have enough stored votes.
+                    if let Some(future_votes) = state.future_messages.take_votes(new_round) {
+                        let mut replayed_prevotes = 0usize;
+                        let mut replayed_precommits = 0usize;
+
+                        for vote in future_votes.prevotes() {
+                            if (vote.validator.index() as usize) < state.validator_set.len() {
+                                let mut prevotes = state.prevotes.write().await;
+                                let _ = prevotes.add_vote(vote.clone());
+                                replayed_prevotes += 1;
+                            }
+                        }
+                        for vote in future_votes.precommits() {
+                            if (vote.validator.index() as usize) < state.validator_set.len() {
+                                let mut precommits = state.precommits.write().await;
+                                let _ = precommits.add_vote(vote.clone());
+                                replayed_precommits += 1;
+                            }
+                        }
+
+                        if replayed_prevotes > 0 || replayed_precommits > 0 {
+                            info!(
+                                correlation_id = %correlation_id,
+                                height = height,
+                                new_round = new_round,
+                                replayed_prevotes = replayed_prevotes,
+                                replayed_precommits = replayed_precommits,
+                                "Replayed stored future votes after timeout advancement"
+                            );
+                        }
+                    }
+
+                    // Also replay stored proposal if exists
+                    if let Some(proposal) = state.future_messages.take_proposal(new_round) {
+                        info!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            new_round = new_round,
+                            proposer = ?proposal.proposer,
+                            block_hash = %H256::from_slice(proposal.block_hash().as_bytes()),
+                            "Replaying stored proposal after timeout advancement"
+                        );
+                        state.current_proposal = Some(proposal.clone());
+                        state.proposals.insert((new_round, proposal.proposer), proposal);
+                    }
                 }
 
                 // Issue 3.3 FIX: Update scheduler position before scheduling
