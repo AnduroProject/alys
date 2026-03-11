@@ -830,10 +830,45 @@ impl Handler<SyncMessage> for SyncActor {
                 let state = std::sync::Arc::clone(&self.state);
                 let network_actor = self.network_actor.clone();
                 let chain_actor = self.chain_actor.clone();
+                let storage_actor = self.storage_actor.clone();
 
                 // Schedule async workflow (non-blocking)
                 ctx.spawn(
                     async move {
+                        // First, query StorageActor for actual chain height to avoid consensus/storage mismatch
+                        // This fixes TM-A1 bug where SyncActor trusts caller-provided height which may be
+                        // consensus state height (ahead of storage) after chaos test recovery
+                        let actual_height = if let Some(ref storage) = storage_actor {
+                            match storage.send(GetChainHeadMessage { correlation_id: None }).await {
+                                Ok(Ok(Some(head))) => {
+                                    if head.number != start_height {
+                                        tracing::warn!(
+                                            param_height = start_height,
+                                            storage_height = head.number,
+                                            delta = start_height.saturating_sub(head.number),
+                                            "StartSync: Height mismatch - using storage height (consensus may be ahead)"
+                                        );
+                                    }
+                                    head.number
+                                }
+                                Ok(Ok(None)) => {
+                                    tracing::warn!("StartSync: No chain head in storage, using parameter height");
+                                    start_height
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(?e, "StartSync: Storage query failed, using parameter height");
+                                    start_height
+                                }
+                                Err(e) => {
+                                    tracing::warn!(%e, "StartSync: Storage actor mailbox error, using parameter height");
+                                    start_height
+                                }
+                            }
+                        } else {
+                            tracing::debug!("StartSync: No StorageActor available, using parameter height");
+                            start_height
+                        };
+
                         // Acquire write lock to validate and update state
                         let mut s = state.write().unwrap();
 
@@ -846,8 +881,8 @@ impl Handler<SyncMessage> for SyncActor {
                             return;
                         }
 
-                        // Update state
-                        s.current_height = start_height;
+                        // Update state with verified storage height
+                        s.current_height = actual_height;
                         s.target_height = target_height.unwrap_or(0);
                         s.is_running = true;
                         s.transition_to_state(SyncState::Starting);
