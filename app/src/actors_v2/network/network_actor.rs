@@ -245,6 +245,10 @@ pub struct NetworkActor {
     /// Duplicate connection detection is disabled during the first 30 seconds
     /// to avoid false positives from multiple parallel connections on fresh startup
     startup_time: Instant,
+    /// Track recent mesh reformation attempts per peer to prevent flooding (TM-B1 fix)
+    /// Maps peer_id -> timestamp of last ReformMesh trigger
+    /// Used to enforce cooldown period between reformation attempts
+    recent_mesh_reforms: HashMap<PeerId, Instant>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -301,10 +305,11 @@ impl NetworkActor {
             last_v2_reconnection_attempt: None,
             recently_disconnected_peers: HashSet::new(),
             startup_time: Instant::now(),
+            recent_mesh_reforms: HashMap::new(),
         })
     }
 
-    /// Cleanup timed-out block requests (Phase 4: Task 7)
+    /// Cleanup timed-out block requests and stale mesh reform tracking (Phase 4: Task 7)
     fn cleanup_timed_out_requests(&mut self) {
         let now = Instant::now();
         let timeout_threshold = Duration::from_secs(60);
@@ -337,6 +342,12 @@ impl NetworkActor {
                 true // Keep this request
             }
         });
+
+        // TM-B1: Cleanup stale mesh reform tracking entries (older than 60 seconds)
+        // This prevents unbounded memory growth from the deduplication map
+        let mesh_reform_cleanup_threshold = Duration::from_secs(60);
+        self.recent_mesh_reforms
+            .retain(|_, timestamp| now.duration_since(*timestamp) < mesh_reform_cleanup_threshold);
     }
 
     /// Schedule mesh verification with retry logic (TM-B1 Layer 2)
@@ -791,15 +802,45 @@ impl NetworkActor {
 
                     // CRITICAL FIX FOR TM-B1: Trigger mesh re-formation on partition recovery
                     // Initial connections form meshes naturally via gossipsub heartbeat.
-                    // Partition recovery needs explicit GRAFT forcing via subscription cycling
-                    // because add_explicit_peer alone does not trigger GRAFT messages.
-                    if needs_mesh_reform {
+                    // Partition recovery needs add_explicit_peer() to mark peer for mesh inclusion.
+                    //
+                    // DEDUPLICATION: Only trigger ReformMesh once per peer per cooldown period.
+                    // Multiple ConnectionEstablished events can fire for the same peer (e.g.,
+                    // both sides dial simultaneously, multiple transports). Without deduplication,
+                    // this causes command channel flooding.
+                    const REFORM_COOLDOWN: Duration = Duration::from_secs(5);
+
+                    let should_reform = if needs_mesh_reform {
+                        // Check cooldown - have we recently triggered ReformMesh for this peer?
+                        let now = Instant::now();
+                        if let Some(last_reform) = self.recent_mesh_reforms.get(&peer_id) {
+                            if now.duration_since(*last_reform) < REFORM_COOLDOWN {
+                                tracing::debug!(
+                                    peer_id = %peer_id,
+                                    cooldown_remaining_ms = (REFORM_COOLDOWN - now.duration_since(*last_reform)).as_millis(),
+                                    "Skipping ReformMesh - cooldown active"
+                                );
+                                false
+                            } else {
+                                true
+                            }
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    };
+
+                    if should_reform {
+                        // Record this reform attempt for deduplication
+                        self.recent_mesh_reforms.insert(peer_id, Instant::now());
+
                         tracing::info!(
                             peer_id = %peer_id,
                             is_recent_reconnection = is_recent_reconnection,
                             is_duplicate_connection = is_duplicate_connection,
                             is_known_peer_reconnecting = is_known_peer_reconnecting,
-                            "Partition recovery detected - triggering mesh re-formation with verification"
+                            "Partition recovery detected - triggering mesh re-formation"
                         );
 
                         let tendermint_topics = vec![
@@ -1844,78 +1885,29 @@ impl NetworkActor {
             }
 
             AlysNetworkBehaviourEvent::GossipPeerSubscribed { peer_id, topic } => {
-                // BIDIRECTIONAL MESH RECOVERY (TM-B1 Layer 1):
-                // When a remote peer cycles its subscriptions (to trigger GRAFT on their side),
-                // we receive Subscribed events. This is our signal to also reform our mesh
-                // to ensure bidirectional connectivity.
+                // TM-B1 FIX: Do NOT trigger ReformMesh from subscription events.
+                //
+                // Previously this handler tried to trigger "bidirectional mesh recovery"
+                // by sending ReformMesh commands whenever a peer subscribed. This created
+                // a catastrophic feedback loop:
+                // 1. Peer A reconnects, triggers ReformMesh
+                // 2. ReformMesh cycled subscriptions, sending SUBSCRIBE to Peer B
+                // 3. Peer B received GossipPeerSubscribed, triggered its own ReformMesh
+                // 4. Peer B cycled subscriptions, sending SUBSCRIBE back to Peer A
+                // 5. Both peers continuously cycle, flooding command channels
+                // 6. Mesh never stabilizes because cycles disrupt formation
+                //
+                // The fix: Mesh reformation is triggered ONCE per reconnection in
+                // ConnectionEstablished handler. Subscription events are just logged
+                // for debugging - they don't require any action.
 
-                // Only care about Tendermint topics for consensus recovery
-                if !topic.starts_with("alys-tendermint-") {
-                    tracing::trace!(
-                        peer_id = %peer_id,
-                        topic = %topic,
-                        "Ignoring non-Tendermint subscription event"
-                    );
-                    return Ok(());
-                }
-
-                // Check startup grace period to avoid false positives during initial sync
-                const STARTUP_GRACE_PERIOD: Duration = Duration::from_secs(30);
-                let past_startup_grace = self.startup_time.elapsed() > STARTUP_GRACE_PERIOD;
-
-                if !past_startup_grace {
+                // Log Tendermint topic subscriptions for debugging
+                if topic.starts_with("alys-tendermint-") {
                     tracing::debug!(
                         peer_id = %peer_id,
                         topic = %topic,
-                        "Ignoring subscription event during startup grace period"
+                        "Remote peer subscribed to Tendermint topic"
                     );
-                    return Ok(());
-                }
-
-                // Check if this peer is connected (sanity check)
-                if self.peer_manager.get_peer(&peer_id).is_none() {
-                    tracing::debug!(
-                        peer_id = %peer_id,
-                        topic = %topic,
-                        "Ignoring subscription from unknown peer"
-                    );
-                    return Ok(());
-                }
-
-                tracing::info!(
-                    peer_id = %peer_id,
-                    topic = %topic,
-                    "Remote peer subscribed to Tendermint topic - checking mesh status"
-                );
-
-                // Trigger mesh reformation on our side to ensure bidirectional mesh
-                if let Some(cmd_tx) = &self.swarm_cmd_tx {
-                    // Parse peer_id string back to PeerId
-                    if let Ok(pid) = peer_id.parse::<PeerId>() {
-                        let tendermint_topics = vec![
-                            "alys-tendermint-proposals".to_string(),
-                            "alys-tendermint-votes".to_string(),
-                            "alys-tendermint-timeouts".to_string(),
-                            "alys-tendermint-evidence".to_string(),
-                            "alys-tendermint-newround".to_string(),
-                        ];
-
-                        let reform_cmd = SwarmCommand::ReformMesh {
-                            peer_id: pid,
-                            topics: tendermint_topics.clone(),
-                        };
-
-                        if let Err(e) = cmd_tx.try_send(reform_cmd) {
-                            tracing::warn!(
-                                peer_id = %peer_id,
-                                error = ?e,
-                                "Failed to send ReformMesh command for bidirectional recovery"
-                            );
-                        } else {
-                            // Schedule mesh verification with retry
-                            self.schedule_mesh_verification(pid, tendermint_topics, 1);
-                        }
-                    }
                 }
             }
         }
@@ -2513,38 +2505,59 @@ impl Handler<NetworkMessage> for NetworkActor {
                                     Some(SwarmCommand::ReformMesh { peer_id, topics }) => {
                                         use libp2p::gossipsub::IdentTopic;
 
-                                        tracing::info!(
-                                            peer_id = %peer_id,
-                                            topics_count = topics.len(),
-                                            "Forcing mesh re-formation for reconnected peer"
-                                        );
+                                        // TM-B1 FIX: Subscription cycling IS needed for mesh formation.
+                                        // The feedback loop was caused by GossipPeerSubscribed handler
+                                        // triggering more ReformMesh commands - that handler has been
+                                        // removed. Now subscription cycling only happens once per
+                                        // reconnection (triggered from ConnectionEstablished with
+                                        // deduplication).
+                                        //
+                                        // How this works:
+                                        // 1. unsubscribe() removes us from topic
+                                        // 2. subscribe() re-joins topic, triggering mesh rebuild
+                                        // 3. Gossipsub sends GRAFT to connected peers for mesh formation
+                                        // 4. Remote peer receives SUBSCRIBE but no longer triggers ReformMesh
+                                        //    (GossipPeerSubscribed handler was removed)
 
                                         let gossipsub = &mut swarm.behaviour_mut().gossipsub;
 
+                                        // Check current mesh status
+                                        let mut needs_reform = false;
+                                        let mut missing_topics = Vec::new();
                                         for topic_str in &topics {
                                             let topic = IdentTopic::new(topic_str);
                                             let topic_hash = topic.hash();
-
-                                            // Check if peer is already in mesh for this topic
                                             let in_mesh = gossipsub
                                                 .mesh_peers(&topic_hash)
                                                 .any(|p| *p == peer_id);
-
                                             if !in_mesh {
-                                                tracing::debug!(
-                                                    peer_id = %peer_id,
-                                                    topic = %topic_str,
-                                                    "Peer not in mesh - cycling subscription to trigger GRAFT"
-                                                );
-
-                                                // Cycle subscription: unsubscribe then resubscribe
-                                                // This forces gossipsub to send GRAFT to connected peers
-                                                let _ = gossipsub.unsubscribe(&topic);
-                                                let _ = gossipsub.subscribe(&topic);
+                                                needs_reform = true;
+                                                missing_topics.push(topic_str.clone());
                                             }
                                         }
 
-                                        // Also add as explicit peer (belt and suspenders)
+                                        if needs_reform {
+                                            tracing::info!(
+                                                peer_id = %peer_id,
+                                                topics_count = topics.len(),
+                                                missing_topics = ?missing_topics,
+                                                "ReformMesh: cycling subscriptions to trigger GRAFT"
+                                            );
+
+                                            // Cycle subscriptions to trigger mesh rebuild with GRAFT
+                                            for topic_str in &topics {
+                                                let topic = IdentTopic::new(topic_str);
+                                                let _ = gossipsub.unsubscribe(&topic);
+                                                let _ = gossipsub.subscribe(&topic);
+                                            }
+                                        } else {
+                                            tracing::debug!(
+                                                peer_id = %peer_id,
+                                                "ReformMesh: peer already in mesh for all topics"
+                                            );
+                                        }
+
+                                        // Also add as explicit peer for reliable message delivery
                                         gossipsub.add_explicit_peer(&peer_id);
                                     }
 
