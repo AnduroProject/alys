@@ -68,6 +68,8 @@ pub enum AlysNetworkBehaviourEvent {
     },
     /// mDNS peer expired
     MdnsPeerExpired { peer_id: String },
+    /// Remote peer subscribed to a gossipsub topic (used for bidirectional mesh recovery)
+    GossipPeerSubscribed { peer_id: String, topic: String },
 }
 
 impl AlysNetworkBehaviour {
@@ -189,6 +191,12 @@ impl From<libp2p::gossipsub::Event> for AlysNetworkBehaviourEvent {
                 source_peer: propagation_source.to_string(),
                 message_id: message_id.to_string(),
             },
+            libp2p::gossipsub::Event::Subscribed { peer_id, topic } => {
+                AlysNetworkBehaviourEvent::GossipPeerSubscribed {
+                    peer_id: peer_id.to_string(),
+                    topic: topic.to_string(),
+                }
+            }
             _ => {
                 tracing::trace!("Unhandled gossipsub event: {:?}", event);
                 // For unhandled events, return a dummy event

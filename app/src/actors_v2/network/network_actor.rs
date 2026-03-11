@@ -83,6 +83,14 @@ pub enum SwarmCommand {
     /// This is needed after network partition recovery because add_explicit_peer
     /// alone does not trigger GRAFT messages for mesh formation
     ReformMesh { peer_id: PeerId, topics: Vec<String> },
+    /// Verify that mesh has formed for a peer on specified topics
+    /// Returns true if peer is in mesh for all topics, false otherwise
+    VerifyMeshFormation {
+        peer_id: PeerId,
+        topics: Vec<String>,
+        attempt: u32,
+        response_tx: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -331,6 +339,204 @@ impl NetworkActor {
         });
     }
 
+    /// Schedule mesh verification with retry logic (TM-B1 Layer 2)
+    ///
+    /// After triggering ReformMesh, verify that mesh actually formed.
+    /// If not formed after initial delay, retry with exponential backoff.
+    /// Max 3 attempts with delays: 500ms, 1s, 2s
+    fn schedule_mesh_verification(&self, peer_id: PeerId, topics: Vec<String>, attempt: u32) {
+        const MAX_ATTEMPTS: u32 = 3;
+
+        if attempt > MAX_ATTEMPTS {
+            tracing::error!(
+                peer_id = %peer_id,
+                attempts = MAX_ATTEMPTS,
+                "Mesh verification failed after maximum attempts - partition recovery may have failed"
+            );
+            return;
+        }
+
+        let cmd_tx = match &self.swarm_cmd_tx {
+            Some(tx) => tx.clone(),
+            None => {
+                tracing::warn!("Cannot schedule mesh verification - no command channel");
+                return;
+            }
+        };
+
+        // Calculate delay with exponential backoff: 500ms, 1000ms, 2000ms
+        let delay_ms = 500 * (1 << (attempt - 1));
+        let delay = Duration::from_millis(delay_ms);
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            attempt = attempt,
+            delay_ms = delay_ms,
+            "Scheduling mesh verification"
+        );
+
+        // Spawn async task to verify mesh after delay
+        let topics_clone = topics.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let verify_cmd = SwarmCommand::VerifyMeshFormation {
+                peer_id,
+                topics: topics_clone.clone(),
+                attempt,
+                response_tx,
+            };
+
+            if let Err(e) = cmd_tx.try_send(verify_cmd) {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = ?e,
+                    "Failed to send VerifyMeshFormation command"
+                );
+                return;
+            }
+
+            // Wait for verification result
+            match response_rx.await {
+                Ok(Ok(true)) => {
+                    // Mesh formed successfully, nothing more to do
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        attempt = attempt,
+                        "Mesh verification confirmed - partition recovery successful"
+                    );
+                }
+                Ok(Ok(false)) => {
+                    // Mesh not formed, retry with ReformMesh
+                    if attempt < MAX_ATTEMPTS {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            attempt = attempt,
+                            next_attempt = attempt + 1,
+                            "Mesh not formed - retrying ReformMesh"
+                        );
+
+                        let reform_cmd = SwarmCommand::ReformMesh {
+                            peer_id,
+                            topics: topics_clone.clone(),
+                        };
+
+                        if let Err(e) = cmd_tx.try_send(reform_cmd) {
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                error = ?e,
+                                "Failed to send ReformMesh retry command"
+                            );
+                            return;
+                        }
+
+                        // Calculate next delay with exponential backoff
+                        let next_delay_ms = 500 * (1 << attempt);
+                        let next_delay = Duration::from_millis(next_delay_ms);
+                        let next_attempt = attempt + 1;
+
+                        // Schedule next verification
+                        let cmd_tx_clone = cmd_tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(next_delay).await;
+
+                            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                            let verify_cmd = SwarmCommand::VerifyMeshFormation {
+                                peer_id,
+                                topics: topics_clone.clone(),
+                                attempt: next_attempt,
+                                response_tx,
+                            };
+
+                            if let Err(e) = cmd_tx_clone.try_send(verify_cmd) {
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    error = ?e,
+                                    "Failed to send VerifyMeshFormation command (attempt {})", next_attempt
+                                );
+                                return;
+                            }
+
+                            match response_rx.await {
+                                Ok(Ok(true)) => {
+                                    tracing::info!(
+                                        peer_id = %peer_id,
+                                        attempt = next_attempt,
+                                        "Mesh verification confirmed - partition recovery successful"
+                                    );
+                                }
+                                Ok(Ok(false)) if next_attempt < MAX_ATTEMPTS => {
+                                    // One more retry
+                                    tracing::info!(
+                                        peer_id = %peer_id,
+                                        attempt = next_attempt,
+                                        "Mesh not formed - final retry"
+                                    );
+
+                                    let reform_cmd = SwarmCommand::ReformMesh {
+                                        peer_id,
+                                        topics: topics_clone.clone(),
+                                    };
+                                    let _ = cmd_tx_clone.try_send(reform_cmd);
+
+                                    // Final verification after delay
+                                    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+                                    let (response_tx, _) = tokio::sync::oneshot::channel();
+                                    let verify_cmd = SwarmCommand::VerifyMeshFormation {
+                                        peer_id,
+                                        topics: topics_clone,
+                                        attempt: MAX_ATTEMPTS,
+                                        response_tx,
+                                    };
+                                    let _ = cmd_tx_clone.try_send(verify_cmd);
+                                }
+                                Ok(Ok(false)) => {
+                                    tracing::error!(
+                                        peer_id = %peer_id,
+                                        "Mesh verification failed after all attempts"
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::warn!(
+                                        peer_id = %peer_id,
+                                        error = %e,
+                                        "Mesh verification returned error"
+                                    );
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        peer_id = %peer_id,
+                                        "Mesh verification response channel closed"
+                                    );
+                                }
+                            }
+                        });
+                    } else {
+                        tracing::error!(
+                            peer_id = %peer_id,
+                            "Mesh verification failed after all attempts"
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Mesh verification returned error"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        "Mesh verification response channel closed"
+                    );
+                }
+            }
+        });
+    }
+
     /// Select a non-loopback address from a list of addresses.
     /// Loopback addresses (127.0.0.1, ::1) are unreachable from other containers
     /// in Docker networks, so we prefer external addresses for peer storage.
@@ -526,8 +732,25 @@ impl NetworkActor {
                     );
                 }
 
-                // Determine if mesh reformation is needed (either path indicates partition recovery)
-                let needs_mesh_reform = is_recent_reconnection || is_duplicate_connection;
+                // TM-B1 Layer 3: More aggressive trigger for incoming connections from known peers
+                // After startup grace period, ANY incoming connection from a peer we already know
+                // about suggests partition recovery. The other side initiated reconnection,
+                // meaning they detected partition recovery - we should reform mesh too.
+                let is_known_peer_reconnecting = past_startup_grace
+                    && !endpoint.is_dialer()
+                    && self.peer_manager.get_peer(&peer_id.to_string()).is_some();
+
+                if is_known_peer_reconnecting && !is_duplicate_connection {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "Known peer reconnecting via incoming connection - potential partition recovery"
+                    );
+                }
+
+                // Determine if mesh reformation is needed (any path indicates partition recovery)
+                let needs_mesh_reform = is_recent_reconnection
+                    || is_duplicate_connection
+                    || is_known_peer_reconnecting;
 
                 // IMPORTANT: Only store addresses from Dialer (outgoing) connections.
                 // For Listener (incoming) connections, get_remote_address() returns the
@@ -575,7 +798,8 @@ impl NetworkActor {
                             peer_id = %peer_id,
                             is_recent_reconnection = is_recent_reconnection,
                             is_duplicate_connection = is_duplicate_connection,
-                            "Partition recovery detected - triggering mesh re-formation"
+                            is_known_peer_reconnecting = is_known_peer_reconnecting,
+                            "Partition recovery detected - triggering mesh re-formation with verification"
                         );
 
                         let tendermint_topics = vec![
@@ -588,7 +812,7 @@ impl NetworkActor {
 
                         let reform_cmd = SwarmCommand::ReformMesh {
                             peer_id,
-                            topics: tendermint_topics,
+                            topics: tendermint_topics.clone(),
                         };
 
                         if let Err(e) = cmd_tx.try_send(reform_cmd) {
@@ -597,6 +821,9 @@ impl NetworkActor {
                                 error = ?e,
                                 "Failed to send ReformMesh command"
                             );
+                        } else {
+                            // TM-B1 Layer 2: Schedule mesh verification with retry
+                            self.schedule_mesh_verification(peer_id, tendermint_topics, 1);
                         }
                     }
                 }
@@ -1615,6 +1842,82 @@ impl NetworkActor {
                 // Phase 2 Task 2.4: Record mDNS-specific expiry metric
                 self.metrics.record_mdns_expiry();
             }
+
+            AlysNetworkBehaviourEvent::GossipPeerSubscribed { peer_id, topic } => {
+                // BIDIRECTIONAL MESH RECOVERY (TM-B1 Layer 1):
+                // When a remote peer cycles its subscriptions (to trigger GRAFT on their side),
+                // we receive Subscribed events. This is our signal to also reform our mesh
+                // to ensure bidirectional connectivity.
+
+                // Only care about Tendermint topics for consensus recovery
+                if !topic.starts_with("alys-tendermint-") {
+                    tracing::trace!(
+                        peer_id = %peer_id,
+                        topic = %topic,
+                        "Ignoring non-Tendermint subscription event"
+                    );
+                    return Ok(());
+                }
+
+                // Check startup grace period to avoid false positives during initial sync
+                const STARTUP_GRACE_PERIOD: Duration = Duration::from_secs(30);
+                let past_startup_grace = self.startup_time.elapsed() > STARTUP_GRACE_PERIOD;
+
+                if !past_startup_grace {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        topic = %topic,
+                        "Ignoring subscription event during startup grace period"
+                    );
+                    return Ok(());
+                }
+
+                // Check if this peer is connected (sanity check)
+                if self.peer_manager.get_peer(&peer_id).is_none() {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        topic = %topic,
+                        "Ignoring subscription from unknown peer"
+                    );
+                    return Ok(());
+                }
+
+                tracing::info!(
+                    peer_id = %peer_id,
+                    topic = %topic,
+                    "Remote peer subscribed to Tendermint topic - checking mesh status"
+                );
+
+                // Trigger mesh reformation on our side to ensure bidirectional mesh
+                if let Some(cmd_tx) = &self.swarm_cmd_tx {
+                    // Parse peer_id string back to PeerId
+                    if let Ok(pid) = peer_id.parse::<PeerId>() {
+                        let tendermint_topics = vec![
+                            "alys-tendermint-proposals".to_string(),
+                            "alys-tendermint-votes".to_string(),
+                            "alys-tendermint-timeouts".to_string(),
+                            "alys-tendermint-evidence".to_string(),
+                            "alys-tendermint-newround".to_string(),
+                        ];
+
+                        let reform_cmd = SwarmCommand::ReformMesh {
+                            peer_id: pid,
+                            topics: tendermint_topics.clone(),
+                        };
+
+                        if let Err(e) = cmd_tx.try_send(reform_cmd) {
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                error = ?e,
+                                "Failed to send ReformMesh command for bidirectional recovery"
+                            );
+                        } else {
+                            // Schedule mesh verification with retry
+                            self.schedule_mesh_verification(pid, tendermint_topics, 1);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -2243,6 +2546,45 @@ impl Handler<NetworkMessage> for NetworkActor {
 
                                         // Also add as explicit peer (belt and suspenders)
                                         gossipsub.add_explicit_peer(&peer_id);
+                                    }
+
+                                    Some(SwarmCommand::VerifyMeshFormation { peer_id, topics, attempt, response_tx }) => {
+                                        use libp2p::gossipsub::IdentTopic;
+
+                                        let gossipsub = &swarm.behaviour().gossipsub;
+                                        let mut all_in_mesh = true;
+                                        let mut missing_topics = Vec::new();
+
+                                        for topic_str in &topics {
+                                            let topic = IdentTopic::new(topic_str);
+                                            let topic_hash = topic.hash();
+
+                                            let in_mesh = gossipsub
+                                                .mesh_peers(&topic_hash)
+                                                .any(|p| *p == peer_id);
+
+                                            if !in_mesh {
+                                                all_in_mesh = false;
+                                                missing_topics.push(topic_str.clone());
+                                            }
+                                        }
+
+                                        if all_in_mesh {
+                                            tracing::info!(
+                                                peer_id = %peer_id,
+                                                attempt = attempt,
+                                                "Mesh verification successful - peer in mesh for all topics"
+                                            );
+                                        } else {
+                                            tracing::warn!(
+                                                peer_id = %peer_id,
+                                                attempt = attempt,
+                                                missing_topics = ?missing_topics,
+                                                "Mesh verification failed - peer not in mesh for some topics"
+                                            );
+                                        }
+
+                                        let _ = response_tx.send(Ok(all_in_mesh));
                                     }
 
                                     None => {
