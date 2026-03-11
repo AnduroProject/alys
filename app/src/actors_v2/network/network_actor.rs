@@ -249,6 +249,10 @@ pub struct NetworkActor {
     /// Maps peer_id -> timestamp of last ReformMesh trigger
     /// Used to enforce cooldown period between reformation attempts
     recent_mesh_reforms: HashMap<PeerId, Instant>,
+    /// TM-B2: Peers awaiting mesh reformation after identification completes
+    /// Maps peer_id -> topics that need mesh reformation
+    /// ReformMesh is deferred until PeerIdentified event to avoid race condition
+    pending_mesh_reforms: HashMap<PeerId, Vec<String>>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -306,6 +310,7 @@ impl NetworkActor {
             recently_disconnected_peers: HashSet::new(),
             startup_time: Instant::now(),
             recent_mesh_reforms: HashMap::new(),
+            pending_mesh_reforms: HashMap::new(),
         })
     }
 
@@ -543,6 +548,97 @@ impl NetworkActor {
                         peer_id = %peer_id,
                         "Mesh verification response channel closed"
                     );
+                }
+            }
+        });
+    }
+
+    /// TM-B2: Periodic mesh health check - verifies all connected V2 peers are in mesh
+    ///
+    /// This provides defense-in-depth for mesh formation failures. Even if the deferred
+    /// ReformMesh fails, this background check will detect and fix stale mesh state
+    /// within 30 seconds.
+    fn schedule_periodic_mesh_health_check(&self, ctx: &mut Context<Self>) {
+        const MESH_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+        ctx.run_interval(MESH_HEALTH_CHECK_INTERVAL, |actor, _ctx| {
+            let Some(cmd_tx) = actor.swarm_cmd_tx.as_ref() else {
+                return;
+            };
+
+            // Get all connected V2 peers
+            let v2_peer_ids = actor.peer_manager.get_v2_peer_ids();
+            if v2_peer_ids.is_empty() {
+                return;
+            }
+
+            let tendermint_topics = vec![
+                "alys-tendermint-proposals".to_string(),
+                "alys-tendermint-votes".to_string(),
+                "alys-tendermint-timeouts".to_string(),
+                "alys-tendermint-evidence".to_string(),
+                "alys-tendermint-newround".to_string(),
+            ];
+
+            for peer_id_str in v2_peer_ids {
+                let Ok(peer_id) = peer_id_str.parse::<PeerId>() else {
+                    continue;
+                };
+
+                // Check cooldown to avoid spamming - skip if we reformed recently
+                if let Some(last_reform) = actor.recent_mesh_reforms.get(&peer_id) {
+                    if last_reform.elapsed() < Duration::from_secs(30) {
+                        continue;
+                    }
+                }
+
+                // Send verification request
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let verify_cmd = SwarmCommand::VerifyMeshFormation {
+                    peer_id,
+                    topics: tendermint_topics.clone(),
+                    attempt: 0, // Special value indicating periodic check
+                    response_tx: tx,
+                };
+
+                if cmd_tx.try_send(verify_cmd).is_ok() {
+                    let cmd_tx_clone = cmd_tx.clone();
+                    let topics_clone = tendermint_topics.clone();
+
+                    tokio::spawn(async move {
+                        match rx.await {
+                            Ok(Ok(true)) => {
+                                // Mesh is healthy, nothing to do
+                                tracing::debug!(
+                                    peer_id = %peer_id,
+                                    "Periodic mesh check: peer in mesh"
+                                );
+                            }
+                            Ok(Ok(false)) => {
+                                // Peer not in mesh, trigger reformation
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    "Periodic mesh check: peer not in mesh, triggering reformation"
+                                );
+
+                                let reform_cmd = SwarmCommand::ReformMesh {
+                                    peer_id,
+                                    topics: topics_clone,
+                                };
+                                let _ = cmd_tx_clone.try_send(reform_cmd);
+                            }
+                            Ok(Err(e)) => {
+                                tracing::debug!(
+                                    peer_id = %peer_id,
+                                    error = %e,
+                                    "Periodic mesh check error"
+                                );
+                            }
+                            Err(_) => {
+                                // Channel closed, ignore
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -840,7 +936,7 @@ impl NetworkActor {
                             is_recent_reconnection = is_recent_reconnection,
                             is_duplicate_connection = is_duplicate_connection,
                             is_known_peer_reconnecting = is_known_peer_reconnecting,
-                            "Partition recovery detected - triggering mesh re-formation"
+                            "Partition recovery detected - deferring mesh re-formation until peer identified"
                         );
 
                         let tendermint_topics = vec![
@@ -851,21 +947,12 @@ impl NetworkActor {
                             "alys-tendermint-newround".to_string(),
                         ];
 
-                        let reform_cmd = SwarmCommand::ReformMesh {
-                            peer_id,
-                            topics: tendermint_topics.clone(),
-                        };
-
-                        if let Err(e) = cmd_tx.try_send(reform_cmd) {
-                            tracing::warn!(
-                                peer_id = %peer_id,
-                                error = ?e,
-                                "Failed to send ReformMesh command"
-                            );
-                        } else {
-                            // TM-B1 Layer 2: Schedule mesh verification with retry
-                            self.schedule_mesh_verification(peer_id, tendermint_topics, 1);
-                        }
+                        // TM-B2: Defer ReformMesh until PeerIdentified event
+                        // This fixes the race condition where ReformMesh was triggered before
+                        // the identify protocol completed, causing gossipsub to fail mesh formation
+                        // because it doesn't know the peer's protocols yet.
+                        self.pending_mesh_reforms
+                            .insert(peer_id, tendermint_topics);
                     }
                 }
             }
@@ -880,6 +967,9 @@ impl NetworkActor {
                 // Track for reconnection detection (partition recovery)
                 // Only peers disconnected in THIS session need mesh recovery when they reconnect
                 self.recently_disconnected_peers.insert(peer_id);
+
+                // TM-B2: Clean up any pending mesh reforms for disconnected peer
+                self.pending_mesh_reforms.remove(&peer_id);
 
                 self.peer_manager.remove_peer(&peer_id.to_string());
                 self.metrics.record_connection_closed();
@@ -1721,6 +1811,37 @@ impl NetworkActor {
                         "V2-capable peer connected"
                     );
                 }
+
+                // TM-B2: Trigger any pending mesh reforms now that peer protocols are known
+                // This resolves the race condition where ReformMesh was triggered in
+                // ConnectionEstablished before the identify protocol completed.
+                if let Ok(libp2p_peer_id) = peer_id.parse::<PeerId>() {
+                    if let Some(topics) = self.pending_mesh_reforms.remove(&libp2p_peer_id) {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            topics_count = topics.len(),
+                            "Triggering deferred mesh reformation after peer identification"
+                        );
+
+                        if let Some(cmd_tx) = self.swarm_cmd_tx.as_ref() {
+                            let reform_cmd = SwarmCommand::ReformMesh {
+                                peer_id: libp2p_peer_id,
+                                topics: topics.clone(),
+                            };
+
+                            if let Err(e) = cmd_tx.try_send(reform_cmd) {
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    error = ?e,
+                                    "Failed to send deferred ReformMesh command"
+                                );
+                            } else {
+                                // TM-B1 Layer 2: Schedule mesh verification with retry
+                                self.schedule_mesh_verification(libp2p_peer_id, topics, 1);
+                            }
+                        }
+                    }
+                }
             }
 
             AlysNetworkBehaviourEvent::MdnsPeerDiscovered { peer_id, addresses } => {
@@ -2267,6 +2388,10 @@ impl Actor for NetworkActor {
         ctx.run_interval(Duration::from_secs(15), |act, _ctx| {
             act.check_v2_peer_health();
         });
+
+        // TM-B2: Start periodic mesh health check for partition recovery defense-in-depth
+        // This detects and fixes stale mesh state even if deferred ReformMesh fails
+        self.schedule_periodic_mesh_health_check(ctx);
 
         // Note: Swarm event loop started in StartNetwork handler
     }

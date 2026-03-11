@@ -664,6 +664,16 @@ impl PeerManager {
         }
         false
     }
+
+    /// Get peer IDs of connected V2-capable peers (TM-B2)
+    /// Returns Vec of peer_id strings for use in periodic mesh health checks
+    pub fn get_v2_peer_ids(&self) -> Vec<String> {
+        self.connected_peers
+            .iter()
+            .filter(|(_, p)| p.supports_v2_protocol)
+            .map(|(peer_id, _)| peer_id.clone())
+            .collect()
+    }
 }
 
 /// Peer connection statistics
