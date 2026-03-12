@@ -1021,7 +1021,21 @@ impl Handler<TendermintDriverMessage> for TendermintDriver {
             }
 
             TendermintDriverMessage::Resume { height } => {
-                self.resume_consensus(height, ctx);
+                // Guard against stale sync completion resetting consensus backward.
+                // This can happen when sync takes long and consensus has already progressed.
+                if height > self.current_height {
+                    self.resume_consensus(height, ctx);
+                } else {
+                    warn!(
+                        current_height = self.current_height,
+                        requested_height = height,
+                        "Ignoring stale sync completion - consensus already beyond this height"
+                    );
+                    // Still unpause so consensus can continue from where it is
+                    if self.is_paused {
+                        self.is_paused = false;
+                    }
+                }
             }
 
             TendermintDriverMessage::UpdateValidatorSet {

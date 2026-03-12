@@ -330,12 +330,15 @@ impl NetworkActor {
                     "Removing timed-out block request"
                 );
 
-                // Penalize peers
+                // Penalize peers (reduced from -5.0 to -1.0 to prevent reputation death spiral)
+                // When a node falls behind, ALL peers get penalized on each timeout. With -5.0
+                // and multiple rapid timeouts, peers quickly drop below disconnect threshold,
+                // causing network isolation and permanent sync failure.
                 for peer_id in &request.peer_ids {
-                    self.peer_manager.update_peer_reputation(peer_id, -5.0);
+                    self.peer_manager.update_peer_reputation(peer_id, -1.0);
                     tracing::debug!(
                         peer_id = %peer_id,
-                        "Penalized peer for request timeout"
+                        "Penalized peer for request timeout (mild penalty)"
                     );
                 }
 

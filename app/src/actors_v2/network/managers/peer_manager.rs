@@ -475,11 +475,48 @@ impl PeerManager {
     }
 
     /// Get peers that should be disconnected
+    ///
+    /// IMPORTANT: Never returns ALL connected peers to prevent network isolation.
+    /// This protects against the "reputation death spiral" where temporary sync failures
+    /// cause all peers to be penalized and disconnected, leaving the node unable to
+    /// recover. At least one peer is always kept connected.
     pub fn get_peers_to_disconnect(&self) -> Vec<PeerId> {
-        self.connected_peers
+        let candidates: Vec<_> = self
+            .connected_peers
             .values()
             .filter(|peer| peer.should_disconnect())
-            .map(|peer| peer.peer_id.clone())
+            .collect();
+
+        // Safety: Never disconnect ALL peers - always keep at least 1 connected
+        // This prevents complete network isolation from reputation penalties
+        let total_connected = self.connected_peers.len();
+        let max_to_disconnect = if total_connected > 1 {
+            total_connected - 1
+        } else {
+            0 // Never disconnect the last peer
+        };
+
+        if candidates.len() > max_to_disconnect {
+            tracing::warn!(
+                total_candidates = candidates.len(),
+                max_allowed = max_to_disconnect,
+                total_connected = total_connected,
+                "Limiting peer disconnections to prevent network isolation"
+            );
+        }
+
+        // Sort by reputation (lowest first) and take only up to max_to_disconnect
+        let mut sorted_candidates = candidates;
+        sorted_candidates.sort_by(|a, b| {
+            a.reputation
+                .partial_cmp(&b.reputation)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        sorted_candidates
+            .into_iter()
+            .take(max_to_disconnect)
+            .map(|p| p.peer_id.clone())
             .collect()
     }
 
