@@ -1021,20 +1021,40 @@ impl Handler<TendermintDriverMessage> for TendermintDriver {
             }
 
             TendermintDriverMessage::Resume { height } => {
+                // TM-B5 Fix: Clear any stale pending timeouts before resuming
+                // This prevents old timeouts from firing after sync completion
+                if let Some(handle) = self.pending_timeout.take() {
+                    ctx.cancel_future(handle);
+                    debug!(
+                        "Cleared stale pending timeout before resuming consensus"
+                    );
+                }
+
                 // Guard against stale sync completion resetting consensus backward.
                 // This can happen when sync takes long and consensus has already progressed.
                 if height > self.current_height {
+                    info!(
+                        current_height = self.current_height,
+                        resume_height = height,
+                        "Resuming consensus at new height after sync"
+                    );
                     self.resume_consensus(height, ctx);
-                } else {
-                    warn!(
+                } else if self.is_paused {
+                    // Same or lower height but we're paused - just unpause
+                    info!(
                         current_height = self.current_height,
                         requested_height = height,
-                        "Ignoring stale sync completion - consensus already beyond this height"
+                        "Unpausing consensus at current height"
                     );
-                    // Still unpause so consensus can continue from where it is
-                    if self.is_paused {
-                        self.is_paused = false;
-                    }
+                    self.is_paused = false;
+                    // Re-schedule timeout for current position
+                    self.schedule_timeout(ctx);
+                } else {
+                    trace!(
+                        current_height = self.current_height,
+                        requested_height = height,
+                        "Resume ignored - already running at higher height"
+                    );
                 }
             }
 

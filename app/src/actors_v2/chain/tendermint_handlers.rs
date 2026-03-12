@@ -3053,10 +3053,11 @@ impl ChainActor {
         voter: ValidatorId,
         correlation_id: Uuid,
     ) -> TendermintResult<ValidatorId> {
-        // Configuration constants
-        const MIN_VOTES_FOR_SYNC: u32 = 3;
-        const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_millis(500);
-        const SYNC_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+        // Configuration constants - TM-B5 Fix: Lowered for faster sync detection
+        // With instant finality, being 1 block behind is significant
+        const MIN_VOTES_FOR_SYNC: u32 = 1;  // Was 3 - trigger on first future vote
+        const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_millis(100);  // Was 500ms
+        const SYNC_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);  // Was 5s
         const MAX_REASONABLE_GAP: u64 = 100;
 
         let height_gap = vote_height.saturating_sub(current_height);

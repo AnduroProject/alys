@@ -12,6 +12,7 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::{
+    actor::ConsensusMode,
     messages::{
         AuxPowParams, BlockSource, ChainManagerMessage, ChainManagerResponse, ChainMessage,
         ChainResponse, CreateAuxBlock, SubmitAuxBlock,
@@ -1778,33 +1779,31 @@ impl Handler<ChainMessage> for ChainActor {
             }
 
             ChainMessage::SyncCompleted { final_height } => {
+                let actor = self.clone();
+                let correlation_id = uuid::Uuid::new_v4();
+
                 info!(
+                    correlation_id = %correlation_id,
                     final_height = final_height,
                     "Sync completed, transitioning to synced state"
                 );
 
-                // Task 3.2: Resume consensus after sync completion
-                // Send Resume message to TendermintDriver to restart consensus at the synced height
-                if let Some(ref driver) = self.tendermint_driver {
+                Box::pin(async move {
+                    // TM-B5 Fix: Enter Consensus mode after sync completion
+                    // This enables the node to participate in consensus at the synced height
+                    actor.enter_consensus_mode(final_height + 1, correlation_id).await;
+
+                    // Reset future height tracker - we're caught up
+                    actor.future_height_tracker.write().await.reset();
+
                     info!(
+                        correlation_id = %correlation_id,
                         final_height = final_height,
-                        "Resuming consensus after sync completion"
+                        "ChainActor entered Consensus mode after sync completion"
                     );
-                    driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
-                        height: final_height + 1,
-                    });
-                }
 
-                // Update sync status - node is now synced
-                // Note: The actual is_synced flag is managed by ChainActor state
-                // This notification allows ChainActor to take any post-sync actions
-
-                tracing::info!(
-                    final_height = final_height,
-                    "ChainActor notified of sync completion"
-                );
-
-                Box::pin(async move { Ok(ChainResponse::Success) })
+                    Ok(ChainResponse::Success)
+                })
             }
 
             ChainMessage::InitializeSyncState => {
@@ -2053,6 +2052,21 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
+                    // TM-B5 Fix: Check consensus mode - skip height init during blocksync
+                    // NewHeight is part of startup/recovery, so we queue it implicitly
+                    // by not processing until consensus mode is entered
+                    let mode = actor.get_consensus_mode().await;
+                    if mode == ConsensusMode::Blocksync {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            "TendermintNewHeight deferred - in Blocksync mode"
+                        );
+                        // Return success but don't actually initialize
+                        // The height will be initialized when entering consensus mode
+                        return Ok(ChainResponse::TendermintHeightStarted { height, round: 0 });
+                    }
+
                     let (height, round) = actor
                         .handle_tendermint_new_height(height, correlation_id)
                         .await?;
@@ -2079,6 +2093,18 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
+                    // TM-B5 Fix: Reject proposals during blocksync
+                    let mode = actor.get_consensus_mode().await;
+                    if mode == ConsensusMode::Blocksync {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            round = round,
+                            "TendermintPropose rejected - in Blocksync mode"
+                        );
+                        return Err(ChainError::NotSynced);
+                    }
+
                     let block_hash = actor
                         .handle_tendermint_propose(height, round, correlation_id)
                         .await?;
@@ -2112,6 +2138,19 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
+                    // TM-B5 Fix: Reject proposals during blocksync
+                    let mode = actor.get_consensus_mode().await;
+                    if mode == ConsensusMode::Blocksync {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            round = round,
+                            peer_id = ?peer_id,
+                            "TendermintProposal rejected - in Blocksync mode"
+                        );
+                        return Err(ChainError::NotSynced);
+                    }
+
                     let block_hash = actor
                         .handle_tendermint_proposal(proposal, peer_id, correlation_id)
                         .await?;
@@ -2145,6 +2184,43 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
+                    // TM-B5 Fix: During blocksync, still process future height votes for sync detection
+                    // but reject current-height votes (we shouldn't participate in consensus)
+                    let mode = actor.get_consensus_mode().await;
+                    if mode == ConsensusMode::Blocksync {
+                        let current_height = actor.get_tendermint_height().await.unwrap_or(0);
+
+                        if vote.height > current_height {
+                            // Future height vote - process for sync detection only
+                            debug!(
+                                correlation_id = %correlation_id,
+                                vote_height = height,
+                                current_height = current_height,
+                                peer_id = ?peer_id,
+                                "Processing future height vote for sync detection during Blocksync"
+                            );
+                            // Call the handler which will detect we're behind and trigger sync
+                            let voter = actor
+                                .handle_tendermint_vote(vote, peer_id, correlation_id)
+                                .await?;
+                            return Ok(ChainResponse::TendermintVoteAccepted {
+                                height,
+                                round,
+                                voter,
+                            });
+                        } else {
+                            // Current/past height vote - reject during blocksync
+                            debug!(
+                                correlation_id = %correlation_id,
+                                vote_height = height,
+                                current_height = current_height,
+                                peer_id = ?peer_id,
+                                "TendermintVote rejected - in Blocksync mode"
+                            );
+                            return Err(ChainError::NotSynced);
+                        }
+                    }
+
                     let voter = actor
                         .handle_tendermint_vote(vote, peer_id, correlation_id)
                         .await?;
@@ -2176,6 +2252,24 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
+                    // TM-B5 Fix: Reject timeouts during blocksync
+                    // This prevents the node from cycling rounds at the wrong height
+                    let mode = actor.get_consensus_mode().await;
+                    if mode == ConsensusMode::Blocksync {
+                        trace!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            round = round,
+                            step = ?step,
+                            "TendermintTimeout ignored - in Blocksync mode"
+                        );
+                        // Return current round since we didn't advance
+                        return Ok(ChainResponse::TendermintRoundAdvanced {
+                            height,
+                            new_round: round,
+                        });
+                    }
+
                     let new_round = actor
                         .handle_tendermint_timeout(height, round, step, correlation_id)
                         .await?;
@@ -2252,6 +2346,52 @@ impl Handler<ChainMessage> for ChainActor {
                     actor
                         .handle_block_request_timeout(block_hash, correlation_id)
                         .await?;
+                    Ok(ChainResponse::Success)
+                })
+            }
+
+            ChainMessage::TendermintNewRoundAnnouncement {
+                height,
+                round,
+                peer_id,
+                correlation_id,
+            } => {
+                let actor = self.clone();
+                let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
+
+                Box::pin(async move {
+                    // TM-B5 Fix: Check if peer is at a height we haven't reached
+                    let current_height = actor.get_tendermint_height().await.unwrap_or(0);
+
+                    if height > current_height {
+                        info!(
+                            correlation_id = %correlation_id,
+                            announced_height = height,
+                            announced_round = round,
+                            current_height = current_height,
+                            peer_id = ?peer_id,
+                            "NewRound announcement indicates we're behind - triggering sync"
+                        );
+
+                        // Enter blocksync mode and trigger sync
+                        actor.enter_blocksync_mode(correlation_id).await;
+
+                        // Trigger sync to catch up
+                        if let Some(ref sync_actor) = actor.sync_actor {
+                            sync_actor.do_send(crate::actors_v2::network::SyncMessage::StartSync {
+                                start_height: current_height,
+                                target_height: Some(height),
+                            });
+                        }
+                    } else {
+                        trace!(
+                            correlation_id = %correlation_id,
+                            announced_height = height,
+                            current_height = current_height,
+                            "NewRound announcement for current/past height - ignoring"
+                        );
+                    }
+
                     Ok(ChainResponse::Success)
                 })
             }
@@ -2390,6 +2530,9 @@ async fn create_aux_block_helper(
         future_height_tracker: std::sync::Arc::new(tokio::sync::RwLock::new(
             super::actor::FutureHeightTracker::new(),
         )),
+        consensus_mode: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::actor::ConsensusMode::Blocksync,
+        )),
     };
 
     actor.create_aux_block(miner_address).await
@@ -2440,6 +2583,9 @@ async fn submit_aux_block_helper(
         tendermint_sync_validator: None,
         future_height_tracker: std::sync::Arc::new(tokio::sync::RwLock::new(
             super::actor::FutureHeightTracker::new(),
+        )),
+        consensus_mode: std::sync::Arc::new(tokio::sync::RwLock::new(
+            super::actor::ConsensusMode::Blocksync,
         )),
     };
 

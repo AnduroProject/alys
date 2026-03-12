@@ -114,6 +114,23 @@ impl Default for FutureHeightTracker {
     }
 }
 
+/// Consensus mode state machine for standard-aligned blocksync.
+///
+/// When a node falls behind (e.g., during network partition or restart),
+/// it must enter Blocksync mode to catch up rather than participating in
+/// consensus at the wrong height. This prevents stuck consensus scenarios
+/// like TM-B5 where a node misses commits and cycles rounds indefinitely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsensusMode {
+    /// Syncing mode - reject consensus messages, accept sync blocks.
+    /// Node is catching up to network height.
+    #[default]
+    Blocksync,
+    /// Consensus mode - participate in Tendermint consensus.
+    /// Node is at network tip and can propose/vote.
+    Consensus,
+}
+
 /// Simplified ChainActor - core blockchain functionality (Clone-enabled for async handlers)
 #[derive(Clone)]
 pub struct ChainActor {
@@ -200,6 +217,11 @@ pub struct ChainActor {
     /// When votes for heights beyond our current height arrive, this helps determine
     /// if we've fallen behind and need to trigger catch-up sync.
     pub(crate) future_height_tracker: Arc<RwLock<FutureHeightTracker>>,
+
+    /// Consensus mode state machine.
+    /// Determines whether to process consensus messages (Consensus mode) or
+    /// defer them while catching up (Blocksync mode).
+    pub(crate) consensus_mode: Arc<RwLock<ConsensusMode>>,
 }
 
 impl ChainActor {
@@ -250,6 +272,8 @@ impl ChainActor {
             tendermint_sync_validator: None,
             // Future height vote tracking for sync detection
             future_height_tracker: Arc::new(RwLock::new(FutureHeightTracker::new())),
+            // Start in Blocksync mode - transition to Consensus after sync completes
+            consensus_mode: Arc::new(RwLock::new(ConsensusMode::Blocksync)),
         }
     }
 
@@ -350,6 +374,96 @@ impl ChainActor {
     /// Set engine actor address
     pub fn set_engine_actor(&mut self, addr: Addr<EngineActor>) {
         self.engine_actor = Some(addr);
+    }
+
+    // =========================================================================
+    // Consensus Mode Transitions (TM-B5 Fix)
+    // =========================================================================
+
+    /// Transition to Consensus mode after sync completion.
+    ///
+    /// Called when node reaches network tip and should participate in consensus.
+    /// This resumes the TendermintDriver and resets the future height tracker.
+    ///
+    /// # Arguments
+    /// * `height` - The height at which to resume consensus
+    /// * `correlation_id` - Tracing correlation ID
+    pub async fn enter_consensus_mode(&self, height: u64, correlation_id: Uuid) {
+        let mut mode = self.consensus_mode.write().await;
+        if *mode == ConsensusMode::Blocksync {
+            *mode = ConsensusMode::Consensus;
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                "Entered Consensus mode - resuming participation"
+            );
+
+            // Reset future height tracker since we're now caught up
+            self.future_height_tracker.write().await.reset();
+
+            // Resume TendermintDriver
+            if let Some(ref driver) = self.tendermint_driver {
+                driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
+                    height,
+                });
+            }
+        } else {
+            debug!(
+                correlation_id = %correlation_id,
+                "Already in Consensus mode"
+            );
+        }
+    }
+
+    /// Transition to Blocksync mode when node falls behind.
+    ///
+    /// Called when node detects it's behind network height (via future height
+    /// votes, NewRound announcements, or sync health checks). This pauses
+    /// consensus to prevent the node from cycling rounds at the wrong height.
+    ///
+    /// # Arguments
+    /// * `correlation_id` - Tracing correlation ID
+    pub async fn enter_blocksync_mode(&self, correlation_id: Uuid) {
+        let mut mode = self.consensus_mode.write().await;
+        if *mode == ConsensusMode::Consensus {
+            *mode = ConsensusMode::Blocksync;
+            info!(
+                correlation_id = %correlation_id,
+                "Entered Blocksync mode - pausing consensus participation"
+            );
+
+            // Pause TendermintDriver
+            if let Some(ref driver) = self.tendermint_driver {
+                driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Pause);
+            }
+        } else {
+            debug!(
+                correlation_id = %correlation_id,
+                "Already in Blocksync mode"
+            );
+        }
+    }
+
+    /// Check if currently in Consensus mode.
+    pub async fn is_consensus_mode(&self) -> bool {
+        *self.consensus_mode.read().await == ConsensusMode::Consensus
+    }
+
+    /// Get current consensus mode.
+    pub async fn get_consensus_mode(&self) -> ConsensusMode {
+        *self.consensus_mode.read().await
+    }
+
+    /// Get current Tendermint height from state machine.
+    /// Returns 0 if Tendermint is not configured.
+    pub async fn get_tendermint_height(&self) -> Result<u64, ChainError> {
+        if let Some(ref tm_state) = self.tendermint_state {
+            let state = tm_state.read().await;
+            Ok(state.height)
+        } else {
+            // Not configured - return storage height as fallback
+            Ok(self.state.get_height().await)
+        }
     }
 
     /// Record activity and update metrics
@@ -860,7 +974,9 @@ impl ChainActor {
             }
         };
 
-        const HEALTH_THRESHOLD: u64 = 10;
+        // TM-B5 Fix: Lowered from 10 to 1 to detect single-block lag
+        // This ensures nodes stuck 1 block behind are detected quickly
+        const HEALTH_THRESHOLD: u64 = 1;
 
         if network_height > storage_height + HEALTH_THRESHOLD {
             warn!(

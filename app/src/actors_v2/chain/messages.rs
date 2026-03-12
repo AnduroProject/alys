@@ -143,6 +143,16 @@ pub enum ChainMessage {
         block_hash: H256,
         correlation_id: Uuid,
     },
+
+    /// NewRound announcement from network peer (TM-B5 Fix)
+    /// Used for additional sync detection when a peer announces a round at a height
+    /// we haven't reached yet.
+    TendermintNewRoundAnnouncement {
+        height: u64,
+        round: u32,
+        peer_id: Option<String>,
+        correlation_id: Option<Uuid>,
+    },
 }
 
 /// ChainManager interface messages (for future EngineActor/AuxPowActor coordination)

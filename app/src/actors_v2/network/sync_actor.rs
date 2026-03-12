@@ -2086,12 +2086,12 @@ mod bootstrap_tests {
             assert_eq!(s.determine_sync_state(), true); // Syncing
         }
 
-        // Case: Target known, caught up
+        // Case: Target known, caught up (exactly at target)
         {
             let mut s = actor.state.write().unwrap();
-            s.current_height = 19;
+            s.current_height = 20;  // Must be at target since SYNC_THRESHOLD = 0
             s.target_height = 20;
-            assert_eq!(s.determine_sync_state(), false); // Not syncing (within threshold)
+            assert_eq!(s.determine_sync_state(), false); // Not syncing (at target)
         }
     }
 

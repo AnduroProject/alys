@@ -2206,7 +2206,15 @@ impl NetworkActor {
                     highest_known_round = highest_known_round,
                     "Received Tendermint new round announcement"
                 );
-                // TODO: Forward to ChainActor for round sync
+
+                // TM-B5 Fix: Forward to ChainActor for sync detection
+                // If peer announces a height we haven't reached, it indicates we're behind
+                chain_actor.do_send(crate::actors_v2::chain::messages::ChainMessage::TendermintNewRoundAnnouncement {
+                    height,
+                    round,
+                    peer_id: Some(source_peer.clone()),
+                    correlation_id: Some(uuid::Uuid::new_v4()),
+                });
             }
 
             TendermintMessage::BlockRequest { height } => {
