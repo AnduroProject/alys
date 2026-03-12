@@ -30,10 +30,11 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::tendermint::{
-    check_for_equivocation, verify_future_proposal, verify_proposal, verify_vote, BlockHash,
-    Commit, CommitSig, ConsensusAction, EquivocationEvidence, EquivocationType, FutureRoundAction,
-    GovernanceUpdate, PendingCommit, Proposal, TendermintMessage, TendermintStep,
-    TendermintValidationError, ValidatorId, Vote, VoteSet, VoteType, WALEntry,
+    check_for_equivocation, verify_future_height_proposal, verify_future_proposal, verify_proposal,
+    verify_vote, BlockHash, Commit, CommitSig, ConsensusAction, EquivocationEvidence,
+    EquivocationType, FutureRoundAction, GovernanceUpdate, PendingCommit, Proposal,
+    TendermintMessage, TendermintStep, TendermintValidationError, ValidatorId, Vote, VoteSet,
+    VoteType, WALEntry,
 };
 use std::cmp::Ordering;
 
@@ -121,6 +122,59 @@ impl ChainActor {
             let mut state = tendermint_state.write().await;
             state.new_height(height, validator_set.clone());
             state.our_validator_id = our_validator_id;
+            // Update future message store's current height
+            state.future_messages.set_current_height(height);
+        }
+
+        // Retrieve and replay any stored future height proposals for this height
+        let chain_id_str = self.config.chain_id.to_string();
+        let stored_proposals = {
+            let mut state = tendermint_state.write().await;
+            state.future_messages.take_proposals_for_height(height)
+        };
+
+        for proposal in stored_proposals {
+            // Re-validate with current validator set (may have changed)
+            if let Err(e) = verify_proposal(
+                &proposal,
+                &validator_set,
+                height,
+                proposal.round,
+                &chain_id_str,
+            ) {
+                warn!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = proposal.round,
+                    error = %e,
+                    "Stored future height proposal failed re-validation, skipping"
+                );
+                continue;
+            }
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                round = proposal.round,
+                proposer = ?proposal.proposer,
+                block_hash = %H256::from_slice(proposal.block_hash().as_bytes()),
+                "Replaying stored future height proposal"
+            );
+
+            // Store in appropriate place based on round
+            {
+                let mut state = tendermint_state.write().await;
+                if proposal.round == 0 {
+                    // Round 0 proposal goes to current_proposal
+                    state.current_proposal = Some(proposal.clone());
+                    state
+                        .proposals
+                        .insert((proposal.round, proposal.proposer), proposal);
+                } else {
+                    // Future round proposal goes to future_messages
+                    state.future_messages.store_proposal(proposal);
+                }
+            }
         }
 
         // Write WAL entry BEFORE any actions
@@ -408,7 +462,54 @@ impl ChainActor {
 
         let chain_id_str = self.config.chain_id.to_string();
 
-        // Handle future round proposals - store for later replay
+        // Handle future HEIGHT proposals - store for later replay when we reach that height
+        // This handles the case where a proposal for H+1 arrives during height transition
+        if height > current_height {
+            // Validate the proposal (correct proposer for that height/round, valid signature)
+            // Note: We use current validator set; may need re-validation at replay if set changes
+            verify_future_height_proposal(&proposal, &validator_set, current_height, &chain_id_str)
+                .map_err(|e| {
+                    warn!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        round = round,
+                        current_height = current_height,
+                        error = %e,
+                        "Future height proposal validation failed"
+                    );
+                    ChainError::Consensus(format!("Future height proposal validation failed: {}", e))
+                })?;
+
+            // Store in future messages for replay when we reach that height
+            let stored = {
+                let mut state = tendermint_state.write().await;
+                state.future_messages.store_future_height_proposal(proposal.clone())
+            };
+
+            if stored {
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    current_height = current_height,
+                    proposer = ?proposer,
+                    block_hash = %H256::from_slice(block_hash.as_bytes()),
+                    "Stored future HEIGHT proposal for later replay"
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    round = round,
+                    "Future height proposal not stored (already have one or rejected)"
+                );
+            }
+
+            // Return early - we'll process this when we reach the height
+            return Ok(H256::from_slice(block_hash.as_bytes()));
+        }
+
+        // Handle future ROUND proposals (same height) - store for later replay
         if height == current_height && round > current_round {
             // Validate the proposal for the future round (proposer correct for THAT round, valid signature)
             verify_future_proposal(

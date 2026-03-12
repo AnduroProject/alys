@@ -19,7 +19,7 @@
 
 use super::messages::{Proposal, Vote};
 use super::round_sync::{analyze_future_round_votes, two_thirds_threshold, FutureRoundAction};
-use super::types::{BlockHash, Round, ValidatorId, ValidatorSet, VoteType, VotingPower};
+use super::types::{BlockHash, Height, Round, ValidatorId, ValidatorSet, VoteType, VotingPower};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -36,6 +36,13 @@ const DEFAULT_MAX_FUTURE_ROUNDS: u32 = 20;
 /// During recovery mode, we accept votes from up to 100 rounds in the future
 /// to allow rapid catch-up to the network's current round.
 const RECOVERY_MAX_FUTURE_ROUNDS: u32 = 100;
+
+/// Default maximum number of future heights to store proposals for.
+///
+/// This allows caching proposals that arrive during height transitions.
+/// 5 heights is generous - typically only height H+1 proposals arrive
+/// during transition from H to H+1.
+const DEFAULT_MAX_FUTURE_HEIGHTS: u64 = 5;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUTURE ROUND VOTES
@@ -232,12 +239,13 @@ impl FutureRoundVotes {
 /// This is the main interface for managing future round messages. It handles:
 /// - Vote storage with automatic threshold detection
 /// - Proposal storage (one per round)
+/// - Future height proposal storage (one per height+round, replayed at height transition)
 /// - Cleanup when advancing rounds
 /// - PoLC verification for unlocking
 /// - Dynamic recovery mode for post-restart catch-up
 #[derive(Debug)]
 pub struct FutureMessageStore {
-    /// Proposals indexed by round
+    /// Proposals indexed by round (same height)
     proposals: HashMap<Round, Proposal>,
 
     /// Votes indexed by round
@@ -254,6 +262,22 @@ pub struct FutureMessageStore {
 
     /// Whether recovery mode is enabled (extended future round acceptance)
     recovery_mode: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FUTURE HEIGHT PROPOSAL STORAGE
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Proposals for future heights, indexed by (height, round).
+    ///
+    /// When a proposal arrives for height H+1 while we're at height H, we store
+    /// it here and replay it when we transition to height H+1.
+    future_height_proposals: HashMap<(Height, Round), Proposal>,
+
+    /// Current height (used for future height proposal storage/cleanup)
+    current_height: Height,
+
+    /// Maximum future heights to store proposals for
+    max_future_heights: u64,
 }
 
 impl FutureMessageStore {
@@ -266,6 +290,10 @@ impl FutureMessageStore {
             validator_set,
             max_future_rounds: DEFAULT_MAX_FUTURE_ROUNDS,
             recovery_mode: false,
+            // Future height proposal storage
+            future_height_proposals: HashMap::new(),
+            current_height: 0,
+            max_future_heights: DEFAULT_MAX_FUTURE_HEIGHTS,
         }
     }
 
@@ -344,6 +372,8 @@ impl FutureMessageStore {
         self.current_round = 0;
         self.validator_set = validator_set;
         // Note: recovery_mode is preserved across height changes
+        // Note: future_height_proposals is NOT cleared here - use set_current_height() instead
+        // so we can replay proposals when advancing to the new height
     }
 
     /// Store a vote for a future round (vote must be pre-validated!)
@@ -503,6 +533,136 @@ impl FutureMessageStore {
     /// Get the current round
     pub fn current_round(&self) -> Round {
         self.current_round
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FUTURE HEIGHT PROPOSAL METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Set the current height and clean up old future height proposals.
+    ///
+    /// This should be called at height transitions to:
+    /// 1. Update the current height
+    /// 2. Clean up proposals for heights we've passed
+    /// 3. Clean up proposals too far in the future
+    pub fn set_current_height(&mut self, height: Height) {
+        self.current_height = height;
+
+        // Clean up proposals for heights we've passed
+        self.future_height_proposals.retain(|(h, _), _| *h > height);
+
+        // Clean up proposals too far in the future
+        let max_height = height.saturating_add(self.max_future_heights);
+        self.future_height_proposals
+            .retain(|(h, _), _| *h <= max_height);
+    }
+
+    /// Get the current height
+    pub fn current_height(&self) -> Height {
+        self.current_height
+    }
+
+    /// Store a proposal from a future height.
+    ///
+    /// Proposals are stored indexed by (height, round). Only one proposal per
+    /// (height, round) is stored - the first valid one.
+    ///
+    /// # Arguments
+    ///
+    /// * `proposal` - The proposal to store (should be pre-validated!)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the proposal was stored, `false` if:
+    /// - Height is not in the future
+    /// - Height is too far in the future
+    /// - A proposal already exists for this (height, round)
+    pub fn store_future_height_proposal(&mut self, proposal: Proposal) -> bool {
+        // Proposal must be for a future height
+        if proposal.height <= self.current_height {
+            return false;
+        }
+
+        // Reject proposals too far in the future
+        if proposal.height > self.current_height.saturating_add(self.max_future_heights) {
+            debug!(
+                proposal_height = proposal.height,
+                current_height = self.current_height,
+                max_future = self.max_future_heights,
+                "Rejecting future height proposal - too far ahead"
+            );
+            return false;
+        }
+
+        let key = (proposal.height, proposal.round);
+
+        // Only store one proposal per (height, round) - first valid one wins
+        if self.future_height_proposals.contains_key(&key) {
+            debug!(
+                height = proposal.height,
+                round = proposal.round,
+                "Future height proposal not stored - already have one for this (height, round)"
+            );
+            return false;
+        }
+
+        debug!(
+            height = proposal.height,
+            round = proposal.round,
+            proposer = ?proposal.proposer,
+            "Storing future height proposal"
+        );
+
+        self.future_height_proposals.insert(key, proposal);
+        true
+    }
+
+    /// Take all stored proposals for a specific height.
+    ///
+    /// This removes the proposals from storage and returns them sorted by round.
+    /// Call this when transitioning to a new height to replay stored proposals.
+    ///
+    /// # Arguments
+    ///
+    /// * `height` - The height to get proposals for
+    ///
+    /// # Returns
+    ///
+    /// A vector of proposals for this height, sorted by round (ascending).
+    pub fn take_proposals_for_height(&mut self, height: Height) -> Vec<Proposal> {
+        // Collect all proposals for this height
+        let mut proposals: Vec<Proposal> = self
+            .future_height_proposals
+            .iter()
+            .filter(|((h, _), _)| *h == height)
+            .map(|(_, p)| p.clone())
+            .collect();
+
+        // Remove them from storage
+        self.future_height_proposals.retain(|(h, _), _| *h != height);
+
+        // Sort by round for deterministic replay order
+        proposals.sort_by_key(|p| p.round);
+
+        if !proposals.is_empty() {
+            debug!(
+                height = height,
+                count = proposals.len(),
+                "Retrieved stored future height proposals for replay"
+            );
+        }
+
+        proposals
+    }
+
+    /// Get the number of stored future height proposals
+    pub fn future_height_proposal_count(&self) -> usize {
+        self.future_height_proposals.len()
+    }
+
+    /// Check if there's a stored proposal for a specific (height, round)
+    pub fn has_future_height_proposal(&self, height: Height, round: Round) -> bool {
+        self.future_height_proposals.contains_key(&(height, round))
     }
 }
 
@@ -980,5 +1140,193 @@ mod tests {
             assert_eq!(action, FutureRoundAction::NoAction,
                 "Observer nodes shouldn't reach threshold with only 2 votes");
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FUTURE HEIGHT PROPOSAL TESTS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    fn create_test_proposal(height: Height, round: Round, proposer_idx: u8) -> Proposal {
+        use crate::block::ConsensusBlock;
+        use lighthouse_wrapper::types::MainnetEthSpec;
+
+        Proposal {
+            height,
+            round,
+            block: ConsensusBlock::<MainnetEthSpec>::default(),
+            pol_round: None,
+            proposer: ValidatorId::new(proposer_idx),
+            signature: BLSSignature::empty(),
+        }
+    }
+
+    #[test]
+    fn test_store_future_height_proposal_basic() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // Set current height to 10
+        store.set_current_height(10);
+
+        // Store a proposal for height 11, round 0
+        let proposal = create_test_proposal(11, 0, 0);
+        let stored = store.store_future_height_proposal(proposal);
+        assert!(stored, "Should store future height proposal");
+        assert_eq!(store.future_height_proposal_count(), 1);
+    }
+
+    #[test]
+    fn test_store_future_height_proposal_rejects_current_height() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // Set current height to 10
+        store.set_current_height(10);
+
+        // Try to store a proposal for current height (should be rejected)
+        let proposal = create_test_proposal(10, 0, 0);
+        let stored = store.store_future_height_proposal(proposal);
+        assert!(!stored, "Should not store proposal for current height");
+        assert_eq!(store.future_height_proposal_count(), 0);
+    }
+
+    #[test]
+    fn test_store_future_height_proposal_rejects_past_height() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // Set current height to 10
+        store.set_current_height(10);
+
+        // Try to store a proposal for past height (should be rejected)
+        let proposal = create_test_proposal(5, 0, 0);
+        let stored = store.store_future_height_proposal(proposal);
+        assert!(!stored, "Should not store proposal for past height");
+        assert_eq!(store.future_height_proposal_count(), 0);
+    }
+
+    #[test]
+    fn test_store_future_height_proposal_rejects_too_far_future() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        // Set current height to 10, max_future_heights is 5
+        store.set_current_height(10);
+
+        // Height 16 is beyond limit (10 + 5 = 15)
+        let proposal = create_test_proposal(16, 0, 0);
+        let stored = store.store_future_height_proposal(proposal);
+        assert!(!stored, "Should not store proposal too far in future");
+        assert_eq!(store.future_height_proposal_count(), 0);
+
+        // Height 15 is at the limit (should be accepted)
+        let proposal = create_test_proposal(15, 0, 0);
+        let stored = store.store_future_height_proposal(proposal);
+        assert!(stored, "Should store proposal at max future height limit");
+        assert_eq!(store.future_height_proposal_count(), 1);
+    }
+
+    #[test]
+    fn test_store_future_height_proposal_one_per_height_round() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        store.set_current_height(10);
+
+        // Store first proposal for (11, 0)
+        let proposal1 = create_test_proposal(11, 0, 0);
+        let stored1 = store.store_future_height_proposal(proposal1);
+        assert!(stored1);
+
+        // Try to store second proposal for same (11, 0) - should be rejected
+        let proposal2 = create_test_proposal(11, 0, 1); // Different proposer
+        let stored2 = store.store_future_height_proposal(proposal2);
+        assert!(!stored2, "Should not store duplicate (height, round)");
+        assert_eq!(store.future_height_proposal_count(), 1);
+
+        // Different round (11, 1) should work
+        let proposal3 = create_test_proposal(11, 1, 1);
+        let stored3 = store.store_future_height_proposal(proposal3);
+        assert!(stored3, "Should store proposal for different round");
+        assert_eq!(store.future_height_proposal_count(), 2);
+    }
+
+    #[test]
+    fn test_take_proposals_for_height() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        store.set_current_height(10);
+
+        // Store proposals for height 11 at rounds 0, 2, 1 (out of order)
+        store.store_future_height_proposal(create_test_proposal(11, 0, 0));
+        store.store_future_height_proposal(create_test_proposal(11, 2, 2));
+        store.store_future_height_proposal(create_test_proposal(11, 1, 1));
+
+        // Also store one for height 12
+        store.store_future_height_proposal(create_test_proposal(12, 0, 0));
+
+        assert_eq!(store.future_height_proposal_count(), 4);
+
+        // Take proposals for height 11
+        let proposals = store.take_proposals_for_height(11);
+
+        // Should have 3 proposals, sorted by round
+        assert_eq!(proposals.len(), 3);
+        assert_eq!(proposals[0].round, 0);
+        assert_eq!(proposals[1].round, 1);
+        assert_eq!(proposals[2].round, 2);
+
+        // Should be removed from store
+        assert_eq!(store.future_height_proposal_count(), 1);
+
+        // Taking again should return empty
+        let proposals2 = store.take_proposals_for_height(11);
+        assert!(proposals2.is_empty());
+    }
+
+    #[test]
+    fn test_set_current_height_cleans_up() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        store.set_current_height(10);
+
+        // Store proposals for heights 11, 12, 13, 14, 15
+        for h in 11..=15 {
+            store.store_future_height_proposal(create_test_proposal(h, 0, 0));
+        }
+        assert_eq!(store.future_height_proposal_count(), 5);
+
+        // Advance to height 13
+        store.set_current_height(13);
+
+        // Proposals for 11, 12, 13 should be cleaned up
+        // Only 14, 15 should remain
+        assert_eq!(store.future_height_proposal_count(), 2);
+        assert!(!store.has_future_height_proposal(11, 0));
+        assert!(!store.has_future_height_proposal(12, 0));
+        assert!(!store.has_future_height_proposal(13, 0));
+        assert!(store.has_future_height_proposal(14, 0));
+        assert!(store.has_future_height_proposal(15, 0));
+    }
+
+    #[test]
+    fn test_has_future_height_proposal() {
+        let validator_set = create_test_validator_set(4);
+        let mut store = FutureMessageStore::new(validator_set);
+
+        store.set_current_height(10);
+
+        // Initially no proposals
+        assert!(!store.has_future_height_proposal(11, 0));
+
+        // Store a proposal
+        store.store_future_height_proposal(create_test_proposal(11, 0, 0));
+
+        // Now it should exist
+        assert!(store.has_future_height_proposal(11, 0));
+        assert!(!store.has_future_height_proposal(11, 1)); // Different round
+        assert!(!store.has_future_height_proposal(12, 0)); // Different height
     }
 }

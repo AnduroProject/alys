@@ -240,6 +240,79 @@ pub fn verify_future_proposal(
     Ok(())
 }
 
+/// Validate a proposal from a future height for storage.
+///
+/// This is a relaxed validation that allows proposals for future heights
+/// to be stored and replayed when the node advances to that height.
+/// Unlike `verify_proposal`, this does NOT require height to match current.
+///
+/// # Checks
+///
+/// 1. Height is greater than current height (must be future)
+/// 2. Proposer is correct for (proposal.height, proposal.round) using round-robin selection
+/// 3. Proposer's BLS signature is valid
+///
+/// # Arguments
+///
+/// * `proposal` - The proposal to validate
+/// * `validator_set` - The validator set (assumed valid for future height)
+/// * `current_height` - The node's current height
+/// * `chain_id` - Chain identifier for domain separation
+///
+/// # Returns
+///
+/// Ok(()) if the proposal is valid for storage, Err with details if invalid.
+///
+/// # Note
+///
+/// This uses the current validator set for validation. If the validator set
+/// changes between heights, proposals may need re-validation at replay time.
+pub fn verify_future_height_proposal(
+    proposal: &Proposal,
+    validator_set: &ValidatorSet,
+    current_height: Height,
+    chain_id: &str,
+) -> Result<(), TendermintValidationError> {
+    // Check height is in the future
+    if proposal.height <= current_height {
+        return Err(TendermintValidationError::InvalidHeight {
+            expected: current_height + 1, // Indicate it should be > current
+            actual: proposal.height,
+        });
+    }
+
+    // Check validator set is not empty
+    if validator_set.is_empty() {
+        return Err(TendermintValidationError::EmptyValidatorSet);
+    }
+
+    // Check proposer is correct for this height and round
+    let expected_proposer = validator_set.get_proposer(proposal.height, proposal.round);
+    if proposal.proposer != expected_proposer {
+        return Err(TendermintValidationError::WrongProposer {
+            expected: expected_proposer,
+            actual: proposal.proposer,
+            height: proposal.height,
+            round: proposal.round,
+        });
+    }
+
+    // Get public key for proposer
+    let public_key = validator_set
+        .get_public_key(&proposal.proposer)
+        .map_err(|_| TendermintValidationError::PublicKeyNotFound(proposal.proposer))?;
+
+    // Verify signature
+    if !proposal.verify_signature(public_key, chain_id) {
+        return Err(TendermintValidationError::InvalidSignature {
+            validator: proposal.proposer,
+            message_type: "Proposal".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 /// Validate a single vote (prevote or precommit).
 ///
 /// # Checks
@@ -728,5 +801,116 @@ mod tests {
             root_mainnet, root_testnet,
             "Signing roots must differ for different chain_ids (domain separation)"
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FUTURE HEIGHT PROPOSAL VALIDATION TESTS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_verify_future_height_proposal_rejects_current_height() {
+        use crate::actors_v2::chain::tendermint::messages::Proposal;
+        use crate::block::ConsensusBlock;
+        use lighthouse_wrapper::types::MainnetEthSpec;
+
+        let validator_set = create_mock_validator_set();
+        let current_height = 100;
+
+        // Proposal for current height should be rejected
+        let proposal = Proposal {
+            height: current_height, // Same as current
+            round: 0,
+            block: ConsensusBlock::<MainnetEthSpec>::default(),
+            pol_round: None,
+            proposer: ValidatorId::new(0),
+            signature: Signature::empty(),
+        };
+
+        let result = verify_future_height_proposal(&proposal, &validator_set, current_height, TEST_CHAIN_ID);
+        assert!(matches!(
+            result,
+            Err(TendermintValidationError::InvalidHeight { .. })
+        ));
+    }
+
+    #[test]
+    fn test_verify_future_height_proposal_rejects_past_height() {
+        use crate::actors_v2::chain::tendermint::messages::Proposal;
+        use crate::block::ConsensusBlock;
+        use lighthouse_wrapper::types::MainnetEthSpec;
+
+        let validator_set = create_mock_validator_set();
+        let current_height = 100;
+
+        // Proposal for past height should be rejected
+        let proposal = Proposal {
+            height: 50, // Past height
+            round: 0,
+            block: ConsensusBlock::<MainnetEthSpec>::default(),
+            pol_round: None,
+            proposer: ValidatorId::new(0),
+            signature: Signature::empty(),
+        };
+
+        let result = verify_future_height_proposal(&proposal, &validator_set, current_height, TEST_CHAIN_ID);
+        assert!(matches!(
+            result,
+            Err(TendermintValidationError::InvalidHeight { .. })
+        ));
+    }
+
+    #[test]
+    fn test_verify_future_height_proposal_rejects_wrong_proposer() {
+        use crate::actors_v2::chain::tendermint::messages::Proposal;
+        use crate::block::ConsensusBlock;
+        use lighthouse_wrapper::types::MainnetEthSpec;
+
+        let validator_set = create_mock_validator_set();
+        let current_height = 100;
+        let future_height = 101;
+
+        // Wrong proposer for (height=101, round=0)
+        let expected_proposer = validator_set.get_proposer(future_height, 0);
+        let wrong_proposer = ValidatorId::new((expected_proposer.index() + 1) % 3);
+
+        let proposal = Proposal {
+            height: future_height,
+            round: 0,
+            block: ConsensusBlock::<MainnetEthSpec>::default(),
+            pol_round: None,
+            proposer: wrong_proposer,
+            signature: Signature::empty(),
+        };
+
+        let result = verify_future_height_proposal(&proposal, &validator_set, current_height, TEST_CHAIN_ID);
+        assert!(matches!(
+            result,
+            Err(TendermintValidationError::WrongProposer { .. })
+        ));
+    }
+
+    #[test]
+    fn test_verify_future_height_proposal_rejects_empty_validator_set() {
+        use crate::actors_v2::chain::tendermint::messages::Proposal;
+        use crate::block::ConsensusBlock;
+        use lighthouse_wrapper::types::MainnetEthSpec;
+
+        let empty_set = ValidatorSet::with_equal_power(vec![]);
+        let current_height = 100;
+
+        let proposal = Proposal {
+            height: 101,
+            round: 0,
+            block: ConsensusBlock::<MainnetEthSpec>::default(),
+            pol_round: None,
+            proposer: ValidatorId::new(0),
+            signature: Signature::empty(),
+        };
+
+        let result = verify_future_height_proposal(&proposal, &empty_set, current_height, TEST_CHAIN_ID);
+        assert!(matches!(
+            result,
+            Err(TendermintValidationError::EmptyValidatorSet)
+        ));
     }
 }

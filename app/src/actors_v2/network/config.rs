@@ -55,10 +55,19 @@ impl Default for NetworkConfig {
             max_connections: 1000,
             connection_timeout: Duration::from_secs(30),
             gossip_topics: vec![
-                "alys/blocks".to_string(),          // Regular block gossip
-                "alys/blocks/priority".to_string(), // Priority block gossip
-                "alys/transactions".to_string(),    // Transaction gossip
-                "alys/auxpow".to_string(),          // Phase 4: AuxPoW mining coordination
+                // Block gossip
+                "alys/blocks".to_string(),
+                "alys/blocks/priority".to_string(),
+                "alys/transactions".to_string(),
+                "alys/auxpow".to_string(),
+                // Tendermint consensus - subscribe at startup to receive messages immediately
+                // Without these, nodes that restart won't receive consensus messages until
+                // they broadcast something themselves (causing stuck consensus)
+                "alys-tendermint-proposals".to_string(),
+                "alys-tendermint-votes".to_string(),
+                "alys-tendermint-timeouts".to_string(),
+                "alys-tendermint-evidence".to_string(),
+                "alys-tendermint-newround".to_string(),
             ],
             message_size_limit: 1024 * 1024, // 1MB
             discovery_interval: Duration::from_secs(60),

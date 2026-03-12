@@ -81,8 +81,8 @@ pub use wal::{ConsensusWAL, RecoveredState, WALConfig, WALEntry, WALError};
 // Validation module
 pub mod validation;
 pub use validation::{
-    check_for_equivocation, validate_last_commit, verify_commit, verify_future_proposal,
-    verify_proposal, verify_vote, TendermintValidationError,
+    check_for_equivocation, validate_last_commit, verify_commit, verify_future_height_proposal,
+    verify_future_proposal, verify_proposal, verify_vote, TendermintValidationError,
 };
 
 // Round synchronization (future round handling)
@@ -108,8 +108,8 @@ pub mod prelude {
     pub use super::timeout::{TimeoutConfig, TimeoutScheduler};
     pub use super::types::*;
     pub use super::validation::{
-        check_for_equivocation, validate_last_commit, verify_commit, verify_future_proposal,
-        verify_proposal, verify_vote, TendermintValidationError,
+        check_for_equivocation, validate_last_commit, verify_commit, verify_future_height_proposal,
+        verify_future_proposal, verify_proposal, verify_vote, TendermintValidationError,
     };
     pub use super::vote_set::VoteSet;
     pub use super::wal::ConsensusWAL;
