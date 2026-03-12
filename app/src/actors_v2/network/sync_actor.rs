@@ -146,7 +146,7 @@ impl SyncActorState {
 
     /// Determine if we're in active sync or bootstrap mode
     fn determine_sync_state(&self) -> bool {
-        const SYNC_THRESHOLD: u64 = 2;
+        const SYNC_THRESHOLD: u64 = 0;
 
         // Case 1: Target height known → Simple comparison
         if self.target_height > 0 {
@@ -704,7 +704,7 @@ impl Actor for SyncActor {
                 let mut s = state.write().unwrap();
 
                 // Check if sync is complete
-                const SYNC_THRESHOLD: u64 = 2;
+                const SYNC_THRESHOLD: u64 = 0;
 
                 // Sync is complete when:
                 // 1. Sync is running and in active sync state (RequestingBlocks or ProcessingBlocks)
@@ -894,7 +894,7 @@ impl Handler<SyncMessage> for SyncActor {
                         );
 
                         // Check if already synced
-                        const SYNC_THRESHOLD: u64 = 2;
+                        const SYNC_THRESHOLD: u64 = 0;
                         if s.target_height > 0
                             && s.current_height + SYNC_THRESHOLD >= s.target_height
                         {
@@ -949,7 +949,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                                         // Transition based on peer availability and sync status
                                         if !s.sync_peers.is_empty() {
-                                            const SYNC_THRESHOLD: u64 = 2;
+                                            const SYNC_THRESHOLD: u64 = 0;
 
                                             if s.target_height == 0 {
                                                 // target_height=0 means we haven't queried the network yet
@@ -1484,7 +1484,7 @@ impl Handler<SyncMessage> for SyncActor {
 
                             // Transition based on sync status
                             if s.is_running && s.sync_state == SyncState::DiscoveringPeers {
-                                const SYNC_THRESHOLD: u64 = 2;
+                                const SYNC_THRESHOLD: u64 = 0;
 
                                 if s.target_height == 0 {
                                     // target_height=0 means we haven't queried the network yet
