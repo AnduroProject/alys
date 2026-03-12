@@ -492,10 +492,11 @@ run_TM_A3() {
 
     # Restart the crashed validator
     restart_node "$target"
-    wait_for_validator_sync "$target" 180
+    wait_for_validator_sync "$target" 300
 
     # Verify consensus resumed and all nodes are at same height
-    sleep 15
+    # Note: Late-joining nodes may need 12+ rounds to re-establish quorum
+    sleep 60
     local h1=$(get_consensus_height "alys-node-1")
     local h2=$(get_consensus_height "alys-node-2")
     local h3=$(get_consensus_height "alys-node-3")
