@@ -32,7 +32,8 @@ use lighthouse_wrapper::types::MainnetEthSpec;
 
 // Tendermint imports
 use super::tendermint::{
-    Commit, ConsensusWAL, TendermintState, TimeoutEvent, TimeoutScheduler, ValidatorSet,
+    Commit, ConsensusWAL, TendermintState, TendermintStep, TimeoutEvent, TimeoutScheduler,
+    ValidatorSet,
 };
 
 pub(crate) const DEFAULT_MAX_PENDING_IMPORTS: usize = 1000;
@@ -463,6 +464,17 @@ impl ChainActor {
         } else {
             // Not configured - return storage height as fallback
             Ok(self.state.get_height().await)
+        }
+    }
+
+    /// Get current Tendermint height and step atomically.
+    /// Returns (height, step). Returns (storage_height, Propose) if Tendermint is not configured.
+    pub async fn get_tendermint_height_and_step(&self) -> Result<(u64, TendermintStep), ChainError> {
+        if let Some(ref tm_state) = self.tendermint_state {
+            let state = tm_state.read().await;
+            Ok((state.height, state.step))
+        } else {
+            Ok((self.state.get_height().await, TendermintStep::Propose))
         }
     }
 

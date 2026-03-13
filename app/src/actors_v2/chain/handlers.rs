@@ -17,6 +17,7 @@ use super::{
         AuxPowParams, BlockSource, ChainManagerMessage, ChainManagerResponse, ChainMessage,
         ChainResponse, CreateAuxBlock, SubmitAuxBlock,
     },
+    tendermint::TendermintStep,
     ChainActor, ChainError,
 };
 
@@ -2349,23 +2350,47 @@ impl Handler<ChainMessage> for ChainActor {
                 let correlation_id = correlation_id.unwrap_or_else(uuid::Uuid::new_v4);
 
                 Box::pin(async move {
-                    // TM-B5 Fix: Check if peer is at a height we haven't reached
-                    let current_height = actor.get_tendermint_height().await.unwrap_or(0);
+                    // Get current height AND step atomically to avoid race condition
+                    let (current_height, current_step) = actor
+                        .get_tendermint_height_and_step()
+                        .await
+                        .unwrap_or((0, TendermintStep::Propose));
 
-                    if height > current_height {
+                    // Determine if we should enter blocksync
+                    let should_sync = if height > current_height {
+                        // TM-B5 Fix: Don't enter blocksync if we're in Commit step for height H
+                        // and receive NewRound(H+1) - we're about to advance naturally
+                        if height == current_height + 1 && current_step == TendermintStep::Commit {
+                            debug!(
+                                correlation_id = %correlation_id,
+                                announced_height = height,
+                                current_height = current_height,
+                                current_step = ?current_step,
+                                peer_id = ?peer_id,
+                                "NewRound(H+1) received while in Commit step - not behind, continuing commit"
+                            );
+                            false
+                        } else {
+                            // Genuine gap: either gap > 1, or we're not in Commit step
+                            true
+                        }
+                    } else {
+                        false
+                    };
+
+                    if should_sync {
                         info!(
                             correlation_id = %correlation_id,
                             announced_height = height,
                             announced_round = round,
                             current_height = current_height,
+                            current_step = ?current_step,
                             peer_id = ?peer_id,
                             "NewRound announcement indicates we're behind - triggering sync"
                         );
 
-                        // Enter blocksync mode and trigger sync
                         actor.enter_blocksync_mode(correlation_id).await;
 
-                        // Trigger sync to catch up
                         if let Some(ref sync_actor) = actor.sync_actor {
                             sync_actor.do_send(crate::actors_v2::network::SyncMessage::StartSync {
                                 start_height: current_height,
@@ -2377,7 +2402,7 @@ impl Handler<ChainMessage> for ChainActor {
                             correlation_id = %correlation_id,
                             announced_height = height,
                             current_height = current_height,
-                            "NewRound announcement for current/past height - ignoring"
+                            "NewRound for current/past height or expected advance - ignoring"
                         );
                     }
 
