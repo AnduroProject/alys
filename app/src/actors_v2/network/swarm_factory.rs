@@ -121,8 +121,11 @@ fn create_behaviour(
     let gossipsub_config = gossipsub::ConfigBuilder::default()
         .max_transmit_size(config.message_size_limit)
         .validation_mode(gossipsub::ValidationMode::Strict)
-        // Small network mesh parameters (minimum 1 peer)
-        .mesh_n_low(1) // Minimum peers in mesh (default: 4)
+        // Small network mesh parameters
+        // TM-B1: Increased mesh_n_low from 1 to 2 for resilience
+        // With mesh_n_low=1, single peer loss doesn't trigger repair
+        // With mesh_n_low=2, GossipSub actively seeks more peers when mesh drops below 2
+        .mesh_n_low(2) // Minimum peers in mesh (default: 4)
         .mesh_n(2) // Target peers in mesh (default: 6)
         .mesh_n_high(3) // Max peers in mesh (default: 12)
         .mesh_outbound_min(1) // Minimum outbound peers (default: 2)

@@ -98,6 +98,13 @@ pub enum SwarmCommand {
         peer_id: PeerId,
         reason: String,
     },
+    /// TM-B1: Actively dial a peer to establish bidirectional connection
+    /// Used for mesh recovery after network partition when hub-and-spoke
+    /// topology forms instead of full mesh
+    DialPeer {
+        peer_id: PeerId,
+        addresses: Vec<Multiaddr>,
+    },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -266,6 +273,11 @@ pub struct NetworkActor {
     /// TM-B3: Track consecutive failed ReformMesh attempts per peer
     /// Incremented when mesh verification fails, cleared on successful gossip receipt
     reform_failure_count: HashMap<PeerId, u32>,
+    /// TM-B1: Known peer addresses for active dialing after partition recovery
+    /// Maps peer_id -> list of known addresses for that peer
+    /// Populated from ConnectionEstablished events and used to actively dial
+    /// peers we've lost connection to during mesh recovery
+    peer_addresses: HashMap<PeerId, Vec<Multiaddr>>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -326,6 +338,7 @@ impl NetworkActor {
             pending_mesh_reforms: HashMap::new(),
             last_peer_gossip: HashMap::new(),
             reform_failure_count: HashMap::new(),
+            peer_addresses: HashMap::new(),
         })
     }
 
@@ -588,6 +601,34 @@ impl NetworkActor {
             let Some(cmd_tx) = actor.swarm_cmd_tx.as_ref() else {
                 return;
             };
+
+            // TM-B1: Dial any known peers we're not currently connected to
+            // This fixes hub-and-spoke topology after partition recovery where
+            // Node2 only connects to Node1 but never dials Node3
+            let connected_peer_ids: HashSet<PeerId> = actor
+                .peer_manager
+                .get_connected_peers()
+                .keys()
+                .filter_map(|s| s.parse::<PeerId>().ok())
+                .collect();
+
+            for (peer_id, addresses) in &actor.peer_addresses {
+                // Skip if already connected or no addresses known
+                if connected_peer_ids.contains(peer_id) || addresses.is_empty() {
+                    continue;
+                }
+
+                tracing::info!(
+                    peer_id = %peer_id,
+                    address_count = addresses.len(),
+                    "Dialing known peer we're not connected to for mesh recovery"
+                );
+
+                let _ = cmd_tx.try_send(SwarmCommand::DialPeer {
+                    peer_id: *peer_id,
+                    addresses: addresses.clone(),
+                });
+            }
 
             // Get all connected V2 peers
             let v2_peer_ids = actor.peer_manager.get_v2_peer_ids();
@@ -931,6 +972,19 @@ impl NetworkActor {
                     self.peer_manager.add_peer(
                         peer_id.to_string(),
                         endpoint.get_remote_address().to_string(),
+                    );
+
+                    // TM-B1: Store peer address for active dialing during mesh recovery
+                    // Only store addresses from outgoing connections (reliable listen ports)
+                    let addr = endpoint.get_remote_address().clone();
+                    self.peer_addresses
+                        .entry(peer_id)
+                        .or_insert_with(Vec::new)
+                        .push(addr);
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        address = %endpoint.get_remote_address(),
+                        "Stored peer address for mesh recovery dialing"
                     );
                 } else {
                     // Incoming connection - don't overwrite good addresses with ephemeral ports
@@ -2818,6 +2872,43 @@ impl Handler<NetworkMessage> for NetworkActor {
                                             "Force disconnecting peer for mesh recovery"
                                         );
                                         let _ = swarm.disconnect_peer_id(peer_id);
+                                    }
+
+                                    Some(SwarmCommand::DialPeer { peer_id, addresses }) => {
+                                        // TM-B1: Actively dial a peer for mesh recovery
+                                        // Used when hub-and-spoke topology forms after partition
+                                        // instead of full mesh (e.g., Node2 never dials Node3)
+                                        tracing::info!(
+                                            peer_id = %peer_id,
+                                            address_count = addresses.len(),
+                                            "Actively dialing peer for mesh recovery"
+                                        );
+
+                                        for addr in addresses {
+                                            // Try dialing with peer_id to establish connection
+                                            let dial_opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
+                                                .addresses(vec![addr.clone()])
+                                                .build();
+
+                                            match swarm.dial(dial_opts) {
+                                                Ok(_) => {
+                                                    tracing::debug!(
+                                                        peer_id = %peer_id,
+                                                        address = %addr,
+                                                        "Initiated dial to peer"
+                                                    );
+                                                    break; // Only need one successful dial initiation
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        peer_id = %peer_id,
+                                                        address = %addr,
+                                                        error = %e,
+                                                        "Failed to dial peer address"
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
 
                                     None => {
