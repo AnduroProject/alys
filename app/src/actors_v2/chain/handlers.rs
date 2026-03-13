@@ -2358,20 +2358,26 @@ impl Handler<ChainMessage> for ChainActor {
 
                     // Determine if we should enter blocksync
                     let should_sync = if height > current_height {
-                        // TM-B5 Fix: Don't enter blocksync if we're in Commit step for height H
-                        // and receive NewRound(H+1) - we're about to advance naturally
-                        if height == current_height + 1 && current_step == TendermintStep::Commit {
+                        // TM-B5 Fix: Don't enter blocksync if we're in Precommit or Commit step
+                        // for height H and receive NewRound(H+1). In Precommit, we're gathering
+                        // 2/3+ signatures and about to commit. In Commit, we're finalizing the
+                        // block. Either way, we'll naturally advance to H+1 shortly - entering
+                        // blocksync would be incorrect.
+                        if height == current_height + 1
+                            && (current_step == TendermintStep::Commit
+                                || current_step == TendermintStep::Precommit)
+                        {
                             debug!(
                                 correlation_id = %correlation_id,
                                 announced_height = height,
                                 current_height = current_height,
                                 current_step = ?current_step,
                                 peer_id = ?peer_id,
-                                "NewRound(H+1) received while in Commit step - not behind, continuing commit"
+                                "NewRound(H+1) received while in Precommit/Commit step - not behind, continuing"
                             );
                             false
                         } else {
-                            // Genuine gap: either gap > 1, or we're not in Commit step
+                            // Genuine gap: either gap > 1, or we're not in Precommit/Commit step
                             true
                         }
                     } else {
