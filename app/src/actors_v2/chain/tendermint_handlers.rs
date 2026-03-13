@@ -2872,6 +2872,21 @@ impl ChainActor {
             }
         };
 
+        // CRITICAL FIX (TM-B3): Set step to Commit BEFORE blocking operations.
+        // This prevents precommit timeouts from triggering during engine execution
+        // or storage commit. The timeout handler checks current_step and will ignore
+        // precommit timeouts when step is already Commit.
+        //
+        // Bug scenario without this fix:
+        // 1. WAL writes Commit entry
+        // 2. Engine execution starts (BLOCKING - 2+ seconds)
+        // 3. Precommit timeout arrives, state is still Precommit
+        // 4. Timeout handler advances to round+1, corrupting consensus
+        {
+            let mut state = tendermint_state.write().await;
+            state.set_step(TendermintStep::Commit);
+        }
+
         // 3. Write commit WAL entry BEFORE any state changes
         // Also write NewRound entry for H+1 to ensure clean recovery
         {
@@ -2968,11 +2983,8 @@ impl ChainActor {
             *guard = commit.clone();
         }
 
-        // 8. Advance state to Commit step
-        {
-            let mut state = tendermint_state.write().await;
-            state.set_step(TendermintStep::Commit);
-        }
+        // 8. [REMOVED - TM-B3]: set_step(Commit) now happens earlier (before blocking ops)
+        // to prevent precommit timeouts from corrupting state during engine execution.
 
         // 9. Notify network peers of committed block
         if let Some(ref network) = self.network_actor {
