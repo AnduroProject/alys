@@ -91,6 +91,13 @@ pub enum SwarmCommand {
         attempt: u32,
         response_tx: tokio::sync::oneshot::Sender<Result<bool, String>>,
     },
+    /// TM-B3: Force disconnect for stale mesh recovery
+    /// When gossip stalls despite TCP connection being up, forcibly disconnect
+    /// to allow fresh connection and mesh formation
+    ForceDisconnect {
+        peer_id: PeerId,
+        reason: String,
+    },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -253,6 +260,12 @@ pub struct NetworkActor {
     /// Maps peer_id -> topics that need mesh reformation
     /// ReformMesh is deferred until PeerIdentified event to avoid race condition
     pending_mesh_reforms: HashMap<PeerId, Vec<String>>,
+    /// TM-B3: Per-peer last gossip message timestamp for stall detection
+    /// Updated whenever we receive a gossip message from a peer
+    last_peer_gossip: HashMap<PeerId, Instant>,
+    /// TM-B3: Track consecutive failed ReformMesh attempts per peer
+    /// Incremented when mesh verification fails, cleared on successful gossip receipt
+    reform_failure_count: HashMap<PeerId, u32>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -311,6 +324,8 @@ impl NetworkActor {
             startup_time: Instant::now(),
             recent_mesh_reforms: HashMap::new(),
             pending_mesh_reforms: HashMap::new(),
+            last_peer_gossip: HashMap::new(),
+            reform_failure_count: HashMap::new(),
         })
     }
 
@@ -556,13 +571,18 @@ impl NetworkActor {
         });
     }
 
-    /// TM-B2: Periodic mesh health check - verifies all connected V2 peers are in mesh
+    /// TM-B2/TM-B3: Periodic mesh health check - verifies all connected V2 peers are in mesh
     ///
     /// This provides defense-in-depth for mesh formation failures. Even if the deferred
     /// ReformMesh fails, this background check will detect and fix stale mesh state
     /// within 30 seconds.
+    ///
+    /// TM-B3 enhancement: Also detects gossip stall (connected but no messages) and
+    /// forces disconnect after multiple failed reform attempts to allow fresh connection.
     fn schedule_periodic_mesh_health_check(&self, ctx: &mut Context<Self>) {
         const MESH_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+        const GOSSIP_STALL_THRESHOLD: Duration = Duration::from_secs(60);
+        const MAX_REFORM_ATTEMPTS_BEFORE_DISCONNECT: u32 = 3;
 
         ctx.run_interval(MESH_HEALTH_CHECK_INTERVAL, |actor, _ctx| {
             let Some(cmd_tx) = actor.swarm_cmd_tx.as_ref() else {
@@ -587,6 +607,39 @@ impl NetworkActor {
                 let Ok(peer_id) = peer_id_str.parse::<PeerId>() else {
                     continue;
                 };
+
+                // TM-B3: Check for gossip stall - connected but no messages for > threshold
+                let gossip_stalled = actor
+                    .last_peer_gossip
+                    .get(&peer_id)
+                    .map(|t| t.elapsed() > GOSSIP_STALL_THRESHOLD)
+                    .unwrap_or(false);
+
+                let reform_attempts = actor
+                    .reform_failure_count
+                    .get(&peer_id)
+                    .copied()
+                    .unwrap_or(0);
+
+                // If gossip has stalled and we've exceeded reform attempts, force disconnect
+                if gossip_stalled && reform_attempts >= MAX_REFORM_ATTEMPTS_BEFORE_DISCONNECT {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        reform_attempts = reform_attempts,
+                        stall_duration_secs = actor.last_peer_gossip.get(&peer_id)
+                            .map(|t| t.elapsed().as_secs())
+                            .unwrap_or(0),
+                        "Gossip stall detected - forcing disconnect for mesh recovery"
+                    );
+
+                    let _ = cmd_tx.try_send(SwarmCommand::ForceDisconnect {
+                        peer_id,
+                        reason: "gossip_stall_recovery".to_string(),
+                    });
+                    actor.reform_failure_count.remove(&peer_id);
+                    actor.last_peer_gossip.remove(&peer_id);
+                    continue;
+                }
 
                 // Check cooldown to avoid spamming - skip if we reformed recently
                 if let Some(last_reform) = actor.recent_mesh_reforms.get(&peer_id) {
@@ -642,6 +695,13 @@ impl NetworkActor {
                             }
                         }
                     });
+
+                    // TM-B3: Increment failure count preemptively (will be cleared on success)
+                    // This tracks how many times we've attempted to reform mesh without
+                    // receiving any gossip messages, indicating potential stall
+                    if gossip_stalled {
+                        *actor.reform_failure_count.entry(peer_id).or_insert(0) += 1;
+                    }
                 }
             }
         });
@@ -1022,7 +1082,14 @@ impl NetworkActor {
             }
 
             SwarmEvent::ExpiredListenAddr { address, .. } => {
-                tracing::info!(address = %address, "Expired listen address");
+                tracing::warn!(
+                    address = %address,
+                    "Listen address expired - clearing mesh reform cooldowns for recovery"
+                );
+                // TM-B3: Clear cooldowns to allow immediate mesh health check
+                // Listen address expiry often indicates network issues that may have
+                // disrupted gossip mesh state
+                self.recent_mesh_reforms.clear();
             }
 
             SwarmEvent::ListenerClosed { addresses, .. } => {
@@ -1166,6 +1233,13 @@ impl NetworkActor {
 
                 self.metrics.record_message_received(data.len());
                 self.metrics.record_gossip_received();
+
+                // TM-B3: Track last gossip received from this peer for stall detection
+                if let Ok(peer_id) = source_peer.parse::<PeerId>() {
+                    self.last_peer_gossip.insert(peer_id, Instant::now());
+                    // Clear failure count on successful gossip receipt
+                    self.reform_failure_count.remove(&peer_id);
+                }
 
                 // Phase 1: Forward block gossip messages to ChainActor for import
                 if topic.contains("block") {
@@ -2734,6 +2808,16 @@ impl Handler<NetworkMessage> for NetworkActor {
                                         }
 
                                         let _ = response_tx.send(Ok(all_in_mesh));
+                                    }
+
+                                    Some(SwarmCommand::ForceDisconnect { peer_id, reason }) => {
+                                        // TM-B3: Force disconnect for stale mesh recovery
+                                        tracing::warn!(
+                                            peer_id = %peer_id,
+                                            reason = %reason,
+                                            "Force disconnecting peer for mesh recovery"
+                                        );
+                                        let _ = swarm.disconnect_peer_id(peer_id);
                                     }
 
                                     None => {
