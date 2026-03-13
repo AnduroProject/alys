@@ -70,6 +70,8 @@ pub enum AlysNetworkBehaviourEvent {
     MdnsPeerExpired { peer_id: String },
     /// Remote peer subscribed to a gossipsub topic (used for bidirectional mesh recovery)
     GossipPeerSubscribed { peer_id: String, topic: String },
+    /// Internal event that should be ignored (placeholder for unhandled events)
+    Ignored,
 }
 
 impl AlysNetworkBehaviour {
@@ -199,12 +201,7 @@ impl From<libp2p::gossipsub::Event> for AlysNetworkBehaviourEvent {
             }
             _ => {
                 tracing::trace!("Unhandled gossipsub event: {:?}", event);
-                // For unhandled events, return a dummy event
-                AlysNetworkBehaviourEvent::PeerIdentified {
-                    peer_id: String::new(),
-                    protocols: vec![],
-                    addresses: vec![],
-                }
+                AlysNetworkBehaviourEvent::Ignored
             }
         }
     }
@@ -222,11 +219,7 @@ impl From<libp2p::identify::Event> for AlysNetworkBehaviourEvent {
             }
             _ => {
                 tracing::trace!("Unhandled identify event: {:?}", event);
-                AlysNetworkBehaviourEvent::PeerIdentified {
-                    peer_id: String::new(),
-                    protocols: vec![],
-                    addresses: vec![],
-                }
+                AlysNetworkBehaviourEvent::Ignored
             }
         }
     }
@@ -236,32 +229,43 @@ impl From<libp2p::mdns::Event> for AlysNetworkBehaviourEvent {
     fn from(event: libp2p::mdns::Event) -> Self {
         match event {
             libp2p::mdns::Event::Discovered(peers) => {
-                // Return first discovered peer (simplified)
                 if let Some((peer_id, addresses)) = peers.into_iter().next() {
-                    AlysNetworkBehaviourEvent::MdnsPeerDiscovered {
-                        peer_id: peer_id.to_string(),
-                        addresses: addresses.iter().map(|a| a.to_string()).collect(),
+                    // Filter to only include complete multiaddrs with transport protocol
+                    // This prevents incomplete addresses (e.g., "/ip4/172.22.0.11" without port)
+                    // from being stored and causing reconnection failures
+                    let valid_addresses: Vec<String> = addresses
+                        .iter()
+                        .filter(|addr| {
+                            let addr_str = addr.to_string();
+                            addr_str.contains("/tcp/") || addr_str.contains("/udp/")
+                        })
+                        .map(|a| a.to_string())
+                        .collect();
+
+                    if valid_addresses.is_empty() {
+                        tracing::debug!(
+                            peer_id = %peer_id,
+                            raw_addresses = ?addresses.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                            "mDNS discovered peer but no valid transport addresses found"
+                        );
+                        AlysNetworkBehaviourEvent::Ignored
+                    } else {
+                        AlysNetworkBehaviourEvent::MdnsPeerDiscovered {
+                            peer_id: peer_id.to_string(),
+                            addresses: valid_addresses,
+                        }
                     }
                 } else {
-                    AlysNetworkBehaviourEvent::PeerIdentified {
-                        peer_id: String::new(),
-                        protocols: vec![],
-                        addresses: vec![],
-                    }
+                    AlysNetworkBehaviourEvent::Ignored
                 }
             }
             libp2p::mdns::Event::Expired(peers) => {
-                // Return first expired peer (simplified)
                 if let Some((peer_id, _)) = peers.into_iter().next() {
                     AlysNetworkBehaviourEvent::MdnsPeerExpired {
                         peer_id: peer_id.to_string(),
                     }
                 } else {
-                    AlysNetworkBehaviourEvent::PeerIdentified {
-                        peer_id: String::new(),
-                        protocols: vec![],
-                        addresses: vec![],
-                    }
+                    AlysNetworkBehaviourEvent::Ignored
                 }
             }
         }

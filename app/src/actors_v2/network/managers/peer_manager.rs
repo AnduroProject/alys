@@ -253,20 +253,45 @@ impl PeerManager {
     }
 
     /// Update peer's address without resetting other fields
-    /// This is called when PeerIdentified provides a potentially updated address
+    /// This is called when PeerIdentified or mDNS provides a potentially updated address.
+    ///
+    /// IMPORTANT: This method validates that the new address is complete (has transport protocol)
+    /// before overwriting an existing complete address. This prevents mDNS from overwriting
+    /// good addresses with incomplete ones (e.g., "/ip4/172.22.0.11" without port), which
+    /// would cause reconnection failures after network partitions.
     pub fn update_peer_address(&mut self, peer_id: &PeerId, address: String) {
+        // Validate that the new address is dialable (has transport protocol)
+        // This prevents mDNS incomplete addresses from overwriting good addresses
+        let is_new_address_complete = address.contains("/tcp/") || address.contains("/udp/");
+
         // Update in connected_peers
         if let Some(peer_info) = self.connected_peers.get_mut(peer_id) {
-            if peer_info.address != address {
+            let is_existing_address_complete = peer_info.address.contains("/tcp/")
+                || peer_info.address.contains("/udp/");
+
+            // Only overwrite if:
+            // 1. New address is complete, OR
+            // 2. Existing address is also incomplete (nothing to lose)
+            if is_new_address_complete || !is_existing_address_complete {
+                if peer_info.address != address {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        old_address = %peer_info.address,
+                        new_address = %address,
+                        "Updated peer address"
+                    );
+                    peer_info.address = address.clone();
+                    peer_info.last_seen = SystemTime::now();
+                    peer_info.last_activity = Instant::now();
+                }
+            } else {
                 tracing::debug!(
                     peer_id = %peer_id,
-                    old_address = %peer_info.address,
-                    new_address = %address,
-                    "Updated peer address"
+                    existing_address = %peer_info.address,
+                    rejected_address = %address,
+                    "Keeping complete address, rejecting incomplete update"
                 );
-                peer_info.address = address.clone();
-                peer_info.last_seen = SystemTime::now();
-                peer_info.last_activity = Instant::now();
+                return; // Don't update known_peers either
             }
         }
 

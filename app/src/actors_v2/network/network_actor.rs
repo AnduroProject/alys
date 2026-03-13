@@ -2034,6 +2034,10 @@ impl NetworkActor {
                     );
                 }
             }
+
+            AlysNetworkBehaviourEvent::Ignored => {
+                // Silently ignore - no action needed for placeholder events
+            }
         }
 
         Ok(())
