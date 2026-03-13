@@ -1676,9 +1676,16 @@ impl ChainActor {
             .as_ref()
             .ok_or_else(|| ChainError::Configuration("StorageActor not configured".into()))?;
 
-        // 1. Get parent block hash and timestamp from storage/execution layer
-        // We need both to ensure timestamp monotonicity (Reth requires timestamp > parent.timestamp)
-        let (parent_hash, parent_timestamp) = {
+        // 1. Get parent block hashes and timestamp from storage/execution layer
+        // We need:
+        // - parent_execution_hash: For Reth/engine operations (it only knows execution hashes)
+        // - parent_consensus_hash: For ConsensusBlock.parent_hash field (TM-B7 fix)
+        // - parent_timestamp: To ensure timestamp monotonicity (Reth requires timestamp > parent.timestamp)
+        //
+        // TM-B7 FIX: Previously we only returned execution_hash and used it for ConsensusBlock.parent_hash.
+        // This caused validation failures because storage indexes blocks by consensus hash.
+        // Now we return BOTH hashes and use the correct one in each context.
+        let (parent_execution_hash, parent_consensus_hash, parent_timestamp) = {
             let head_result = storage
                 .send(GetChainHeadMessage {
                     correlation_id: Some(correlation_id),
@@ -1696,9 +1703,7 @@ impl ChainActor {
                         parent_execution_hash = %head.execution_hash,
                         "Found parent block"
                     );
-                    // IMPORTANT: Use execution_hash (not consensus hash) for Reth parent lookup
-                    // Reth only knows blocks by their execution layer hash, not the consensus block hash
-                    // Also need to get the parent's timestamp to ensure monotonicity
+                    // Get parent's timestamp from engine to ensure monotonicity
                     let parent_payload = engine
                         .send(EngineMessage::GetPayloadByTag {
                             block_tag: "latest".to_string(),
@@ -1712,17 +1717,57 @@ impl ChainActor {
                         EngineResponse::PayloadByTag { payload } => payload.timestamp(),
                         _ => 0, // Fallback, shouldn't happen
                     };
-                    (head.execution_hash, parent_ts)
+
+                    // TM-B7: Return BOTH hashes:
+                    // - execution_hash for Reth/engine operations
+                    // - consensus hash (head.hash) for ConsensusBlock.parent_hash
+                    (head.execution_hash, head.hash, parent_ts)
                 }
                 None => {
-                    // No head means we're building on genesis
-                    // Query Reth for the actual genesis block hash (block 0)
+                    // No head means we're building on genesis (height 1)
+                    // Query both storage for genesis consensus hash and Reth for execution hash
                     debug!(
                         correlation_id = %correlation_id,
-                        "No chain head found, querying Reth for genesis block"
+                        "No chain head found, querying genesis block for both hashes"
                     );
 
-                    // Get genesis execution block from engine
+                    // TM-B7: Query genesis from storage to get its consensus hash
+                    let genesis_consensus_hash = {
+                        use crate::actors_v2::storage::messages::GetBlockByHeightMessage;
+                        let get_genesis_msg = GetBlockByHeightMessage {
+                            height: 0,
+                            correlation_id: Some(correlation_id),
+                        };
+
+                        match storage.send(get_genesis_msg).await {
+                            Ok(Ok(Some(genesis_block))) => {
+                                // Use tree_hash crate's TreeHash trait for canonical_root
+                                use tree_hash::TreeHash;
+                                genesis_block.canonical_root()
+                            }
+                            Ok(Ok(None)) => {
+                                // Genesis not in storage yet - use zero hash as placeholder
+                                // This happens on very first block; validation will handle it
+                                warn!(
+                                    correlation_id = %correlation_id,
+                                    "Genesis block not found in storage, using zero hash for consensus parent"
+                                );
+                                lighthouse_wrapper::types::Hash256::zero()
+                            }
+                            Ok(Err(e)) => {
+                                return Err(ChainError::Storage(format!(
+                                    "Failed to query genesis for consensus hash: {}", e
+                                )));
+                            }
+                            Err(e) => {
+                                return Err(ChainError::Internal(format!(
+                                    "Storage mailbox error querying genesis: {}", e
+                                )));
+                            }
+                        }
+                    };
+
+                    // Get genesis execution hash and timestamp from Reth
                     let genesis_result = engine
                         .send(EngineMessage::GetPayloadByTag {
                             block_tag: "earliest".to_string(),
@@ -1734,15 +1779,16 @@ impl ChainActor {
 
                     match genesis_result {
                         EngineResponse::PayloadByTag { payload } => {
-                            let genesis_hash = payload.block_hash();
+                            let genesis_exec_hash = payload.block_hash();
                             let genesis_ts = payload.timestamp();
                             info!(
                                 correlation_id = %correlation_id,
-                                genesis_hash = %genesis_hash,
+                                genesis_execution_hash = %genesis_exec_hash,
+                                genesis_consensus_hash = %genesis_consensus_hash,
                                 genesis_timestamp = genesis_ts,
-                                "Using Reth genesis block as parent"
+                                "Using genesis block as parent (TM-B7: both hashes)"
                             );
-                            (genesis_hash, genesis_ts)
+                            (genesis_exec_hash, genesis_consensus_hash, genesis_ts)
                         }
                         _ => {
                             return Err(ChainError::Engine(
@@ -1796,7 +1842,7 @@ impl ChainActor {
         let execution_payload = {
             let build_msg = EngineMessage::BuildPayload {
                 timestamp,
-                parent_hash: Some(parent_hash),
+                parent_hash: Some(parent_execution_hash), // TM-B7: Use execution hash for Reth
                 add_balances, // Peg-in withdrawals as balance additions
                 correlation_id: Some(correlation_id),
             };
@@ -1885,10 +1931,11 @@ impl ChainActor {
         };
 
         // 9. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
-        // Convert ExecutionBlockHash to Hash256 using into_root()
+        // TM-B7 FIX: Use parent CONSENSUS hash (not execution hash) for ConsensusBlock.parent_hash
+        // This ensures storage lookups work correctly since blocks are indexed by consensus hash.
         // Path B: Pegins are now stored in auxpow_header.pegins (not directly on ConsensusBlock)
         let block = crate::block::ConsensusBlock {
-            parent_hash: execution_payload_capella.parent_hash.into_root(),
+            parent_hash: parent_consensus_hash, // TM-B7: Use consensus hash, not execution hash
             slot: height, // In Tendermint mode, slot == height
             last_commit,
             auxpow_header, // Optional AuxPoW from miners via submitauxblock (includes pegins)

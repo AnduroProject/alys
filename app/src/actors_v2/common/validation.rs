@@ -2,17 +2,19 @@
 //!
 //! Provides parent hash relationship verification for Tendermint consensus.
 //!
-//! ## Hash Type Note (TM-B1 Fix)
+//! ## Hash Type Note (TM-B7 Fix)
 //!
 //! Alys uses two different hash types:
 //! - **Consensus hash** (`canonical_root()`): Merkle root of the full consensus block, used for storage indexing
-//! - **Execution hash** (`execution_payload.block_hash`): EVM block hash from Reth, used in parent references
+//! - **Execution hash** (`execution_payload.block_hash`): EVM block hash from Reth
 //!
-//! The `ConsensusBlock.parent_hash` field contains the **execution hash** of the parent block
-//! (set in tendermint_handlers.rs during block assembly). Since storage indexes blocks by
-//! **consensus hash**, we cannot look up parents by their execution hash directly.
+//! With the TM-B7 fix, `ConsensusBlock.parent_hash` now contains the **consensus hash** of the
+//! parent block (set correctly in tendermint_handlers.rs during block assembly). This matches
+//! how storage indexes blocks, enabling direct hash-based lookups.
 //!
-//! Solution: Look up parent by **height** (block_height - 1), then verify the execution hash matches.
+//! However, we still use height-based lookup as a defense-in-depth measure to handle any
+//! edge cases with missing blocks or reorgs. The parent_hash is verified against the
+//! **consensus hash** (canonical_root) of the looked-up block.
 //!
 //! ## Consensus Note
 //!
@@ -28,9 +30,9 @@ use lighthouse_wrapper::types::MainnetEthSpec;
 /// Validate block's parent hash and height relationship (Phase 3)
 ///
 /// This function verifies:
-/// 1. Parent block exists in storage (looked up by height, not hash - see TM-B1)
+/// 1. Parent block exists in storage (looked up by height for robustness)
 /// 2. Block height is exactly parent.height + 1
-/// 3. Block's parent_hash matches the **execution hash** of the parent block
+/// 3. Block's parent_hash matches the **consensus hash** (canonical_root) of the parent block
 ///
 /// # Genesis Handling
 /// Genesis blocks (height 0) skip validation as they have no parent.
@@ -39,7 +41,7 @@ use lighthouse_wrapper::types::MainnetEthSpec;
 /// Returns `ChainError::InvalidBlock` if:
 /// - Parent block is missing from storage
 /// - Height relationship is incorrect (not parent.height + 1)
-/// - Parent hash doesn't match expected value
+/// - Parent hash doesn't match expected consensus hash
 ///
 pub async fn validate_parent_relationship(
     block: &SignedConsensusBlock<MainnetEthSpec>,
@@ -55,7 +57,6 @@ pub async fn validate_parent_relationship(
     }
 
     // Special handling for block #1 - it MUST reference genesis (height 0)
-    // TM-B1 FIX: Use height-based lookup for genesis too
     if block_height == 1 {
         // Block #1 should NOT have zero parent hash - it must reference genesis
         if parent_hash.is_zero() {
@@ -67,10 +68,10 @@ pub async fn validate_parent_relationship(
         tracing::debug!(
             block_height = block_height,
             parent_hash = %parent_hash,
-            "Block #1 detected - validating genesis parent via height lookup (TM-B1 fix)"
+            "Block #1 detected - validating genesis parent via height lookup"
         );
 
-        // TM-B1 FIX: Fetch genesis by HEIGHT (0), not by hash
+        // Fetch genesis by HEIGHT (0) for robustness
         let get_block_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
             height: 0,
             correlation_id: Some(uuid::Uuid::new_v4()),
@@ -83,7 +84,7 @@ pub async fn validate_parent_relationship(
                 tracing::debug!(
                     parent_hash = %parent_hash,
                     block_height = block_height,
-                    "Block #1 parent (genesis at height 0) not found - block is orphan (TM-B1)"
+                    "Block #1 parent (genesis at height 0) not found - block is orphan"
                 );
                 return Err(ChainError::OrphanBlock {
                     parent_hash: ethereum_types::H256::from_slice(parent_hash.as_bytes()),
@@ -113,26 +114,26 @@ pub async fn validate_parent_relationship(
             )));
         }
 
-        // TM-B1 FIX: Validate using EXECUTION hash
-        // The parent_hash field contains the execution hash, not consensus hash
-        let genesis_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
-        if genesis_execution_hash != parent_hash {
-            let genesis_consensus_hash = parent_block.canonical_root();
+        // TM-B7 FIX: Validate using CONSENSUS hash
+        // The parent_hash field now contains the consensus hash (canonical_root)
+        let genesis_consensus_hash = parent_block.canonical_root();
+        if genesis_consensus_hash != parent_hash {
+            let genesis_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
             tracing::warn!(
                 claimed_parent_hash = %parent_hash,
-                genesis_execution_hash = %genesis_execution_hash,
                 genesis_consensus_hash = %genesis_consensus_hash,
-                "Genesis hash mismatch (TM-B1 debug info)"
+                genesis_execution_hash = %genesis_execution_hash,
+                "Genesis hash mismatch (TM-B7 debug info)"
             );
             return Err(ChainError::InvalidBlock(format!(
-                "Block #1 parent hash mismatch: claimed {} but genesis execution hash is {}",
-                parent_hash, genesis_execution_hash
+                "Block #1 parent hash mismatch: claimed {} but genesis consensus hash is {}",
+                parent_hash, genesis_consensus_hash
             )));
         }
 
         tracing::debug!(
-            genesis_execution_hash = %genesis_execution_hash,
-            "Block #1 genesis parent relationship validated successfully (TM-B1)"
+            genesis_consensus_hash = %genesis_consensus_hash,
+            "Block #1 genesis parent relationship validated successfully"
         );
 
         return Ok(());
@@ -146,22 +147,18 @@ pub async fn validate_parent_relationship(
         )));
     }
 
-    // TM-B1 FIX: Look up parent by HEIGHT, not by hash
-    //
-    // ConsensusBlock.parent_hash contains the EXECUTION hash of the parent,
-    // but storage indexes blocks by CONSENSUS hash. These are different hashes!
-    // So we look up by height (parent = block_height - 1), then verify the
-    // execution hash matches.
+    // Look up parent by HEIGHT for robustness (handles edge cases with missing blocks)
+    // Then verify the consensus hash matches
     let parent_height = block_height - 1;
 
     tracing::debug!(
         block_height = block_height,
         parent_height = parent_height,
         claimed_parent_hash = %parent_hash,
-        "Validating parent relationship via height lookup (TM-B1 fix)"
+        "Validating parent relationship via height lookup"
     );
 
-    // Fetch parent block by HEIGHT (not by hash - see TM-B1 fix note above)
+    // Fetch parent block by HEIGHT
     let get_block_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
         height: parent_height,
         correlation_id: Some(uuid::Uuid::new_v4()),
@@ -175,7 +172,7 @@ pub async fn validate_parent_relationship(
                 parent_hash = %parent_hash,
                 parent_height = parent_height,
                 block_height = block_height,
-                "Parent block not found at height {} - block is orphan (TM-B1)",
+                "Parent block not found at height {} - block is orphan",
                 parent_height
             );
             return Err(ChainError::OrphanBlock {
@@ -206,32 +203,31 @@ pub async fn validate_parent_relationship(
         )));
     }
 
-    // TM-B1: Validate using EXECUTION hash (parent_hash references execution layer)
-    // The block.parent_hash field contains execution_payload.parent_hash (execution hash),
-    // NOT the consensus hash. So we verify against the parent's execution block hash.
-    let parent_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
+    // TM-B7 FIX: Validate using CONSENSUS hash (canonical_root)
+    // The block.parent_hash field now contains the consensus hash, not execution hash
+    let parent_consensus_hash = parent_block.canonical_root();
 
-    if parent_execution_hash != parent_hash {
+    if parent_consensus_hash != parent_hash {
         // Log both hash types for debugging
-        let parent_consensus_hash = parent_block.canonical_root();
+        let parent_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
         tracing::warn!(
             block_height = block_height,
             claimed_parent_hash = %parent_hash,
-            parent_execution_hash = %parent_execution_hash,
             parent_consensus_hash = %parent_consensus_hash,
-            "Parent hash mismatch (TM-B1 debug info)"
+            parent_execution_hash = %parent_execution_hash,
+            "Parent hash mismatch (TM-B7 debug info)"
         );
         return Err(ChainError::InvalidBlock(format!(
-            "Parent execution hash mismatch: block claims {} but parent's execution hash is {}",
-            parent_hash, parent_execution_hash
+            "Parent consensus hash mismatch: block claims {} but parent's consensus hash is {}",
+            parent_hash, parent_consensus_hash
         )));
     }
 
     tracing::debug!(
         block_height = block_height,
         parent_height = parent_height,
-        parent_execution_hash = %parent_execution_hash,
-        "Parent relationship validated successfully (TM-B1 height-based lookup)"
+        parent_consensus_hash = %parent_consensus_hash,
+        "Parent relationship validated successfully (TM-B7 consensus hash verification)"
     );
 
     Ok(())
