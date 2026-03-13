@@ -1038,22 +1038,26 @@ impl Handler<TendermintDriverMessage> for TendermintDriver {
                         resume_height = height,
                         "Resuming consensus at new height after sync"
                     );
+                    // Need to set is_paused so resume_consensus will execute
+                    self.is_paused = true;
                     self.resume_consensus(height, ctx);
-                } else if self.is_paused {
-                    // Same or lower height but we're paused - just unpause
+                } else if height == self.current_height {
+                    // TM-B5 Fix: Same height - restart consensus round
+                    // This handles bootstrap case where initial proposal was rejected
+                    // due to blocksync guards, but now we're in consensus mode.
                     info!(
                         current_height = self.current_height,
-                        requested_height = height,
-                        "Unpausing consensus at current height"
+                        "Restarting consensus at current height after sync"
                     );
-                    self.is_paused = false;
-                    // Re-schedule timeout for current position
-                    self.schedule_timeout(ctx);
+                    // Force restart by setting paused and calling resume
+                    self.is_paused = true;
+                    self.resume_consensus(height, ctx);
                 } else {
+                    // height < current_height - stale resume, ignore
                     trace!(
                         current_height = self.current_height,
                         requested_height = height,
-                        "Resume ignored - already running at higher height"
+                        "Resume ignored - already at higher height"
                     );
                 }
             }

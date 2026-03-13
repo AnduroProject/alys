@@ -2052,21 +2052,10 @@ impl Handler<ChainMessage> for ChainActor {
 
                 let actor = self.clone();
                 Box::pin(async move {
-                    // TM-B5 Fix: Check consensus mode - skip height init during blocksync
-                    // NewHeight is part of startup/recovery, so we queue it implicitly
-                    // by not processing until consensus mode is entered
-                    let mode = actor.get_consensus_mode().await;
-                    if mode == ConsensusMode::Blocksync {
-                        debug!(
-                            correlation_id = %correlation_id,
-                            height = height,
-                            "TendermintNewHeight deferred - in Blocksync mode"
-                        );
-                        // Return success but don't actually initialize
-                        // The height will be initialized when entering consensus mode
-                        return Ok(ChainResponse::TendermintHeightStarted { height, round: 0 });
-                    }
-
+                    // TM-B5 Fix Note: TendermintNewHeight MUST be processed regardless of mode.
+                    // This initializes the state machine - without it, consensus can never start.
+                    // The mode guards on TendermintPropose/Timeout prevent active participation
+                    // during blocksync, but the state machine must be initialized.
                     let (height, round) = actor
                         .handle_tendermint_new_height(height, correlation_id)
                         .await?;
