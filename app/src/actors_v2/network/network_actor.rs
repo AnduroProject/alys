@@ -105,6 +105,11 @@ pub enum SwarmCommand {
         peer_id: PeerId,
         addresses: Vec<Multiaddr>,
     },
+    /// TM-B8: Force mesh reconnection via disconnect-reconnect
+    /// This is the nuclear option when add_explicit_peer() fails repeatedly.
+    /// GossipSub naturally forms mesh on fresh connections, so disconnecting
+    /// and letting the health check redial is the most reliable way to fix stale mesh.
+    ForceMeshReconnect { peer_id: PeerId },
 }
 
 /// Phase 4: Rate limiter for DOS protection
@@ -278,6 +283,10 @@ pub struct NetworkActor {
     /// Populated from ConnectionEstablished events and used to actively dial
     /// peers we've lost connection to during mesh recovery
     peer_addresses: HashMap<PeerId, Vec<Multiaddr>>,
+    /// TM-B8: Track consecutive mesh verification failures per peer
+    /// After MAX_MESH_FAILURES_BEFORE_RECONNECT failures, force disconnect-reconnect
+    /// Cleared on successful gossip receipt from peer
+    mesh_failure_count: HashMap<PeerId, u32>,
 }
 
 /// Pending block request tracking (Phase 4: Task 2.3)
@@ -339,6 +348,7 @@ impl NetworkActor {
             last_peer_gossip: HashMap::new(),
             reform_failure_count: HashMap::new(),
             peer_addresses: HashMap::new(),
+            mesh_failure_count: HashMap::new(),
         })
     }
 
@@ -584,18 +594,25 @@ impl NetworkActor {
         });
     }
 
-    /// TM-B2/TM-B3: Periodic mesh health check - verifies all connected V2 peers are in mesh
+    /// TM-B2/TM-B3/TM-B8: Periodic mesh health check - verifies all connected V2 peers are in mesh
     ///
     /// This provides defense-in-depth for mesh formation failures. Even if the deferred
-    /// ReformMesh fails, this background check will detect and fix stale mesh state
-    /// within 30 seconds.
+    /// ReformMesh fails, this background check will detect and fix stale mesh state.
     ///
     /// TM-B3 enhancement: Also detects gossip stall (connected but no messages) and
     /// forces disconnect after multiple failed reform attempts to allow fresh connection.
+    ///
+    /// TM-B8 enhancement: Graduated escalation - after MAX_MESH_FAILURES_BEFORE_RECONNECT
+    /// consecutive mesh verification failures, force disconnect-reconnect to get fresh
+    /// gossipsub state. Reduced interval from 30s to 15s for faster recovery.
     fn schedule_periodic_mesh_health_check(&self, ctx: &mut Context<Self>) {
-        const MESH_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+        // TM-B8: Reduced from 30s to 15s for faster partition recovery
+        const MESH_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(15);
         const GOSSIP_STALL_THRESHOLD: Duration = Duration::from_secs(60);
         const MAX_REFORM_ATTEMPTS_BEFORE_DISCONNECT: u32 = 3;
+        // TM-B8: After this many consecutive mesh verification failures, force reconnect
+        // At 15s intervals, this is ~1 minute before nuclear option
+        const MAX_MESH_FAILURES_BEFORE_RECONNECT: u32 = 4;
 
         ctx.run_interval(MESH_HEALTH_CHECK_INTERVAL, |actor, _ctx| {
             let Some(cmd_tx) = actor.swarm_cmd_tx.as_ref() else {
@@ -662,6 +679,28 @@ impl NetworkActor {
                     .copied()
                     .unwrap_or(0);
 
+                // TM-B8: Check mesh failure count for graduated escalation
+                let mesh_failures = actor
+                    .mesh_failure_count
+                    .get(&peer_id)
+                    .copied()
+                    .unwrap_or(0);
+
+                // TM-B8: If mesh verification has failed repeatedly, force reconnect
+                // This is the nuclear option when add_explicit_peer/ReformMesh don't work
+                if mesh_failures >= MAX_MESH_FAILURES_BEFORE_RECONNECT {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        mesh_failures = mesh_failures,
+                        "Mesh formation failed repeatedly - forcing reconnect"
+                    );
+
+                    let _ = cmd_tx.try_send(SwarmCommand::ForceMeshReconnect { peer_id });
+                    actor.mesh_failure_count.remove(&peer_id);
+                    actor.reform_failure_count.remove(&peer_id);
+                    continue;
+                }
+
                 // If gossip has stalled and we've exceeded reform attempts, force disconnect
                 if gossip_stalled && reform_attempts >= MAX_REFORM_ATTEMPTS_BEFORE_DISCONNECT {
                     tracing::warn!(
@@ -679,12 +718,14 @@ impl NetworkActor {
                     });
                     actor.reform_failure_count.remove(&peer_id);
                     actor.last_peer_gossip.remove(&peer_id);
+                    actor.mesh_failure_count.remove(&peer_id);
                     continue;
                 }
 
                 // Check cooldown to avoid spamming - skip if we reformed recently
+                // TM-B8: Reduced cooldown from 30s to 15s to match health check interval
                 if let Some(last_reform) = actor.recent_mesh_reforms.get(&peer_id) {
-                    if last_reform.elapsed() < Duration::from_secs(30) {
+                    if last_reform.elapsed() < Duration::from_secs(15) {
                         continue;
                     }
                 }
@@ -701,20 +742,24 @@ impl NetworkActor {
                 if cmd_tx.try_send(verify_cmd).is_ok() {
                     let cmd_tx_clone = cmd_tx.clone();
                     let topics_clone = tendermint_topics.clone();
+                    let current_mesh_failures = mesh_failures;
 
                     tokio::spawn(async move {
                         match rx.await {
                             Ok(Ok(true)) => {
-                                // Mesh is healthy, nothing to do
+                                // Mesh is healthy
                                 tracing::debug!(
                                     peer_id = %peer_id,
                                     "Periodic mesh check: peer in mesh"
                                 );
+                                // Note: We can't reset mesh_failure_count from async task,
+                                // but successful gossip receipt will reset it (see gossip handler)
                             }
                             Ok(Ok(false)) => {
                                 // Peer not in mesh, trigger reformation
                                 tracing::warn!(
                                     peer_id = %peer_id,
+                                    mesh_failures = current_mesh_failures,
                                     "Periodic mesh check: peer not in mesh, triggering reformation"
                                 );
 
@@ -737,6 +782,10 @@ impl NetworkActor {
                         }
                     });
 
+                    // TM-B8: Track mesh verification - will be used for graduated escalation
+                    // Increment preemptively (will be cleared on successful gossip receipt)
+                    *actor.mesh_failure_count.entry(peer_id).or_insert(0) += 1;
+
                     // TM-B3: Increment failure count preemptively (will be cleared on success)
                     // This tracks how many times we've attempted to reform mesh without
                     // receiving any gossip messages, indicating potential stall
@@ -758,6 +807,29 @@ impl NetworkActor {
             .iter()
             .find(|addr| !addr.contains("127.0.0.1") && !addr.contains("/ip6/::1/"))
             .or_else(|| addresses.first())
+    }
+
+    /// TM-B8: Extract IP address from a Multiaddr for address validation.
+    /// Used to validate Identify addresses against the connected peer's IP.
+    fn extract_ip_from_multiaddr(addr: &Multiaddr) -> Option<String> {
+        use libp2p::multiaddr::Protocol;
+        for proto in addr.iter() {
+            match proto {
+                Protocol::Ip4(ip) => return Some(ip.to_string()),
+                Protocol::Ip6(ip) => return Some(ip.to_string()),
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    /// TM-B8: Extract IP address from a multiaddr string.
+    fn extract_ip_from_address_str(addr_str: &str) -> Option<String> {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            Self::extract_ip_from_multiaddr(&addr)
+        } else {
+            None
+        }
     }
 
     /// Cooldown duration between V2 reconnection attempts (30 seconds)
@@ -1291,8 +1363,10 @@ impl NetworkActor {
                 // TM-B3: Track last gossip received from this peer for stall detection
                 if let Ok(peer_id) = source_peer.parse::<PeerId>() {
                     self.last_peer_gossip.insert(peer_id, Instant::now());
-                    // Clear failure count on successful gossip receipt
+                    // Clear failure counts on successful gossip receipt
                     self.reform_failure_count.remove(&peer_id);
+                    // TM-B8: Reset mesh failure count - gossip receipt proves mesh is working
+                    self.mesh_failure_count.remove(&peer_id);
                 }
 
                 // Phase 1: Forward block gossip messages to ChainActor for import
@@ -1922,6 +1996,49 @@ impl NetworkActor {
                 // addresses from the peer's local perspective (including localhost),
                 // which would overwrite the correct external address and break
                 // reconnection in containerized environments.
+
+                // TM-B8: Store valid listen addresses from Identify for mesh recovery.
+                // This fixes the gap where incoming connections don't populate peer_addresses.
+                // We validate addresses by checking if they have the same IP as the connected peer.
+                if let Ok(pid) = peer_id.parse::<PeerId>() {
+                    // Get the current connection's IP for validation
+                    let connected_ip = self
+                        .peer_manager
+                        .get_peer(&peer_id)
+                        .and_then(|p| Self::extract_ip_from_address_str(&p.address));
+
+                    for addr_str in &addresses {
+                        // Skip loopback addresses - unreachable from other containers
+                        if addr_str.contains("127.0.0.1") || addr_str.contains("/ip6/::1") {
+                            continue;
+                        }
+
+                        // Parse and validate address
+                        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                            // Check if address has same IP as connected peer (validates reachability)
+                            if let Some(ref conn_ip) = connected_ip {
+                                if let Some(addr_ip) = Self::extract_ip_from_multiaddr(&addr) {
+                                    if addr_ip == *conn_ip {
+                                        // Valid address - store for mesh recovery
+                                        let entry = self
+                                            .peer_addresses
+                                            .entry(pid)
+                                            .or_insert_with(Vec::new);
+                                        // Avoid duplicates
+                                        if !entry.contains(&addr) {
+                                            entry.push(addr.clone());
+                                            tracing::debug!(
+                                                peer_id = %peer_id,
+                                                address = %addr,
+                                                "Stored identify address for mesh recovery"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Track V2 protocol capability
                 let supports_v2 = self.peer_manager.update_peer_protocols(&peer_id, protocols);
@@ -2875,6 +2992,20 @@ impl Handler<NetworkMessage> for NetworkActor {
                                     }
 
                                     Some(SwarmCommand::DialPeer { peer_id, addresses }) => {
+                                        // TM-B8: Check if already connected - don't dial if so
+                                        // The default PeerCondition::Disconnected fails for connected peers,
+                                        // which is a common case during mesh recovery
+                                        if swarm.is_connected(&peer_id) {
+                                            tracing::debug!(
+                                                peer_id = %peer_id,
+                                                "Skipping DialPeer - already connected"
+                                            );
+                                            // Connection exists but mesh may be broken - add as explicit peer
+                                            // for message delivery via flood_publish
+                                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                            continue;
+                                        }
+
                                         // TM-B1: Actively dial a peer for mesh recovery
                                         // Used when hub-and-spoke topology forms after partition
                                         // instead of full mesh (e.g., Node2 never dials Node3)
@@ -2886,8 +3017,10 @@ impl Handler<NetworkMessage> for NetworkActor {
 
                                         for addr in addresses {
                                             // Try dialing with peer_id to establish connection
+                                            // Use NotDialing condition to avoid "dial in progress" errors
                                             let dial_opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
                                                 .addresses(vec![addr.clone()])
+                                                .condition(libp2p::swarm::dial_opts::PeerCondition::NotDialing)
                                                 .build();
 
                                             match swarm.dial(dial_opts) {
@@ -2911,6 +3044,28 @@ impl Handler<NetworkMessage> for NetworkActor {
                                         }
                                     }
 
+                                    Some(SwarmCommand::ForceMeshReconnect { peer_id }) => {
+                                        // TM-B8: Force mesh reconnection via disconnect-reconnect
+                                        // This is the nuclear option when add_explicit_peer fails repeatedly.
+                                        // GossipSub naturally forms mesh on fresh connections.
+                                        tracing::warn!(
+                                            peer_id = %peer_id,
+                                            "Forcing mesh reconnection (disconnect + redial via health check)"
+                                        );
+
+                                        // Step 1: Disconnect (clears gossipsub state for this peer)
+                                        let _ = swarm.disconnect_peer_id(peer_id);
+
+                                        // The reconnection will happen via:
+                                        // 1. Peer dials us back (if they have our address)
+                                        // 2. Our periodic health check dials them (using peer_addresses)
+                                        // 3. mDNS rediscovery (on local networks)
+                                        //
+                                        // Note: We don't dial immediately because disconnect_peer_id
+                                        // is async, connection may still be closing. Letting the
+                                        // health check handle it is more robust.
+                                    }
+
                                     None => {
                                         tracing::info!("Command channel closed, stopping swarm poll");
                                         break;
@@ -2930,6 +3085,30 @@ impl Handler<NetworkMessage> for NetworkActor {
                 // Set up peer manager with bootstrap peers
                 self.peer_manager
                     .set_bootstrap_peers(bootstrap_peers.clone());
+
+                // TM-B8: Store bootstrap peer addresses for mesh recovery BEFORE dialing.
+                // This ensures all nodes have each other's addresses from the start,
+                // enabling mesh recovery after partition even for incoming connections.
+                for peer_addr_str in &bootstrap_peers {
+                    if let Ok(multiaddr) = peer_addr_str.parse::<Multiaddr>() {
+                        // Extract peer ID from multiaddr (format: /ip4/.../tcp/.../p2p/<peer_id>)
+                        use libp2p::multiaddr::Protocol;
+                        for proto in multiaddr.iter() {
+                            if let Protocol::P2p(peer_id) = proto {
+                                self.peer_addresses
+                                    .entry(peer_id)
+                                    .or_insert_with(Vec::new)
+                                    .push(multiaddr.clone());
+                                tracing::info!(
+                                    peer_id = %peer_id,
+                                    address = %multiaddr,
+                                    "Stored bootstrap peer address for mesh recovery"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 // Connect to bootstrap peers using command channel (Phase 2 Task 2.0.4)
                 if !bootstrap_peers.is_empty() {
