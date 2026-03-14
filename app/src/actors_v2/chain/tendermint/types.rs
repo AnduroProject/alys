@@ -180,6 +180,17 @@ pub struct Commit {
     pub signatures: Vec<CommitSig>,
 }
 
+impl Default for Commit {
+    fn default() -> Self {
+        Self {
+            height: 0,
+            round: 0,
+            block_hash: BlockHash::zero(),
+            signatures: Vec::new(),
+        }
+    }
+}
+
 impl Commit {
     /// Create a new commit from collected precommit signatures
     pub fn new(

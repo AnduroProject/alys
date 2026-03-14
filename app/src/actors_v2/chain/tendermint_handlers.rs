@@ -1901,12 +1901,21 @@ impl ChainActor {
 
         // 6. Get last_commit from cache (commit proof for the previous block)
         // PHASE 3 FIX (Bug 2): Enhanced diagnostics for last_commit propagation
+        // TM-B10 FIX: cached_last_commit is now always initialized with a default Commit
         let last_commit = if let Some(ref cached) = self.cached_last_commit {
             let guard = cached.read().await;
             let commit = (*guard).clone();
 
-            // Verify the cached commit is for the correct height (should be height - 1)
-            if commit.height != height.saturating_sub(1) && height > 1 {
+            // Skip default/empty commit (height 0 means never set)
+            if commit.height == 0 && height > 1 {
+                warn!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "Cached last_commit is empty (height=0) - waiting for first commit"
+                );
+                None
+            } else if commit.height != height.saturating_sub(1) && height > 1 {
+                // Height mismatch - log but still use (may be stale)
                 warn!(
                     correlation_id = %correlation_id,
                     cached_height = commit.height,
@@ -1914,28 +1923,26 @@ impl ChainActor {
                     current_height = height,
                     "Cached last_commit height mismatch - may cause sync validation issues"
                 );
+                Some(commit)
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    commit_height = commit.height,
+                    commit_round = commit.round,
+                    num_signatures = commit.signatures.len(),
+                    "Using cached last_commit for proposal"
+                );
+                Some(commit)
             }
-
-            debug!(
-                correlation_id = %correlation_id,
-                commit_height = commit.height,
-                commit_round = commit.round,
-                num_signatures = commit.signatures.len(),
-                "Using cached last_commit for proposal"
-            );
-
-            Some(commit)
         } else {
-            // No cached commit - this is expected for height 1 (first block after genesis)
-            // but is a problem for height > 1
+            // This branch should no longer be hit after the TM-B10 fix
+            // (cached_last_commit is always initialized in configure_tendermint)
             if height > 1 {
                 error!(
                     correlation_id = %correlation_id,
                     height = height,
-                    "CRITICAL: No cached last_commit available for height {}! \
-                     Blocks at height > 1 require last_commit from previous height. \
-                     This may happen after restart if cache wasn't restored from WAL.",
-                    height
+                    "BUG: cached_last_commit is None - cache was not initialized! \
+                     This should not happen after TM-B10 fix.",
                 );
             } else {
                 debug!(
@@ -3174,7 +3181,21 @@ impl ChainActor {
         // 6. Cache the commit for the next block's last_commit
         if let Some(ref cached_commit) = self.cached_last_commit {
             let mut guard = cached_commit.write().await;
+            debug!(
+                correlation_id = %correlation_id,
+                height = height,
+                round = round,
+                signatures = commit.signatures.len(),
+                "Updating cached_last_commit for next block"
+            );
             *guard = commit.clone();
+        } else {
+            // This should not happen after the TM-B10 fix
+            error!(
+                correlation_id = %correlation_id,
+                height = height,
+                "BUG: cached_last_commit is None - cache was not initialized!"
+            );
         }
 
         // 7. Notify network peers of committed block

@@ -336,7 +336,10 @@ impl ChainActor {
         self.consensus_wal = Some(Arc::new(RwLock::new(wal)));
         self.validator_keypair = validator_keypair.map(Arc::new);
         self.validator_set = Some(Arc::new(RwLock::new(validator_set_for_state)));
-        self.cached_last_commit = None;
+        // Initialize cached_last_commit with a default commit that will be overwritten
+        // after the first block is committed. This ensures the Arc<RwLock<Commit>>
+        // exists so subsequent updates work correctly.
+        self.cached_last_commit = Some(Arc::new(RwLock::new(Commit::default())));
         // Note: tendermint_enabled field removed - Tendermint is always enabled
         // Store the timeout receiver (wrapped for Clone compatibility)
         // Use try_lock since we're in a sync context but may be called from async runtime
