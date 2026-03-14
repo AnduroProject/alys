@@ -151,6 +151,18 @@ pub enum FutureRoundAction {
         /// Block hash that has 2/3+ precommits (if any, None means NIL)
         block_hash: Option<BlockHash>,
     },
+
+    /// Received a valid proposal from the correct proposer for a future round.
+    /// Allows advancing without waiting for 2/3+ votes (TM-B9 fix).
+    ///
+    /// This is safe because:
+    /// 1. Proposer selection is deterministic: `(height + round) % validator_count`
+    /// 2. BLS signature prevents forgery
+    /// 3. Only the designated proposer can create a valid proposal
+    AdvanceToPropose {
+        round: Round,
+        proposal_hash: BlockHash,
+    },
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

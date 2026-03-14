@@ -457,6 +457,55 @@ impl FutureMessageStore {
         }
     }
 
+    /// Check if a valid future proposal should trigger round advancement (TM-B9 fix).
+    ///
+    /// A valid proposal from the correct proposer is cryptographic proof that the
+    /// proposer is active at that round. This allows advancing without waiting for
+    /// 2/3+ votes, breaking the deadlock that occurs when:
+    /// 1. Nodes start at different rounds after WAL recovery
+    /// 2. Only 1 of 2 needed peer votes arrives
+    /// 3. The other lagging nodes can't vote for the future round yet
+    ///
+    /// # Arguments
+    ///
+    /// * `proposal` - The proposal to check (must be pre-validated for signature)
+    /// * `validator_set` - The validator set for proposer verification
+    /// * `current_round` - Our current round
+    ///
+    /// # Returns
+    ///
+    /// `Some(FutureRoundAction::AdvanceToPropose { ... })` if we should advance,
+    /// `None` if the proposal is not from a future round or not from the correct proposer.
+    ///
+    /// # Safety
+    ///
+    /// This is safe because:
+    /// 1. Proposer selection is deterministic: `(height + round) % validator_count`
+    /// 2. BLS signature verification happens before this check
+    /// 3. Only the designated proposer can create a valid proposal for a given round
+    pub fn check_proposal_for_advancement(
+        &self,
+        proposal: &Proposal,
+        validator_set: &ValidatorSet,
+        current_round: Round,
+    ) -> Option<FutureRoundAction> {
+        // Only advance for future rounds
+        if proposal.round <= current_round {
+            return None;
+        }
+
+        // Verify this proposal is from the correct proposer for that round
+        let expected_proposer = validator_set.get_proposer(proposal.height, proposal.round);
+        if proposal.proposer != expected_proposer {
+            return None;
+        }
+
+        Some(FutureRoundAction::AdvanceToPropose {
+            round: proposal.round,
+            proposal_hash: proposal.block_hash(),
+        })
+    }
+
     /// Get stored proposal for a specific round (removes it from store)
     pub fn take_proposal(&mut self, round: Round) -> Option<Proposal> {
         self.proposals.remove(&round)
@@ -1328,5 +1377,92 @@ mod tests {
         assert!(store.has_future_height_proposal(11, 0));
         assert!(!store.has_future_height_proposal(11, 1)); // Different round
         assert!(!store.has_future_height_proposal(12, 0)); // Different height
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PROPOSAL-BASED ROUND ADVANCEMENT TESTS (TM-B9)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_check_proposal_for_advancement_future_round() {
+        // Test that a valid proposal from the correct proposer triggers advancement
+        let validator_set = create_test_validator_set(3);
+        let store = FutureMessageStore::new(validator_set.clone());
+
+        // Create a proposal for round 5 from the correct proposer
+        // For height=1, round=5, proposer is (1 + 5) % 3 = 0
+        let proposal = create_test_proposal(1, 5, 0);
+
+        // We're at round 2, proposal is for round 5
+        let action = store.check_proposal_for_advancement(&proposal, &validator_set, 2);
+
+        assert!(matches!(
+            action,
+            Some(FutureRoundAction::AdvanceToPropose { round: 5, .. })
+        ), "Should advance for future proposal from correct proposer");
+    }
+
+    #[test]
+    fn test_check_proposal_for_advancement_current_round() {
+        // Test that a proposal for current round doesn't trigger advancement
+        let validator_set = create_test_validator_set(3);
+        let store = FutureMessageStore::new(validator_set.clone());
+
+        let proposal = create_test_proposal(1, 5, 0);
+
+        // We're already at round 5
+        let action = store.check_proposal_for_advancement(&proposal, &validator_set, 5);
+
+        assert!(action.is_none(), "Should not advance for current round proposal");
+    }
+
+    #[test]
+    fn test_check_proposal_for_advancement_past_round() {
+        // Test that a proposal for past round doesn't trigger advancement
+        let validator_set = create_test_validator_set(3);
+        let store = FutureMessageStore::new(validator_set.clone());
+
+        let proposal = create_test_proposal(1, 3, 0);
+
+        // We're at round 5, proposal is for round 3
+        let action = store.check_proposal_for_advancement(&proposal, &validator_set, 5);
+
+        assert!(action.is_none(), "Should not advance for past round proposal");
+    }
+
+    #[test]
+    fn test_check_proposal_for_advancement_wrong_proposer() {
+        // Test that a proposal from wrong proposer doesn't trigger advancement
+        let validator_set = create_test_validator_set(3);
+        let store = FutureMessageStore::new(validator_set.clone());
+
+        // For height=1, round=5, expected proposer is (1 + 5) % 3 = 0
+        // But we create proposal with proposer_idx=1 (wrong proposer)
+        let proposal = create_test_proposal(1, 5, 1);
+
+        // We're at round 2, proposal is for round 5 but from wrong proposer
+        let action = store.check_proposal_for_advancement(&proposal, &validator_set, 2);
+
+        assert!(action.is_none(), "Should not advance for proposal from wrong proposer");
+    }
+
+    #[test]
+    fn test_check_proposal_for_advancement_returns_block_hash() {
+        // Test that the returned action contains the correct block hash
+        let validator_set = create_test_validator_set(3);
+        let store = FutureMessageStore::new(validator_set.clone());
+
+        let proposal = create_test_proposal(1, 5, 0);
+        let expected_hash = proposal.block_hash();
+
+        let action = store.check_proposal_for_advancement(&proposal, &validator_set, 2);
+
+        match action {
+            Some(FutureRoundAction::AdvanceToPropose { round, proposal_hash }) => {
+                assert_eq!(round, 5);
+                assert_eq!(proposal_hash, expected_hash);
+            }
+            _ => panic!("Expected AdvanceToPropose action"),
+        }
     }
 }

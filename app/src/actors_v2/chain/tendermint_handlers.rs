@@ -539,6 +539,32 @@ impl ChainActor {
                     block_hash = %H256::from_slice(block_hash.as_bytes()),
                     "Stored future round proposal for later replay"
                 );
+
+                // TM-B9: Check if this proposal should trigger round advancement.
+                // A valid proposal from the correct proposer is cryptographic proof
+                // that the proposer is active at that round, allowing us to break
+                // the deadlock that occurs with n=3 validators after network partition.
+                let should_advance = {
+                    let state = tendermint_state.read().await;
+                    state.future_messages.check_proposal_for_advancement(
+                        &proposal,
+                        &validator_set,
+                        current_round,
+                    )
+                };
+
+                if let Some(FutureRoundAction::AdvanceToPropose { round: target_round, proposal_hash }) = should_advance {
+                    info!(
+                        correlation_id = %correlation_id,
+                        current_round = current_round,
+                        target_round = target_round,
+                        proposal_hash = %H256::from_slice(proposal_hash.as_bytes()),
+                        "Valid future proposal from correct proposer - advancing to round"
+                    );
+
+                    self.advance_to_round(target_round, TendermintStep::Prevote, correlation_id)
+                        .await?;
+                }
             } else {
                 debug!(
                     correlation_id = %correlation_id,
@@ -548,7 +574,7 @@ impl ChainActor {
                 );
             }
 
-            // Return early - we'll process this when we reach the round
+            // Return - we've either stored for later or advanced to the round
             return Ok(H256::from_slice(block_hash.as_bytes()));
         }
 
@@ -3482,6 +3508,20 @@ impl ChainActor {
                     "Received 2/3+ precommits - advancing to Precommit step"
                 );
                 self.advance_to_round(round, TendermintStep::Precommit, correlation_id)
+                    .await?;
+                Ok(voter)
+            }
+
+            FutureRoundAction::AdvanceToPropose { round, proposal_hash } => {
+                // TM-B9: Proposal-based advancement (should not happen via vote path,
+                // but handle for exhaustiveness and potential future use cases)
+                info!(
+                    correlation_id = %correlation_id,
+                    target_round = round,
+                    proposal_hash = %H256::from_slice(proposal_hash.as_bytes()),
+                    "Advancing via proposal (from vote handler)"
+                );
+                self.advance_to_round(round, TendermintStep::Prevote, correlation_id)
                     .await?;
                 Ok(voter)
             }
