@@ -1874,17 +1874,50 @@ impl ChainActor {
         };
 
         // 6. Get last_commit from cache (commit proof for the previous block)
+        // PHASE 3 FIX (Bug 2): Enhanced diagnostics for last_commit propagation
         let last_commit = if let Some(ref cached) = self.cached_last_commit {
             let guard = cached.read().await;
-            // Clone the commit - it will be embedded in this block
-            Some((*guard).clone())
-        } else {
-            // No cached commit - this might be the first Tendermint block after genesis
-            // or after a restart where the cache wasn't populated
+            let commit = (*guard).clone();
+
+            // Verify the cached commit is for the correct height (should be height - 1)
+            if commit.height != height.saturating_sub(1) && height > 1 {
+                warn!(
+                    correlation_id = %correlation_id,
+                    cached_height = commit.height,
+                    expected_height = height.saturating_sub(1),
+                    current_height = height,
+                    "Cached last_commit height mismatch - may cause sync validation issues"
+                );
+            }
+
             debug!(
                 correlation_id = %correlation_id,
-                "No cached last_commit available"
+                commit_height = commit.height,
+                commit_round = commit.round,
+                num_signatures = commit.signatures.len(),
+                "Using cached last_commit for proposal"
             );
+
+            Some(commit)
+        } else {
+            // No cached commit - this is expected for height 1 (first block after genesis)
+            // but is a problem for height > 1
+            if height > 1 {
+                error!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "CRITICAL: No cached last_commit available for height {}! \
+                     Blocks at height > 1 require last_commit from previous height. \
+                     This may happen after restart if cache wasn't restored from WAL.",
+                    height
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "No last_commit needed for height 1 (genesis/first block)"
+                );
+            }
             None
         };
 
@@ -2934,10 +2967,158 @@ impl ChainActor {
             state.set_step(TendermintStep::Commit);
         }
 
-        // 3. Write commit WAL entry BEFORE any state changes
-        // Also write NewRound entry for H+1 to ensure clean recovery
+        // =========================================================================
+        // CRITICAL FIX: Correct commit ordering to prevent consensus-execution desync
+        //
+        // Standard Tendermint pattern (this matches CometBFT/Tendermint):
+        // 1. Execute block (FinalizeBlock) - MUST succeed before WAL records commit
+        // 2. Store to persistent storage - MUST succeed before WAL records commit
+        // 3. Write WAL entries - Only AFTER execution + storage succeed
+        //
+        // Previous bug: WAL was written BEFORE execution, so if ExecuteBlock failed,
+        // WAL said "committed" but reth was behind. On restart, node was stuck with
+        // PayloadIdUnavailable because parent block didn't exist in execution layer.
+        //
+        // New order ensures WAL only records commits that actually completed.
+        // =========================================================================
+
+        // 3. Execute block via EngineActor FIRST (instant finality)
+        // If this fails, we return early and WAL is NOT written
+        let execution_hash = if let Some(ref engine) = self.engine_actor {
+            let parent_hash = block.execution_payload.parent_hash;
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                parent_hash = %parent_hash,
+                "Executing block via EngineActor (pre-WAL)"
+            );
+
+            let engine_result = engine.send(EngineMessage::ExecuteBlock {
+                execution_payload: ExecutionPayload::Capella(block.execution_payload.clone()),
+                parent_hash,
+                correlation_id: Some(correlation_id),
+            }).await
+                .map_err(|e| ChainError::Internal(format!("Engine mailbox error: {}", e)))?
+                .map_err(|e| ChainError::Engine(format!("Block execution failed: {}", e)))?;
+
+            match engine_result {
+                EngineResponse::BlockExecuted { block_hash: exec_hash, block_number, .. } => {
+                    info!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        exec_hash = %exec_hash,
+                        exec_number = block_number,
+                        "Block executed successfully in reth"
+                    );
+                    exec_hash
+                }
+                other => return Err(ChainError::Engine(format!("Unexpected response: {:?}", other))),
+            }
+        } else {
+            // EngineActor is required for Tendermint consensus
+            return Err(ChainError::Configuration(
+                "EngineActor required for Tendermint block execution".into()
+            ));
+        };
+
+        // 4. Atomically store block + update chain head (survives SIGKILL)
+        // If this fails, we return early and WAL is NOT written
+        //
+        // This uses a single WriteBatch with sync to ensure block data, height index,
+        // and chain head are all written atomically. This prevents WAL-storage mismatch
+        // where WAL shows committed blocks but storage reports height 0 after crash.
+        if let Some(ref storage) = self.storage_actor {
+            let signed_block = crate::block::SignedConsensusBlock {
+                message: block.clone(),
+                signature: crate::signatures::AggregateApproval::new(),
+            };
+
+            let block_ref = BlockRef {
+                hash: H256::from_slice(block_hash.as_bytes()),
+                number: height,
+                execution_hash,
+            };
+
+            // PHASE 3 FIX (Bug 2): Diagnostic logging for last_commit field
+            // Verify that last_commit is properly set before storing blocks.
+            // Missing last_commit at height > 1 would cause MissingLastCommit errors during sync.
+            if block.last_commit.is_none() && height > 1 {
+                error!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "CRITICAL: Block missing last_commit before storage! \
+                     This will cause MissingLastCommit errors during sync validation. \
+                     Investigate proposal creation - cached_last_commit may not be set."
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    has_last_commit = block.last_commit.is_some(),
+                    last_commit_sigs = block.last_commit.as_ref().map(|c| c.signatures.len()).unwrap_or(0),
+                    "Block last_commit status before storage"
+                );
+            }
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                block_hash = %H256::from_slice(block_hash.as_bytes()),
+                "Storing block to StorageActor (pre-WAL)"
+            );
+
+            storage.send(AtomicCommitBlockMessage {
+                block: signed_block,
+                new_head: block_ref.clone(),
+                correlation_id: Some(correlation_id),
+            }).await
+                .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
+                .map_err(|e| ChainError::Storage(format!("Atomic commit failed: {}", e)))?;
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                "Block stored successfully to storage"
+            );
+
+            // Update local state after storage confirms
+            self.state.update_head(block_ref).await;
+
+            // Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)
+            // This happens AFTER commit to ensure peg-ins aren't lost if commit fails
+            // Path B: Peg-ins are stored in auxpow_header.pegins (via pegins() helper)
+            for pegin_info in block.pegins() {
+                self.state.mark_pegin_processed(pegin_info.txid).await;
+            }
+
+            if !block.pegins().is_empty() {
+                debug!(
+                    correlation_id = %correlation_id,
+                    pegins_finalized = block.pegins().len(),
+                    "Marked peg-ins as processed after commit"
+                );
+            }
+        } else {
+            // StorageActor is required for Tendermint consensus
+            return Err(ChainError::Configuration(
+                "StorageActor required for Tendermint block storage".into()
+            ));
+        }
+
+        // 5. NOW write WAL entries - execution and storage both succeeded
+        // This ensures WAL only records commits that actually completed.
+        // If we crash between storage commit and WAL write, storage is the
+        // source of truth (which is correct - the block IS committed).
         {
             let mut wal_guard = wal.write().await;
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                "Writing WAL commit entry (post-execution, post-storage)"
+            );
+
             wal_guard
                 .write(WALEntry::Commit {
                     height,
@@ -2955,85 +3136,22 @@ impl ChainActor {
                     round: 0,
                 })
                 .map_err(|e| ChainError::Internal(format!("WAL write failed: {}", e)))?;
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                next_height = height + 1,
+                "WAL commit entries written successfully"
+            );
         }
 
-        // 4. Execute block via EngineActor (instant finality)
-        let execution_hash = if let Some(ref engine) = self.engine_actor {
-            let parent_hash = block.execution_payload.parent_hash;
-
-            let engine_result = engine.send(EngineMessage::ExecuteBlock {
-                execution_payload: ExecutionPayload::Capella(block.execution_payload.clone()),
-                parent_hash,
-                correlation_id: Some(correlation_id),
-            }).await
-                .map_err(|e| ChainError::Internal(format!("Engine mailbox error: {}", e)))?
-                .map_err(|e| ChainError::Engine(format!("Block execution failed: {}", e)))?;
-
-            match engine_result {
-                EngineResponse::BlockExecuted { block_hash: exec_hash, .. } => exec_hash,
-                other => return Err(ChainError::Engine(format!("Unexpected response: {:?}", other))),
-            }
-        } else {
-            warn!(correlation_id = %correlation_id, "EngineActor not configured - skipping execution");
-            lighthouse_wrapper::types::ExecutionBlockHash::zero()
-        };
-
-        // 5. Atomically store block + update chain head (survives SIGKILL)
-        //
-        // This uses a single WriteBatch with sync to ensure block data, height index,
-        // and chain head are all written atomically. This prevents WAL-storage mismatch
-        // where WAL shows committed blocks but storage reports height 0 after crash.
-        if let Some(ref storage) = self.storage_actor {
-            let signed_block = crate::block::SignedConsensusBlock {
-                message: block.clone(),
-                signature: crate::signatures::AggregateApproval::new(),
-            };
-
-            let block_ref = BlockRef {
-                hash: H256::from_slice(block_hash.as_bytes()),
-                number: height,
-                execution_hash,
-            };
-
-            storage.send(AtomicCommitBlockMessage {
-                block: signed_block,
-                new_head: block_ref.clone(),
-                correlation_id: Some(correlation_id),
-            }).await
-                .map_err(|e| ChainError::Internal(format!("Storage mailbox error: {}", e)))?
-                .map_err(|e| ChainError::Storage(format!("Atomic commit failed: {}", e)))?;
-
-            // Update local state after storage confirms
-            self.state.update_head(block_ref).await;
-
-            // 6b. Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)
-            // This happens AFTER commit to ensure peg-ins aren't lost if commit fails
-            // Path B: Peg-ins are stored in auxpow_header.pegins (via pegins() helper)
-            for pegin_info in block.pegins() {
-                self.state.mark_pegin_processed(pegin_info.txid).await;
-            }
-
-            if !block.pegins().is_empty() {
-                debug!(
-                    correlation_id = %correlation_id,
-                    pegins_finalized = block.pegins().len(),
-                    "Marked peg-ins as processed after commit"
-                );
-            }
-        } else {
-            warn!(correlation_id = %correlation_id, "StorageActor not configured - skipping storage");
-        }
-
-        // 7. Cache the commit for the next block's last_commit
+        // 6. Cache the commit for the next block's last_commit
         if let Some(ref cached_commit) = self.cached_last_commit {
             let mut guard = cached_commit.write().await;
             *guard = commit.clone();
         }
 
-        // 8. [REMOVED - TM-B3]: set_step(Commit) now happens earlier (before blocking ops)
-        // to prevent precommit timeouts from corrupting state during engine execution.
-
-        // 9. Notify network peers of committed block
+        // 7. Notify network peers of committed block
         if let Some(ref network) = self.network_actor {
             let message = super::tendermint::TendermintMessage::NewRound {
                 height: height + 1,
@@ -3055,7 +3173,7 @@ impl ChainActor {
             "Block committed successfully"
         );
 
-        // 9b. Disable recovery mode after successful commit
+        // 8. Disable recovery mode after successful commit
         // Once we've committed a block, we've rejoined consensus and no longer
         // need the extended future round acceptance window.
         {
@@ -3070,12 +3188,12 @@ impl ChainActor {
             }
         }
 
-        // 10. Initialize state machine for H+1 BEFORE notifying TendermintDriver
+        // 9. Initialize state machine for H+1 BEFORE notifying TendermintDriver
         // This ensures the state machine is reset (locks cleared) before the driver
         // tries to start consensus for the new height.
         self.handle_tendermint_new_height(height + 1, correlation_id).await?;
 
-        // 11. Notify TendermintDriver of commit (after state machine is ready)
+        // 10. Notify TendermintDriver of commit (after state machine is ready)
         if let Some(ref driver) = self.tendermint_driver {
             driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Committed {
                 height,

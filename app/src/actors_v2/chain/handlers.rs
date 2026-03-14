@@ -3090,6 +3090,7 @@ impl Handler<ApplyRecoveredState> for ChainActor {
         let tendermint_state = self.tendermint_state.clone();
         let storage_actor = self.storage_actor.clone();
         let sync_actor = self.sync_actor.clone();
+        let engine_actor = self.engine_actor.clone();
 
         Box::pin(
             async move {
@@ -3185,6 +3186,94 @@ impl Handler<ApplyRecoveredState> for ChainActor {
                             prevotes_restored: 0,
                             precommits_restored: 0,
                         });
+                    }
+
+                    // PHASE 1.2 FIX (Bug 3): Verify execution layer matches storage height
+                    // Even if WAL and storage are in sync, reth may be behind due to
+                    // failed ExecuteBlock calls. Query reth and trigger resync if behind.
+                    if let Some(ref engine) = engine_actor {
+                        use crate::actors_v2::engine::{EngineMessage, EngineResponse};
+
+                        match engine.send(EngineMessage::GetLatestBlock {
+                            correlation_id: Some(correlation_id),
+                        }).await {
+                            Ok(Ok(EngineResponse::LatestBlock { number: reth_height, hash })) => {
+                                tracing::info!(
+                                    correlation_id = %correlation_id,
+                                    reth_height = reth_height,
+                                    reth_hash = %hash,
+                                    storage_height = storage_height,
+                                    wal_committed_height = wal_committed_height,
+                                    "Execution layer at height {} during recovery", reth_height
+                                );
+
+                                if reth_height < storage_height {
+                                    let gap = storage_height - reth_height;
+                                    tracing::error!(
+                                        correlation_id = %correlation_id,
+                                        reth_height = reth_height,
+                                        storage_height = storage_height,
+                                        gap = gap,
+                                        "CRITICAL: Execution layer behind storage by {} blocks during recovery! \
+                                         WAL recorded commits that failed to execute. Triggering resync.",
+                                        gap
+                                    );
+
+                                    // Trigger resync to replay missing blocks from storage to execution layer
+                                    if let Some(ref sync) = sync_actor {
+                                        let resync_msg = crate::actors_v2::network::messages::SyncMessage::ForceResync {
+                                            reason: format!(
+                                                "Execution-storage desync at recovery: reth at {} but storage at {} (gap: {})",
+                                                reth_height, storage_height, gap
+                                            ),
+                                        };
+                                        if let Err(e) = sync.send(resync_msg).await {
+                                            tracing::error!(
+                                                correlation_id = %correlation_id,
+                                                error = %e,
+                                                "Failed to send ForceResync for execution layer recovery"
+                                            );
+                                        } else {
+                                            tracing::info!(
+                                                correlation_id = %correlation_id,
+                                                "ForceResync triggered for execution layer recovery during ApplyRecoveredState"
+                                            );
+                                        }
+                                    }
+
+                                    // Return applied: false to prevent consensus from starting at wrong height
+                                    return Ok(ApplyRecoveredStateResponse {
+                                        applied: false,
+                                        height: reth_height,
+                                        round: 0,
+                                        lock_restored: false,
+                                        prevotes_restored: 0,
+                                        precommits_restored: 0,
+                                    });
+                                }
+                            }
+                            Ok(Ok(other)) => {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    response = ?other,
+                                    "Unexpected response from EngineActor GetLatestBlock during recovery"
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    "Failed to query execution layer height during recovery - proceeding cautiously"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    error = %e,
+                                    "EngineActor unreachable during recovery - cannot verify execution layer sync"
+                                );
+                            }
+                        }
                     }
                 }
 

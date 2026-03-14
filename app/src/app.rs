@@ -749,6 +749,76 @@ impl App {
                     }
                 };
 
+                // PHASE 1 FIX (Bug 3): Verify execution layer height matches storage
+                // This detects consensus-execution layer desynchronization that can cause
+                // PayloadIdUnavailable errors when the parent block doesn't exist in reth.
+                {
+                    use crate::actors_v2::engine::{EngineMessage, EngineResponse};
+
+                    let storage_height = start_height.saturating_sub(1); // start_height is next block, so -1 for committed
+
+                    match engine_actor.send(EngineMessage::GetLatestBlock {
+                        correlation_id: Some(uuid::Uuid::new_v4()),
+                    }).await {
+                        Ok(Ok(EngineResponse::LatestBlock { number: reth_height, hash })) => {
+                            info!(
+                                reth_height = reth_height,
+                                reth_hash = %hash,
+                                storage_height = storage_height,
+                                "Execution layer at height {}", reth_height
+                            );
+
+                            if reth_height < storage_height {
+                                let gap = storage_height - reth_height;
+                                error!(
+                                    reth_height = reth_height,
+                                    storage_height = storage_height,
+                                    gap = gap,
+                                    "CRITICAL: Execution layer behind storage by {} blocks! \
+                                     This indicates consensus-execution desync. WAL may have \
+                                     recorded commits that failed to execute. Triggering resync.",
+                                    gap
+                                );
+
+                                // Trigger resync to replay missing blocks from storage to execution layer
+                                let resync_msg = crate::actors_v2::network::messages::SyncMessage::ForceResync {
+                                    reason: format!(
+                                        "Execution-storage desync: reth at {} but storage at {} (gap: {})",
+                                        reth_height, storage_height, gap
+                                    ),
+                                };
+                                if let Err(e) = sync_actor.send(resync_msg).await {
+                                    error!(error = %e, "Failed to send ForceResync for execution layer recovery");
+                                } else {
+                                    info!("ForceResync triggered for execution layer recovery");
+                                }
+                            } else if reth_height > storage_height {
+                                // This is unusual but not necessarily an error - reth might have
+                                // speculative blocks that weren't finalized
+                                warn!(
+                                    reth_height = reth_height,
+                                    storage_height = storage_height,
+                                    "Execution layer ahead of storage - may indicate incomplete commit"
+                                );
+                            } else {
+                                info!(
+                                    height = storage_height,
+                                    "Execution layer in sync with storage"
+                                );
+                            }
+                        }
+                        Ok(Ok(other)) => {
+                            warn!(response = ?other, "Unexpected response from EngineActor GetLatestBlock");
+                        }
+                        Ok(Err(e)) => {
+                            warn!(error = ?e, "Failed to query execution layer height - cannot verify sync");
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "EngineActor unreachable - cannot verify execution layer sync");
+                        }
+                    }
+                }
+
                 // Wait for peers before starting consensus (peer-readiness gating)
                 // This prevents nodes from starting consensus before they can communicate
                 {
