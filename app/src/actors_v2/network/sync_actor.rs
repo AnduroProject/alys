@@ -1212,7 +1212,9 @@ impl Handler<SyncMessage> for SyncActor {
                                             "Processing new block"
                                         );
 
-                                        if let Err(e) = chain_actor
+                                        // TM-B12 Fix: Wait for actual import result
+                                        let block_height = block.message.execution_payload.block_number;
+                                        match chain_actor
                                             .send(crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
                                                 block: block.clone(),
                                                 source: crate::actors_v2::chain::messages::BlockSource::Network(peer_id.clone()),
@@ -1220,22 +1222,54 @@ impl Handler<SyncMessage> for SyncActor {
                                             })
                                             .await
                                         {
-                                            tracing::error!(
-                                                height = block.message.execution_payload.block_number,
-                                                error = %e,
-                                                "Failed to import new block"
-                                            );
-
-                                            let mut s = state.write().unwrap();
-                                            s.metrics.record_network_error();
-                                        } else {
-                                            // Update height after successful import
-                                            let mut s = state.write().unwrap();
-                                            let block_height = block.message.execution_payload.block_number;
-                                            if block_height > s.current_height {
-                                                s.current_height = block_height;
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    height = block_height,
+                                                    error = %e,
+                                                    "Failed to import new block"
+                                                );
+                                                let mut s = state.write().unwrap();
+                                                s.metrics.record_network_error();
                                             }
-                                            s.metrics.record_block_processed(block_height, Duration::from_millis(0));
+                                            Ok(Err(chain_err)) => {
+                                                tracing::error!(
+                                                    height = block_height,
+                                                    error = ?chain_err,
+                                                    "Block import failed with ChainError"
+                                                );
+                                                let mut s = state.write().unwrap();
+                                                s.metrics.record_network_error();
+                                            }
+                                            Ok(Ok(response)) => {
+                                                use crate::actors_v2::chain::messages::ChainResponse;
+                                                match response {
+                                                    ChainResponse::BlockImported { height, .. } => {
+                                                        // Update height only after confirmed import
+                                                        let mut s = state.write().unwrap();
+                                                        if height > s.current_height {
+                                                            s.current_height = height;
+                                                        }
+                                                        s.metrics.record_block_processed(height, Duration::from_millis(0));
+                                                    }
+                                                    ChainResponse::BlockQueued { .. } => {
+                                                        // Don't update height - import pending
+                                                        tracing::debug!(
+                                                            height = block_height,
+                                                            "Block queued - height not updated"
+                                                        );
+                                                    }
+                                                    ChainResponse::BlockRejected { reason } => {
+                                                        tracing::warn!(
+                                                            height = block_height,
+                                                            reason = %reason,
+                                                            "Block rejected"
+                                                        );
+                                                        let mut s = state.write().unwrap();
+                                                        s.metrics.record_network_error();
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -1361,7 +1395,8 @@ impl Handler<SyncMessage> for SyncActor {
                                                     }
                                                 }
 
-                                                if let Err(e) = chain_actor
+                                                // TM-B12 Fix: Wait for actual import result, not just message delivery
+                                                match chain_actor
                                                     .send(crate::actors_v2::chain::messages::ChainMessage::ImportBlock {
                                                         block: block.clone(),
                                                         source: crate::actors_v2::chain::messages::BlockSource::Sync,
@@ -1369,33 +1404,83 @@ impl Handler<SyncMessage> for SyncActor {
                                                     })
                                                     .await
                                                 {
-                                                    tracing::error!(
-                                                        height = block_height,
-                                                        error = %e,
-                                                        "Failed to send block to ChainActor"
-                                                    );
-
-                                                    // Record error in metrics
-                                                    let mut s = state.write().unwrap();
-                                                    s.metrics.record_network_error();
-                                                    break;
-                                                }
-
-                                                // Update current height after successful import
-                                                {
-                                                    let mut s = state.write().unwrap();
-                                                    let old_height = s.current_height;
-                                                    if block_height > s.current_height {
-                                                        s.current_height = block_height;
-                                                        tracing::info!(
-                                                            "📈 SYNC: Height updated {} → {} (target: {}, remaining: {})",
-                                                            old_height,
-                                                            block_height,
-                                                            s.target_height,
-                                                            s.target_height.saturating_sub(block_height)
+                                                    Err(e) => {
+                                                        tracing::error!(
+                                                            height = block_height,
+                                                            error = %e,
+                                                            "Failed to send block to ChainActor"
                                                         );
+                                                        let mut s = state.write().unwrap();
+                                                        s.metrics.record_network_error();
+                                                        break;
                                                     }
-                                                    s.metrics.record_block_processed(block_height, Duration::from_millis(0));
+                                                    Ok(Err(chain_err)) => {
+                                                        // ChainActor returned an error (e.g., validation failed)
+                                                        tracing::error!(
+                                                            height = block_height,
+                                                            error = ?chain_err,
+                                                            "Block import failed with ChainError"
+                                                        );
+                                                        let mut s = state.write().unwrap();
+                                                        s.metrics.record_network_error();
+                                                        // Don't update height - block was not imported
+                                                        continue;
+                                                    }
+                                                    Ok(Ok(response)) => {
+                                                        use crate::actors_v2::chain::messages::ChainResponse;
+                                                        match response {
+                                                            ChainResponse::BlockImported { block_hash, height } => {
+                                                                // Block successfully imported - NOW update current_height
+                                                                tracing::info!(
+                                                                    height = height,
+                                                                    block_hash = %block_hash,
+                                                                    "Block import confirmed by ChainActor"
+                                                                );
+                                                                let mut s = state.write().unwrap();
+                                                                let old_height = s.current_height;
+                                                                if height > s.current_height {
+                                                                    s.current_height = height;
+                                                                    tracing::info!(
+                                                                        "📈 SYNC: Height updated {} → {} (target: {}, remaining: {})",
+                                                                        old_height,
+                                                                        height,
+                                                                        s.target_height,
+                                                                        s.target_height.saturating_sub(height)
+                                                                    );
+                                                                }
+                                                                s.metrics.record_block_processed(height, Duration::from_millis(0));
+                                                            }
+                                                            ChainResponse::BlockQueued { position } => {
+                                                                // Block was queued (import lock held by another operation)
+                                                                // DO NOT update height - the import hasn't completed yet
+                                                                tracing::info!(
+                                                                    height = block_height,
+                                                                    queue_position = position,
+                                                                    "Block queued for import (lock held) - height NOT updated"
+                                                                );
+                                                                // Note: The queued block will be processed later by ChainActor
+                                                                // and height will be updated via ImportNotification
+                                                            }
+                                                            ChainResponse::BlockRejected { reason } => {
+                                                                tracing::warn!(
+                                                                    height = block_height,
+                                                                    reason = %reason,
+                                                                    "Block rejected by ChainActor"
+                                                                );
+                                                                let mut s = state.write().unwrap();
+                                                                s.metrics.record_network_error();
+                                                                // Don't update height - block was rejected
+                                                            }
+                                                            other => {
+                                                                // Unexpected response type
+                                                                tracing::warn!(
+                                                                    height = block_height,
+                                                                    response = ?other,
+                                                                    "Unexpected ChainResponse for ImportBlock"
+                                                                );
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                             Err(e) => {

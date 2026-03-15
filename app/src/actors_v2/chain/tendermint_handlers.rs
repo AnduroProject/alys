@@ -3369,15 +3369,21 @@ impl ChainActor {
             }
 
             // Trigger sync to catch up
+            // TM-B12 Fix: Sync to vote_height - 1, not vote_height
+            // If we're seeing votes for height 72, block 72 is being actively created
+            // and may not exist yet. We need to sync up to block 71 (vote_height - 1)
+            // to be able to participate in the consensus for height 72.
+            let sync_target = vote_height.saturating_sub(1);
             if let Some(ref sync_actor) = self.sync_actor {
                 info!(
                     correlation_id = %correlation_id,
-                    target_height = vote_height,
-                    "Starting catch-up sync to height {}", vote_height
+                    vote_height = vote_height,
+                    sync_target = sync_target,
+                    "Starting catch-up sync to height {} (one behind vote height)", sync_target
                 );
                 sync_actor.do_send(crate::actors_v2::network::SyncMessage::StartSync {
                     start_height: current_height,
-                    target_height: Some(vote_height),
+                    target_height: Some(sync_target),
                 });
             } else {
                 warn!(
@@ -3792,8 +3798,14 @@ impl ChainActor {
                             .await?;
 
                         // Cast the prevote
-                        let state = tendermint_state.read().await;
-                        self.cast_prevote(state.height, round, vote_block, correlation_id)
+                        // NOTE: We must extract height and drop the read lock BEFORE calling cast_prevote,
+                        // because cast_prevote internally needs a write lock on tendermint_state.
+                        // Holding a read lock while calling cast_prevote causes a deadlock.
+                        let height = {
+                            let state = tendermint_state.read().await;
+                            state.height
+                        };
+                        self.cast_prevote(height, round, vote_block, correlation_id)
                             .await?;
                     }
                 }
@@ -3818,13 +3830,18 @@ impl ChainActor {
                         "Triggering precommit after round advancement"
                     );
 
-                    let state = tendermint_state.read().await;
-                    self.cast_precommit(state.height, round, precommit_block, correlation_id)
+                    // NOTE: We must extract height and drop the read lock BEFORE calling cast_precommit,
+                    // because cast_precommit internally needs a write lock on tendermint_state.
+                    // Holding a read lock while calling cast_precommit causes a deadlock.
+                    let height = {
+                        let state = tendermint_state.read().await;
+                        state.height
+                    };
+                    self.cast_precommit(height, round, precommit_block, correlation_id)
                         .await?;
 
                     // If we precommitted for a block, update our lock
                     if let Some(block_hash) = precommit_block {
-                        drop(state);
                         let mut state = tendermint_state.write().await;
                         // Only update lock if this is a newer round
                         if state.locked_round.map_or(true, |lr| round > lr) {
@@ -3913,8 +3930,14 @@ impl ChainActor {
                         round = round,
                         "We are proposer after round advancement - creating proposal"
                     );
-                    let state = tendermint_state.read().await;
-                    self.handle_tendermint_propose(state.height, round, correlation_id)
+                    // NOTE: We must extract height and drop the read lock BEFORE calling handle_tendermint_propose,
+                    // because handle_tendermint_propose internally needs a write lock on tendermint_state.
+                    // Holding a read lock while calling handle_tendermint_propose causes a deadlock.
+                    let height = {
+                        let state = tendermint_state.read().await;
+                        state.height
+                    };
+                    self.handle_tendermint_propose(height, round, correlation_id)
                         .await?;
                 }
             }
