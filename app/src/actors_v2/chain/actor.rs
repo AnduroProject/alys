@@ -101,11 +101,19 @@ impl FutureHeightTracker {
     }
 
     /// Reset the tracker (e.g., after sync completes)
+    ///
+    /// TM-B13 Fix: Also reset last_sync_trigger_at after sync completion.
+    /// The cooldown is only needed DURING active sync to prevent rapid retriggers.
+    /// After sync completes, the node is caught up and should immediately
+    /// participate in consensus. Keeping the cooldown causes a race condition
+    /// where votes for the new height are blocked during the async handshake
+    /// between SyncCompleted → Resume → TendermintNewHeight.
     pub fn reset(&mut self) {
         self.max_observed_height = 0;
         self.vote_count = 0;
         self.first_vote_at = None;
-        // Note: Don't reset last_sync_trigger_at - that's for cooldown
+        // TM-B13 Fix: Reset cooldown after sync completion
+        self.last_sync_trigger_at = None;
     }
 }
 
@@ -393,29 +401,41 @@ impl ChainActor {
     /// * `height` - The height at which to resume consensus
     /// * `correlation_id` - Tracing correlation ID
     pub async fn enter_consensus_mode(&self, height: u64, correlation_id: Uuid) {
-        let mut mode = self.consensus_mode.write().await;
-        if *mode == ConsensusMode::Blocksync {
-            *mode = ConsensusMode::Consensus;
-            info!(
-                correlation_id = %correlation_id,
-                height = height,
-                "Entered Consensus mode - resuming participation"
-            );
-
-            // Reset future height tracker since we're now caught up
-            self.future_height_tracker.write().await.reset();
-
-            // Resume TendermintDriver
-            if let Some(ref driver) = self.tendermint_driver {
-                driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
-                    height,
-                });
+        // Scope the mode lock to avoid holding it while acquiring other locks
+        {
+            let mut mode = self.consensus_mode.write().await;
+            if *mode == ConsensusMode::Blocksync {
+                *mode = ConsensusMode::Consensus;
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    "Entered Consensus mode - resuming participation"
+                );
+            } else {
+                debug!(
+                    correlation_id = %correlation_id,
+                    "Already in Consensus mode"
+                );
             }
-        } else {
-            debug!(
-                correlation_id = %correlation_id,
-                "Already in Consensus mode"
-            );
+        } // mode lock released here
+
+        // TM-B13 Fix: Always reset future height tracker and send Resume
+        // when sync completes, regardless of previous mode.
+        //
+        // The issue is that during the race between SyncCompleted processing
+        // and TendermintNewHeight delivery, incoming votes may trigger
+        // a Pause (via future height vote handling). If we're already in
+        // Consensus mode, we need to still send Resume to ensure the Driver
+        // is running.
+        //
+        // The Driver's Resume handler is idempotent - it checks the height
+        // relationship and handles duplicates gracefully.
+        self.future_height_tracker.write().await.reset();
+
+        if let Some(ref driver) = self.tendermint_driver {
+            driver.do_send(crate::actors_v2::tendermint_driver::TendermintDriverMessage::Resume {
+                height,
+            });
         }
     }
 
