@@ -97,6 +97,16 @@ get_rpc_port() {
     esac
 }
 
+get_node_ip() {
+    local node="$1"
+    case "$node" in
+        alys-node-1) echo "172.22.0.10" ;;
+        alys-node-2) echo "172.22.0.11" ;;
+        alys-node-3) echo "172.22.0.12" ;;
+        *) echo "" ;;
+    esac
+}
+
 rpc_call() {
     local port="$1"
     local method="$2"
@@ -146,7 +156,8 @@ get_commit() {
     local node="${1:-alys-node-1}"
     local height="$2"
     local port=$(get_rpc_port "$node")
-    rpc_call "$port" "tendermint_commit" "[{\"height\": $height}]" 2>/dev/null
+    # Note: tendermint_commit expects height as a direct integer, not an object
+    rpc_call "$port" "tendermint_commit" "[$height]" 2>/dev/null
 }
 
 get_evidence() {
@@ -267,18 +278,44 @@ wait_for_validator_sync() {
 
 verify_no_forks() {
     local height="$1"
+    local max_retries="${2:-10}"
+    local retry_delay="${3:-2}"
     local block_hashes=()
+    local all_responded=false
 
-    for node in "${NODE_NAMES[@]}"; do
-        local port=$(get_rpc_port "$node")
-        local hash=$(rpc_call "$port" "tendermint_commit" "[{\"height\":$height}]" 2>/dev/null \
-            | jq -r '.block_hash // "unknown"')
-        block_hashes+=("$hash")
+    # Retry until all nodes respond with valid hashes
+    for attempt in $(seq 1 $max_retries); do
+        block_hashes=()
+        all_responded=true
+
+        for node in "${NODE_NAMES[@]}"; do
+            local port=$(get_rpc_port "$node")
+            # Note: tendermint_commit expects height as a direct integer, not an object
+            local hash=$(rpc_call "$port" "tendermint_commit" "[$height]" 2>/dev/null \
+                | jq -r '.block_hash // empty')
+
+            if [[ -z "$hash" || "$hash" == "null" ]]; then
+                log_debug "Node $node not responding for height $height (attempt $attempt/$max_retries)"
+                all_responded=false
+                break
+            fi
+            block_hashes+=("$hash")
+        done
+
+        if [[ "$all_responded" == "true" ]]; then
+            break
+        fi
+        sleep "$retry_delay"
     done
+
+    if [[ "$all_responded" != "true" ]]; then
+        log_error "Not all nodes responded for height $height after $max_retries attempts"
+        return 1
+    fi
 
     local unique_hashes=$(printf '%s\n' "${block_hashes[@]}" | sort -u | wc -l | tr -d ' ')
     if [[ "$unique_hashes" -eq 1 ]]; then
-        log_debug "No fork detected at height $height"
+        log_debug "No fork detected at height $height (all ${#block_hashes[@]} nodes agree)"
         return 0
     else
         log_error "Fork detected at height $height! Hashes: ${block_hashes[*]}"
@@ -309,8 +346,10 @@ isolate_node() {
 
 reconnect_node() {
     local node="$1"
-    log_info "Reconnecting $node to network $NETWORK_NAME..."
-    docker network connect "$NETWORK_NAME" "$node" 2>/dev/null || true
+    local ip=$(get_node_ip "$node")
+    log_info "Reconnecting $node to network $NETWORK_NAME with IP $ip..."
+    # Use --ip to preserve the static IP assignment from docker-compose
+    docker network connect --ip "$ip" "$NETWORK_NAME" "$node" 2>/dev/null || true
 }
 
 add_latency() {
