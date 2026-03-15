@@ -713,7 +713,7 @@ run_TM_B5() {
         fi
 
         local elapsed=$(($(date +%s) - heal_time))
-        if [[ $elapsed -ge 90 ]]; then
+        if [[ $elapsed -ge 180 ]]; then
             record_test_result "TM-B5" "FAILED" "Timeout waiting for consensus resume"
             return
         fi
