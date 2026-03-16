@@ -509,6 +509,19 @@ pub struct GetCommit {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Individual commit signature info (for RPC response)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitSignatureInfo {
+    /// Vote flag: "Commit" | "Nil" | "Absent"
+    pub block_id_flag: String,
+    /// Validator address/index (if present)
+    pub validator_address: Option<String>,
+    /// Timestamp of the vote (Unix timestamp)
+    pub timestamp: Option<u64>,
+    /// Hex-encoded BLS signature (if present)
+    pub signature: Option<String>,
+}
+
 /// Response for GetCommit
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitResponse {
@@ -518,6 +531,16 @@ pub struct CommitResponse {
     pub round: u32,
     /// Block hash that was committed
     pub block_hash: H256,
+    /// Parent block hash
+    pub parent_hash: H256,
+    /// Block timestamp (Unix timestamp)
+    pub timestamp: u64,
+    /// Proposer validator index
+    pub proposer_index: u32,
+    /// Hash of the last commit (commit for block N-1)
+    pub last_commit_hash: Option<H256>,
+    /// Individual commit signatures
+    pub signatures: Vec<CommitSignatureInfo>,
     /// Number of signatures
     pub signatures_count: u32,
     /// Whether block is canonical

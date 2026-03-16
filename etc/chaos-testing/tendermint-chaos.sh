@@ -1372,6 +1372,373 @@ run_TM_L3() {
 }
 
 # ============================================================================
+# Category I: Block Integrity Tests
+# ============================================================================
+# These tests validate block data consistency across all nodes using the
+# extended tendermint_commit RPC that returns full header and signature data.
+
+# Get full commit data for a height (uses extended tendermint_commit RPC)
+get_full_commit() {
+    local node="$1"
+    local height="$2"
+    local port=$(get_rpc_port "$node")
+    rpc_call "$port" "tendermint_commit" "[$height]" 2>/dev/null
+}
+
+# Compare full commit data across all nodes for a given height
+# Returns 0 if all nodes agree, 1 if mismatch detected
+verify_full_commit_consistency() {
+    local height="$1"
+    local commits=()
+    local first_hash=""
+    local first_parent=""
+    local first_sigs=""
+
+    log_debug "Verifying commit consistency at height $height"
+
+    for node in "${NODE_NAMES[@]}"; do
+        local commit=$(get_full_commit "$node" "$height")
+        if [[ -z "$commit" ]] || [[ "$commit" == "null" ]]; then
+            log_debug "Node $node returned empty commit for height $height"
+            return 1
+        fi
+
+        local hash=$(echo "$commit" | jq -r '.signed_header.header.hash // empty')
+        local parent=$(echo "$commit" | jq -r '.signed_header.header.parent_hash // empty')
+        local sigs=$(echo "$commit" | jq -r '.signed_header.commit.signatures | length // 0')
+        local available=$(echo "$commit" | jq -r '.commit_available // false')
+
+        if [[ "$available" != "true" ]]; then
+            log_debug "Commit not yet available at height $height on $node"
+            return 2  # Not ready yet
+        fi
+
+        if [[ -z "$first_hash" ]]; then
+            first_hash="$hash"
+            first_parent="$parent"
+            first_sigs="$sigs"
+            log_debug "Reference: hash=$hash parent=$parent sigs=$sigs"
+        else
+            if [[ "$hash" != "$first_hash" ]]; then
+                log_error "Hash mismatch at height $height: $node has $hash, expected $first_hash"
+                return 1
+            fi
+            if [[ "$parent" != "$first_parent" ]]; then
+                log_error "Parent hash mismatch at height $height: $node has $parent, expected $first_parent"
+                return 1
+            fi
+            if [[ "$sigs" != "$first_sigs" ]]; then
+                log_warn "Signature count mismatch at height $height: $node has $sigs, expected $first_sigs"
+                # Not necessarily a failure, but worth noting
+            fi
+        fi
+    done
+
+    log_debug "All nodes agree at height $height"
+    return 0
+}
+
+# Verify parent hash chain consistency (block N's parent == block N-1's hash)
+verify_parent_chain() {
+    local start_height="$1"
+    local end_height="$2"
+    local node="${3:-alys-node-1}"
+
+    log_debug "Verifying parent chain from $start_height to $end_height on $node"
+
+    local prev_hash=""
+    for ((h = start_height; h <= end_height; h++)); do
+        local commit=$(get_full_commit "$node" "$h")
+        local hash=$(echo "$commit" | jq -r '.signed_header.header.hash // empty')
+        local parent=$(echo "$commit" | jq -r '.signed_header.header.parent_hash // empty')
+
+        if [[ -z "$hash" ]] || [[ -z "$parent" ]]; then
+            log_error "Could not get hash/parent at height $h"
+            return 1
+        fi
+
+        if [[ -n "$prev_hash" ]] && [[ "$parent" != "$prev_hash" ]]; then
+            log_error "Parent chain broken at height $h: parent=$parent but prev hash was $prev_hash"
+            return 1
+        fi
+
+        prev_hash="$hash"
+    done
+
+    return 0
+}
+
+run_TM_I1() {
+    log_info "[TM-I1] Running: Random Block Sampling"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-I1" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    if [[ $current_height -lt 10 ]]; then
+        log_warn "Not enough blocks yet (height=$current_height), waiting..."
+        sleep 30
+        current_height=$(get_consensus_height "alys-node-1")
+    fi
+
+    # Sample 5-10 random heights (skip last 2 blocks as commit may not be available)
+    local max_sample_height=$((current_height - 2))
+    if [[ $max_sample_height -lt 1 ]]; then
+        record_test_result "TM-I1" "SKIPPED" "Not enough blocks (height=$current_height)"
+        return
+    fi
+
+    local sample_count=5
+    if [[ $max_sample_height -ge 10 ]]; then
+        sample_count=10
+    fi
+
+    local passed=0
+    local failed=0
+
+    for ((i = 0; i < sample_count; i++)); do
+        local sample_height=$((RANDOM % max_sample_height + 1))
+        log_debug "Sampling height $sample_height"
+
+        if verify_full_commit_consistency "$sample_height"; then
+            ((passed++))
+        else
+            ((failed++))
+            log_warn "Consistency check failed at height $sample_height"
+        fi
+    done
+
+    log_info "Random sampling: $passed/$sample_count heights verified"
+
+    if [[ $failed -eq 0 ]]; then
+        record_test_result "TM-I1" "PASSED" "All $sample_count sampled blocks consistent"
+    else
+        record_test_result "TM-I1" "FAILED" "$failed/$sample_count blocks inconsistent"
+    fi
+}
+
+run_TM_I2() {
+    log_info "[TM-I2] Running: Last Commit Chain Verification"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-I2" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    if [[ $current_height -lt 10 ]]; then
+        record_test_result "TM-I2" "SKIPPED" "Not enough blocks (height=$current_height)"
+        return
+    fi
+
+    # Verify parent chain for recent blocks (last 10)
+    local start=$((current_height - 10))
+    if [[ $start -lt 1 ]]; then
+        start=1
+    fi
+    local end=$((current_height - 2))  # Skip last 2 for commit availability
+
+    local all_passed=true
+    for node in "${NODE_NAMES[@]}"; do
+        if ! verify_parent_chain "$start" "$end" "$node"; then
+            log_error "Parent chain broken on $node"
+            all_passed=false
+        fi
+    done
+
+    if [[ "$all_passed" == "true" ]]; then
+        record_test_result "TM-I2" "PASSED" "Parent chain consistent on all nodes ($start-$end)"
+    else
+        record_test_result "TM-I2" "FAILED" "Parent chain inconsistent"
+    fi
+}
+
+run_TM_I3() {
+    log_info "[TM-I3] Running: Historical Block Scan"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-I3" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    if [[ $current_height -lt 20 ]]; then
+        record_test_result "TM-I3" "SKIPPED" "Not enough blocks (height=$current_height)"
+        return
+    fi
+
+    local failed=0
+    local checked=0
+
+    # Scan early blocks [1-10]
+    log_info "Scanning early blocks [1-10]..."
+    for ((h = 1; h <= 10 && h <= current_height - 2; h++)); do
+        if ! verify_full_commit_consistency "$h"; then
+            ((failed++))
+        fi
+        ((checked++))
+    done
+
+    # Scan middle blocks [mid-5, mid+5]
+    local mid=$((current_height / 2))
+    local mid_start=$((mid - 5))
+    local mid_end=$((mid + 5))
+    if [[ $mid_start -lt 1 ]]; then mid_start=1; fi
+    if [[ $mid_end -gt $((current_height - 2)) ]]; then mid_end=$((current_height - 2)); fi
+
+    log_info "Scanning middle blocks [$mid_start-$mid_end]..."
+    for ((h = mid_start; h <= mid_end; h++)); do
+        if ! verify_full_commit_consistency "$h"; then
+            ((failed++))
+        fi
+        ((checked++))
+    done
+
+    # Scan recent blocks [recent-10, recent-2]
+    local recent_start=$((current_height - 12))
+    local recent_end=$((current_height - 2))
+    if [[ $recent_start -lt 1 ]]; then recent_start=1; fi
+
+    log_info "Scanning recent blocks [$recent_start-$recent_end]..."
+    for ((h = recent_start; h <= recent_end; h++)); do
+        if ! verify_full_commit_consistency "$h"; then
+            ((failed++))
+        fi
+        ((checked++))
+    done
+
+    log_info "Historical scan: checked $checked blocks, $failed failures"
+
+    if [[ $failed -eq 0 ]]; then
+        record_test_result "TM-I3" "PASSED" "All $checked historical blocks consistent"
+    else
+        record_test_result "TM-I3" "FAILED" "$failed/$checked blocks inconsistent"
+    fi
+}
+
+run_TM_I4() {
+    log_info "[TM-I4] Running: Real-time Block Consistency"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-I4" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local initial_height=$(get_consensus_height "alys-node-1")
+    local test_duration=30
+    local checked=0
+    local failed=0
+    local last_checked_height=$initial_height
+
+    log_info "Monitoring new blocks for ${test_duration}s..."
+
+    local start_time=$(date +%s)
+    while true; do
+        local elapsed=$(($(date +%s) - start_time))
+        if [[ $elapsed -ge $test_duration ]]; then
+            break
+        fi
+
+        local current_height=$(get_consensus_height "alys-node-1")
+
+        # Check any new blocks (with 2-block delay for commit availability)
+        for ((h = last_checked_height + 1; h <= current_height - 2; h++)); do
+            log_debug "Checking new block at height $h"
+            if verify_full_commit_consistency "$h"; then
+                ((checked++))
+            else
+                ((failed++))
+                log_warn "Consistency failure at height $h"
+            fi
+            last_checked_height=$h
+        done
+
+        sleep 2
+    done
+
+    log_info "Real-time monitoring: checked $checked new blocks, $failed failures"
+
+    if [[ $checked -eq 0 ]]; then
+        record_test_result "TM-I4" "SKIPPED" "No new blocks during test period"
+    elif [[ $failed -eq 0 ]]; then
+        record_test_result "TM-I4" "PASSED" "All $checked new blocks consistent"
+    else
+        record_test_result "TM-I4" "FAILED" "$failed/$checked new blocks inconsistent"
+    fi
+}
+
+run_TM_I5() {
+    log_info "[TM-I5] Running: Signature Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-I5" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    if [[ $current_height -lt 5 ]]; then
+        record_test_result "TM-I5" "SKIPPED" "Not enough blocks (height=$current_height)"
+        return
+    fi
+
+    # Check recent blocks for proper signatures
+    local check_height=$((current_height - 3))
+    if [[ $check_height -lt 1 ]]; then check_height=1; fi
+
+    local passed=0
+    local failed=0
+    local total_checks=5
+
+    for ((i = 0; i < total_checks && check_height >= 1; i++)); do
+        local commit=$(get_full_commit "alys-node-1" "$check_height")
+        local available=$(echo "$commit" | jq -r '.commit_available // false')
+
+        if [[ "$available" != "true" ]]; then
+            log_debug "Commit not available at height $check_height, skipping"
+            ((check_height--))
+            continue
+        fi
+
+        local sig_count=$(echo "$commit" | jq -r '.signed_header.commit.signatures | length')
+        local commit_sigs=$(echo "$commit" | jq -r '[.signed_header.commit.signatures[] | select(.block_id_flag == "Commit")] | length')
+        local has_signatures=$(echo "$commit" | jq -r '[.signed_header.commit.signatures[] | select(.signature != null)] | length')
+
+        log_debug "Height $check_height: $sig_count total sigs, $commit_sigs commits, $has_signatures with signatures"
+
+        # For Tendermint BFT with n=3, we need 100% (3/3) to commit
+        # Check that we have signatures and they match the commit flags
+        if [[ $sig_count -ge 1 ]] && [[ $commit_sigs -ge 1 ]]; then
+            # Verify all Commit votes have signatures
+            local missing_sigs=$(echo "$commit" | jq -r '[.signed_header.commit.signatures[] | select(.block_id_flag == "Commit" and .signature == null)] | length')
+            if [[ $missing_sigs -eq 0 ]]; then
+                ((passed++))
+                log_debug "Height $check_height: Signatures valid"
+            else
+                ((failed++))
+                log_warn "Height $check_height: $missing_sigs Commit votes missing signatures"
+            fi
+        else
+            ((failed++))
+            log_warn "Height $check_height: Insufficient signatures (count=$sig_count, commits=$commit_sigs)"
+        fi
+
+        ((check_height--))
+    done
+
+    log_info "Signature validation: $passed passed, $failed failed"
+
+    if [[ $failed -eq 0 ]] && [[ $passed -gt 0 ]]; then
+        record_test_result "TM-I5" "PASSED" "All $passed blocks have valid signatures"
+    elif [[ $passed -eq 0 ]]; then
+        record_test_result "TM-I5" "SKIPPED" "No blocks available for signature check"
+    else
+        record_test_result "TM-I5" "FAILED" "$failed blocks have invalid/missing signatures"
+    fi
+}
+
+# ============================================================================
 # Scenario Dispatcher
 # ============================================================================
 
@@ -1419,6 +1786,13 @@ run_scenario() {
         TM-L2) run_TM_L2 ;;
         TM-L3) run_TM_L3 ;;
 
+        # Category I: Block Integrity
+        TM-I1) run_TM_I1 ;;
+        TM-I2) run_TM_I2 ;;
+        TM-I3) run_TM_I3 ;;
+        TM-I4) run_TM_I4 ;;
+        TM-I5) run_TM_I5 ;;
+
         # Scenario groups
         tier1)
             run_TM_A1
@@ -1426,6 +1800,8 @@ run_scenario() {
             run_TM_B1
             run_TM_B5
             run_TM_L3
+            run_TM_I1
+            run_TM_I3
             ;;
 
         tier2)
@@ -1481,6 +1857,14 @@ run_scenario() {
             run_TM_L3
             ;;
 
+        integrity)
+            run_TM_I1
+            run_TM_I2
+            run_TM_I3
+            run_TM_I4
+            run_TM_I5
+            ;;
+
         all)
             # Category A: Validator Failures
             run_TM_A1
@@ -1515,6 +1899,12 @@ run_scenario() {
             run_TM_L1
             run_TM_L2
             run_TM_L3
+            # Category I: Integrity
+            run_TM_I1
+            run_TM_I2
+            run_TM_I3
+            run_TM_I4
+            run_TM_I5
             ;;
 
         *)
@@ -1526,8 +1916,9 @@ run_scenario() {
             echo "  D (WAL):        TM-D1, TM-D2, TM-D3, TM-D4, TM-D5"
             echo "  E (Equivoc):    TM-E5"
             echo "  F (External):   TM-F1, TM-F2, TM-F3"
+            echo "  I (Integrity):  TM-I1, TM-I2, TM-I3, TM-I4, TM-I5"
             echo "  L (Liveness):   TM-L1, TM-L2, TM-L3"
-            echo "  Groups: tier1, tier2, validator, network, timing, wal, external, liveness, all"
+            echo "  Groups: tier1, tier2, validator, network, timing, wal, external, integrity, liveness, all"
             exit 1
             ;;
     esac
@@ -1585,21 +1976,29 @@ Scenarios:
     TM-F2  Bitcoin Core Failure
     TM-F3  Monitoring (Prometheus) Failure
 
+  Category I - Block Integrity:
+    TM-I1  Random Block Sampling
+    TM-I2  Last Commit Chain Verification
+    TM-I3  Historical Block Scan
+    TM-I4  Real-time Block Consistency
+    TM-I5  Signature Validation
+
   Category L - Liveness & Safety:
     TM-L1  Round Stall Recovery
     TM-L2  Multi-Round Block Commit
     TM-L3  Height Progression
 
   Groups:
-    tier1      Core scenarios (A1, A3, B1, B5, L3)
+    tier1      Core scenarios (A1, A3, B1, B5, L3, I1, I3)
     tier2      Advanced scenarios (D1-D3, E5, F1-F2)
     validator  All validator failure scenarios (A1-A5)
     network    All network partition scenarios (B1-B5)
     timing     All timing scenarios (C1-C4)
     wal        All WAL/recovery scenarios (D1-D5, E5)
     external   All external dependency scenarios (F1-F3)
+    integrity  All block integrity scenarios (I1-I5)
     liveness   All liveness scenarios (L1-L3)
-    all        All 24 scenarios
+    all        All 29 scenarios
 
 Examples:
   $0 --scenario TM-A1

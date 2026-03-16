@@ -535,12 +535,35 @@ impl CommitHandler {
             .map_err(|e| RpcError::MailboxError(e.to_string()))?
             .map_err(RpcError::ChainError)?;
 
-        // Return simplified commit response
+        // Build full commit response with signed_header structure
+        let signatures_json: Vec<Value> = result.signatures.iter().map(|s| {
+            json!({
+                "block_id_flag": s.block_id_flag,
+                "validator_address": s.validator_address,
+                "timestamp": s.timestamp,
+                "signature": s.signature
+            })
+        }).collect();
+
         let response = json!({
-            "height": result.height,
-            "round": result.round,
-            "block_hash": format!("{:?}", result.block_hash),
-            "signatures_count": result.signatures_count,
+            "signed_header": {
+                "header": {
+                    "height": result.height,
+                    "hash": format!("{:?}", result.block_hash),
+                    "parent_hash": format!("{:?}", result.parent_hash),
+                    "timestamp": result.timestamp,
+                    "proposer_index": result.proposer_index,
+                    "last_commit_hash": result.last_commit_hash.map(|h| format!("{:?}", h))
+                },
+                "commit": {
+                    "height": result.height,
+                    "round": result.round,
+                    "block_id": {
+                        "hash": format!("{:?}", result.block_hash)
+                    },
+                    "signatures": signatures_json
+                }
+            },
             "canonical": result.canonical,
             "commit_available": result.commit_available
         });

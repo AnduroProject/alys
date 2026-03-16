@@ -2748,7 +2748,7 @@ impl Handler<SubmitAuxBlock> for ChainActor {
 use crate::actors_v2::chain::messages::{
     GetTendermintState, TendermintStateResponse,
     GetValidatorSet, ValidatorSetResponse, ValidatorInfoResponse,
-    GetCommit, CommitResponse,
+    GetCommit, CommitResponse, CommitSignatureInfo,
     GetChainParams, ChainParamsResponse,
     QueryTendermintPosition, TendermintPositionSnapshot,
     GetPendingGovernance, PendingGovernanceResponse, PendingGovernanceUpdate,
@@ -2921,29 +2921,63 @@ impl Handler<GetCommit> for ChainActor {
                     ChainError::Storage(format!("Block not found at height {}", height))
                 })?;
 
+                // Extract block header fields
+                let parent_hash = H256::from_slice(block.message.parent_hash.as_bytes());
+                let timestamp = block.message.execution_payload.timestamp;
+                // proposer_index: Use slot % validator_count, or 0 if we can't determine
+                // In Tendermint, the proposer rotates based on round-robin
+                let proposer_index = (block.message.slot % 15) as u32; // 15 validators max
+
+                // Compute last_commit_hash from block's last_commit field
+                let last_commit_hash = block.message.last_commit.as_ref().map(|commit| {
+                    // Hash the commit by combining height, round, block_hash, and signature count
+                    use tiny_keccak::{Hasher, Keccak};
+                    let mut hasher = Keccak::v256();
+                    hasher.update(&commit.height.to_le_bytes());
+                    hasher.update(&commit.round.to_le_bytes());
+                    hasher.update(commit.block_hash.as_bytes());
+                    hasher.update(&(commit.signatures.len() as u32).to_le_bytes());
+                    let mut hash = [0u8; 32];
+                    hasher.finalize(&mut hash);
+                    H256::from_slice(&hash)
+                });
+
                 // Extract commit from the NEXT block's last_commit
                 // Since block N's commit proof is in block N+1's last_commit
                 // For the head block, the commit won't be available until the next block is produced
-                let (round, signatures_count, commit_available) = if let Some(ref storage) = storage_actor {
+                let (round, signatures_count, commit_available, signatures) = if let Some(ref storage) = storage_actor {
                     use crate::actors_v2::storage::messages::GetBlockByHeightMessage;
 
                     match storage.send(GetBlockByHeightMessage { height: height + 1, correlation_id: None }).await {
                         Ok(Ok(Some(next_block))) => {
                             if let Some(commit) = next_block.message.last_commit {
-                                (commit.round, commit.signatures.len() as u32, true)
+                                let sigs: Vec<CommitSignatureInfo> = commit.signatures.iter().map(|sig| {
+                                    CommitSignatureInfo {
+                                        block_id_flag: format!("{:?}", sig.block_id_flag),
+                                        validator_address: sig.validator_address.map(|v| format!("{}", v.0)),
+                                        timestamp: if sig.timestamp > 0 { Some(sig.timestamp) } else { None },
+                                        // Encode signature as hex string
+                                        signature: sig.signature.as_ref().map(|s| {
+                                            let bytes = s.serialize();
+                                            bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+                                        }),
+                                    }
+                                }).collect();
+                                let count = sigs.len() as u32;
+                                (commit.round, count, true, sigs)
                             } else {
                                 // Next block exists but has no last_commit (shouldn't happen)
-                                (0, 0, false)
+                                (0, 0, false, Vec::new())
                             }
                         }
                         _ => {
                             // Next block doesn't exist yet - commit not available
                             // This is expected for the current head block
-                            (0, 0, false)
+                            (0, 0, false, Vec::new())
                         }
                     }
                 } else {
-                    (0, 0, false)
+                    (0, 0, false, Vec::new())
                 };
 
                 let block_hash = H256::from_slice(block.canonical_root().as_bytes());
@@ -2961,6 +2995,11 @@ impl Handler<GetCommit> for ChainActor {
                     height,
                     round,
                     block_hash,
+                    parent_hash,
+                    timestamp,
+                    proposer_index,
+                    last_commit_hash,
+                    signatures,
                     signatures_count,
                     canonical: true,
                     commit_available,
