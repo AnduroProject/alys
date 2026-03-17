@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --bin app --verbose
+    cargo build --bin app --bin miner --verbose
 
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
@@ -83,9 +83,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ## Our second stage will use Debian
 FROM debian:bullseye-slim AS runtime
 #
-## Copy the build artifact from the builder stage and set the startup command
+## Copy the build artifacts from the builder stage
 #COPY --from=builder /opt/alys/target/release/app /bin/alys
 COPY --from=builder /opt/alys/target/debug/app /bin/alys
+COPY --from=builder /opt/alys/target/debug/miner /bin/miner
 #
 ## Set the startup command to run your binary
 CMD ["alys --dev"]
