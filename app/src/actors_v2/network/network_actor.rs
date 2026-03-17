@@ -1569,6 +1569,102 @@ impl NetworkActor {
                         );
                     }
                 }
+                // Handle AuxPoW gossip messages (Phase 4: Mining coordination)
+                else if topic.contains("auxpow") {
+                    if let Some(ref chain_actor) = self.chain_actor {
+                        let chain_actor_clone = chain_actor.clone();
+                        let source_peer_clone = source_peer.clone();
+                        let correlation_id = uuid::Uuid::new_v4();
+
+                        // Deserialize and forward to ChainActor for queuing
+                        match serde_json::from_slice::<crate::block::AuxPowHeader>(&data) {
+                            Ok(auxpow_header) => {
+                                // Validate that AuxPoW field is populated
+                                if auxpow_header.auxpow.is_none() {
+                                    tracing::warn!(
+                                        peer_id = %source_peer,
+                                        correlation_id = %correlation_id,
+                                        "Received AuxPoW header without completed work, dropping"
+                                    );
+                                    self.peer_manager.add_peer_violation(
+                                        &source_peer,
+                                        Violation::InvalidData {
+                                            reason: "AuxPoW header missing completed work".to_string(),
+                                        },
+                                    );
+                                    return Ok(());
+                                }
+
+                                tracing::info!(
+                                    peer_id = %source_peer,
+                                    correlation_id = %correlation_id,
+                                    height = auxpow_header.height,
+                                    "Received valid AuxPoW from peer, forwarding to ChainActor"
+                                );
+
+                                // Record metrics
+                                self.metrics.record_auxpow_received();
+
+                                // Spawn async task to forward to ChainActor
+                                tokio::spawn(async move {
+                                    let msg = crate::actors_v2::chain::messages::ChainMessage::QueueAuxPow {
+                                        auxpow_header,
+                                        correlation_id: Some(correlation_id),
+                                    };
+
+                                    match chain_actor_clone.send(msg).await {
+                                        Ok(Ok(_)) => {
+                                            tracing::info!(
+                                                correlation_id = %correlation_id,
+                                                peer_id = %source_peer_clone,
+                                                "Successfully queued AuxPoW from peer"
+                                            );
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::warn!(
+                                                correlation_id = %correlation_id,
+                                                peer_id = %source_peer_clone,
+                                                error = ?e,
+                                                "ChainActor rejected AuxPoW from peer"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                correlation_id = %correlation_id,
+                                                peer_id = %source_peer_clone,
+                                                error = ?e,
+                                                "Failed to communicate with ChainActor for AuxPoW"
+                                            );
+                                        }
+                                    }
+                                });
+
+                                // Update peer reputation - they provided useful work
+                                self.peer_manager.record_peer_success(&source_peer);
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    peer_id = %source_peer,
+                                    correlation_id = %correlation_id,
+                                    error = ?e,
+                                    data_len = data.len(),
+                                    "Failed to deserialize AuxPoW from gossip message"
+                                );
+                                self.peer_manager.add_peer_violation(
+                                    &source_peer,
+                                    Violation::InvalidData {
+                                        reason: format!("AuxPoW deserialization failed: {}", e),
+                                    },
+                                );
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            topic = %topic,
+                            "Received AuxPoW gossip but ChainActor not available, dropping"
+                        );
+                    }
+                }
             }
 
             AlysNetworkBehaviourEvent::BlockRequestReceived {

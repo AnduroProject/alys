@@ -2686,6 +2686,7 @@ impl Handler<SubmitAuxBlock> for ChainActor {
         // Clone state and config for async operation (Arc<RwLock> fields propagate correctly)
         let state = self.state.clone();
         let config = self.config.clone();
+        let network_actor = self.network_actor.clone();
 
         Box::pin(
             async move {
@@ -2727,7 +2728,35 @@ impl Handler<SubmitAuxBlock> for ChainActor {
                     "AuxPoW queued with attached peg-ins (Path B)"
                 );
 
-                // TODO: Step 4: Broadcast to network (NetworkActor integration pending)
+                // Step 4: Broadcast AuxPoW to network (non-blocking, best-effort)
+                if let Some(ref actor) = network_actor {
+                    match serde_json::to_vec(&auxpow_header) {
+                        Ok(auxpow_data) => {
+                            let network_msg = crate::actors_v2::network::NetworkMessage::BroadcastAuxPow {
+                                auxpow_data,
+                                correlation_id: Some(correlation_id),
+                            };
+                            actor.do_send(network_msg);
+                            debug!(
+                                correlation_id = %correlation_id,
+                                height = auxpow_header.height,
+                                "AuxPoW broadcast initiated to network"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to serialize AuxPoW for network broadcast"
+                            );
+                        }
+                    }
+                } else {
+                    debug!(
+                        correlation_id = %correlation_id,
+                        "Skipping AuxPoW network broadcast - no NetworkActor configured"
+                    );
+                }
 
                 Ok(SubmitAuxBlockResponse {
                     auxpow_header: auxpow_header.clone(),
