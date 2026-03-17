@@ -12,4 +12,5 @@ clap = { workspace = true }
 tokio = { workspace = true }
 hex = { workspace = true }
 prometheus = { workspace = true }
+rand = "0.8"
 app = {  path = "../../app" }

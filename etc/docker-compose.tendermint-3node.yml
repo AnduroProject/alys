@@ -305,6 +305,32 @@ services:
         condition: service_started
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # MINING
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Test Miner - Submits AuxPoW with synthetic peg-ins
+  miner:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: miner
+    restart: unless-stopped
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.50
+    entrypoint: ["/bin/miner"]
+    command:
+      - --url=http://alys-node-1:3001
+      - --miner-address=0xb95f80EC665a534b1e309a2a24F8849d27B70FDE
+      - --test-pegins
+      - --pegin-interval=30
+      - --pegin-amount=10000000
+      - --pegin-recipient=0x1111111111111111111111111111111111111111
+      - --verbose
+    depends_on:
+      - alys-node-1
+      - alys-node-2
+      - alys-node-3
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # MONITORING
   # ═══════════════════════════════════════════════════════════════════════════
 

@@ -96,6 +96,11 @@ impl AuxBlock {
             _target: bits.into(),
         }
     }
+
+    /// Returns the block height for this work package
+    pub fn height(&self) -> u64 {
+        self.height
+    }
 }
 
 // TODO: Either move this struct out of auxpow__miner or modularize between mining related functionalities, and basic chain functionality
