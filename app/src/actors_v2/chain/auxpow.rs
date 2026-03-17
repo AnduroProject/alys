@@ -72,6 +72,29 @@ impl ChainActor {
                 self.state.set_queued_pow(None).await;
                 self.state.reset_blocks_without_pow().await;
 
+                // Step 5.1: Clear finalized blocks from AuxPoW cache
+                // The AuxPoW covers blocks from range_start to range_end
+                // Clear the cache through range_end so only newer blocks remain
+                let range_end_bitcoin = bitcoin::BlockHash::from_byte_array(
+                    auxpow_header.range_end.as_bytes().try_into().expect("H256 is 32 bytes")
+                );
+                if let Err(e) = self.state.clear_auxpow_cache_through(range_end_bitcoin).await {
+                    // Not fatal - cache may have been cleared already or blocks re-orged
+                    warn!(
+                        correlation_id = %correlation_id,
+                        error = %e,
+                        "Failed to clear AuxPoW cache through range_end (non-fatal)"
+                    );
+                }
+
+                info!(
+                    correlation_id = %correlation_id,
+                    range_start = %auxpow_header.range_start,
+                    range_end = %auxpow_header.range_end,
+                    remaining_cache_size = self.state.auxpow_cache_len().await,
+                    "Cleared finalized blocks from AuxPoW cache"
+                );
+
                 // Step 6: Update metrics
                 self.metrics.auxpow_processed.inc();
 
@@ -441,15 +464,9 @@ impl ChainActor {
     /// Get aggregate hashes from block hash cache (Priority 2)
     ///
     /// Returns hashes of unfinalized blocks for aggregate calculation.
-    /// Returns error if no work is available or cache is not initialized.
+    /// Returns error if no work is available or cache is empty.
     pub async fn get_aggregate_hashes(&self) -> Result<Vec<BlockHash>, ChainError> {
         let correlation_id = Uuid::new_v4();
-
-        // Check if block_hash_cache is initialized
-        let block_hash_cache =
-            self.state.block_hash_cache.as_ref().ok_or_else(|| {
-                ChainError::Internal("Block hash cache not initialized".to_string())
-            })?;
 
         // Get current head to check for new work
         let current_head = self
@@ -472,8 +489,8 @@ impl ChainActor {
             }
         }
 
-        // Get cached block hashes
-        let hashes = block_hash_cache.get();
+        // Get cached block hashes (uses async Arc<RwLock> access)
+        let hashes = self.state.get_auxpow_cache_hashes().await;
 
         if hashes.is_empty() {
             warn!(

@@ -23,6 +23,7 @@ use crate::actors_v2::chain::{ChainActor, ChainError};
 use crate::actors_v2::storage::messages::{
     GetValidatorSetForHeightMessage, StoreValidatorSetMessage,
 };
+use bitcoin::hashes::Hash as BitcoinHash; // For BlockHash::from_byte_array
 use ethereum_types::H256;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -3117,6 +3118,20 @@ impl ChainActor {
 
             // Update local state after storage confirms
             self.state.update_head(block_ref).await;
+
+            // Add block hash to AuxPoW cache for aggregate calculation
+            // This enables createauxblock to return work for miners
+            let bitcoin_block_hash = bitcoin::BlockHash::from_byte_array(
+                block_hash.as_bytes().try_into().expect("H256 is 32 bytes")
+            );
+            self.state.add_block_to_auxpow_cache(bitcoin_block_hash).await;
+
+            info!(
+                correlation_id = %correlation_id,
+                height = height,
+                cache_size = self.state.auxpow_cache_len().await,
+                "Added block to AuxPoW cache"
+            );
 
             // Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)
             // This happens AFTER commit to ensure peg-ins aren't lost if commit fails

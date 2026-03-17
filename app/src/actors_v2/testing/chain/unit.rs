@@ -82,7 +82,7 @@ mod tests {
         assert!(state.get_queued_pow().await.is_none());
         assert!(state.queued_pegins.read().await.is_empty());
         assert_eq!(state.is_validator, true);
-        assert!(state.block_hash_cache.is_some());
+        assert!(state.is_auxpow_cache_empty().await); // Cache starts empty
         assert!(state.last_block_time.read().await.is_none());
     }
 

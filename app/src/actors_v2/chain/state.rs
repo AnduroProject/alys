@@ -105,8 +105,12 @@ pub struct ChainState {
     /// Essential configuration (read-only)
     pub is_validator: bool,
     pub retarget_params: BitcoinConsensusParams,
-    pub block_hash_cache: Option<BlockHashCache>,
     pub max_blocks_without_pow: u64,
+
+    /// Block hash cache for AuxPoW aggregate calculation
+    /// Tracks unfinalized blocks that need AuxPoW coverage
+    /// Wrapped in Arc<RwLock> for async mutation from handlers
+    pub block_hash_cache: Arc<RwLock<BlockHashCache>>,
 
     // ========================================================================
     // Mutable State (Arc<RwLock> for async handler compatibility)
@@ -235,7 +239,7 @@ impl std::fmt::Debug for ChainState {
             .field("tendermint_runtime", &"<Option<Arc<RwLock<TendermintRuntimeState>>>>")
             .field("is_validator", &self.is_validator)
             .field("retarget_params", &self.retarget_params)
-            .field("block_hash_cache", &self.block_hash_cache)
+            .field("block_hash_cache", &"<Arc<RwLock<BlockHashCache>>>")
             .field("cumulative_difficulty", &"<Arc<RwLock<u128>>>")
             .field("difficulty_cache", &"<LruCache<u64, u128>>")
             .field("bridge", &"<Bridge>")
@@ -273,8 +277,10 @@ impl ChainState {
             federation,
             is_validator,
             retarget_params,
-            block_hash_cache: Some(BlockHashCache::new(None)),
             max_blocks_without_pow,
+
+            // Block hash cache for AuxPoW (wrapped for async access)
+            block_hash_cache: Arc::new(RwLock::new(BlockHashCache::new(None))),
 
             // Mutable state wrapped in Arc<RwLock>
             head: Arc::new(RwLock::new(head)),
@@ -431,6 +437,58 @@ impl ChainState {
             .try_read()
             .map(|guard| *guard)
             .unwrap_or(0)
+    }
+
+    // ========================================================================
+    // Block Hash Cache Methods (for AuxPoW aggregate calculation)
+    // ========================================================================
+
+    /// Add a block hash to the AuxPoW cache
+    ///
+    /// Called when a block is committed via Tendermint consensus.
+    /// The hash is used for aggregate calculation in createauxblock.
+    pub async fn add_block_to_auxpow_cache(&self, hash: bitcoin::BlockHash) {
+        let mut cache = self.block_hash_cache.write().await;
+        cache.add(hash);
+        tracing::debug!(
+            hash = %hash,
+            cache_size = cache.len(),
+            "Added block hash to AuxPoW cache"
+        );
+    }
+
+    /// Get all block hashes from the AuxPoW cache
+    ///
+    /// Returns hashes of unfinalized blocks for aggregate calculation.
+    pub async fn get_auxpow_cache_hashes(&self) -> Vec<bitcoin::BlockHash> {
+        self.block_hash_cache.read().await.get()
+    }
+
+    /// Clear the AuxPoW cache through a specific hash
+    ///
+    /// Called after successful submitauxblock to remove finalized blocks.
+    /// Returns Ok if the hash was found and cleared, Err if not found.
+    pub async fn clear_auxpow_cache_through(&self, hash: bitcoin::BlockHash) -> eyre::Result<()> {
+        let mut cache = self.block_hash_cache.write().await;
+        let result = cache.reset_with(hash);
+        if result.is_ok() {
+            tracing::debug!(
+                hash = %hash,
+                remaining = cache.len(),
+                "Cleared AuxPoW cache through hash"
+            );
+        }
+        result
+    }
+
+    /// Check if the AuxPoW cache is empty
+    pub async fn is_auxpow_cache_empty(&self) -> bool {
+        self.block_hash_cache.read().await.is_empty()
+    }
+
+    /// Get the number of hashes in the AuxPoW cache
+    pub async fn auxpow_cache_len(&self) -> usize {
+        self.block_hash_cache.read().await.len()
     }
 
     // ========================================================================
