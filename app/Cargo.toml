@@ -151,3 +151,7 @@ path = "src/bin/keygen.rs"
 [[bin]]
 name = "app"
 path = "src/main.rs"
+
+[[bin]]
+name = "tx-simulator"
+path = "src/bin/tx_simulator.rs"
