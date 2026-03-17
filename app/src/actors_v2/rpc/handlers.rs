@@ -131,13 +131,17 @@ impl SubmitAuxBlockHandler {
             ));
         }
 
-        // Parse aggregate hash
+        // Parse aggregate hash (consensus byte order, matching createauxblock output)
+        // Note: The miner sends the hash in consensus format (internal byte order),
+        // NOT Bitcoin display format (reversed). We must use consensus_decode to match.
         let hash_str = params[0]
             .as_str()
             .ok_or_else(|| RpcError::InvalidParams("Expected string hash".to_string()))?;
 
-        let aggregate_hash = BlockHash::from_str(hash_str)
-            .map_err(|e| RpcError::InvalidParams(format!("Invalid hash: {}", e)))?;
+        let hash_bytes = hex::decode(hash_str)
+            .map_err(|e| RpcError::InvalidParams(format!("Invalid hash hex: {}", e)))?;
+        let aggregate_hash = BlockHash::consensus_decode(&mut hash_bytes.as_slice())
+            .map_err(|e| RpcError::InvalidParams(format!("Invalid hash: {:?}", e)))?;
 
         // Parse AuxPoW hex
         let auxpow_hex = params[1]
