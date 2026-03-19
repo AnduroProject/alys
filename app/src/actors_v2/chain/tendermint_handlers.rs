@@ -3133,6 +3133,34 @@ impl ChainActor {
                 "Added block to AuxPoW cache"
             );
 
+            // Clear finalized blocks from AuxPoW cache if this block has AuxPoW
+            // This mirrors the logic in incorporate_auxpow (auxpow.rs:75-96)
+            // Without this, the cache grows unbounded causing createauxblock to return
+            // inflated target heights (cache_size ≈ chain_height, so height is doubled)
+            if let Some(ref auxpow_header) = block.auxpow_header {
+                let range_end_bitcoin = bitcoin::BlockHash::from_byte_array(
+                    auxpow_header.range_end.as_bytes().try_into().expect("H256 is 32 bytes")
+                );
+
+                if let Err(e) = self.state.clear_auxpow_cache_through(range_end_bitcoin).await {
+                    // Not fatal - cache may have been cleared already or blocks re-orged
+                    warn!(
+                        correlation_id = %correlation_id,
+                        error = %e,
+                        range_end = %auxpow_header.range_end,
+                        "Failed to clear AuxPoW cache through range_end (non-fatal)"
+                    );
+                } else {
+                    info!(
+                        correlation_id = %correlation_id,
+                        range_start = %auxpow_header.range_start,
+                        range_end = %auxpow_header.range_end,
+                        remaining_cache_size = self.state.auxpow_cache_len().await,
+                        "Cleared finalized blocks from AuxPoW cache"
+                    );
+                }
+            }
+
             // Mark all peg-ins in this block as processed (Doc 16 Layer 2: deduplication)
             // This happens AFTER commit to ensure peg-ins aren't lost if commit fails
             // Path B: Peg-ins are stored in auxpow_header.pegins (via pegins() helper)
