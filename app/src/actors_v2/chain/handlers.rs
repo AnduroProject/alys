@@ -3672,3 +3672,31 @@ impl Handler<GetEvidence> for ChainActor {
         )
     }
 }
+
+// ============================================================================
+// Governance: GovernanceUpdateReceived Handler
+// ============================================================================
+
+use crate::actors_v2::governance::GovernanceUpdateReceived;
+
+impl Handler<GovernanceUpdateReceived> for ChainActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: GovernanceUpdateReceived, ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        let update = msg.update;
+
+        info!(
+            correlation_id = %correlation_id,
+            update_type = update.variant_name(),
+            "Received governance update from governance service"
+        );
+
+        // Forward to the existing TendermintGovernanceUpdate handler
+        // This reuses existing governance handling logic
+        ctx.address().do_send(ChainMessage::TendermintGovernanceUpdate {
+            update,
+            correlation_id: Some(correlation_id),
+        });
+    }
+}

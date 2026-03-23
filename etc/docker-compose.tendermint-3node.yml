@@ -136,6 +136,8 @@ services:
       TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
+      GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
+      GOVERNANCE_AUTH_TOKEN: "test-token-123"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -168,6 +170,8 @@ services:
       execution:
         condition: service_started
       bitcoin-core:
+        condition: service_started
+      mock-governance:
         condition: service_started
 
   # Alys Node 2 - Validator (Proposer for height % 3 == 1)
@@ -203,6 +207,8 @@ services:
       TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
+      GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
+      GOVERNANCE_AUTH_TOKEN: "test-token-123"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -235,6 +241,8 @@ services:
       execution:
         condition: service_started
       bitcoin-core:
+        condition: service_started
+      mock-governance:
         condition: service_started
 
   # Alys Node 3 - Validator (Proposer for height % 3 == 2)
@@ -270,6 +278,8 @@ services:
       TENDERMINT_PROPOSE_TIMEOUT_MS: 5000  # Increased from 3000 for block build + broadcast time
       TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
+      GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
+      GOVERNANCE_AUTH_TOKEN: "test-token-123"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -303,6 +313,33 @@ services:
         condition: service_started
       bitcoin-core:
         condition: service_started
+      mock-governance:
+        condition: service_started
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # GOVERNANCE
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Mock Governance Service - Testing bidirectional gRPC streaming
+  mock-governance:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: mock-governance
+    restart: unless-stopped
+    labels:
+      chaos.role: "governance"
+      chaos.network: "alys-tendermint-3"
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.60
+    ports:
+      - "50051:50051"  # gRPC
+    entrypoint: ["/bin/mock-governance"]
+    command:
+      - --listen-addr=0.0.0.0:50051
+      - --auth-token=test-token-123
+      - --chain-id=alys-regtest
+      - --auto-ack-pegins
+      - --log-level=debug
 
   # ═══════════════════════════════════════════════════════════════════════════
   # MINING
@@ -323,7 +360,7 @@ services:
       - --test-pegins
       - --pegin-interval=30
       - --pegin-amount=10000000
-      - --pegin-recipient=0x1111111111111111111111111111111111111111
+      - --pegin-recipient=0xdad13ea7e7fbf9c77d185ee5acbf50ddd93e1823
       - --verbose
     depends_on:
       - alys-node-1

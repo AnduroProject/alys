@@ -6,6 +6,7 @@
 pub mod chain;
 pub mod common;
 pub mod engine;
+pub mod governance;
 pub mod network;
 pub mod rpc;
 pub mod storage;

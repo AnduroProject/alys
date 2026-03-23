@@ -1,0 +1,12 @@
+[package]
+name = "governance-proto"
+version = "0.1.0"
+edition = "2021"
+description = "Protocol buffer definitions for Alys governance service"
+
+[dependencies]
+prost = "0.12"
+tonic = { version = "0.10", features = ["transport", "codegen"] }
+
+[build-dependencies]
+tonic-build = "0.10"

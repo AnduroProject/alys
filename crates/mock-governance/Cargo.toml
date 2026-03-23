@@ -1,0 +1,35 @@
+[package]
+name = "mock-governance"
+version = "0.1.0"
+edition = "2021"
+description = "Mock governance server for Alys testnet"
+
+[[bin]]
+name = "mock-governance"
+path = "src/main.rs"
+
+[dependencies]
+# gRPC
+governance-proto = { path = "../governance-proto" }
+tonic = { version = "0.10", features = ["transport"] }
+prost = "0.12"
+
+# Async runtime
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+tokio-stream = "0.1"
+futures = { workspace = true }
+
+# CLI and config
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = "1.0"
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+eyre = { workspace = true }
+hex = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
+rand = "0.8"

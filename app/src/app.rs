@@ -179,6 +179,14 @@ pub struct App {
 
     #[clap(long, help = "Port for the metrics server")]
     pub metrics_port: Option<u16>,
+
+    /// Governance service gRPC URL (e.g., http://governance:50051)
+    #[clap(long, env = "GOVERNANCE_GRPC_URL")]
+    pub governance_grpc_url: Option<String>,
+
+    /// Authentication token for governance service
+    #[clap(long, env = "GOVERNANCE_AUTH_TOKEN", default_value = "test-token-123")]
+    pub governance_auth_token: String,
 }
 
 impl App {
@@ -353,6 +361,8 @@ impl App {
         let v2_required_confirmations = chain_spec.required_btc_txn_confirmations;
         let v2_slot_duration = slot_duration;
         let v2_wallet_path = format!("{DEFAULT_ROOT_DIR}/wallet_v2");
+        let v2_governance_grpc_url = self.governance_grpc_url.clone();
+        let v2_governance_auth_token = self.governance_auth_token.clone();
 
         // Start V2 JSON-RPC server
         info!("Starting V2 RPC server on port 3001...");
@@ -644,6 +654,32 @@ impl App {
                     Ok(()) => info!("✓ TendermintSyncValidator configured in ChainActor for governance notifications"),
                     Err(e) => error!("✗ Failed to set TendermintSyncValidator in ChainActor: {:?}", e),
                 }
+            }
+
+            // 5.5 Initialize GovernanceClientActor (if configured)
+            if let Some(ref governance_url) = v2_governance_grpc_url {
+                info!("🏛️  Initializing GovernanceClientActor...");
+                let governance_config = crate::actors_v2::governance::GovernanceConfig {
+                    grpc_url: governance_url.clone(),
+                    auth_token: v2_governance_auth_token.clone(),
+                    chain_id: "alys-regtest".to_string(),
+                    reconnect_interval: std::time::Duration::from_secs(5),
+                    heartbeat_interval: std::time::Duration::from_secs(30),
+                    verify_timeout: std::time::Duration::from_secs(30),
+                };
+                let governance_actor = crate::actors_v2::governance::GovernanceClientActor::new(governance_config).start();
+                info!("✓ GovernanceClientActor started");
+
+                // Wire GovernanceClientActor to ChainActor
+                match governance_actor.send(crate::actors_v2::governance::GovernanceMessage::SetChainActor {
+                    addr: chain_actor_addr.clone(),
+                }).await {
+                    Ok(Ok(_)) => info!("✓ ChainActor configured in GovernanceClientActor"),
+                    Ok(Err(e)) => error!("✗ Failed to set ChainActor in GovernanceClientActor: {:?}", e),
+                    Err(e) => error!("✗ GovernanceClientActor mailbox error during SetChainActor: {:?}", e),
+                }
+            } else {
+                info!("ℹ️  GovernanceClientActor not configured (no GOVERNANCE_GRPC_URL)");
             }
 
             // Clone chain_actor_addr for slot worker (before RPC consumes it)

@@ -1,0 +1,219 @@
+# Docker Compose Single-Validator Tendermint Configuration
+# Purpose: Testing Tendermint consensus with a single validator node
+# Use Case: Development, debugging, and initial Tendermint migration validation
+#
+# This configuration runs:
+# - Bitcoin Core (regtest)
+# - Reth execution layer
+# - Single Alys validator node with Tendermint consensus
+# - Prometheus + Grafana for metrics
+#
+# Usage:
+#   docker compose -f docker-compose.tendermint-single.yml up -d
+#   docker compose -f docker-compose.tendermint-single.yml logs -f alys-node-1
+
+services:
+  # Bitcoin Core - Regtest instance
+  bitcoin-core:
+    image: balajimara/bitcoin:25.99
+    platform: linux/amd64
+    container_name: bitcoin-core
+    restart: unless-stopped
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.30
+    ports:
+      - "18333:18333"  # P2P
+      - "18443:18443"  # RPC
+    volumes:
+      - ../data/tendermint-single/bitcoin:/root/.bitcoin
+    command:
+      - -printtoconsole
+      - -debug=1
+      - -regtest=1
+      - -fallbackfee=0.002
+      - -rpcallowip=0.0.0.0/0
+      - -rpcbind=0.0.0.0
+      - -server
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -port=18333
+      - -rpcport=18443
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "getblockchaininfo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Execution Layer - Reth
+  execution:
+    image: ghcr.io/paradigmxyz/reth:v1.1.3
+    platform: linux/amd64
+    container_name: execution
+    restart: unless-stopped
+    pid: host
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.20
+    ports:
+      - "8545:8545"    # HTTP RPC
+      - "8551:8551"    # Engine API
+      - "8456:8456"    # WebSocket
+      - "19001:19001"  # Metrics
+      - "30303:30303"  # ETH P2P
+    volumes:
+      - ../data/tendermint-single/execution/data:/opt/alys/execution/data
+      - ../data/tendermint-single/execution/logs:/opt/alys/execution/logs
+      - ./config:/opt/alys/execution/config
+    environment:
+      RUST_LOG: info
+      RUST_BACKTRACE: full
+    command: >
+      node
+      --chain /opt/alys/execution/config/genesis.json
+      --log.file.directory /opt/alys/execution/logs
+      --datadir /opt/alys/execution/data
+      --config /opt/alys/execution/config/eth-config.toml
+      --metrics 0.0.0.0:19001
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /opt/alys/execution/config/jwt/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "debug,net,eth,web3,txpool"
+      --http.corsdomain "*"
+      --ws.api "eth,net,web3,debug,txpool"
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8456
+      --ws.origins "*"
+      --port 30303
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Alys Single Validator Node (Tendermint)
+  alys-node-1:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: alys-tendermint-single
+    restart: unless-stopped
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.10
+    ports:
+      - "3000:3000"    # V0 RPC
+      - "3001:3001"    # V2 RPC
+      - "9000:9000"    # V0 P2P
+      - "9090:9090"    # Prometheus Metrics
+      - "10000:10000"  # V2 P2P (libp2p)
+    volumes:
+      - ../data/tendermint-single/node1/db:/lib/alys/data/db
+      - ../data/tendermint-single/node1/wallet:/lib/alys/data/wallet
+      - ../logs/tendermint-single/node1:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: info,app=debug,tendermint=debug
+      RUST_BACKTRACE: full
+      # Tendermint timeout configuration (optional, these are defaults)
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 3000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 1000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 1000
+      TENDERMINT_TIMEOUT_DELTA_MS: 500
+      TENDERMINT_MAX_TIMEOUT_SECS: 30
+      GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
+      GOVERNANCE_AUTH_TOKEN: "test-token-123"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for dependencies..."
+        sleep 15
+        echo "Starting Alys Single Validator (Tendermint)..."
+        exec /bin/alys \
+          --dev \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090
+    depends_on:
+      execution:
+        condition: service_healthy
+      bitcoin-core:
+        condition: service_healthy
+      mock-governance:
+        condition: service_started
+
+  # Mock Governance Service - Testing bidirectional gRPC streaming
+  mock-governance:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: mock-governance-single
+    restart: unless-stopped
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.60
+    ports:
+      - "50051:50051"  # gRPC
+    entrypoint: ["/bin/mock-governance"]
+    command:
+      - --listen-addr=0.0.0.0:50051
+      - --auth-token=test-token-123
+      - --chain-id=alys-regtest
+      - --auto-ack-pegins
+      - --log-level=debug
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-tendermint
+    restart: unless-stopped
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.40
+    ports:
+      - "9092:9090"  # Prometheus UI
+    volumes:
+      - ./config/prometheus/prometheus-single.yml:/etc/prometheus/prometheus.yml:ro
+      - ../data/tendermint-single/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - alys-node-1
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-tendermint
+    restart: unless-stopped
+    networks:
+      alys-tendermint:
+        ipv4_address: 172.21.0.41
+    ports:
+      - "3030:3000"  # Grafana UI
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../data/tendermint-single/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+
+networks:
+  alys-tendermint:
+    name: alys-tendermint
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

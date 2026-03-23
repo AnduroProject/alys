@@ -1,0 +1,110 @@
+syntax = "proto3";
+package governance;
+
+// GovernanceService provides bidirectional streaming for validator-governance communication.
+// Pattern matches anduro-governance ChatMessage for easy migration to real client.
+service GovernanceService {
+    // Bidirectional streaming RPC for governance communication.
+    // Validators send requests (pegin verification, heartbeats).
+    // Governance sends responses and pushes updates (validator set changes, parameters).
+    rpc GovernanceStream(stream GovernanceRequest) returns (stream GovernanceResponse);
+}
+
+// Request from validator to governance
+message GovernanceRequest {
+    // Chain identifier (e.g., "alys-regtest", "alys-mainnet")
+    string chain = 1;
+    // Request ID for correlation with responses
+    string request_id = 2;
+    // Request payload
+    oneof payload {
+        PeginVerifyRequest pegin_verify = 10;
+        Heartbeat heartbeat = 11;
+    }
+}
+
+// Response from governance to validator
+message GovernanceResponse {
+    // Chain identifier
+    string chain = 1;
+    // Request ID for correlation (empty for push notifications)
+    string request_id = 2;
+    // Response payload
+    oneof payload {
+        PeginVerifyResponse pegin_verify = 10;
+        ValidatorSetUpdate validator_update = 11;
+        ParameterUpdate parameter_update = 12;
+        EmergencyAction emergency = 13;
+        HeartbeatAck heartbeat_ack = 14;
+    }
+}
+
+// Request to verify a peg-in transaction
+message PeginVerifyRequest {
+    // Bitcoin transaction ID (32 bytes, internal byte order)
+    bytes txid = 1;
+    // Bitcoin block hash containing the transaction (32 bytes)
+    bytes block_hash = 2;
+    // EVM account to receive the pegged-in funds (20 bytes)
+    bytes evm_account = 3;
+    // Required number of Bitcoin confirmations
+    uint32 required_confirmations = 4;
+    // Amount in satoshis
+    uint64 amount = 5;
+}
+
+// Response for peg-in verification
+message PeginVerifyResponse {
+    // Whether the peg-in is verified
+    bool verified = 1;
+    // Reason for rejection (if not verified)
+    string reason = 2;
+    // Current number of confirmations
+    uint32 confirmations = 3;
+}
+
+// Validator set update pushed from governance
+message ValidatorSetUpdate {
+    // Validator's BLS public key (48 bytes compressed)
+    bytes public_key = 1;
+    // New voting power (0 = remove from validator set)
+    uint64 power = 2;
+    // Governance signature authorizing the update
+    bytes governance_signature = 3;
+}
+
+// Parameter update pushed from governance
+message ParameterUpdate {
+    // Parameter ID (see GovernableParam enum values)
+    uint32 param_id = 1;
+    // New parameter value
+    uint64 value = 2;
+    // Governance signature authorizing the update
+    bytes governance_signature = 3;
+}
+
+// Emergency action pushed from governance
+message EmergencyAction {
+    // Action type:
+    // 0 = PausePegIns
+    // 1 = ResumePegIns
+    // 2 = PausePegOuts
+    // 3 = ResumePegOuts
+    // 4 = PauseChain
+    // 5 = ResumeChain
+    uint32 action = 1;
+    // Governance signature authorizing the action
+    bytes governance_signature = 2;
+}
+
+// Heartbeat from validator to keep connection alive
+message Heartbeat {
+    // Unix timestamp in milliseconds
+    uint64 timestamp = 1;
+}
+
+// Heartbeat acknowledgment from governance
+message HeartbeatAck {
+    // Echo of the timestamp received
+    uint64 timestamp = 1;
+}
