@@ -67,7 +67,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --bin app --bin miner --verbose
+    cargo build --bin app --bin miner --bin mock-governance --verbose
 
 ##RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #  --mount=type=cache,target=/usr/local/cargo/git \
@@ -88,6 +88,7 @@ FROM debian:bullseye-slim AS runtime
 #COPY --from=builder /opt/alys/target/release/app /bin/alys
 COPY --from=builder /opt/alys/target/debug/app /bin/alys
 COPY --from=builder /opt/alys/target/debug/miner /bin/miner
+COPY --from=builder /opt/alys/target/debug/mock-governance /bin/mock-governance
 #
 ## Set the startup command to run your binary
 CMD ["alys --dev"]
