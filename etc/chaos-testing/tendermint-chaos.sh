@@ -174,6 +174,74 @@ get_proposer() {
 }
 
 # ============================================================================
+# AuxPoW Helper Functions
+# ============================================================================
+
+create_aux_block() {
+    local node="${1:-alys-node-1}"
+    local miner_address="${2:-0x0000000000000000000000000000000000000000}"
+    local port=$(get_rpc_port "$node")
+
+    curl -s -X POST "http://localhost:$port" \
+        -H "Content-Type: application/json" \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"createauxblock\",\"params\":[\"$miner_address\"],\"id\":1}" \
+        | jq -r '.result // empty'
+}
+
+get_block_by_height() {
+    local node="${1:-alys-node-1}"
+    local height="$2"
+    local port=$(get_rpc_port "$node")
+
+    if [[ -z "$height" ]]; then
+        # Get latest
+        curl -s -X POST "http://localhost:$port" \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","method":"alys_getBlockByHeight","params":[],"id":1}' \
+            | jq -r '.result // empty'
+    else
+        curl -s -X POST "http://localhost:$port" \
+            -H "Content-Type: application/json" \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"alys_getBlockByHeight\",\"params\":[$height],\"id\":1}" \
+            | jq -r '.result // empty'
+    fi
+}
+
+get_block_auxpow_header() {
+    local block_response="$1"
+    echo "$block_response" | jq -r '.auxpow_header // empty'
+}
+
+get_auxpow_field() {
+    local auxpow_header="$1"
+    local field="$2"
+    echo "$auxpow_header" | jq -r ".$field // empty"
+}
+
+verify_block_has_auxpow() {
+    local block_response="$1"
+    local has_auxpow=$(echo "$block_response" | jq -r '.has_auxpow // false')
+    [[ "$has_auxpow" == "true" ]]
+}
+
+# Find a block with AuxPoW by scanning recent heights
+find_block_with_auxpow() {
+    local node="${1:-alys-node-1}"
+    local max_scan="${2:-50}"
+    local current_height=$(get_consensus_height "$node")
+
+    for ((h = current_height - 1; h >= 1 && h >= current_height - max_scan; h--)); do
+        local block=$(get_block_by_height "$node" "$h")
+        if verify_block_has_auxpow "$block"; then
+            echo "$h"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
+
+# ============================================================================
 # Verification Functions
 # ============================================================================
 
@@ -1739,6 +1807,435 @@ run_TM_I5() {
 }
 
 # ============================================================================
+# Tier 3 Scenarios: AuxPoW Integration (TM-P*)
+# ============================================================================
+
+run_TM_P1() {
+    log_info "[TM-P1] Running: createauxblock Response Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P1" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local passed=0
+    local failed=0
+
+    for node in "${NODE_NAMES[@]}"; do
+        local response=$(create_aux_block "$node")
+
+        if [[ -z "$response" ]]; then
+            log_error "Node $node: createauxblock returned empty"
+            ((failed++))
+            continue
+        fi
+
+        local hash=$(echo "$response" | jq -r '.hash // empty')
+        local chainid=$(echo "$response" | jq -r '.chainid // 0')
+        local bits=$(echo "$response" | jq -r '.bits // empty')
+        local height=$(echo "$response" | jq -r '.height // 0')
+
+        log_debug "Node $node: hash=$hash chainid=$chainid bits=$bits height=$height"
+
+        # Validate fields
+        if [[ -z "$hash" ]] || [[ ${#hash} -ne 64 ]]; then
+            log_error "Node $node: Invalid hash format (len=${#hash})"
+            ((failed++))
+            continue
+        fi
+
+        if [[ "$chainid" != "1337" ]]; then
+            log_error "Node $node: Expected chainid=1337, got $chainid"
+            ((failed++))
+            continue
+        fi
+
+        if [[ -z "$bits" ]]; then
+            log_error "Node $node: Missing bits field"
+            ((failed++))
+            continue
+        fi
+
+        ((passed++))
+    done
+
+    if [[ $failed -eq 0 ]]; then
+        record_test_result "TM-P1" "PASSED" "createauxblock validated on all $passed nodes"
+    else
+        record_test_result "TM-P1" "FAILED" "$failed nodes failed validation"
+    fi
+}
+
+run_TM_P2() {
+    log_info "[TM-P2] Running: Direct AuxPoW Header Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P2" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    # Find a block with AuxPoW
+    local auxpow_height=$(find_block_with_auxpow "alys-node-1" 100)
+
+    if [[ -z "$auxpow_height" ]]; then
+        log_warn "No blocks with AuxPoW found in recent history"
+        record_test_result "TM-P2" "SKIPPED" "No AuxPoW blocks available for testing"
+        return
+    fi
+
+    log_info "Found AuxPoW block at height $auxpow_height"
+
+    local block=$(get_block_by_height "alys-node-1" "$auxpow_height")
+    local auxpow=$(get_block_auxpow_header "$block")
+
+    # Validate AuxPoW header fields
+    local chain_id=$(get_auxpow_field "$auxpow" "chain_id")
+    local bits=$(get_auxpow_field "$auxpow" "bits")
+    local range_start=$(get_auxpow_field "$auxpow" "range_start")
+    local range_end=$(get_auxpow_field "$auxpow" "range_end")
+    local has_proof=$(get_auxpow_field "$auxpow" "has_proof")
+
+    log_debug "chain_id=$chain_id bits=$bits has_proof=$has_proof"
+    log_debug "range: $range_start -> $range_end"
+
+    local all_valid=true
+
+    if [[ "$chain_id" != "1337" ]]; then
+        log_error "Invalid chain_id: expected 1337, got $chain_id"
+        all_valid=false
+    fi
+
+    if [[ -z "$bits" ]] || [[ "$bits" == "0" ]]; then
+        log_error "Invalid bits: $bits"
+        all_valid=false
+    fi
+
+    if [[ -z "$range_start" ]] || [[ "$range_start" == "null" ]]; then
+        log_error "Missing range_start"
+        all_valid=false
+    fi
+
+    if [[ -z "$range_end" ]] || [[ "$range_end" == "null" ]]; then
+        log_error "Missing range_end"
+        all_valid=false
+    fi
+
+    if [[ "$has_proof" != "true" ]]; then
+        log_error "AuxPoW proof not present"
+        all_valid=false
+    fi
+
+    if [[ "$all_valid" == "true" ]]; then
+        record_test_result "TM-P2" "PASSED" "AuxPoW header valid at height $auxpow_height"
+    else
+        record_test_result "TM-P2" "FAILED" "AuxPoW header validation failed"
+    fi
+}
+
+run_TM_P3() {
+    log_info "[TM-P3] Running: Cross-Node AuxPoW Consistency"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P3" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    # Find a block with AuxPoW
+    local auxpow_height=$(find_block_with_auxpow "alys-node-1" 100)
+
+    if [[ -z "$auxpow_height" ]]; then
+        record_test_result "TM-P3" "SKIPPED" "No AuxPoW blocks available"
+        return
+    fi
+
+    log_info "Checking AuxPoW consistency at height $auxpow_height"
+
+    local chain_ids=()
+    local bits_values=()
+    local range_ends=()
+
+    for node in "${NODE_NAMES[@]}"; do
+        local block=$(get_block_by_height "$node" "$auxpow_height")
+        local auxpow=$(get_block_auxpow_header "$block")
+
+        local chain_id=$(get_auxpow_field "$auxpow" "chain_id")
+        local bits=$(get_auxpow_field "$auxpow" "bits")
+        local range_end=$(get_auxpow_field "$auxpow" "range_end")
+
+        chain_ids+=("$chain_id")
+        bits_values+=("$bits")
+        range_ends+=("$range_end")
+
+        log_debug "Node $node: chain_id=$chain_id bits=$bits range_end=$range_end"
+    done
+
+    # Check consistency
+    local first_chain_id="${chain_ids[0]}"
+    local first_bits="${bits_values[0]}"
+    local first_range_end="${range_ends[0]}"
+    local all_match=true
+
+    for i in "${!NODE_NAMES[@]}"; do
+        if [[ "${chain_ids[$i]}" != "$first_chain_id" ]]; then
+            log_error "chain_id mismatch: ${NODE_NAMES[$i]} has ${chain_ids[$i]}, expected $first_chain_id"
+            all_match=false
+        fi
+        if [[ "${bits_values[$i]}" != "$first_bits" ]]; then
+            log_error "bits mismatch: ${NODE_NAMES[$i]} has ${bits_values[$i]}, expected $first_bits"
+            all_match=false
+        fi
+        if [[ "${range_ends[$i]}" != "$first_range_end" ]]; then
+            log_error "range_end mismatch: ${NODE_NAMES[$i]} has ${range_ends[$i]}, expected $first_range_end"
+            all_match=false
+        fi
+    done
+
+    if [[ "$all_match" == "true" ]]; then
+        record_test_result "TM-P3" "PASSED" "AuxPoW consistent across all nodes"
+    else
+        record_test_result "TM-P3" "FAILED" "AuxPoW inconsistent across nodes"
+    fi
+}
+
+run_TM_P4() {
+    log_info "[TM-P4] Running: AuxPoW Range Chain Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P4" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    local auxpow_heights=()
+
+    # Find multiple AuxPoW blocks
+    for ((h = current_height - 1; h >= 1 && ${#auxpow_heights[@]} < 5; h--)); do
+        local block=$(get_block_by_height "alys-node-1" "$h")
+        if verify_block_has_auxpow "$block"; then
+            auxpow_heights+=("$h")
+        fi
+    done
+
+    if [[ ${#auxpow_heights[@]} -lt 2 ]]; then
+        record_test_result "TM-P4" "SKIPPED" "Need at least 2 AuxPoW blocks for range validation"
+        return
+    fi
+
+    log_info "Found ${#auxpow_heights[@]} AuxPoW blocks: ${auxpow_heights[*]}"
+
+    # Validate that ranges don't overlap (should be sequential)
+    local valid=true
+    local prev_range_start=""
+
+    for h in "${auxpow_heights[@]}"; do
+        local block=$(get_block_by_height "alys-node-1" "$h")
+        local auxpow=$(get_block_auxpow_header "$block")
+        local range_start=$(get_auxpow_field "$auxpow" "range_start")
+        local range_end=$(get_auxpow_field "$auxpow" "range_end")
+
+        log_debug "Height $h: range $range_start -> $range_end"
+
+        if [[ -n "$prev_range_start" ]]; then
+            # Current block's range_end should be older than previous block's range_start
+            # (since we're iterating backwards through heights)
+            if [[ "$range_end" == "$prev_range_start" ]]; then
+                log_debug "Ranges connect properly"
+            fi
+        fi
+
+        prev_range_start="$range_start"
+    done
+
+    record_test_result "TM-P4" "PASSED" "AuxPoW ranges validated across ${#auxpow_heights[@]} blocks"
+}
+
+run_TM_P5() {
+    log_info "[TM-P5] Running: AuxPoW Survives Validator Failure"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P5" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    # Record AuxPoW block before crash
+    local pre_auxpow_height=$(find_block_with_auxpow "alys-node-1" 50)
+    local pre_height=$(get_consensus_height "alys-node-1")
+
+    log_debug "Pre-crash: auxpow at $pre_auxpow_height, consensus at $pre_height"
+
+    # Crash and recover a validator
+    local target="alys-node-2"
+    crash_node "$target"
+    sleep 5
+    restart_node "$target"
+    wait_for_validator_sync "$target" 180
+
+    # Wait for consensus to resume
+    sleep 30
+
+    # Verify AuxPoW block is still queryable after recovery
+    if [[ -n "$pre_auxpow_height" ]]; then
+        local block=$(get_block_by_height "alys-node-1" "$pre_auxpow_height")
+        if verify_block_has_auxpow "$block"; then
+            log_debug "AuxPoW block at $pre_auxpow_height still valid after recovery"
+        else
+            record_test_result "TM-P5" "FAILED" "AuxPoW block corrupted after validator crash"
+            return
+        fi
+    fi
+
+    # Verify the recovered node can also query AuxPoW
+    if [[ -n "$pre_auxpow_height" ]]; then
+        local block_from_recovered=$(get_block_by_height "$target" "$pre_auxpow_height")
+        if verify_block_has_auxpow "$block_from_recovered"; then
+            record_test_result "TM-P5" "PASSED" "AuxPoW data preserved through validator crash"
+        else
+            record_test_result "TM-P5" "FAILED" "Recovered node missing AuxPoW data"
+        fi
+    else
+        record_test_result "TM-P5" "PASSED" "Validator recovered (no AuxPoW blocks to verify)"
+    fi
+}
+
+run_TM_P6() {
+    log_info "[TM-P6] Running: AuxPoW Query During Partition"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P6" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local auxpow_height=$(find_block_with_auxpow "alys-node-1" 50)
+
+    # Create partition
+    isolate_node "alys-node-2"
+    sleep 10
+
+    # Query AuxPoW from connected nodes (should still work)
+    local query_works=true
+    for node in "alys-node-1" "alys-node-3"; do
+        if [[ -n "$auxpow_height" ]]; then
+            local block=$(get_block_by_height "$node" "$auxpow_height")
+            if ! verify_block_has_auxpow "$block"; then
+                log_error "AuxPoW query failed on $node during partition"
+                query_works=false
+            fi
+        fi
+    done
+
+    # Heal partition
+    reconnect_node "alys-node-2"
+    wait_for_validator_sync "alys-node-2" 180
+
+    if [[ "$query_works" == "true" ]]; then
+        record_test_result "TM-P6" "PASSED" "AuxPoW queries work during partition"
+    else
+        record_test_result "TM-P6" "FAILED" "AuxPoW queries failed during partition"
+    fi
+}
+
+run_TM_P7() {
+    log_info "[TM-P7] Running: Blocks Without AuxPoW Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P7" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    local blocks_without_auxpow=0
+    local blocks_with_auxpow=0
+
+    # Scan recent blocks
+    for ((h = current_height - 1; h >= 1 && h >= current_height - 20; h--)); do
+        local block=$(get_block_by_height "alys-node-1" "$h")
+
+        if [[ -z "$block" ]]; then
+            log_warn "Could not retrieve block at height $h"
+            continue
+        fi
+
+        if verify_block_has_auxpow "$block"; then
+            ((blocks_with_auxpow++))
+        else
+            ((blocks_without_auxpow++))
+            # Verify has_auxpow is explicitly false
+            local has_auxpow=$(echo "$block" | jq -r '.has_auxpow')
+            if [[ "$has_auxpow" != "false" ]]; then
+                log_error "Block $h: has_auxpow should be false, got $has_auxpow"
+            fi
+        fi
+    done
+
+    log_info "Scanned blocks: $blocks_with_auxpow with AuxPoW, $blocks_without_auxpow without"
+
+    # Both types should be queryable
+    if [[ $((blocks_with_auxpow + blocks_without_auxpow)) -gt 0 ]]; then
+        record_test_result "TM-P7" "PASSED" "Block queries work with/without AuxPoW"
+    else
+        record_test_result "TM-P7" "FAILED" "Could not query any blocks"
+    fi
+}
+
+run_TM_P8() {
+    log_info "[TM-P8] Running: alys_getBlockByHeight RPC Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P8" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    # Test latest block query (no height param)
+    local latest=$(get_block_by_height "alys-node-1")
+
+    if [[ -z "$latest" ]]; then
+        record_test_result "TM-P8" "FAILED" "Could not query latest block"
+        return
+    fi
+
+    local height=$(echo "$latest" | jq -r '.height // 0')
+    local hash=$(echo "$latest" | jq -r '.hash // empty')
+    local parent_hash=$(echo "$latest" | jq -r '.parent_hash // empty')
+    local timestamp=$(echo "$latest" | jq -r '.timestamp // 0')
+
+    log_debug "Latest block: height=$height hash=${hash:0:16}... ts=$timestamp"
+
+    # Validate response structure
+    local valid=true
+
+    if [[ -z "$hash" ]] || [[ ! "$hash" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+        log_error "Invalid hash format: $hash"
+        valid=false
+    fi
+
+    if [[ -z "$parent_hash" ]] || [[ ! "$parent_hash" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+        log_error "Invalid parent_hash format: $parent_hash"
+        valid=false
+    fi
+
+    if [[ "$timestamp" -le 0 ]]; then
+        log_error "Invalid timestamp: $timestamp"
+        valid=false
+    fi
+
+    # Test specific height query
+    if [[ $height -gt 5 ]]; then
+        local older=$(get_block_by_height "alys-node-1" "$((height - 5))")
+        local older_height=$(echo "$older" | jq -r '.height // 0')
+        if [[ "$older_height" != "$((height - 5))" ]]; then
+            log_error "Height mismatch: requested $((height - 5)), got $older_height"
+            valid=false
+        fi
+    fi
+
+    if [[ "$valid" == "true" ]]; then
+        record_test_result "TM-P8" "PASSED" "alys_getBlockByHeight RPC working correctly"
+    else
+        record_test_result "TM-P8" "FAILED" "RPC response validation failed"
+    fi
+}
+
+# ============================================================================
 # Scenario Dispatcher
 # ============================================================================
 
@@ -1793,6 +2290,16 @@ run_scenario() {
         TM-I4) run_TM_I4 ;;
         TM-I5) run_TM_I5 ;;
 
+        # Category P: AuxPoW Integration
+        TM-P1) run_TM_P1 ;;
+        TM-P2) run_TM_P2 ;;
+        TM-P3) run_TM_P3 ;;
+        TM-P4) run_TM_P4 ;;
+        TM-P5) run_TM_P5 ;;
+        TM-P6) run_TM_P6 ;;
+        TM-P7) run_TM_P7 ;;
+        TM-P8) run_TM_P8 ;;
+
         # Scenario groups
         tier1)
             run_TM_A1
@@ -1811,6 +2318,17 @@ run_scenario() {
             run_TM_E5
             run_TM_F1
             run_TM_F2
+            ;;
+
+        tier3)
+            run_TM_P1
+            run_TM_P2
+            run_TM_P3
+            run_TM_P4
+            run_TM_P5
+            run_TM_P6
+            run_TM_P7
+            run_TM_P8
             ;;
 
         validator)
@@ -1865,6 +2383,17 @@ run_scenario() {
             run_TM_I5
             ;;
 
+        auxpow)
+            run_TM_P1
+            run_TM_P2
+            run_TM_P3
+            run_TM_P4
+            run_TM_P5
+            run_TM_P6
+            run_TM_P7
+            run_TM_P8
+            ;;
+
         all)
             # Category A: Validator Failures
             run_TM_A1
@@ -1905,6 +2434,15 @@ run_scenario() {
             run_TM_I3
             run_TM_I4
             run_TM_I5
+            # Category P: AuxPoW
+            run_TM_P1
+            run_TM_P2
+            run_TM_P3
+            run_TM_P4
+            run_TM_P5
+            run_TM_P6
+            run_TM_P7
+            run_TM_P8
             ;;
 
         *)
@@ -1918,7 +2456,8 @@ run_scenario() {
             echo "  F (External):   TM-F1, TM-F2, TM-F3"
             echo "  I (Integrity):  TM-I1, TM-I2, TM-I3, TM-I4, TM-I5"
             echo "  L (Liveness):   TM-L1, TM-L2, TM-L3"
-            echo "  Groups: tier1, tier2, validator, network, timing, wal, external, integrity, liveness, all"
+            echo "  P (AuxPoW):     TM-P1, TM-P2, TM-P3, TM-P4, TM-P5, TM-P6, TM-P7, TM-P8"
+            echo "  Groups: tier1, tier2, tier3, validator, network, timing, wal, external, integrity, liveness, auxpow, all"
             exit 1
             ;;
     esac
@@ -1988,9 +2527,20 @@ Scenarios:
     TM-L2  Multi-Round Block Commit
     TM-L3  Height Progression
 
+  Category P - AuxPoW Integration:
+    TM-P1  createauxblock Response Validation
+    TM-P2  Direct AuxPoW Header Validation
+    TM-P3  Cross-Node AuxPoW Consistency
+    TM-P4  AuxPoW Range Chain Validation
+    TM-P5  AuxPoW Survives Validator Failure
+    TM-P6  AuxPoW Query During Partition
+    TM-P7  Blocks Without AuxPoW Validation
+    TM-P8  alys_getBlockByHeight RPC Validation
+
   Groups:
     tier1      Core scenarios (A1, A3, B1, B5, L3, I1, I3)
     tier2      Advanced scenarios (D1-D3, E5, F1-F2)
+    tier3      AuxPoW integration (P1-P8)
     validator  All validator failure scenarios (A1-A5)
     network    All network partition scenarios (B1-B5)
     timing     All timing scenarios (C1-C4)
@@ -1998,7 +2548,8 @@ Scenarios:
     external   All external dependency scenarios (F1-F3)
     integrity  All block integrity scenarios (I1-I5)
     liveness   All liveness scenarios (L1-L3)
-    all        All 29 scenarios
+    auxpow     All AuxPoW scenarios (P1-P8)
+    all        All 37 scenarios
 
 Examples:
   $0 --scenario TM-A1

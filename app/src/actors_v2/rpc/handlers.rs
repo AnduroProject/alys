@@ -9,12 +9,13 @@ use uuid::Uuid;
 
 use super::error::RpcError;
 use super::tendermint_types::{
-    ConsensusStateResponse, VotesInfo, ValidatorsResponse, ValidatorInfo, PubKeyInfo,
-    EvidenceListResponse, EvidenceItem, ValidatorEvidenceInfo, EvidenceVoteInfo,
+    AuxPowHeaderResponse, BlockResponse, ConsensusStateResponse, EvidenceItem,
+    EvidenceListResponse, EvidenceVoteInfo, PubKeyInfo, ValidatorEvidenceInfo, ValidatorInfo,
+    ValidatorsResponse, VotesInfo,
 };
 use crate::actors_v2::chain::messages::{
-    CreateAuxBlock, GetChainParams, GetCommit, GetEvidence, GetPendingGovernance,
-    GetTendermintState, GetValidatorSet, SubmitAuxBlock,
+    CreateAuxBlock, GetBlockByHeightRpc, GetChainParams, GetCommit, GetEvidence,
+    GetPendingGovernance, GetTendermintState, GetValidatorSet, SubmitAuxBlock,
 };
 use crate::actors_v2::chain::ChainActor;
 use crate::auxpow::AuxPow;
@@ -772,6 +773,104 @@ impl EvidenceHandler {
             correlation_id = %correlation_id,
             evidence_count = result.total,
             "tendermint_evidence completed"
+        );
+
+        serde_json::to_value(&response)
+            .map_err(|e| RpcError::Internal(format!("Serialization error: {}", e)))
+    }
+}
+
+// ============================================================================
+// Block Query RPC Handlers (alys_getBlockByHeight)
+// ============================================================================
+
+/// alys_getBlockByHeight RPC handler
+///
+/// Returns full block data including AuxPoW headers for chaos testing.
+pub struct GetBlockByHeightHandler;
+
+impl GetBlockByHeightHandler {
+    /// Handle alys_getBlockByHeight request
+    ///
+    /// # Parameters
+    /// - params[0]: height (u64, optional - uses latest committed if not provided)
+    ///
+    /// # Returns
+    /// BlockResponse with full block data including auxpow_header
+    pub async fn handle(
+        params: Vec<Value>,
+        chain_actor: Addr<ChainActor>,
+    ) -> Result<Value, RpcError> {
+        // Parse height parameter (optional)
+        let height = if params.is_empty() {
+            None
+        } else {
+            Some(
+                params[0]
+                    .as_u64()
+                    .ok_or_else(|| RpcError::InvalidParams("Expected integer height".to_string()))?,
+            )
+        };
+
+        // Create correlation ID
+        let correlation_id = Uuid::new_v4();
+
+        tracing::debug!(
+            correlation_id = %correlation_id,
+            height = ?height,
+            "alys_getBlockByHeight request received"
+        );
+
+        // Send message to ChainActor
+        let message = GetBlockByHeightRpc {
+            height,
+            correlation_id,
+        };
+
+        let result = chain_actor
+            .send(message)
+            .await
+            .map_err(|e| RpcError::MailboxError(e.to_string()))?
+            .map_err(RpcError::ChainError)?;
+
+        // If no block found, return custom error
+        let block = result.ok_or_else(|| {
+            RpcError::Custom(
+                -32051,
+                format!(
+                    "Block not found at height {}",
+                    height.map(|h| h.to_string()).unwrap_or_else(|| "latest".to_string())
+                ),
+            )
+        })?;
+
+        // Build response with hex formatting
+        let auxpow_response = block.auxpow_header.map(|h| AuxPowHeaderResponse {
+            range_start: format!("0x{}", hex::encode(h.range_start.as_bytes())),
+            range_end: format!("0x{}", hex::encode(h.range_end.as_bytes())),
+            bits: h.bits,
+            chain_id: h.chain_id,
+            height: h.height,
+            fee_recipient: format!("0x{}", hex::encode(h.fee_recipient.as_bytes())),
+            pegins_count: h.pegins_count,
+            has_proof: h.has_proof,
+        });
+
+        let response = BlockResponse {
+            height: block.height,
+            hash: format!("0x{}", hex::encode(block.hash.as_bytes())),
+            parent_hash: format!("0x{}", hex::encode(block.parent_hash.as_bytes())),
+            timestamp: block.timestamp,
+            has_auxpow: block.has_auxpow,
+            auxpow_header: auxpow_response,
+            commit_signatures: block.commit_signatures,
+        };
+
+        tracing::info!(
+            correlation_id = %correlation_id,
+            height = block.height,
+            has_auxpow = block.has_auxpow,
+            "alys_getBlockByHeight completed successfully"
         );
 
         serde_json::to_value(&response)

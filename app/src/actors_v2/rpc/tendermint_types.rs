@@ -346,6 +346,51 @@ pub struct EvidenceVoteInfo {
     pub timestamp: String,
 }
 
+// =============================================================================
+// Block Query Response Types (alys_getBlockByHeight)
+// =============================================================================
+
+/// Response for `alys_getBlockByHeight` RPC
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockResponse {
+    /// Block height/slot
+    pub height: u64,
+    /// Block hash (hex with 0x prefix)
+    pub hash: String,
+    /// Parent block hash (hex with 0x prefix)
+    pub parent_hash: String,
+    /// Block timestamp (Unix seconds)
+    pub timestamp: u64,
+    /// Whether block has AuxPoW attached
+    pub has_auxpow: bool,
+    /// AuxPoW header details (if present)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auxpow_header: Option<AuxPowHeaderResponse>,
+    /// Validator signatures in last_commit
+    pub commit_signatures: usize,
+}
+
+/// AuxPoW header response (serializable subset)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxPowHeaderResponse {
+    /// First block in finalized range (hex with 0x prefix)
+    pub range_start: String,
+    /// Last block in finalized range (hex with 0x prefix)
+    pub range_end: String,
+    /// Difficulty target (compact bits)
+    pub bits: u32,
+    /// Chain ID (should be 1337)
+    pub chain_id: u32,
+    /// AuxPoW height for difficulty calculation
+    pub height: u64,
+    /// Fee recipient address (hex with 0x prefix)
+    pub fee_recipient: String,
+    /// Number of peg-ins included
+    pub pegins_count: usize,
+    /// Whether full AuxPoW proof is present
+    pub has_proof: bool,
+}
+
 /// Tendermint-specific error codes
 pub mod error_codes {
     /// Consensus not initialized or still syncing

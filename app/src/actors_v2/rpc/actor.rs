@@ -11,8 +11,9 @@ use super::config::RpcConfig;
 use crate::metrics::{RPC_REQUESTS, RPC_REQUEST_DURATION};
 use super::error::{JsonRpcError, RpcError};
 use super::handlers::{
-    CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, EvidenceHandler, ParamsHandler,
-    PendingGovernanceHandler, SubmitAuxBlockHandler, ValidatorsHandler,
+    CommitHandler, ConsensusStateHandler, CreateAuxBlockHandler, EvidenceHandler,
+    GetBlockByHeightHandler, ParamsHandler, PendingGovernanceHandler, SubmitAuxBlockHandler,
+    ValidatorsHandler,
 };
 use super::messages::{GetRpcStatus, RpcStatus, StartRpcServer, StopRpcServer};
 use crate::actors_v2::chain::ChainActor;
@@ -197,6 +198,11 @@ impl RpcActor {
                 PendingGovernanceHandler::handle(req.params, state.chain_actor).await
             }
             "tendermint_evidence" => EvidenceHandler::handle(req.params, state.chain_actor).await,
+
+            // Block query RPC endpoints
+            "alys_getBlockByHeight" => {
+                GetBlockByHeightHandler::handle(req.params, state.chain_actor).await
+            }
 
             // Note: Aura RPC methods have been removed. Tendermint is the only consensus.
 

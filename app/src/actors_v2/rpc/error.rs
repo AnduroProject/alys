@@ -25,6 +25,9 @@ pub enum RpcError {
 
     /// Server not running
     ServerNotRunning,
+
+    /// Custom error with specific code
+    Custom(i32, String),
 }
 
 impl fmt::Display for RpcError {
@@ -37,6 +40,7 @@ impl fmt::Display for RpcError {
             RpcError::ChainError(err) => write!(f, "Chain error: {:?}", err),
             RpcError::MailboxError(msg) => write!(f, "Mailbox error: {}", msg),
             RpcError::ServerNotRunning => write!(f, "RPC server not running"),
+            RpcError::Custom(_, msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -87,6 +91,10 @@ impl RpcError {
             RpcError::ServerNotRunning => JsonRpcError {
                 code: -32000,
                 message: "RPC server not running".to_string(),
+            },
+            RpcError::Custom(code, _) => JsonRpcError {
+                code: *code,
+                message: self.to_string(),
             },
         }
     }

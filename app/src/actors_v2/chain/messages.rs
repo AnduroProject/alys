@@ -641,6 +641,62 @@ pub struct EvidenceInfo {
 }
 
 // ============================================================================
+// Block Query Messages (for RPC: alys_getBlockByHeight)
+// ============================================================================
+
+/// Get block by height for RPC (alys_getBlockByHeight)
+///
+/// Returns full block data including AuxPoW header details for chaos testing.
+#[derive(Debug, Clone, Message)]
+#[rtype(result = "Result<Option<BlockByHeightResponse>, crate::actors_v2::chain::ChainError>")]
+pub struct GetBlockByHeightRpc {
+    /// Block height to query (None = latest committed)
+    pub height: Option<u64>,
+    /// Correlation ID for tracing
+    pub correlation_id: Uuid,
+}
+
+/// Response for GetBlockByHeightRpc
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockByHeightResponse {
+    /// Block height/slot
+    pub height: u64,
+    /// Block hash (consensus signing root)
+    pub hash: H256,
+    /// Parent block hash
+    pub parent_hash: H256,
+    /// Block timestamp (Unix seconds)
+    pub timestamp: u64,
+    /// Whether block has AuxPoW attached
+    pub has_auxpow: bool,
+    /// AuxPoW header details (if present)
+    pub auxpow_header: Option<AuxPowHeaderDetails>,
+    /// Validator signatures in last_commit
+    pub commit_signatures: usize,
+}
+
+/// AuxPoW header details for RPC response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxPowHeaderDetails {
+    /// First block in finalized range
+    pub range_start: H256,
+    /// Last block in finalized range
+    pub range_end: H256,
+    /// Difficulty target (compact bits)
+    pub bits: u32,
+    /// Chain ID (should be 1337)
+    pub chain_id: u32,
+    /// AuxPoW height for difficulty calculation
+    pub height: u64,
+    /// Fee recipient address
+    pub fee_recipient: Address,
+    /// Number of peg-ins included
+    pub pegins_count: usize,
+    /// Whether full AuxPoW proof is present
+    pub has_proof: bool,
+}
+
+// ============================================================================
 // Issue 3.2: Internal State Query Messages (for TendermintDriver)
 // ============================================================================
 

@@ -2784,6 +2784,7 @@ use crate::actors_v2::chain::messages::{
     GetEvidence, EvidenceResponse, EvidenceInfo,
     ApplyRecoveredState, ApplyRecoveredStateResponse,
     SetSyncValidator,
+    GetBlockByHeightRpc, BlockByHeightResponse, AuxPowHeaderDetails,
 };
 
 impl Handler<GetTendermintState> for ChainActor {
@@ -3096,6 +3097,127 @@ impl Handler<GetPendingGovernance> for ChainActor {
                 );
 
                 Ok(PendingGovernanceResponse { updates })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// ============================================================================
+// Block Query Handler (for RPC: alys_getBlockByHeight)
+// ============================================================================
+
+impl Handler<GetBlockByHeightRpc> for ChainActor {
+    type Result = ResponseActFuture<Self, Result<Option<BlockByHeightResponse>, ChainError>>;
+
+    fn handle(&mut self, msg: GetBlockByHeightRpc, _ctx: &mut Self::Context) -> Self::Result {
+        let correlation_id = msg.correlation_id;
+        let state = self.state.clone();
+        let storage_actor = self.storage_actor.clone();
+
+        Box::pin(
+            async move {
+                // Get height to query
+                let height = match msg.height {
+                    Some(h) => h,
+                    None => {
+                        // Get current committed height (latest - 1)
+                        let current = state.get_height().await;
+                        current.saturating_sub(1)
+                    }
+                };
+
+                // Query storage for block
+                let block = if let Some(ref storage) = storage_actor {
+                    use crate::actors_v2::storage::messages::GetBlockByHeightMessage;
+
+                    match storage
+                        .send(GetBlockByHeightMessage {
+                            height,
+                            correlation_id: Some(correlation_id),
+                        })
+                        .await
+                    {
+                        Ok(Ok(Some(b))) => Some(b),
+                        Ok(Ok(None)) => None,
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                height = height,
+                                error = ?e,
+                                "Storage error querying block"
+                            );
+                            return Err(ChainError::Storage(format!("Storage error: {:?}", e)));
+                        }
+                        Err(e) => {
+                            return Err(ChainError::Internal(format!(
+                                "Failed to communicate with storage: {}",
+                                e
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(ChainError::Configuration(
+                        "Storage actor not configured".to_string(),
+                    ));
+                };
+
+                // If no block found, return None
+                let block = match block {
+                    Some(b) => b,
+                    None => {
+                        tracing::debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            "Block not found at height"
+                        );
+                        return Ok(None);
+                    }
+                };
+
+                // Extract block fields
+                let inner = &block.message;
+                let block_hash = H256::from_slice(block.canonical_root().as_bytes());
+                let parent_hash = H256::from_slice(inner.parent_hash.as_bytes());
+                let timestamp = inner.execution_payload.timestamp;
+                let has_auxpow = inner.auxpow_header.is_some();
+
+                // Extract AuxPoW header details if present
+                let auxpow_header = inner.auxpow_header.as_ref().map(|h| AuxPowHeaderDetails {
+                    range_start: H256::from_slice(h.range_start.as_bytes()),
+                    range_end: H256::from_slice(h.range_end.as_bytes()),
+                    bits: h.bits,
+                    chain_id: h.chain_id,
+                    height: h.height,
+                    fee_recipient: h.fee_recipient,
+                    pegins_count: h.pegins.len(),
+                    has_proof: h.auxpow.is_some(),
+                });
+
+                // Count commit signatures
+                let commit_signatures = inner
+                    .last_commit
+                    .as_ref()
+                    .map(|c| c.signatures.len())
+                    .unwrap_or(0);
+
+                tracing::debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    has_auxpow = has_auxpow,
+                    commit_signatures = commit_signatures,
+                    "GetBlockByHeightRpc query completed"
+                );
+
+                Ok(Some(BlockByHeightResponse {
+                    height: inner.slot,
+                    hash: block_hash,
+                    parent_hash,
+                    timestamp,
+                    has_auxpow,
+                    auxpow_header,
+                    commit_signatures,
+                }))
             }
             .into_actor(self),
         )
