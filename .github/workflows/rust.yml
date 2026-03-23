@@ -19,6 +19,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler curl
+
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
@@ -30,8 +35,6 @@ jobs:
 
       - name: Setup Bitcoin Core
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl
           curl -sL https://bitcoincore.org/bin/bitcoin-core-26.2/bitcoin-26.2-x86_64-linux-gnu.tar.gz | tar xz -C /tmp
           sudo mv /tmp/bitcoin-26.2/bin/* /usr/local/bin/
 

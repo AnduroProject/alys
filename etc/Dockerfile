@@ -20,7 +20,8 @@ RUN apt-get update && \
         libclang-dev \
         llvm-dev \
         git \
-        ca-certificates && \
+        ca-certificates \
+        protobuf-compiler && \
     update-ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

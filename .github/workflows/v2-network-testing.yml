@@ -32,6 +32,9 @@ jobs:
           components: rustfmt, clippy
           override: true
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -79,6 +82,9 @@ jobs:
         with:
           toolchain: stable
           override: true
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo
         uses: actions/cache@v3
@@ -147,6 +153,9 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -197,6 +206,9 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -236,6 +248,9 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -269,6 +284,9 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Cache cargo
         uses: actions/cache@v3
         with:
@@ -298,6 +316,9 @@ jobs:
         with:
           toolchain: stable
           override: true
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo
         uses: actions/cache@v3
@@ -331,6 +352,9 @@ jobs:
         with:
           toolchain: stable
           override: true
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Cache cargo
         uses: actions/cache@v3
