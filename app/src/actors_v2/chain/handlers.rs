@@ -2518,6 +2518,7 @@ async fn create_aux_block_helper(
         network_actor: None,
         sync_actor: None,
         engine_actor: None,
+        governance_actor: None,
         metrics: super::metrics::ChainMetrics::default(),
         last_activity: std::time::Instant::now(),
         // Phase 2 fields
@@ -2572,6 +2573,7 @@ async fn submit_aux_block_helper(
         network_actor: None,
         sync_actor: None,
         engine_actor: None,
+        governance_actor: None,
         metrics: super::metrics::ChainMetrics::default(),
         last_activity: std::time::Instant::now(),
         // Phase 2 fields
@@ -2667,6 +2669,7 @@ impl Handler<SubmitAuxBlock> for ChainActor {
     fn handle(&mut self, msg: SubmitAuxBlock, _ctx: &mut Self::Context) -> Self::Result {
         use crate::actors_v2::chain::messages::SubmitAuxBlockResponse;
         use crate::actors_v2::chain::tendermint::pegin::QueuedPegIn;
+        use crate::actors_v2::governance::{GovernanceMessage, GovernanceResponse, VerifyPegin};
 
         let correlation_id = msg.correlation_id;
         let aggregate_hash = msg.aggregate_hash;
@@ -2687,6 +2690,7 @@ impl Handler<SubmitAuxBlock> for ChainActor {
         let state = self.state.clone();
         let config = self.config.clone();
         let network_actor = self.network_actor.clone();
+        let governance_actor = self.governance_actor.clone();
 
         Box::pin(
             async move {
@@ -2715,10 +2719,112 @@ impl Handler<SubmitAuxBlock> for ChainActor {
                     }
                     valid_pegins.push(pegin);
                 }
+
+                // Step 3: Verify pegins with governance service (if any pegins present)
+                if !valid_pegins.is_empty() {
+                    let governance = governance_actor.ok_or_else(|| {
+                        error!(
+                            correlation_id = %correlation_id,
+                            pegins_count = valid_pegins.len(),
+                            "Cannot verify peg-ins: GovernanceClientActor not configured"
+                        );
+                        ChainError::GovernanceActorNotSet
+                    })?;
+
+                    info!(
+                        correlation_id = %correlation_id,
+                        pegins_count = valid_pegins.len(),
+                        "Verifying peg-ins with governance service"
+                    );
+
+                    // Verify each peg-in - if ANY fails, reject the entire submission
+                    for pegin in &valid_pegins {
+                        let verify_req = VerifyPegin {
+                            txid: pegin.txid,
+                            block_hash: pegin.block_hash,
+                            evm_account: pegin.evm_account,
+                            amount: pegin.amount,
+                            required_confirmations: 6, // Standard confirmation depth
+                            correlation_id,
+                        };
+
+                        debug!(
+                            correlation_id = %correlation_id,
+                            txid = %pegin.txid,
+                            amount = pegin.amount,
+                            "Sending VerifyPegin request to governance"
+                        );
+
+                        let verify_result = governance
+                            .send(GovernanceMessage::VerifyPegin(verify_req))
+                            .await
+                            .map_err(|e| {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    txid = %pegin.txid,
+                                    error = %e,
+                                    "Governance actor mailbox error during peg-in verification"
+                                );
+                                ChainError::GovernanceVerificationFailed(format!(
+                                    "Mailbox error: {}",
+                                    e
+                                ))
+                            })?
+                            .map_err(|e| {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    txid = %pegin.txid,
+                                    error = %e,
+                                    "Governance service error during peg-in verification"
+                                );
+                                ChainError::GovernanceVerificationFailed(e.to_string())
+                            })?;
+
+                        // Check verification result
+                        if let GovernanceResponse::PeginVerified(result) = verify_result {
+                            if !result.verified {
+                                error!(
+                                    correlation_id = %correlation_id,
+                                    txid = %pegin.txid,
+                                    reason = %result.reason,
+                                    confirmations = result.confirmations,
+                                    "Peg-in verification REJECTED by governance"
+                                );
+                                return Err(ChainError::PeginVerificationFailed {
+                                    txid: pegin.txid.to_string(),
+                                    reason: result.reason,
+                                });
+                            }
+
+                            info!(
+                                correlation_id = %correlation_id,
+                                txid = %pegin.txid,
+                                confirmations = result.confirmations,
+                                "Peg-in verified by governance ✓"
+                            );
+                        } else {
+                            error!(
+                                correlation_id = %correlation_id,
+                                txid = %pegin.txid,
+                                "Unexpected response type from governance"
+                            );
+                            return Err(ChainError::GovernanceVerificationFailed(
+                                "Unexpected response type".to_string(),
+                            ));
+                        }
+                    }
+
+                    info!(
+                        correlation_id = %correlation_id,
+                        pegins_count = valid_pegins.len(),
+                        "All peg-ins verified successfully by governance ✓"
+                    );
+                }
+
                 let queued_count = valid_pegins.len();
                 auxpow_header.pegins = valid_pegins;
 
-                // Step 3: Queue validated AuxPoW with attached pegins
+                // Step 4: Queue validated AuxPoW with attached pegins
                 state.set_queued_pow(Some(auxpow_header.clone())).await;
                 state.reset_blocks_without_pow().await;
 
@@ -2728,7 +2834,7 @@ impl Handler<SubmitAuxBlock> for ChainActor {
                     "AuxPoW queued with attached peg-ins (Path B)"
                 );
 
-                // Step 4: Broadcast AuxPoW to network (non-blocking, best-effort)
+                // Step 5: Broadcast AuxPoW to network (non-blocking, best-effort)
                 if let Some(ref actor) = network_actor {
                     match serde_json::to_vec(&auxpow_header) {
                         Ok(auxpow_data) => {
@@ -3604,6 +3710,21 @@ impl Handler<SetSyncValidator> for ChainActor {
     fn handle(&mut self, msg: SetSyncValidator, _ctx: &mut Self::Context) -> Self::Result {
         info!("Setting TendermintSyncValidator reference for governance notifications");
         self.tendermint_sync_validator = Some(msg.validator);
+    }
+}
+
+// ============================================================================
+// Governance Integration: SetGovernanceActor Handler
+// ============================================================================
+
+use crate::actors_v2::chain::messages::SetGovernanceActor;
+
+impl Handler<SetGovernanceActor> for ChainActor {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetGovernanceActor, _ctx: &mut Self::Context) -> Self::Result {
+        info!("Setting GovernanceClientActor reference for peg-in verification");
+        self.governance_actor = Some(msg.addr);
     }
 }
 

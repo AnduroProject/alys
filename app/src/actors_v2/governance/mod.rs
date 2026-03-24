@@ -15,6 +15,6 @@ mod messages;
 pub use actor::GovernanceClientActor;
 pub use config::GovernanceConfig;
 pub use messages::{
-    GovernanceMessage, GovernanceResponse, GovernanceUpdateReceived, PeginVerificationResult,
-    VerifyPegin,
+    GovernanceError, GovernanceMessage, GovernanceResponse, GovernanceUpdateReceived,
+    PeginVerificationResult, VerifyPegin,
 };

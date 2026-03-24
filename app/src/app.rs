@@ -670,13 +670,21 @@ impl App {
                 let governance_actor = crate::actors_v2::governance::GovernanceClientActor::new(governance_config).start();
                 info!("✓ GovernanceClientActor started");
 
-                // Wire GovernanceClientActor to ChainActor
+                // Wire GovernanceClientActor -> ChainActor (for governance updates)
                 match governance_actor.send(crate::actors_v2::governance::GovernanceMessage::SetChainActor {
                     addr: chain_actor_addr.clone(),
                 }).await {
-                    Ok(Ok(_)) => info!("✓ ChainActor configured in GovernanceClientActor"),
+                    Ok(Ok(_)) => info!("✓ ChainActor configured in GovernanceClientActor (for updates)"),
                     Ok(Err(e)) => error!("✗ Failed to set ChainActor in GovernanceClientActor: {:?}", e),
                     Err(e) => error!("✗ GovernanceClientActor mailbox error during SetChainActor: {:?}", e),
+                }
+
+                // Wire ChainActor -> GovernanceClientActor (for peg-in verification)
+                match chain_actor_addr.send(crate::actors_v2::chain::messages::SetGovernanceActor {
+                    addr: governance_actor.clone(),
+                }).await {
+                    Ok(()) => info!("✓ GovernanceClientActor configured in ChainActor (for peg-in verification)"),
+                    Err(e) => error!("✗ Failed to set GovernanceClientActor in ChainActor: {:?}", e),
                 }
             } else {
                 info!("ℹ️  GovernanceClientActor not configured (no GOVERNANCE_GRPC_URL)");

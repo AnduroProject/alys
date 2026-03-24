@@ -23,6 +23,7 @@ use super::{
 
 use crate::actors_v2::{
     engine::EngineActor,
+    governance::GovernanceClientActor,
     network::{NetworkActor, SyncActor},
     storage::StorageActor,
 };
@@ -154,6 +155,7 @@ pub struct ChainActor {
     pub(crate) network_actor: Option<Addr<NetworkActor>>,
     pub(crate) sync_actor: Option<Addr<SyncActor>>,
     pub(crate) engine_actor: Option<Addr<EngineActor>>,
+    pub(crate) governance_actor: Option<Addr<GovernanceClientActor>>,
 
     /// Simple metrics
     pub(crate) metrics: ChainMetrics,
@@ -256,6 +258,7 @@ impl ChainActor {
             network_actor: None,
             sync_actor: None,
             engine_actor: None,
+            governance_actor: None,
             metrics,
             last_activity: Instant::now(),
             // Phase 2: Initialize import serialization
@@ -386,6 +389,11 @@ impl ChainActor {
     /// Set engine actor address
     pub fn set_engine_actor(&mut self, addr: Addr<EngineActor>) {
         self.engine_actor = Some(addr);
+    }
+
+    /// Set governance actor address for peg-in verification
+    pub fn set_governance_actor(&mut self, addr: Addr<GovernanceClientActor>) {
+        self.governance_actor = Some(addr);
     }
 
     // =========================================================================

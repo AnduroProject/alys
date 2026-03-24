@@ -808,3 +808,26 @@ pub struct ValidatorSetChanged {
     /// The new validator set
     pub new_set: crate::actors_v2::chain::tendermint::ValidatorSet,
 }
+
+// ============================================================================
+// Governance Integration Messages
+// ============================================================================
+
+/// Set the GovernanceClientActor address for peg-in verification.
+///
+/// This establishes the ChainActor -> GovernanceClientActor direction for
+/// verifying peg-ins before accepting them in submitauxblock.
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetGovernanceActor {
+    /// Address of the GovernanceClientActor
+    pub addr: actix::Addr<crate::actors_v2::governance::GovernanceClientActor>,
+}
+
+impl std::fmt::Debug for SetGovernanceActor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetGovernanceActor")
+            .field("addr", &"<GovernanceClientActor>")
+            .finish()
+    }
+}

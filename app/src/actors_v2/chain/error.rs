@@ -101,10 +101,25 @@ pub enum ChainError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Governance actor not set - cannot verify peg-ins")]
+    GovernanceActorNotSet,
+
+    #[error("Governance verification failed: {0}")]
+    GovernanceVerificationFailed(String),
+
+    #[error("Peg-in verification failed for txid {txid}: {reason}")]
+    PeginVerificationFailed { txid: String, reason: String },
 }
 
 impl From<eyre::Error> for ChainError {
     fn from(err: eyre::Error) -> Self {
         ChainError::Internal(err.to_string())
+    }
+}
+
+impl From<crate::actors_v2::governance::GovernanceError> for ChainError {
+    fn from(err: crate::actors_v2::governance::GovernanceError) -> Self {
+        ChainError::GovernanceVerificationFailed(err.to_string())
     }
 }
