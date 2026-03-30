@@ -750,6 +750,14 @@ impl DatabaseManager {
     /// # Arguments
     /// * `effective_height` - The height at which this validator set becomes active
     /// * `validator_set` - The validator set to store (serialized as JSON)
+    ///
+    /// # Durability
+    ///
+    /// Uses synchronous writes to ensure the validator set is durably written
+    /// before returning. This is critical for H+2 activation - without sync writes,
+    /// a race condition can occur where height H+2 initializes before the new
+    /// validator set is visible, causing consensus to use the wrong validator set
+    /// and potentially stalling the network.
     pub async fn put_validator_set(
         &self,
         effective_height: u64,
@@ -766,14 +774,21 @@ impl DatabaseManager {
         let value = serde_json::to_vec(validator_set)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        db.put_cf(&cf, key, value).map_err(|e| {
+        // Use sync writes to ensure the validator set is visible immediately.
+        // Without this, a race condition can occur where load_validator_set_for_height()
+        // is called before the async write is flushed, causing height H+2 to initialize
+        // with the old validator set and breaking consensus.
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+
+        db.put_cf_opt(&cf, key, value, &write_opts).map_err(|e| {
             StorageError::Database(format!("Failed to store validator set: {}", e))
         })?;
 
         debug!(
             effective_height = effective_height,
             validator_count = validator_set.len(),
-            "Stored validator set"
+            "Stored validator set (synced)"
         );
 
         Ok(())
