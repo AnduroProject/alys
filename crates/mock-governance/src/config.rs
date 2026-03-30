@@ -51,6 +51,27 @@ pub struct Config {
     /// Push validator set update every N seconds (0 = never)
     #[arg(long, default_value = "0")]
     pub push_validator_update_interval: u64,
+
+    // === Dynamic Validator Addition Options ===
+
+    /// BLS public key (hex) for validator update push
+    /// If specified, uses this key instead of generating a random one
+    #[arg(long)]
+    pub validator_update_pubkey: Option<String>,
+
+    /// Voting power for validator update (default: 100)
+    #[arg(long, default_value = "100")]
+    pub validator_update_power: u64,
+
+    /// Delay before pushing validator update (seconds after first connection)
+    /// Only used when validator_update_pubkey is specified
+    #[arg(long, default_value = "60")]
+    pub validator_update_delay: u64,
+
+    /// Push validator update only once (after delay), then stop
+    /// If false, uses push_validator_update_interval for periodic updates
+    #[arg(long)]
+    pub validator_update_one_shot: bool,
 }
 
 impl Config {

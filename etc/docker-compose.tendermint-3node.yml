@@ -138,6 +138,7 @@ services:
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
       GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
       GOVERNANCE_AUTH_TOKEN: "test-token-123"
+      SKIP_GOVERNANCE_SIG_VERIFY: "true"  # Skip for testing (mock governance doesn't sign properly)
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -163,7 +164,9 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node1.log &
+          --metrics-port 9090 \
+          --skip-governance-signature-verification \
+          2>&1 | stdbuf -oL tee /opt/alys/logs/node1.log &
         PID=$!
         wait $PID
     depends_on:
@@ -209,6 +212,7 @@ services:
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
       GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
       GOVERNANCE_AUTH_TOKEN: "test-token-123"
+      SKIP_GOVERNANCE_SIG_VERIFY: "true"  # Skip for testing (mock governance doesn't sign properly)
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -234,7 +238,9 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node2.log &
+          --metrics-port 9090 \
+          --skip-governance-signature-verification \
+          2>&1 | stdbuf -oL tee /opt/alys/logs/node2.log &
         PID=$!
         wait $PID
     depends_on:
@@ -280,6 +286,7 @@ services:
       TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
       GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
       GOVERNANCE_AUTH_TOKEN: "test-token-123"
+      SKIP_GOVERNANCE_SIG_VERIFY: "true"  # Skip for testing (mock governance doesn't sign properly)
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -305,7 +312,87 @@ services:
           --bitcoin-rpc-user rpcuser \
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
-          --metrics-port 9090 2>&1 | stdbuf -oL tee /opt/alys/logs/node3.log &
+          --metrics-port 9090 \
+          --skip-governance-signature-verification \
+          2>&1 | stdbuf -oL tee /opt/alys/logs/node3.log &
+        PID=$!
+        wait $PID
+    depends_on:
+      execution:
+        condition: service_started
+      bitcoin-core:
+        condition: service_started
+      mock-governance:
+        condition: service_started
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # DYNAMIC VALIDATORS (for chaos testing - TM-V1)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # Alys Node 4 - Dynamic Validator (added via governance for TM-V1 chaos test)
+  # Note: This node is NOT auto-started. It is controlled by the chaos test script.
+  alys-node-4:
+    image: ghcr.io/anduroproject/alys:feature-tendermint
+    container_name: alys-node-4
+    profiles: ["dynamic"]  # Only start when explicitly requested
+    restart: "no"
+    stop_grace_period: 30s
+    labels:
+      chaos.role: "validator"
+      chaos.validator_id: "3"
+      chaos.network: "alys-tendermint-3"
+      chaos.rpc_port: "3031"
+      chaos.dynamic: "true"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      alys-tendermint-3:
+        ipv4_address: 172.22.0.13
+    ports:
+      - "3030:3000"    # V0 RPC (remapped to avoid conflict with grafana)
+      - "3031:3001"    # V2 RPC
+      - "9003:9000"    # V0 P2P
+      - "9094:9090"    # Prometheus Metrics
+      - "10003:10000"  # V2 P2P (libp2p)
+    volumes:
+      - ../data/tendermint-3node/node4/db:/lib/alys/data/db
+      - ../data/tendermint-3node/node4/wallet:/lib/alys/data/wallet
+      - ../logs/tendermint-3node/node4:/opt/alys/logs
+      - ./config/jwt/jwt.hex:/lib/alys/jwt.hex:ro
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      TENDERMINT_PROPOSE_TIMEOUT_MS: 5000
+      TENDERMINT_PREVOTE_TIMEOUT_MS: 2000
+      TENDERMINT_PRECOMMIT_TIMEOUT_MS: 2000
+      GOVERNANCE_GRPC_URL: "http://mock-governance:50051"
+      GOVERNANCE_AUTH_TOKEN: "test-token-123"
+      SKIP_GOVERNANCE_SIG_VERIFY: "true"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        trap 'kill -TERM $PID; wait $PID' TERM INT
+        echo "Starting Alys Node 4 (Dynamic Validator - added via governance)..."
+        /bin/alys \
+          --dev-regtest \
+          --regtest-node-id 4 \
+          --v2-only \
+          --no-mine \
+          --p2p-listen-addr 0.0.0.0 \
+          --p2p-port 9000 \
+          --rpc-port 3000 \
+          --db-path /lib/alys/data/db \
+          --wallet-path /lib/alys/data/wallet \
+          --geth-url http://execution:8551 \
+          --geth-execution-url http://execution:8545 \
+          --aura-secret-key 1d2da98c2ec1eeee0dc382ed79aa6896d1066064d86ad7a7d0b6ce2c594f4313 \
+          --bitcoin-rpc-url http://bitcoin-core:18443 \
+          --bitcoin-rpc-user rpcuser \
+          --bitcoin-rpc-pass rpcpassword \
+          --jwt-secret /lib/alys/jwt.hex \
+          --metrics-port 9090 \
+          --skip-governance-signature-verification \
+          2>&1 | stdbuf -oL tee /opt/alys/logs/node4.log &
         PID=$!
         wait $PID
     depends_on:
@@ -321,6 +408,7 @@ services:
   # ═══════════════════════════════════════════════════════════════════════════
 
   # Mock Governance Service - Testing bidirectional gRPC streaming
+  # Configured to push a validator update (node 4) after 60s for TM-V1 chaos test
   mock-governance:
     image: ghcr.io/anduroproject/alys:feature-tendermint
     container_name: mock-governance
@@ -340,6 +428,11 @@ services:
       - --chain-id=alys-regtest
       - --auto-ack-pegins
       - --log-level=debug
+      # TM-V1 Chaos Test: Push validator 4 update after 60s delay (one-shot)
+      - --validator-update-pubkey=90220dc92c39b95cfb107d1e2cdcd65cb400dabf55a00db7d66a5c8599692feaa561c13b467c321ccac02bf0f4b13c94
+      - --validator-update-power=100
+      - --validator-update-delay=60
+      - --validator-update-one-shot
 
   # ═══════════════════════════════════════════════════════════════════════════
   # MINING

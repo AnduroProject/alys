@@ -44,6 +44,12 @@ pub struct ChainConfig {
     /// Default: 1337 (Alys mainnet)
     /// Testnet should use different value to prevent replay attacks
     pub chain_id: u32,
+
+    /// Skip governance signature verification (testing mode only)
+    ///
+    /// WARNING: This bypasses BLS aggregate signature verification for governance
+    /// updates. Only enable in regtest/testing environments.
+    pub skip_governance_signature_verification: bool,
 }
 
 /// Bitcoin consensus parameters (simplified from auxpow_miner)
@@ -69,6 +75,7 @@ impl Default for ChainConfig {
             retarget_params: Some(BitcoinConsensusParams::default()),
             block_hash_cache_size: Some(1000),
             chain_id: 1337, // Alys mainnet
+            skip_governance_signature_verification: false,
         }
     }
 }

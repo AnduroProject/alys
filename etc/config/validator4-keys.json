@@ -1,0 +1,15 @@
+{
+  "description": "4th validator keys for dynamic validator addition testing (TM-V1 chaos test)",
+  "note": "These keys are NOT in the initial DEV_REGTEST validator set - they are specifically for testing dynamic validator addition via governance",
+
+  "bls_secret_key": "1d2da98c2ec1eeee0dc382ed79aa6896d1066064d86ad7a7d0b6ce2c594f4313",
+  "bls_public_key": "0x90220dc92c39b95cfb107d1e2cdcd65cb400dabf55a00db7d66a5c8599692feaa561c13b467c321ccac02bf0f4b13c94",
+  "ethereum_address": "0x53fbe9bc278cbbd225bacf1d77f6d6e2eea76bd0",
+  "bitcoin_secret_key": "eff7826eff6f6af225ca58c78cd435fb91858b667f777399feb0d82496dd107f",
+  "bitcoin_public_key": "03bdb9502a428013b57a0df128bc76a106108e0a44b4d6501cd253cef7ba6dbce0",
+
+  "docker_env": {
+    "AURA_SECRET_KEY": "1d2da98c2ec1eeee0dc382ed79aa6896d1066064d86ad7a7d0b6ce2c594f4313",
+    "BITCOIN_SECRET_KEY": "eff7826eff6f6af225ca58c78cd435fb91858b667f777399feb0d82496dd107f"
+  }
+}

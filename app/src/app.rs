@@ -187,6 +187,11 @@ pub struct App {
     /// Authentication token for governance service
     #[clap(long, env = "GOVERNANCE_AUTH_TOKEN", default_value = "test-token-123")]
     pub governance_auth_token: String,
+
+    /// Skip governance signature verification (testing mode only)
+    /// WARNING: This bypasses security checks and should only be used in regtest/testing environments
+    #[clap(long, env = "SKIP_GOVERNANCE_SIG_VERIFY", default_value_t = false)]
+    pub skip_governance_signature_verification: bool,
 }
 
 impl App {
@@ -428,6 +433,8 @@ impl App {
                 None,
             );
 
+            let v2_skip_governance_sig_verify = self.skip_governance_signature_verification;
+
             let v2_config = crate::actors_v2::chain::ChainConfig {
                 is_validator: v2_is_validator && !v2_not_validator,
                 validator_address: None,
@@ -445,6 +452,7 @@ impl App {
                 }),
                 block_hash_cache_size: Some(1000),
                 chain_id: 1337,
+                skip_governance_signature_verification: v2_skip_governance_sig_verify,
             };
 
             // 1. Initialize StorageActor V2

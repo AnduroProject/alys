@@ -90,6 +90,29 @@ impl GovernanceUpdate {
             GovernanceUpdate::Emergency(_) => "Emergency",
         }
     }
+
+    /// Verify the governance signature against the current validator set.
+    ///
+    /// All governance updates require 2/3+ aggregate signature from validators.
+    /// This method dispatches to the appropriate verification method based on
+    /// the update type.
+    pub fn verify_governance_signature(
+        &self,
+        validator_set: &ValidatorSet,
+        chain_id: &str,
+    ) -> Result<(), GovernanceError> {
+        match self {
+            GovernanceUpdate::Validator(update) => {
+                update.verify_governance_signature(validator_set, chain_id)
+            }
+            GovernanceUpdate::Parameter(update) => {
+                update.verify_governance_signature(validator_set, chain_id)
+            }
+            GovernanceUpdate::Emergency(update) => {
+                update.verify_governance_signature(validator_set, chain_id)
+            }
+        }
+    }
 }
 
 /// Validator set change request from governance

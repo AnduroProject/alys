@@ -163,11 +163,44 @@ impl MockGovernanceService {
 
     /// Generate a mock validator set update for testing.
     fn generate_validator_update(&self) -> GovernanceResponse {
-        // Generate a random public key for testing
-        let mut pubkey = vec![0u8; 48];
-        rand::Rng::fill(&mut rand::thread_rng(), &mut pubkey[..]);
-
-        info!("Pushing mock validator set update");
+        // Use configured public key if provided, otherwise generate random
+        let pubkey = if let Some(ref hex_key) = self.config.validator_update_pubkey {
+            // Parse hex key (remove 0x prefix if present)
+            let hex_str = hex_key.trim_start_matches("0x");
+            match hex::decode(hex_str) {
+                Ok(bytes) => {
+                    if bytes.len() != 48 {
+                        warn!(
+                            expected = 48,
+                            got = bytes.len(),
+                            "Invalid public key length, using random key instead"
+                        );
+                        let mut random_key = vec![0u8; 48];
+                        rand::Rng::fill(&mut rand::thread_rng(), &mut random_key[..]);
+                        random_key
+                    } else {
+                        info!(
+                            pubkey = hex_str,
+                            power = self.config.validator_update_power,
+                            "Pushing configured validator update"
+                        );
+                        bytes
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to decode public key hex, using random key");
+                    let mut random_key = vec![0u8; 48];
+                    rand::Rng::fill(&mut rand::thread_rng(), &mut random_key[..]);
+                    random_key
+                }
+            }
+        } else {
+            // Generate a random public key for testing
+            info!("Pushing mock validator set update (random key)");
+            let mut random_key = vec![0u8; 48];
+            rand::Rng::fill(&mut rand::thread_rng(), &mut random_key[..]);
+            random_key
+        };
 
         GovernanceResponse {
             chain: self.config.chain_id.clone(),
@@ -175,7 +208,7 @@ impl MockGovernanceService {
             payload: Some(governance_response::Payload::ValidatorUpdate(
                 ValidatorSetUpdate {
                     public_key: pubkey,
-                    power: 100,
+                    power: self.config.validator_update_power,
                     governance_signature: vec![0u8; 96], // Mock signature
                 },
             )),
@@ -285,8 +318,38 @@ impl GovernanceService for MockGovernanceService {
             info!(peer = %peer_clone, "Validator stream ended");
         });
 
-        // Spawn task to push periodic validator updates if configured
-        if let Some(interval) = config.validator_update_interval() {
+        // Spawn task to push validator updates
+        // Priority 1: One-shot mode with configured pubkey (for chaos testing)
+        // Priority 2: Periodic mode with interval
+        if config.validator_update_one_shot && config.validator_update_pubkey.is_some() {
+            let service_for_push = service.clone();
+            let tx_for_push = tx.clone();
+            let delay_secs = config.validator_update_delay;
+            let peer_for_log = peer_addr.clone();
+
+            tokio::spawn(async move {
+                info!(
+                    peer = %peer_for_log,
+                    delay_secs = delay_secs,
+                    "Scheduling one-shot validator update after {} seconds",
+                    delay_secs
+                );
+
+                // Wait for the configured delay
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+
+                // Push the validator update once
+                let update = service_for_push.generate_validator_update();
+                if tx_for_push.send(Ok(update)).await.is_err() {
+                    warn!(peer = %peer_for_log, "Failed to send one-shot validator update - client disconnected");
+                } else {
+                    info!(peer = %peer_for_log, "One-shot validator update sent successfully");
+                }
+
+                // Task ends after one-shot push
+            });
+        } else if let Some(interval) = config.validator_update_interval() {
+            // Periodic mode: push validator updates at regular intervals
             let service_for_push = service.clone();
             let tx_for_push = tx.clone();
             tokio::spawn(async move {

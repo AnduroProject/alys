@@ -1388,7 +1388,7 @@ impl ChainActor {
     /// Handle a governance update (validator set change, parameter update, etc.).
     ///
     /// # Actions
-    /// - Validate the update
+    /// - Validate the governance signature (unless skip_governance_signature_verification is set)
     /// - Calculate effective height (H+2 for validator updates, H+1 for params)
     /// - Store to StorageActor
     pub async fn handle_tendermint_governance_update(
@@ -1407,6 +1407,33 @@ impl ChainActor {
             effective_height = effective_height,
             "Processing governance update"
         );
+
+        // Verify governance signature (unless skipped for testing)
+        if !self.config.skip_governance_signature_verification {
+            // Load current validator set to verify against
+            let validator_set = self.load_validator_set_for_height(current_height).await?;
+            let chain_id = format!("alys-{}", self.config.chain_id);
+
+            // Verify the signature - requires 2/3+ aggregate signature from validators
+            update.verify_governance_signature(&validator_set, &chain_id).map_err(|e| {
+                warn!(
+                    correlation_id = %correlation_id,
+                    error = %e,
+                    "Governance signature verification failed"
+                );
+                ChainError::GovernanceVerificationFailed(format!("Governance signature verification failed: {}", e))
+            })?;
+
+            debug!(
+                correlation_id = %correlation_id,
+                "Governance signature verified successfully"
+            );
+        } else {
+            warn!(
+                correlation_id = %correlation_id,
+                "Skipping governance signature verification (test mode)"
+            );
+        }
 
         let storage = self
             .storage_actor

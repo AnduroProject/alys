@@ -3,7 +3,10 @@
 //! All governable parameters are enumerated here with their constraints.
 //! See `17_GOVERNANCE_PARAMETERS.md` for complete documentation.
 
+use super::governance::GovernanceError;
 use super::pegin::PegInCompensation;
+use super::types::ValidatorSet;
+use ethereum_types::H256;
 use lighthouse_wrapper::bls::Signature;
 use lighthouse_wrapper::types::Hash256;
 use serde::{Deserialize, Serialize};
@@ -175,6 +178,60 @@ impl ParameterUpdate {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Compute the signing root for this parameter update.
+    ///
+    /// Includes domain separation and chain_id for replay protection.
+    pub fn signing_root(&self, chain_id: &str) -> H256 {
+        let mut hasher = Keccak::v256();
+
+        // Domain separation prefix
+        hasher.update(b"governance-parameter-update");
+        // Chain ID for cross-network replay protection
+        hasher.update(chain_id.as_bytes());
+        // Parameter being updated
+        hasher.update(&self.param.to_bytes());
+        // New value (serialize deterministically)
+        let value_bytes = match &self.value {
+            ParameterValue::U64(v) => v.to_le_bytes().to_vec(),
+            ParameterValue::U32(v) => v.to_le_bytes().to_vec(),
+            ParameterValue::Bool(v) => vec![if *v { 1 } else { 0 }],
+            ParameterValue::Bytes(v) => v.clone(),
+        };
+        hasher.update(&value_bytes);
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        H256::from(output)
+    }
+
+    /// Verify the governance signature against the current validator set.
+    ///
+    /// Requires 2/3+ aggregate signature from validators.
+    pub fn verify_governance_signature(
+        &self,
+        validator_set: &ValidatorSet,
+        chain_id: &str,
+    ) -> Result<(), GovernanceError> {
+        let signing_root = self.signing_root(chain_id);
+
+        // Check if signature is empty
+        if self.governance_signature == Signature::empty() {
+            return Err(GovernanceError::MissingSignature);
+        }
+
+        // Verify as aggregate BLS signature
+        let aggregate_pubkey = validator_set.aggregate_public_key();
+
+        if !self
+            .governance_signature
+            .verify(&aggregate_pubkey, signing_root)
+        {
+            return Err(GovernanceError::InvalidSignature);
+        }
+
         Ok(())
     }
 }

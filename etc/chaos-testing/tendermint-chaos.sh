@@ -2394,6 +2394,199 @@ run_TM_P9() {
 }
 
 # ============================================================================
+# Tier 2 Scenarios: Validator Set Updates (TM-V*)
+# ============================================================================
+
+# Node 4 configuration (dynamically added validator)
+NODE4_NAME="alys-node-4"
+NODE4_IP="172.22.0.13"
+NODE4_RPC_PORT=3031
+# BLS public key for validator 4 (from etc/config/validator4-keys.json)
+NODE4_VALIDATOR_PUBKEY="90220dc92c39b95cfb107d1e2cdcd65cb400dabf55a00db7d66a5c8599692feaa561c13b467c321ccac02bf0f4b13c94"
+
+# Get validator count from RPC
+get_validator_count() {
+    local node="${1:-alys-node-1}"
+    local port=$(get_rpc_port "$node")
+    local result=$(rpc_call "$port" "tendermint_validators" 2>/dev/null)
+    if [[ -n "$result" ]]; then
+        echo "$result" | jq -r '.total // 0'
+    else
+        echo "0"
+    fi
+}
+
+# Check if a specific validator is in the set
+verify_validator_in_set() {
+    local node="${1:-alys-node-1}"
+    local pubkey_hex="$2"
+    local port=$(get_rpc_port "$node")
+
+    local validators=$(rpc_call "$port" "tendermint_validators" 2>/dev/null)
+    if [[ -z "$validators" ]]; then
+        return 1
+    fi
+
+    # Check if pubkey exists in validators array
+    echo "$validators" | jq -e --arg pk "$pubkey_hex" \
+        '.validators[] | select(.pub_key == $pk or .pub_key.value == $pk)' >/dev/null 2>&1
+}
+
+# Wait for validator count to reach expected value
+wait_for_validator_count() {
+    local expected_count="$1"
+    local timeout_seconds="${2:-120}"
+    local node="${3:-alys-node-1}"
+
+    local start_time=$(date +%s)
+    while true; do
+        local count=$(get_validator_count "$node")
+        if [[ "$count" -ge "$expected_count" ]]; then
+            log_debug "Validator count reached $count (expected $expected_count)"
+            return 0
+        fi
+
+        local elapsed=$(($(date +%s) - start_time))
+        if [[ $elapsed -ge $timeout_seconds ]]; then
+            log_error "Timeout waiting for $expected_count validators (current: $count)"
+            return 1
+        fi
+
+        log_debug "Current validator count: $count, waiting for $expected_count..."
+        sleep 2
+    done
+}
+
+# Start node 4 container (dynamic validator)
+start_node4() {
+    log_info "Starting $NODE4_NAME container..."
+
+    # Start the container using docker compose profile
+    docker compose -f "$COMPOSE_FILE" --profile dynamic up -d alys-node-4 2>/dev/null || {
+        # Fallback: try direct docker start if container exists
+        docker start "$NODE4_NAME" 2>/dev/null || {
+            log_error "Failed to start $NODE4_NAME"
+            return 1
+        }
+    }
+
+    # Wait for container to be running
+    local timeout=30
+    local elapsed=0
+    while ! docker ps --filter "name=$NODE4_NAME" --format '{{.Names}}' | grep -q "$NODE4_NAME"; do
+        sleep 1
+        ((elapsed++))
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "$NODE4_NAME did not start in ${timeout}s"
+            return 1
+        fi
+    done
+
+    log_info "$NODE4_NAME container started"
+    return 0
+}
+
+# Stop node 4 container
+stop_node4() {
+    log_info "Stopping $NODE4_NAME container..."
+    docker stop -t 30 "$NODE4_NAME" 2>/dev/null || true
+}
+
+run_TM_V1() {
+    log_info "[TM-V1] Running: Dynamic Validator Addition (4th validator via governance)"
+
+    # Pre-conditions: 3 validators active
+    if ! verify_all_validators_active; then
+        record_test_result "TM-V1" "FAILED" "Pre-condition failed: validators not active"
+        return
+    fi
+
+    local initial_count=$(get_validator_count "alys-node-1")
+    if [[ "$initial_count" -ne 3 ]]; then
+        log_warn "Expected 3 initial validators, got $initial_count"
+        # Not a hard failure - continue with test
+    fi
+
+    log_info "Initial validator count: $initial_count"
+    local initial_height=$(get_consensus_height "alys-node-1")
+
+    # The mock-governance is configured to push validator update after 60s
+    # We need to wait for: governance delay (60s) + H+2 activation (~10-15s) + buffer
+    log_info "Waiting for governance to push validator update..."
+    log_info "This may take up to 120 seconds (60s governance delay + H+2 activation)"
+
+    # Wait for validator count to increase (H+2 activation)
+    if wait_for_validator_count 4 180 "alys-node-1"; then
+        log_info "Validator count increased to 4"
+    else
+        record_test_result "TM-V1" "FAILED" "Validator count did not increase to 4"
+        return
+    fi
+
+    # Verify all 3 original nodes see 4 validators
+    local all_see_four=true
+    for node in "${NODE_NAMES[@]}"; do
+        local count=$(get_validator_count "$node")
+        if [[ "$count" -ne 4 ]]; then
+            log_error "Node $node sees $count validators (expected 4)"
+            all_see_four=false
+        else
+            log_debug "Node $node sees 4 validators"
+        fi
+    done
+
+    if [[ "$all_see_four" != "true" ]]; then
+        record_test_result "TM-V1" "FAILED" "Not all nodes see 4 validators"
+        return
+    fi
+
+    # Start node 4 and verify it can sync
+    log_info "Starting validator node 4..."
+    if ! start_node4; then
+        record_test_result "TM-V1" "FAILED" "Failed to start node 4 container"
+        return
+    fi
+
+    # Wait for node 4 to sync
+    if wait_for_validator_sync "$NODE4_NAME" 120; then
+        log_info "Node 4 synced successfully"
+    else
+        record_test_result "TM-V1" "FAILED" "Node 4 failed to sync"
+        stop_node4
+        return
+    fi
+
+    # Verify consensus continues with 4 validators
+    local pre_four_height=$(get_consensus_height "alys-node-1")
+    log_info "Waiting 30s for consensus to progress with 4 validators..."
+    sleep 30
+    local post_four_height=$(get_consensus_height "alys-node-1")
+
+    if [[ "$post_four_height" -gt "$pre_four_height" ]]; then
+        log_info "Consensus progressing with 4 validators: $pre_four_height -> $post_four_height"
+    else
+        record_test_result "TM-V1" "FAILED" "Consensus stalled after adding 4th validator"
+        stop_node4
+        return
+    fi
+
+    # Verify node 4 is participating (check its height matches others)
+    local h1=$(get_consensus_height "alys-node-1")
+    local h4=$(get_consensus_height "$NODE4_NAME")
+
+    log_info "Height comparison: Node 1 at $h1, Node 4 at $h4"
+
+    if [[ "$h4" -ge "$((h1 - 2))" ]]; then
+        record_test_result "TM-V1" "PASSED" "Dynamic Validator Addition - 4 validators in consensus (heights: n1=$h1, n4=$h4)"
+    else
+        record_test_result "TM-V1" "FAILED" "Node 4 height ($h4) far behind others ($h1)"
+    fi
+
+    # Cleanup: stop node 4 (leave for optional follow-up tests)
+    stop_node4
+}
+
+# ============================================================================
 # Scenario Dispatcher
 # ============================================================================
 
@@ -2454,6 +2647,9 @@ run_scenario() {
         TM-P3) run_TM_P3 ;;
         TM-P4) run_TM_P4 ;;
         TM-P5) run_TM_P5 ;;
+
+        # Category V: Validator Set Updates
+        TM-V1) run_TM_V1 ;;
         TM-P6) run_TM_P6 ;;
         TM-P7) run_TM_P7 ;;
         TM-P8) run_TM_P8 ;;
@@ -2477,6 +2673,7 @@ run_scenario() {
             run_TM_E5
             run_TM_F1
             run_TM_F2
+            run_TM_V1
             ;;
 
         tier3)
@@ -2555,6 +2752,10 @@ run_scenario() {
             run_TM_P9
             ;;
 
+        valset)
+            run_TM_V1
+            ;;
+
         all)
             # Category A: Validator Failures
             run_TM_A1
@@ -2605,6 +2806,8 @@ run_scenario() {
             run_TM_P7
             run_TM_P8
             run_TM_P9
+            # Category V: Validator Set Updates
+            run_TM_V1
             ;;
 
         *)
@@ -2619,7 +2822,8 @@ run_scenario() {
             echo "  I (Integrity):  TM-I1, TM-I2, TM-I3, TM-I4, TM-I5"
             echo "  L (Liveness):   TM-L1, TM-L2, TM-L3"
             echo "  P (AuxPoW):     TM-P1, TM-P2, TM-P3, TM-P4, TM-P5, TM-P6, TM-P7, TM-P8, TM-P9"
-            echo "  Groups: tier1, tier2, tier3, validator, network, timing, wal, external, integrity, liveness, auxpow, all"
+            echo "  V (ValSet):     TM-V1"
+            echo "  Groups: tier1, tier2, tier3, validator, network, timing, wal, external, integrity, liveness, auxpow, valset, all"
             exit 1
             ;;
     esac
@@ -2700,9 +2904,12 @@ Scenarios:
     TM-P8  alys_getBlockByHeight RPC Validation
     TM-P9  AuxPoW Range Hash Existence Validation
 
+  Category V - Validator Set Updates:
+    TM-V1  Dynamic Validator Addition (4th validator via governance)
+
   Groups:
     tier1      Core scenarios (A1, A3, B1, B5, L3, I1, I3)
-    tier2      Advanced scenarios (D1-D3, E5, F1-F2)
+    tier2      Advanced scenarios (D1-D3, E5, F1-F2, V1)
     tier3      AuxPoW integration (P1-P9)
     validator  All validator failure scenarios (A1-A5)
     network    All network partition scenarios (B1-B5)
@@ -2711,8 +2918,9 @@ Scenarios:
     external   All external dependency scenarios (F1-F3)
     integrity  All block integrity scenarios (I1-I5)
     liveness   All liveness scenarios (L1-L3)
-    auxpow     All AuxPoW scenarios (P1-P8)
-    all        All 37 scenarios
+    auxpow     All AuxPoW scenarios (P1-P9)
+    valset     All validator set update scenarios (V1)
+    all        All 38 scenarios
 
 Examples:
   $0 --scenario TM-A1

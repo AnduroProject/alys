@@ -52,6 +52,7 @@ pub fn minimal_config() -> ChainConfig {
         retarget_params: None,
         block_hash_cache_size: Some(100),
         chain_id: 1337, // Priority 5: added field
+        skip_governance_signature_verification: true, // Skip for tests
     }
 }
 
