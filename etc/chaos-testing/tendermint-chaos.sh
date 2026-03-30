@@ -93,6 +93,7 @@ get_rpc_port() {
         alys-node-1) echo 3001 ;;
         alys-node-2) echo 3011 ;;
         alys-node-3) echo 3021 ;;
+        alys-node-4) echo 3031 ;;
         *) echo 3001 ;;
     esac
 }
@@ -103,6 +104,7 @@ get_node_ip() {
         alys-node-1) echo "172.22.0.10" ;;
         alys-node-2) echo "172.22.0.11" ;;
         alys-node-3) echo "172.22.0.12" ;;
+        alys-node-4) echo "172.22.0.13" ;;
         *) echo "" ;;
     esac
 }

@@ -165,7 +165,6 @@ services:
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
           --metrics-port 9090 \
-          --skip-governance-signature-verification \
           2>&1 | stdbuf -oL tee /opt/alys/logs/node1.log &
         PID=$!
         wait $PID
@@ -239,7 +238,6 @@ services:
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
           --metrics-port 9090 \
-          --skip-governance-signature-verification \
           2>&1 | stdbuf -oL tee /opt/alys/logs/node2.log &
         PID=$!
         wait $PID
@@ -313,7 +311,6 @@ services:
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
           --metrics-port 9090 \
-          --skip-governance-signature-verification \
           2>&1 | stdbuf -oL tee /opt/alys/logs/node3.log &
         PID=$!
         wait $PID
@@ -391,7 +388,6 @@ services:
           --bitcoin-rpc-pass rpcpassword \
           --jwt-secret /lib/alys/jwt.hex \
           --metrics-port 9090 \
-          --skip-governance-signature-verification \
           2>&1 | stdbuf -oL tee /opt/alys/logs/node4.log &
         PID=$!
         wait $PID
