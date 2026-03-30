@@ -190,7 +190,7 @@ create_aux_block() {
 
 get_block_by_height() {
     local node="${1:-alys-node-1}"
-    local height="$2"
+    local height="${2:-}"
     local port=$(get_rpc_port "$node")
 
     if [[ -z "$height" ]]; then
@@ -2008,8 +2008,8 @@ run_TM_P4() {
     local current_height=$(get_consensus_height "alys-node-1")
     local auxpow_heights=()
 
-    # Find multiple AuxPoW blocks
-    for ((h = current_height - 1; h >= 1 && ${#auxpow_heights[@]} < 5; h--)); do
+    # Find multiple AuxPoW blocks (scan more to find distinct epochs)
+    for ((h = current_height - 1; h >= 1 && ${#auxpow_heights[@]} < 10; h--)); do
         local block=$(get_block_by_height "alys-node-1" "$h")
         if verify_block_has_auxpow "$block"; then
             auxpow_heights+=("$h")
@@ -2023,9 +2023,13 @@ run_TM_P4() {
 
     log_info "Found ${#auxpow_heights[@]} AuxPoW blocks: ${auxpow_heights[*]}"
 
-    # Validate that ranges don't overlap (should be sequential)
     local valid=true
-    local prev_range_start=""
+    local validation_errors=""
+
+    # Collect unique epochs using simple string tracking (bash 3.x compatible)
+    local seen_epochs=""
+    local unique_epoch_count=0
+    local prev_epoch=""
 
     for h in "${auxpow_heights[@]}"; do
         local block=$(get_block_by_height "alys-node-1" "$h")
@@ -2035,18 +2039,58 @@ run_TM_P4() {
 
         log_debug "Height $h: range $range_start -> $range_end"
 
-        if [[ -n "$prev_range_start" ]]; then
-            # Current block's range_end should be older than previous block's range_start
-            # (since we're iterating backwards through heights)
-            if [[ "$range_end" == "$prev_range_start" ]]; then
-                log_debug "Ranges connect properly"
-            fi
+        # Validation 1: range_start and range_end must be valid hashes (0x + 64 hex chars)
+        if [[ ! "$range_start" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+            log_error "Height $h: Invalid range_start format: $range_start"
+            validation_errors="${validation_errors}Invalid range_start at height $h; "
+            valid=false
         fi
 
-        prev_range_start="$range_start"
+        if [[ ! "$range_end" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+            log_error "Height $h: Invalid range_end format: $range_end"
+            validation_errors="${validation_errors}Invalid range_end at height $h; "
+            valid=false
+        fi
+
+        # Validation 2: range_start and range_end must not be zero hashes
+        local zero_hash="0x0000000000000000000000000000000000000000000000000000000000000000"
+        if [[ "$range_start" == "$zero_hash" ]] && [[ $h -gt 1 ]]; then
+            log_warn "Height $h: range_start is zero hash (only valid for genesis)"
+        fi
+
+        # Track unique epochs using string matching (bash 3.x compatible)
+        local epoch_key="${range_start}|${range_end}"
+        if [[ "$seen_epochs" != *"$epoch_key"* ]]; then
+            seen_epochs="${seen_epochs}${epoch_key};"
+            ((unique_epoch_count++))
+            log_debug "New epoch #$unique_epoch_count at height $h"
+        else
+            # Multiple blocks sharing same epoch is expected and valid
+            log_debug "Height $h shares epoch with earlier block"
+        fi
+
+        # Check for duplicate consecutive epochs (should not happen)
+        if [[ -n "$prev_epoch" ]] && [[ "$epoch_key" != "$prev_epoch" ]]; then
+            log_debug "Epoch transition detected at height $h"
+        fi
+        prev_epoch="$epoch_key"
     done
 
-    record_test_result "TM-P4" "PASSED" "AuxPoW ranges validated across ${#auxpow_heights[@]} blocks"
+    log_info "Found $unique_epoch_count unique AuxPoW epochs across ${#auxpow_heights[@]} blocks"
+
+    # Validation 3: Must have at least 1 valid epoch
+    if [[ $unique_epoch_count -lt 1 ]]; then
+        log_error "No valid AuxPoW epochs found"
+        valid=false
+        validation_errors="${validation_errors}No valid epochs; "
+    fi
+
+    # Report results
+    if [[ "$valid" == "true" ]]; then
+        record_test_result "TM-P4" "PASSED" "AuxPoW ranges validated: $unique_epoch_count epochs, ${#auxpow_heights[@]} blocks"
+    else
+        record_test_result "TM-P4" "FAILED" "Range validation errors: $validation_errors"
+    fi
 }
 
 run_TM_P5() {
@@ -2235,6 +2279,120 @@ run_TM_P8() {
     fi
 }
 
+run_TM_P9() {
+    log_info "[TM-P9] Running: AuxPoW Range Hash Existence Validation"
+
+    if ! verify_all_validators_active; then
+        record_test_result "TM-P9" "FAILED" "Pre-condition failed"
+        return
+    fi
+
+    local current_height=$(get_consensus_height "alys-node-1")
+    local valid=true
+    local validation_errors=""
+
+    # Find a block with AuxPoW
+    local auxpow_height=$(find_block_with_auxpow "alys-node-1" 50)
+
+    if [[ -z "$auxpow_height" ]]; then
+        record_test_result "TM-P9" "SKIPPED" "No AuxPoW blocks available"
+        return
+    fi
+
+    local block=$(get_block_by_height "alys-node-1" "$auxpow_height")
+    local auxpow=$(get_block_auxpow_header "$block")
+    local range_start=$(get_auxpow_field "$auxpow" "range_start")
+    local range_end=$(get_auxpow_field "$auxpow" "range_end")
+
+    log_info "Validating AuxPoW at height $auxpow_height"
+    log_debug "range_start: $range_start"
+    log_debug "range_end: $range_end"
+
+    # Find blocks matching range_start and range_end hashes
+    local start_found=false
+    local end_found=false
+    local start_height=""
+    local end_height=""
+
+    # Scan backwards to find the blocks with these hashes
+    for ((h = auxpow_height; h >= 1 && h >= auxpow_height - 100; h--)); do
+        local scan_block=$(get_block_by_height "alys-node-1" "$h")
+        local block_hash=$(echo "$scan_block" | jq -r '.hash // empty')
+
+        if [[ "$block_hash" == "$range_start" ]]; then
+            start_found=true
+            start_height=$h
+            log_debug "Found range_start at height $h"
+        fi
+
+        if [[ "$block_hash" == "$range_end" ]]; then
+            end_found=true
+            end_height=$h
+            log_debug "Found range_end at height $h"
+        fi
+
+        if [[ "$start_found" == "true" ]] && [[ "$end_found" == "true" ]]; then
+            break
+        fi
+    done
+
+    # Validation 1: range_start hash must exist in the chain
+    if [[ "$start_found" != "true" ]]; then
+        log_error "range_start hash not found in chain: $range_start"
+        validation_errors="${validation_errors}range_start not found; "
+        valid=false
+    fi
+
+    # Validation 2: range_end hash must exist in the chain
+    if [[ "$end_found" != "true" ]]; then
+        log_error "range_end hash not found in chain: $range_end"
+        validation_errors="${validation_errors}range_end not found; "
+        valid=false
+    fi
+
+    # Validation 3: range_start height must be <= range_end height (chronological order)
+    if [[ "$start_found" == "true" ]] && [[ "$end_found" == "true" ]]; then
+        if [[ $start_height -gt $end_height ]]; then
+            log_error "range_start (height $start_height) is after range_end (height $end_height)"
+            validation_errors="${validation_errors}range order invalid; "
+            valid=false
+        else
+            local range_size=$((end_height - start_height + 1))
+            log_info "AuxPoW covers $range_size blocks (heights $start_height to $end_height)"
+
+            # Validation 4: Verify parent chain continuity within the range
+            local chain_valid=true
+            for ((h = start_height + 1; h <= end_height; h++)); do
+                local curr_block=$(get_block_by_height "alys-node-1" "$h")
+                local prev_block=$(get_block_by_height "alys-node-1" "$((h - 1))")
+
+                local curr_parent=$(echo "$curr_block" | jq -r '.parent_hash // empty')
+                local prev_hash=$(echo "$prev_block" | jq -r '.hash // empty')
+
+                if [[ "$curr_parent" != "$prev_hash" ]]; then
+                    log_error "Parent chain break at height $h: parent=$curr_parent, prev_hash=$prev_hash"
+                    chain_valid=false
+                    break
+                fi
+            done
+
+            if [[ "$chain_valid" != "true" ]]; then
+                validation_errors="${validation_errors}parent chain break in range; "
+                valid=false
+            else
+                log_debug "Parent chain continuous within range"
+            fi
+        fi
+    fi
+
+    # Report results
+    if [[ "$valid" == "true" ]]; then
+        record_test_result "TM-P9" "PASSED" "Range hashes exist and form continuous chain"
+    else
+        record_test_result "TM-P9" "FAILED" "Range validation errors: $validation_errors"
+    fi
+}
+
 # ============================================================================
 # Scenario Dispatcher
 # ============================================================================
@@ -2299,6 +2457,7 @@ run_scenario() {
         TM-P6) run_TM_P6 ;;
         TM-P7) run_TM_P7 ;;
         TM-P8) run_TM_P8 ;;
+        TM-P9) run_TM_P9 ;;
 
         # Scenario groups
         tier1)
@@ -2329,6 +2488,7 @@ run_scenario() {
             run_TM_P6
             run_TM_P7
             run_TM_P8
+            run_TM_P9
             ;;
 
         validator)
@@ -2392,6 +2552,7 @@ run_scenario() {
             run_TM_P6
             run_TM_P7
             run_TM_P8
+            run_TM_P9
             ;;
 
         all)
@@ -2443,6 +2604,7 @@ run_scenario() {
             run_TM_P6
             run_TM_P7
             run_TM_P8
+            run_TM_P9
             ;;
 
         *)
@@ -2456,7 +2618,7 @@ run_scenario() {
             echo "  F (External):   TM-F1, TM-F2, TM-F3"
             echo "  I (Integrity):  TM-I1, TM-I2, TM-I3, TM-I4, TM-I5"
             echo "  L (Liveness):   TM-L1, TM-L2, TM-L3"
-            echo "  P (AuxPoW):     TM-P1, TM-P2, TM-P3, TM-P4, TM-P5, TM-P6, TM-P7, TM-P8"
+            echo "  P (AuxPoW):     TM-P1, TM-P2, TM-P3, TM-P4, TM-P5, TM-P6, TM-P7, TM-P8, TM-P9"
             echo "  Groups: tier1, tier2, tier3, validator, network, timing, wal, external, integrity, liveness, auxpow, all"
             exit 1
             ;;
@@ -2536,11 +2698,12 @@ Scenarios:
     TM-P6  AuxPoW Query During Partition
     TM-P7  Blocks Without AuxPoW Validation
     TM-P8  alys_getBlockByHeight RPC Validation
+    TM-P9  AuxPoW Range Hash Existence Validation
 
   Groups:
     tier1      Core scenarios (A1, A3, B1, B5, L3, I1, I3)
     tier2      Advanced scenarios (D1-D3, E5, F1-F2)
-    tier3      AuxPoW integration (P1-P8)
+    tier3      AuxPoW integration (P1-P9)
     validator  All validator failure scenarios (A1-A5)
     network    All network partition scenarios (B1-B5)
     timing     All timing scenarios (C1-C4)
