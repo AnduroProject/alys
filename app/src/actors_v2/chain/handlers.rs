@@ -1362,6 +1362,50 @@ impl Handler<ChainMessage> for ChainActor {
                             }
                         }
 
+                        // Step 7.5: Process governance updates from imported block (Bug 2 fix)
+                        // Syncing nodes must apply validator/parameter changes from blocks they import.
+                        // This mirrors the logic in commit_block() for the proposer path.
+                        // IMPORTANT: This must happen AFTER block storage (Step 5) to match commit_block ordering.
+                        if let Some(ref governance_updates) = block.message.governance_updates {
+                            let chain_id = format!("alys-{}", self_clone.config.chain_id);
+
+                            for update in governance_updates {
+                                let effective_height = update.effective_height(block_height);
+
+                                info!(
+                                    correlation_id = %correlation_id,
+                                    update_type = update.variant_name(),
+                                    block_height = block_height,
+                                    effective_height = effective_height,
+                                    "Processing governance update from imported block"
+                                );
+
+                                // Apply the governance update
+                                if let Err(e) = self_clone.apply_committed_governance_update(
+                                    update, effective_height, correlation_id
+                                ).await {
+                                    error!(
+                                        correlation_id = %correlation_id,
+                                        error = %e,
+                                        update_type = update.variant_name(),
+                                        "Failed to apply governance update from imported block"
+                                    );
+                                    // Continue with other updates - don't fail the whole import
+                                    // (matches commit_block behavior)
+                                }
+
+                                // Mark as committed for deduplication
+                                let update_hash = update.compute_hash(&chain_id);
+                                self_clone.state.mark_governance_update_committed(update_hash).await;
+                            }
+
+                            info!(
+                                correlation_id = %correlation_id,
+                                updates_count = governance_updates.len(),
+                                "Processed governance updates from imported block"
+                            );
+                        }
+
                             // Step 8: With Tendermint instant finality, no orphan processing needed
                             // Blocks are committed in order, so children are always received after parents
 
@@ -3387,9 +3431,27 @@ impl Handler<ApplyRecoveredState> for ChainActor {
         let storage_actor = self.storage_actor.clone();
         let sync_actor = self.sync_actor.clone();
         let engine_actor = self.engine_actor.clone();
+        // Bug 5 fix: Capture state for governance update re-queuing
+        let chain_state = self.state.clone();
 
         Box::pin(
             async move {
+                // Bug 5 fix: Re-queue uncommitted governance updates from WAL
+                // This handles the case where the proposer crashed after draining
+                // the pending queue but before the block was committed.
+                if let Some(ref uncommitted_updates) = recovered.uncommitted_governance_updates {
+                    if !uncommitted_updates.is_empty() {
+                        tracing::info!(
+                            correlation_id = %correlation_id,
+                            updates_count = uncommitted_updates.len(),
+                            "Re-queuing uncommitted governance updates from WAL recovery"
+                        );
+                        for update in uncommitted_updates {
+                            chain_state.queue_governance_update(update.clone()).await;
+                        }
+                    }
+                }
+
                 // Check if there's any state to recover
                 if recovered.last_committed_height.is_none() && recovered.current_round.is_none() {
                     tracing::debug!(

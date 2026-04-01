@@ -623,6 +623,72 @@ impl ChainActor {
             );
         }
 
+        // Validate governance updates in proposal (race condition fix)
+        // Reject proposals containing already-committed governance updates
+        let governance_valid = if let Some(ref governance_updates) = proposal.block.governance_updates {
+            let chain_id = format!("alys-{}", self.config.chain_id);
+            let mut all_valid = true;
+
+            for update in governance_updates {
+                // Check if update was already committed
+                let update_hash = update.compute_hash(&chain_id);
+                if self.state.is_governance_update_committed(&update_hash).await {
+                    warn!(
+                        correlation_id = %correlation_id,
+                        height = height,
+                        round = round,
+                        update_type = update.variant_name(),
+                        update_hash = ?H256::from(update_hash),
+                        "Proposal contains already-committed governance update - will vote NIL"
+                    );
+                    all_valid = false;
+                    break;
+                }
+
+                // Verify governance signature (unless skipped for testing)
+                if !self.config.skip_governance_signature_verification {
+                    let validator_set = match self.load_validator_set_for_height(height).await {
+                        Ok(vs) => vs,
+                        Err(e) => {
+                            warn!(
+                                correlation_id = %correlation_id,
+                                error = %e,
+                                "Failed to load validator set for governance validation - will vote NIL"
+                            );
+                            all_valid = false;
+                            break;
+                        }
+                    };
+
+                    if let Err(e) = update.verify_governance_signature(&validator_set, &chain_id) {
+                        warn!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            round = round,
+                            update_type = update.variant_name(),
+                            error = %e,
+                            "Proposal contains governance update with invalid signature - will vote NIL"
+                        );
+                        all_valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_valid {
+                debug!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    updates_validated = governance_updates.len(),
+                    "All governance updates in proposal validated"
+                );
+            }
+
+            all_valid
+        } else {
+            true // No governance updates is valid
+        };
+
         // Store proposal in state and determine prevote target
         let prevote_target = {
             let mut state = tendermint_state.write().await;
@@ -651,11 +717,11 @@ impl ChainActor {
             state.proposals.insert((round, proposer), proposal.clone());
 
             // Determine prevote target based on locking rules
-            // Phase 4.3: If execution validation failed, vote NIL regardless of locking
-            if execution_valid {
+            // Phase 4.3: If execution or governance validation failed, vote NIL regardless of locking
+            if execution_valid && governance_valid {
                 state.determine_prevote_target(&proposal)
             } else {
-                // Invalid execution payload - vote NIL
+                // Invalid execution payload or governance updates - vote NIL
                 None
             }
         };
@@ -1385,34 +1451,53 @@ impl ChainActor {
     // TendermintGovernanceUpdate Handler Implementation
     // =========================================================================
 
-    /// Handle a governance update (validator set change, parameter update, etc.).
+    /// Handle a governance update received from the governance service.
+    ///
+    /// # Race Condition Fix
+    ///
+    /// Previously, governance updates were processed immediately when received,
+    /// calculating `effective_height = current_height + activation_delay`. This caused
+    /// race conditions when nodes were at different heights, resulting in different
+    /// effective heights and validator set mismatches.
+    ///
+    /// Now, validator and parameter updates are QUEUED for block inclusion. The
+    /// proposer includes pending updates in their block proposal, and all nodes
+    /// process the updates when the block is committed. This ensures deterministic
+    /// effective height calculation: `effective_height = commit_height + activation_delay`.
+    ///
+    /// Emergency actions (H+0) are still processed immediately since they need
+    /// instant effect across all nodes.
     ///
     /// # Actions
-    /// - Validate the governance signature (unless skip_governance_signature_verification is set)
-    /// - Calculate effective height (H+2 for validator updates, H+1 for params)
-    /// - Store to StorageActor
+    /// - Validate the governance signature
+    /// - Check if update was already committed (deduplication)
+    /// - Emergency (H+0): Process immediately
+    /// - Validator/Parameter: Queue for block inclusion
+    ///
+    /// # Returns
+    /// - For queued updates: Returns 0 (actual effective_height determined at commit time)
+    /// - For emergency actions: Returns current_height (immediate effect)
     pub async fn handle_tendermint_governance_update(
         &self,
         update: GovernanceUpdate,
         correlation_id: Uuid,
     ) -> TendermintResult<u64> {
         let current_height = self.state.get_height().await;
-        let effective_height = update.effective_height(current_height);
         let variant_name = update.variant_name();
+        let chain_id = format!("alys-{}", self.config.chain_id);
 
         info!(
             correlation_id = %correlation_id,
             update_type = variant_name,
             current_height = current_height,
-            effective_height = effective_height,
-            "Processing governance update"
+            activation_delay = update.activation_delay(),
+            "Received governance update from governance service"
         );
 
         // Verify governance signature (unless skipped for testing)
         if !self.config.skip_governance_signature_verification {
             // Load current validator set to verify against
             let validator_set = self.load_validator_set_for_height(current_height).await?;
-            let chain_id = format!("alys-{}", self.config.chain_id);
 
             // Verify the signature - requires 2/3+ aggregate signature from validators
             update.verify_governance_signature(&validator_set, &chain_id).map_err(|e| {
@@ -1435,104 +1520,30 @@ impl ChainActor {
             );
         }
 
-        let storage = self
-            .storage_actor
-            .as_ref()
-            .ok_or_else(|| ChainError::Configuration("StorageActor not configured".into()))?;
+        // Compute hash for deduplication
+        let update_hash = update.compute_hash(&chain_id);
 
-        match update {
-            GovernanceUpdate::Validator(validator_update) => {
-                // Validator updates activate at H+2
-                info!(
-                    correlation_id = %correlation_id,
-                    effective_height = effective_height,
-                    public_key = ?validator_update.public_key,
-                    power = validator_update.power,
-                    is_removal = validator_update.is_removal(),
-                    "Processing validator update for H+2 activation"
-                );
+        // Check if this update was already committed in a block
+        if self.state.is_governance_update_committed(&update_hash).await {
+            info!(
+                correlation_id = %correlation_id,
+                update_type = variant_name,
+                update_hash = ?H256::from(update_hash),
+                "Governance update already committed, ignoring duplicate"
+            );
+            return Ok(0);
+        }
 
-                // 1. Load current validator set from storage
-                let mut current_set = self.load_validator_set_for_height(current_height).await?;
-
-                // 2. Apply the update (add/modify/remove)
-                current_set.apply_updates(&[validator_update.clone()]);
-
-                // 3. Store the new validator set for activation at effective_height
-                storage
-                    .send(crate::actors_v2::storage::messages::StoreValidatorSetMessage {
-                        effective_height,
-                        validator_set: current_set.clone(),
-                        correlation_id: Some(correlation_id),
-                    })
-                    .await
-                    .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
-                    .map_err(|e| ChainError::Storage(format!("Storage error: {}", e)))?;
-
-                // Note: Local validator set is NOT updated here.
-                // The new set activates at effective_height (H+2) via load_validator_set_for_height()
-
-                // Issue 4.2: Notify sync validator of upcoming validator set change
-                if let Some(ref sync_validator) = self.tendermint_sync_validator {
-                    match sync_validator.write() {
-                        Ok(mut validator_guard) => {
-                            validator_guard.record_validator_change(effective_height, current_set.clone());
-                            info!(
-                                correlation_id = %correlation_id,
-                                effective_height = effective_height,
-                                "Notified sync validator of validator set change"
-                            );
-                        }
-                        Err(e) => {
-                            error!(
-                                correlation_id = %correlation_id,
-                                error = ?e,
-                                "Failed to acquire sync validator lock for governance notification"
-                            );
-                        }
-                    }
-                }
-
-                info!(
-                    correlation_id = %correlation_id,
-                    effective_height = effective_height,
-                    "Validator update stored and will activate at height {}",
-                    effective_height
-                );
-            }
-
-            GovernanceUpdate::Parameter(param_update) => {
-                // Serialize and store parameter
-                let value = rmp_serde::to_vec(&param_update.value)
-                    .map_err(|e| ChainError::Internal(format!("Serialization error: {}", e)))?;
-
-                storage
-                    .send(crate::actors_v2::storage::messages::StoreParameterUpdateMessage {
-                        param_id: param_update.param,
-                        effective_height,
-                        value,
-                        correlation_id: Some(correlation_id),
-                    })
-                    .await
-                    .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
-                    .map_err(|e| ChainError::Storage(format!("Storage error: {}", e)))?;
-
-                info!(
-                    correlation_id = %correlation_id,
-                    param = ?param_update.param,
-                    effective_height = effective_height,
-                    "Parameter update stored"
-                );
-            }
-
+        match &update {
             GovernanceUpdate::Emergency(emergency_action) => {
                 // Emergency actions take effect immediately (H+0)
+                // These are still processed right away since they need instant effect
                 use super::tendermint::governance::EmergencyActionKind;
 
                 warn!(
                     correlation_id = %correlation_id,
                     action = ?emergency_action.action,
-                    "Applying emergency action IMMEDIATELY"
+                    "Applying emergency action IMMEDIATELY (H+0)"
                 );
 
                 // Update TendermintRuntimeState pause flags
@@ -1567,13 +1578,220 @@ impl ChainActor {
                 } else {
                     warn!(
                         correlation_id = %correlation_id,
-                        "TendermintRuntimeState not initialized - emergency action not applied"
+                        "TendermintRuntimeState not initialized - emergency action not applied locally"
                     );
+                }
+
+                // Queue for block inclusion so it's recorded for audit trail
+                // and syncing nodes can see the emergency action
+                self.state.queue_governance_update(update).await;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    "Emergency action applied and queued for block inclusion"
+                );
+
+                Ok(current_height)
+            }
+
+            GovernanceUpdate::Validator(validator_update) => {
+                // Queue validator update for block inclusion
+                // Actual processing happens in commit_block when block is committed
+                info!(
+                    correlation_id = %correlation_id,
+                    public_key = ?validator_update.public_key,
+                    power = validator_update.power,
+                    is_removal = validator_update.is_removal(),
+                    "Queueing validator update for block inclusion (effective at commit_height + 2)"
+                );
+
+                self.state.queue_governance_update(update).await;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    pending_count = self.state.pending_governance_updates_count().await,
+                    "Validator update queued successfully"
+                );
+
+                // Return 0 to indicate effective height will be determined at commit time
+                Ok(0)
+            }
+
+            GovernanceUpdate::Parameter(param_update) => {
+                // Queue parameter update for block inclusion
+                // Actual processing happens in commit_block when block is committed
+                info!(
+                    correlation_id = %correlation_id,
+                    param = ?param_update.param,
+                    "Queueing parameter update for block inclusion (effective at commit_height + 1)"
+                );
+
+                self.state.queue_governance_update(update).await;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    pending_count = self.state.pending_governance_updates_count().await,
+                    "Parameter update queued successfully"
+                );
+
+                // Return 0 to indicate effective height will be determined at commit time
+                Ok(0)
+            }
+        }
+    }
+
+    /// Apply a governance update that was committed in a block.
+    ///
+    /// This is called from commit_block() when processing governance updates
+    /// from a committed block. The effective_height is deterministic because
+    /// it's calculated from the block's height, not from when the update was received.
+    ///
+    /// Bug 2 fix: Made pub(crate) so ImportBlock handler can also call this method.
+    ///
+    /// # Arguments
+    /// * `update` - The governance update to apply
+    /// * `effective_height` - Pre-calculated effective height (block_height + activation_delay)
+    /// * `correlation_id` - For logging correlation
+    pub(crate) async fn apply_committed_governance_update(
+        &self,
+        update: &GovernanceUpdate,
+        effective_height: u64,
+        correlation_id: Uuid,
+    ) -> TendermintResult<()> {
+        let storage = self
+            .storage_actor
+            .as_ref()
+            .ok_or_else(|| ChainError::Configuration("StorageActor not configured".into()))?;
+
+        match update {
+            GovernanceUpdate::Validator(validator_update) => {
+                info!(
+                    correlation_id = %correlation_id,
+                    effective_height = effective_height,
+                    public_key = ?validator_update.public_key,
+                    power = validator_update.power,
+                    is_removal = validator_update.is_removal(),
+                    "Applying committed validator update (deterministic effective height)"
+                );
+
+                // Load current validator set and apply update
+                let current_height = self.state.get_height().await;
+                let mut current_set = self.load_validator_set_for_height(current_height).await?;
+                current_set.apply_updates(&[validator_update.clone()]);
+
+                // Store the new validator set for activation at effective_height
+                storage
+                    .send(crate::actors_v2::storage::messages::StoreValidatorSetMessage {
+                        effective_height,
+                        validator_set: current_set.clone(),
+                        correlation_id: Some(correlation_id),
+                    })
+                    .await
+                    .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
+                    .map_err(|e| ChainError::Storage(format!("Storage error: {}", e)))?;
+
+                // Notify sync validator of upcoming validator set change
+                if let Some(ref sync_validator) = self.tendermint_sync_validator {
+                    match sync_validator.write() {
+                        Ok(mut validator_guard) => {
+                            validator_guard.record_validator_change(effective_height, current_set.clone());
+                            debug!(
+                                correlation_id = %correlation_id,
+                                effective_height = effective_height,
+                                "Notified sync validator of validator set change"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                correlation_id = %correlation_id,
+                                error = ?e,
+                                "Failed to acquire sync validator lock for governance notification"
+                            );
+                        }
+                    }
+                }
+
+                info!(
+                    correlation_id = %correlation_id,
+                    effective_height = effective_height,
+                    "Validator update applied - will activate at height {}",
+                    effective_height
+                );
+            }
+
+            GovernanceUpdate::Parameter(param_update) => {
+                info!(
+                    correlation_id = %correlation_id,
+                    param = ?param_update.param,
+                    effective_height = effective_height,
+                    "Applying committed parameter update (deterministic effective height)"
+                );
+
+                // Serialize and store parameter
+                let value = rmp_serde::to_vec(&param_update.value)
+                    .map_err(|e| ChainError::Internal(format!("Serialization error: {}", e)))?;
+
+                storage
+                    .send(crate::actors_v2::storage::messages::StoreParameterUpdateMessage {
+                        param_id: param_update.param,
+                        effective_height,
+                        value,
+                        correlation_id: Some(correlation_id),
+                    })
+                    .await
+                    .map_err(|e| ChainError::Internal(format!("Mailbox error: {}", e)))?
+                    .map_err(|e| ChainError::Storage(format!("Storage error: {}", e)))?;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    param = ?param_update.param,
+                    effective_height = effective_height,
+                    "Parameter update applied - will activate at height {}",
+                    effective_height
+                );
+            }
+
+            GovernanceUpdate::Emergency(emergency_action) => {
+                // Emergency actions were already applied immediately when received
+                // Here we just log that it was committed for the audit trail
+                use super::tendermint::governance::EmergencyActionKind;
+
+                info!(
+                    correlation_id = %correlation_id,
+                    action = ?emergency_action.action,
+                    effective_height = effective_height,
+                    "Emergency action committed to block (was already applied immediately)"
+                );
+
+                // For syncing nodes that didn't receive the action via governance service,
+                // apply it now from the committed block
+                if let Some(ref runtime_state) = self.state.tendermint_runtime {
+                    let mut runtime = runtime_state.write().await;
+                    match emergency_action.action {
+                        EmergencyActionKind::PauseChain => {
+                            runtime.chain_paused = true;
+                        }
+                        EmergencyActionKind::ResumeChain => {
+                            runtime.chain_paused = false;
+                        }
+                        EmergencyActionKind::PausePegIns => {
+                            runtime.pegins_paused = true;
+                        }
+                        EmergencyActionKind::ResumePegIns => {
+                            runtime.pegins_paused = false;
+                        }
+                        EmergencyActionKind::PausePegOuts => {
+                            runtime.pegouts_paused = true;
+                        }
+                        EmergencyActionKind::ResumePegOuts => {
+                            runtime.pegouts_paused = false;
+                        }
+                    }
                 }
             }
         }
 
-        Ok(effective_height)
+        Ok(())
     }
 
     // =========================================================================
@@ -2024,7 +2242,52 @@ impl ChainActor {
             )
         };
 
-        // 9. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
+        // 9. Collect pending governance updates for block inclusion (race condition fix)
+        // This drains the queue - updates will be processed by all nodes when block is committed
+        let governance_updates = {
+            let pending = self.state.take_pending_governance_updates().await;
+            if pending.is_empty() {
+                None
+            } else {
+                info!(
+                    correlation_id = %correlation_id,
+                    height = height,
+                    pending_count = pending.len(),
+                    "Including pending governance updates in proposal block"
+                );
+
+                // Bug 5 fix: Write WAL entry BEFORE broadcast to enable crash recovery.
+                // If we crash after draining the queue but before the block is committed,
+                // the WAL allows re-queuing these updates on restart.
+                if let Some(ref wal) = self.consensus_wal {
+                    let mut wal_guard = wal.write().await;
+                    if let Err(e) = wal_guard.write(WALEntry::ProposedGovernanceUpdates {
+                        height,
+                        round: 0, // Round from current consensus state
+                        updates: pending.clone(),
+                    }) {
+                        error!(
+                            correlation_id = %correlation_id,
+                            error = %e,
+                            "Failed to write governance updates to WAL - continuing without crash protection"
+                        );
+                        // Continue anyway - the updates are still included in the block
+                        // but won't be recoverable if we crash before commit
+                    } else {
+                        debug!(
+                            correlation_id = %correlation_id,
+                            height = height,
+                            updates_count = pending.len(),
+                            "Wrote governance updates to WAL for crash recovery"
+                        );
+                    }
+                }
+
+                Some(pending)
+            }
+        };
+
+        // 10. Assemble the ConsensusBlock with optional AuxPoW (retrieved in step 3)
         // TM-B7 FIX: Use parent CONSENSUS hash (not execution hash) for ConsensusBlock.parent_hash
         // This ensures storage lookups work correctly since blocks are indexed by consensus hash.
         // Path B: Pegins are now stored in auxpow_header.pegins (not directly on ConsensusBlock)
@@ -2040,14 +2303,16 @@ impl ChainActor {
             validators_hash,
             next_validators_hash,
             params_hash,
-            // governance_updates: Collected when governance proposals are finalized
-            // For now, None until governance integration is complete (Phase 5)
-            governance_updates: None,
+            // Race condition fix: Include any pending governance updates in this block.
+            // All nodes will process these updates when the block is committed, ensuring
+            // deterministic effective_height = block_height + activation_delay.
+            governance_updates,
         };
 
         info!(
             correlation_id = %correlation_id,
             height = height,
+            governance_updates_count = block.governance_updates.as_ref().map(|u| u.len()).unwrap_or(0),
             block_number = block.execution_payload.block_number,
             parent_hash = %block.parent_hash,
             has_last_commit = block.last_commit.is_some(),
@@ -3200,6 +3465,48 @@ impl ChainActor {
                     correlation_id = %correlation_id,
                     pegins_finalized = block.pegins().len(),
                     "Marked peg-ins as processed after commit"
+                );
+            }
+
+            // Process governance updates from committed block (race condition fix)
+            // This is where validator/parameter updates actually take effect.
+            // effective_height = block_height + activation_delay is deterministic
+            // because all nodes process the same block at the same height.
+            if let Some(ref governance_updates) = block.governance_updates {
+                let chain_id = format!("alys-{}", self.config.chain_id);
+
+                for update in governance_updates {
+                    // Calculate deterministic effective height
+                    let effective_height = update.effective_height(height);
+
+                    info!(
+                        correlation_id = %correlation_id,
+                        update_type = update.variant_name(),
+                        block_height = height,
+                        effective_height = effective_height,
+                        "Processing governance update from committed block"
+                    );
+
+                    // Apply the update (stores to storage, updates sync validator, etc.)
+                    if let Err(e) = self.apply_committed_governance_update(update, effective_height, correlation_id).await {
+                        error!(
+                            correlation_id = %correlation_id,
+                            error = %e,
+                            update_type = update.variant_name(),
+                            "Failed to apply governance update from committed block"
+                        );
+                        // Continue with other updates - don't fail the whole commit
+                    }
+
+                    // Mark update as committed to prevent re-inclusion
+                    let update_hash = update.compute_hash(&chain_id);
+                    self.state.mark_governance_update_committed(update_hash).await;
+                }
+
+                info!(
+                    correlation_id = %correlation_id,
+                    updates_processed = governance_updates.len(),
+                    "Governance updates from committed block processed"
                 );
             }
         } else {

@@ -91,6 +91,63 @@ impl GovernanceUpdate {
         }
     }
 
+    /// Compute a deterministic hash for this governance update.
+    ///
+    /// Used for deduplication to prevent the same update from being included
+    /// in multiple blocks. The hash includes:
+    /// - Domain separation prefix
+    /// - Chain ID for cross-network replay protection
+    /// - Serialized update content
+    ///
+    /// This ensures updates are uniquely identified regardless of when they
+    /// are received by different nodes.
+    pub fn compute_hash(&self, chain_id: &str) -> [u8; 32] {
+        let mut hasher = Keccak::v256();
+
+        // Domain separation prefix
+        hasher.update(b"governance-update-hash-v1");
+        // Chain ID for cross-network replay protection
+        hasher.update(chain_id.as_bytes());
+        // Separator
+        hasher.update(&[0x00]);
+
+        // Hash content based on variant
+        match self {
+            GovernanceUpdate::Validator(update) => {
+                hasher.update(&[0x01]); // Variant tag
+                hasher.update(&update.public_key.serialize());
+                hasher.update(&update.power.to_le_bytes());
+                hasher.update(&update.governance_signature.serialize());
+            }
+            GovernanceUpdate::Parameter(update) => {
+                hasher.update(&[0x02]); // Variant tag
+                hasher.update(&[update.param as u8]);
+                // Serialize value using MessagePack for determinism
+                // Bug 3 fix: Include success/failure indicator to prevent hash collisions
+                // between successful serialization and serialization failures.
+                match rmp_serde::to_vec(&update.value) {
+                    Ok(value_bytes) => {
+                        hasher.update(&[0x01]); // Success flag
+                        hasher.update(&value_bytes);
+                    }
+                    Err(_) => {
+                        hasher.update(&[0x00]); // Failure flag - ensures different hash
+                    }
+                }
+                hasher.update(&update.governance_signature.serialize());
+            }
+            GovernanceUpdate::Emergency(update) => {
+                hasher.update(&[0x03]); // Variant tag
+                hasher.update(&[update.action as u8]);
+                hasher.update(&update.governance_signature.serialize());
+            }
+        }
+
+        let mut output = [0u8; 32];
+        hasher.finalize(&mut output);
+        output
+    }
+
     /// Verify the governance signature against the current validator set.
     ///
     /// All governance updates require 2/3+ aggregate signature from validators.
@@ -526,4 +583,61 @@ mod tests {
     // TODO: Add aggregate signature test when proper aggregate signing infrastructure is in place.
     // The current governance_signature field uses Signature type, but proper aggregate
     // verification requires AggregateSignature. This architectural decision needs review.
+
+    #[test]
+    fn test_governance_update_compute_hash_deterministic() {
+        let update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        // Same update should produce same hash
+        let hash1 = update.compute_hash("alys-test");
+        let hash2 = update.compute_hash("alys-test");
+        assert_eq!(hash1, hash2, "Hash should be deterministic");
+
+        // Different chain_id should produce different hash
+        let hash3 = update.compute_hash("alys-mainnet");
+        assert_ne!(hash1, hash3, "Hash should differ for different chain_ids");
+    }
+
+    #[test]
+    fn test_governance_update_compute_hash_different_variants() {
+        let validator_update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        let emergency_update = GovernanceUpdate::Emergency(EmergencyAction {
+            action: EmergencyActionKind::PausePegIns,
+            governance_signature: Signature::empty(),
+        });
+
+        // Different variants should produce different hashes
+        let hash1 = validator_update.compute_hash("alys-test");
+        let hash2 = emergency_update.compute_hash("alys-test");
+        assert_ne!(hash1, hash2, "Different variants should have different hashes");
+    }
+
+    #[test]
+    fn test_governance_update_compute_hash_different_power() {
+        let update1 = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        let update2 = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: create_mock_pubkey(),
+            power: 200, // Different power
+            governance_signature: Signature::empty(),
+        });
+
+        // Different power should produce different hashes
+        let hash1 = update1.compute_hash("alys-test");
+        let hash2 = update2.compute_hash("alys-test");
+        assert_ne!(hash1, hash2, "Different power values should have different hashes");
+    }
 }

@@ -32,9 +32,17 @@ use bridge::{BitcoinSignatureCollector, BitcoinSigner, Bridge};
 // Import V2 Tendermint types for peg-in handling (Doc 16)
 use super::tendermint::pegin::QueuedPegIn;
 use super::tendermint::types::Commit;
+// Import governance types for pending update queue (race condition fix)
+use super::tendermint::GovernanceUpdate;
 
 /// Default size for the difficulty cache (number of heights to cache)
 const DEFAULT_DIFFICULTY_CACHE_SIZE: usize = 256;
+
+/// Maximum number of committed governance update hashes to retain (Bug 4 fix)
+/// This prevents unbounded memory growth while still providing deduplication
+/// for recent updates. 10,000 entries is generous given typical governance
+/// update frequency.
+const MAX_COMMITTED_GOVERNANCE_HASHES: usize = 10_000;
 
 /// Mining context for tracking issued AuxPoW work (Priority 3)
 ///
@@ -181,6 +189,31 @@ pub struct ChainState {
     pub tendermint_runtime: Option<Arc<RwLock<TendermintRuntimeState>>>,
 
     // ========================================================================
+    // Pending Governance Updates (Race Condition Fix)
+    // ========================================================================
+
+    /// Queue of governance updates received from governance service, awaiting block inclusion.
+    ///
+    /// Instead of processing governance updates immediately when received (which causes
+    /// race conditions when nodes are at different heights), updates are queued here
+    /// and included in blocks by the proposer. All nodes then process the same updates
+    /// at the same height, ensuring deterministic effective_height calculation.
+    ///
+    /// Emergency actions (H+0) bypass this queue and are processed immediately.
+    pub pending_governance_updates: Arc<RwLock<Vec<GovernanceUpdate>>>,
+
+    /// LRU cache of governance update hashes that have been committed in blocks.
+    ///
+    /// Used to prevent double-processing of governance updates:
+    /// - When receiving an update, check if already committed -> ignore
+    /// - When validating proposals, reject if update already committed
+    /// - After commit, add update hash to this cache
+    ///
+    /// Bug 4 fix: Changed from HashSet to LruCache to prevent unbounded memory growth.
+    /// The cache retains MAX_COMMITTED_GOVERNANCE_HASHES most recent entries.
+    pub committed_governance_hashes: Arc<RwLock<LruCache<[u8; 32], ()>>>,
+
+    // ========================================================================
     // Cumulative Difficulty Tracking (Gap FC-2)
     // ========================================================================
 
@@ -242,6 +275,8 @@ impl std::fmt::Debug for ChainState {
             .field("block_hash_cache", &"<Arc<RwLock<BlockHashCache>>>")
             .field("cumulative_difficulty", &"<Arc<RwLock<u128>>>")
             .field("difficulty_cache", &"<LruCache<u64, u128>>")
+            .field("pending_governance_updates", &"<Arc<RwLock<Vec<GovernanceUpdate>>>>")
+            .field("committed_governance_hashes", &"<Arc<RwLock<HashSet<[u8; 32]>>>")
             .field("bridge", &"<Bridge>")
             .field("bitcoin_wallet", &"<BitcoinWallet>")
             .field(
@@ -304,6 +339,13 @@ impl ChainState {
 
             // Tendermint runtime state (None until Tendermint mode enabled)
             tendermint_runtime: None,
+
+            // Pending governance updates queue (race condition fix)
+            pending_governance_updates: Arc::new(RwLock::new(Vec::new())),
+            // Bug 4 fix: Use LruCache instead of HashSet to prevent unbounded memory growth
+            committed_governance_hashes: Arc::new(RwLock::new(LruCache::new(
+                NonZeroUsize::new(MAX_COMMITTED_GOVERNANCE_HASHES).unwrap(),
+            ))),
 
             // Cumulative difficulty tracking (Gap FC-2)
             cumulative_difficulty: Arc::new(RwLock::new(0)),
@@ -692,6 +734,72 @@ impl ChainState {
     pub async fn clear_difficulty_cache(&self) {
         self.difficulty_cache.write().await.clear();
     }
+
+    // ========================================================================
+    // Pending Governance Updates Queue (Race Condition Fix)
+    // ========================================================================
+
+    /// Queue a governance update for block inclusion.
+    ///
+    /// Called when a validator/parameter update is received from the governance service.
+    /// Emergency actions (H+0) should NOT be queued - they are processed immediately.
+    ///
+    /// The update will be included in the next block proposed by this node.
+    /// This ensures all nodes process the update at the same height.
+    pub async fn queue_governance_update(&self, update: GovernanceUpdate) {
+        self.pending_governance_updates.write().await.push(update);
+    }
+
+    /// Take all pending governance updates for block production.
+    ///
+    /// Called by the proposer when building a new block. The returned updates
+    /// should be included in the block's governance_updates field.
+    ///
+    /// Returns the updates and clears the queue.
+    pub async fn take_pending_governance_updates(&self) -> Vec<GovernanceUpdate> {
+        std::mem::take(&mut *self.pending_governance_updates.write().await)
+    }
+
+    /// Check if a governance update has already been committed in a block.
+    ///
+    /// Used for deduplication:
+    /// - Skip processing updates that are already committed
+    /// - Reject proposals that include already-committed updates
+    ///
+    /// Bug 4 fix: Uses LruCache::contains() which also promotes the entry (LRU behavior).
+    pub async fn is_governance_update_committed(&self, update_hash: &[u8; 32]) -> bool {
+        // Note: LruCache::contains() requires &mut self to update LRU order,
+        // so we need a write lock here.
+        self.committed_governance_hashes
+            .write()
+            .await
+            .contains(update_hash)
+    }
+
+    /// Mark a governance update as committed.
+    ///
+    /// Called after a block containing the update is committed.
+    /// Prevents the same update from being included in future blocks.
+    ///
+    /// Bug 4 fix: Uses LruCache::put() which will evict oldest entries when full.
+    pub async fn mark_governance_update_committed(&self, update_hash: [u8; 32]) {
+        self.committed_governance_hashes
+            .write()
+            .await
+            .put(update_hash, ());
+    }
+
+    /// Get count of pending governance updates.
+    pub async fn pending_governance_updates_count(&self) -> usize {
+        self.pending_governance_updates.read().await.len()
+    }
+
+    /// Clear all pending governance updates.
+    ///
+    /// Used during recovery or state reset.
+    pub async fn clear_pending_governance_updates(&self) {
+        self.pending_governance_updates.write().await.clear();
+    }
 }
 
 #[cfg(test)]
@@ -919,5 +1027,199 @@ mod tests {
             .update_difficulty_on_import(1, u128::MAX, u128::MAX)
             .await;
         assert_eq!(result, u128::MAX); // Should saturate, not overflow
+    }
+
+    // ========================================================================
+    // Pending Governance Updates Queue Tests (Race Condition Fix)
+    // ========================================================================
+
+    /// Test fixture for governance queue testing
+    /// Bug 4 fix: Updated to use LruCache instead of HashSet
+    struct GovernanceQueueTestFixture {
+        pending_governance_updates: Arc<RwLock<Vec<GovernanceUpdate>>>,
+        committed_governance_hashes: Arc<RwLock<LruCache<[u8; 32], ()>>>,
+    }
+
+    impl GovernanceQueueTestFixture {
+        fn new() -> Self {
+            Self {
+                pending_governance_updates: Arc::new(RwLock::new(Vec::new())),
+                committed_governance_hashes: Arc::new(RwLock::new(LruCache::new(
+                    NonZeroUsize::new(MAX_COMMITTED_GOVERNANCE_HASHES).unwrap(),
+                ))),
+            }
+        }
+
+        async fn queue_governance_update(&self, update: GovernanceUpdate) {
+            self.pending_governance_updates.write().await.push(update);
+        }
+
+        async fn take_pending_governance_updates(&self) -> Vec<GovernanceUpdate> {
+            std::mem::take(&mut *self.pending_governance_updates.write().await)
+        }
+
+        async fn is_governance_update_committed(&self, update_hash: &[u8; 32]) -> bool {
+            self.committed_governance_hashes
+                .write()
+                .await
+                .contains(update_hash)
+        }
+
+        async fn mark_governance_update_committed(&self, update_hash: [u8; 32]) {
+            self.committed_governance_hashes
+                .write()
+                .await
+                .put(update_hash, ());
+        }
+
+        async fn pending_governance_updates_count(&self) -> usize {
+            self.pending_governance_updates.read().await.len()
+        }
+    }
+
+    impl Clone for GovernanceQueueTestFixture {
+        fn clone(&self) -> Self {
+            Self {
+                pending_governance_updates: Arc::clone(&self.pending_governance_updates),
+                committed_governance_hashes: Arc::clone(&self.committed_governance_hashes),
+            }
+        }
+    }
+
+    fn create_test_validator_update(power: u64) -> GovernanceUpdate {
+        use lighthouse_wrapper::bls::{PublicKey, Signature};
+        use std::str::FromStr;
+
+        let pubkey = PublicKey::from_str(
+            "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        ).expect("valid test public key");
+
+        GovernanceUpdate::Validator(super::super::tendermint::ValidatorUpdate {
+            public_key: pubkey,
+            power,
+            governance_signature: Signature::empty(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_governance_queue_empty_initially() {
+        let fixture = GovernanceQueueTestFixture::new();
+        assert_eq!(fixture.pending_governance_updates_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_governance_queue_add_and_take() {
+        let fixture = GovernanceQueueTestFixture::new();
+
+        // Add two updates
+        fixture.queue_governance_update(create_test_validator_update(100)).await;
+        fixture.queue_governance_update(create_test_validator_update(200)).await;
+
+        assert_eq!(fixture.pending_governance_updates_count().await, 2);
+
+        // Take all updates
+        let updates = fixture.take_pending_governance_updates().await;
+        assert_eq!(updates.len(), 2);
+
+        // Queue should be empty after take
+        assert_eq!(fixture.pending_governance_updates_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_governance_committed_hash_tracking() {
+        let fixture = GovernanceQueueTestFixture::new();
+        let update = create_test_validator_update(100);
+        let hash = update.compute_hash("alys-test");
+
+        // Initially not committed
+        assert!(!fixture.is_governance_update_committed(&hash).await);
+
+        // Mark as committed
+        fixture.mark_governance_update_committed(hash).await;
+
+        // Now should be committed
+        assert!(fixture.is_governance_update_committed(&hash).await);
+    }
+
+    #[tokio::test]
+    async fn test_governance_queue_clone_visibility() {
+        // Test that updates are visible across clones (Arc<RwLock<>> pattern)
+        let fixture1 = GovernanceQueueTestFixture::new();
+        let fixture2 = fixture1.clone();
+
+        // Add via fixture1
+        fixture1.queue_governance_update(create_test_validator_update(100)).await;
+
+        // Should be visible via fixture2
+        assert_eq!(fixture2.pending_governance_updates_count().await, 1);
+
+        // Take via fixture2
+        let updates = fixture2.take_pending_governance_updates().await;
+        assert_eq!(updates.len(), 1);
+
+        // Should be empty in fixture1
+        assert_eq!(fixture1.pending_governance_updates_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_governance_different_updates_different_hashes() {
+        let update1 = create_test_validator_update(100);
+        let update2 = create_test_validator_update(200);
+
+        let hash1 = update1.compute_hash("alys-test");
+        let hash2 = update2.compute_hash("alys-test");
+
+        // Different power values should produce different hashes
+        assert_ne!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_governance_committed_deduplication() {
+        let fixture = GovernanceQueueTestFixture::new();
+        let update = create_test_validator_update(100);
+        let hash = update.compute_hash("alys-test");
+
+        // Mark as committed
+        fixture.mark_governance_update_committed(hash).await;
+
+        // Marking same hash again should be idempotent
+        fixture.mark_governance_update_committed(hash).await;
+
+        // Still committed
+        assert!(fixture.is_governance_update_committed(&hash).await);
+    }
+
+    #[tokio::test]
+    async fn test_governance_lru_eviction() {
+        // Bug 4 fix: Test that LRU eviction works correctly
+        // Create a small cache to test eviction behavior
+        let small_cache: Arc<RwLock<LruCache<[u8; 32], ()>>> = Arc::new(RwLock::new(
+            LruCache::new(NonZeroUsize::new(3).unwrap())
+        ));
+
+        // Add 3 entries
+        let hash1 = [0x01; 32];
+        let hash2 = [0x02; 32];
+        let hash3 = [0x03; 32];
+
+        small_cache.write().await.put(hash1, ());
+        small_cache.write().await.put(hash2, ());
+        small_cache.write().await.put(hash3, ());
+
+        // All 3 should be present
+        assert!(small_cache.write().await.contains(&hash1));
+        assert!(small_cache.write().await.contains(&hash2));
+        assert!(small_cache.write().await.contains(&hash3));
+
+        // Add a 4th entry - should evict hash1 (oldest)
+        let hash4 = [0x04; 32];
+        small_cache.write().await.put(hash4, ());
+
+        // hash1 should be evicted
+        assert!(!small_cache.write().await.contains(&hash1));
+        // Others should still be present
+        assert!(small_cache.write().await.contains(&hash2));
+        assert!(small_cache.write().await.contains(&hash3));
+        assert!(small_cache.write().await.contains(&hash4));
     }
 }

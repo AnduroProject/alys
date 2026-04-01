@@ -20,6 +20,7 @@
 //! ```
 
 use super::types::*;
+use super::GovernanceUpdate;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -111,6 +112,24 @@ pub enum WALEntry {
     ///
     /// Persists the liveness gate counter to survive restarts.
     LivenessUpdate { height: u64, blocks_without_pow: u64 },
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GOVERNANCE UPDATES (Bug 5 fix)
+    // ═══════════════════════════════════════════════════════════════════
+    /// Governance updates included in a proposed block (for crash recovery)
+    ///
+    /// Written BEFORE broadcasting the proposal containing governance updates.
+    /// If the proposer crashes after draining the pending queue but before
+    /// the block is committed, the WAL allows re-queuing these updates.
+    ///
+    /// On recovery:
+    /// - If a Commit entry exists for this height, the updates were committed (no action needed)
+    /// - If no Commit entry exists, re-queue the updates for the next proposal
+    ProposedGovernanceUpdates {
+        height: u64,
+        round: u32,
+        updates: Vec<GovernanceUpdate>,
+    },
 }
 
 impl WALEntry {
@@ -124,6 +143,7 @@ impl WALEntry {
             Self::Commit { height, .. } => Some(*height),
             Self::SentEvidence { height, .. } => Some(*height),
             Self::LivenessUpdate { height, .. } => Some(*height),
+            Self::ProposedGovernanceUpdates { height, .. } => Some(*height),
             Self::Locked { .. } | Self::Unlocked { .. } => None,
         }
     }
@@ -140,6 +160,7 @@ impl WALEntry {
             Self::Commit { .. } => "Commit",
             Self::SentEvidence { .. } => "SentEvidence",
             Self::LivenessUpdate { .. } => "LivenessUpdate",
+            Self::ProposedGovernanceUpdates { .. } => "ProposedGovernanceUpdates",
         }
     }
 }
@@ -516,6 +537,14 @@ pub struct RecoveredState {
 
     /// Liveness counter (blocks without AuxPoW)
     pub blocks_without_pow: u64,
+
+    /// Uncommitted governance updates (Bug 5 fix)
+    ///
+    /// If a proposer crashed after draining the pending governance queue
+    /// but before the block was committed, these updates need to be re-queued.
+    /// Empty if the block was successfully committed or no governance updates
+    /// were proposed.
+    pub uncommitted_governance_updates: Option<Vec<GovernanceUpdate>>,
 }
 
 impl RecoveredState {
@@ -523,6 +552,9 @@ impl RecoveredState {
     pub fn from_wal_entries(entries: Vec<WALEntry>) -> Self {
         let mut state = Self::default();
         let mut current_height: Option<u64> = None;
+
+        // Bug 5 fix: Track proposed but uncommitted governance updates
+        let mut proposed_governance: Option<(u64, u32, Vec<GovernanceUpdate>)> = None;
 
         for entry in entries {
             match entry {
@@ -580,6 +612,13 @@ impl RecoveredState {
                     // This ensures recovery starts at the correct round after crash
                     state.current_round = Some(0);
                     current_height = Some(height + 1);
+
+                    // Bug 5 fix: Clear proposed governance if commit succeeds for that height
+                    if let Some((prop_height, _, _)) = &proposed_governance {
+                        if *prop_height == height {
+                            proposed_governance = None;
+                        }
+                    }
                 }
 
                 WALEntry::SentProposal { .. } => {
@@ -596,8 +635,16 @@ impl RecoveredState {
                 } => {
                     state.blocks_without_pow = blocks_without_pow;
                 }
+
+                // Bug 5 fix: Track proposed governance updates for crash recovery
+                WALEntry::ProposedGovernanceUpdates { height, round, updates } => {
+                    proposed_governance = Some((height, round, updates));
+                }
             }
         }
+
+        // Bug 5 fix: Return proposed governance updates for re-queuing if not committed
+        state.uncommitted_governance_updates = proposed_governance.map(|(_, _, u)| u);
 
         state
     }
@@ -935,5 +982,133 @@ mod tests {
         ];
         let state = RecoveredState::from_wal_entries(entries);
         assert_eq!(state.current_step(), TendermintStep::Precommit);
+    }
+
+    #[test]
+    fn test_governance_updates_recovery_uncommitted() {
+        use super::super::governance::{GovernanceUpdate, ValidatorUpdate};
+        use lighthouse_wrapper::bls::{PublicKey, Signature};
+        use std::str::FromStr;
+
+        // Create a test governance update
+        let pubkey = PublicKey::from_str(
+            "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        ).expect("valid test public key");
+
+        let update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: pubkey,
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        // Simulate: Proposed governance updates, then crashed (no commit)
+        let entries = vec![
+            WALEntry::NewRound {
+                height: 100,
+                round: 0,
+            },
+            WALEntry::ProposedGovernanceUpdates {
+                height: 100,
+                round: 0,
+                updates: vec![update.clone()],
+            },
+            // No Commit entry - simulates crash
+        ];
+
+        let state = RecoveredState::from_wal_entries(entries);
+
+        // Uncommitted governance updates should be recovered
+        assert!(state.uncommitted_governance_updates.is_some());
+        let recovered_updates = state.uncommitted_governance_updates.unwrap();
+        assert_eq!(recovered_updates.len(), 1);
+        assert_eq!(recovered_updates[0], update);
+    }
+
+    #[test]
+    fn test_governance_updates_recovery_committed() {
+        use super::super::governance::{GovernanceUpdate, ValidatorUpdate};
+        use lighthouse_wrapper::bls::{PublicKey, Signature};
+        use std::str::FromStr;
+
+        // Create a test governance update
+        let pubkey = PublicKey::from_str(
+            "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        ).expect("valid test public key");
+
+        let update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: pubkey,
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        // Simulate: Proposed governance updates, then committed successfully
+        let entries = vec![
+            WALEntry::NewRound {
+                height: 100,
+                round: 0,
+            },
+            WALEntry::ProposedGovernanceUpdates {
+                height: 100,
+                round: 0,
+                updates: vec![update.clone()],
+            },
+            WALEntry::Commit {
+                height: 100,
+                block_hash: BlockHash::repeat_byte(0xAB),
+            },
+        ];
+
+        let state = RecoveredState::from_wal_entries(entries);
+
+        // No uncommitted governance updates - they were committed
+        assert!(state.uncommitted_governance_updates.is_none());
+        assert_eq!(state.last_committed_height, Some(100));
+    }
+
+    #[test]
+    fn test_governance_updates_recovery_different_height() {
+        use super::super::governance::{GovernanceUpdate, ValidatorUpdate};
+        use lighthouse_wrapper::bls::{PublicKey, Signature};
+        use std::str::FromStr;
+
+        // Create a test governance update
+        let pubkey = PublicKey::from_str(
+            "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        ).expect("valid test public key");
+
+        let update = GovernanceUpdate::Validator(ValidatorUpdate {
+            public_key: pubkey,
+            power: 100,
+            governance_signature: Signature::empty(),
+        });
+
+        // Simulate: Proposed at height 101, but only height 100 was committed
+        // This means we recovered after crash during height 101 proposal
+        let entries = vec![
+            WALEntry::Commit {
+                height: 100,
+                block_hash: BlockHash::repeat_byte(0xAA),
+            },
+            WALEntry::NewRound {
+                height: 101,
+                round: 0,
+            },
+            WALEntry::ProposedGovernanceUpdates {
+                height: 101,
+                round: 0,
+                updates: vec![update.clone()],
+            },
+            // No Commit for height 101 - crash happened
+        ];
+
+        let state = RecoveredState::from_wal_entries(entries);
+
+        // Uncommitted governance updates should be recovered
+        assert!(state.uncommitted_governance_updates.is_some());
+        let recovered_updates = state.uncommitted_governance_updates.unwrap();
+        assert_eq!(recovered_updates.len(), 1);
+
+        // Last committed should still be 100
+        assert_eq!(state.last_committed_height, Some(100));
     }
 }
