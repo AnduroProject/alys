@@ -426,7 +426,7 @@ services:
       - --log-level=debug
       # TM-V1 Chaos Test: Push validator 4 update after 60s delay (one-shot)
       - --validator-update-pubkey=90220dc92c39b95cfb107d1e2cdcd65cb400dabf55a00db7d66a5c8599692feaa561c13b467c321ccac02bf0f4b13c94
-      - --validator-update-power=100
+      - --validator-update-power=1
       - --validator-update-delay=60
       - --validator-update-one-shot
 
