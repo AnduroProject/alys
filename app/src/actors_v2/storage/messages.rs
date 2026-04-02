@@ -103,6 +103,27 @@ pub struct BlockExistsMessage {
     pub correlation_id: Option<Uuid>,
 }
 
+/// Message to get a block's hash by height without fetching the full block.
+///
+/// This is an optimization for parent validation during sync. The BLOCK_HEIGHTS
+/// column family already stores `height -> block_hash` mappings, so we can
+/// retrieve just the hash without deserializing the full block data.
+///
+/// # Performance Impact
+///
+/// During fast sync, validation previously fetched entire parent blocks (~KB-MB)
+/// just to compute `canonical_root()` for hash comparison. This message reads
+/// only the 32-byte hash directly from the height index, dramatically reducing
+/// I/O and deserialization overhead.
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "Result<Option<Hash256>, StorageError>")]
+pub struct GetBlockHashByHeightMessage {
+    /// Height/slot number to look up
+    pub height: u64,
+    /// Optional correlation ID for tracing
+    pub correlation_id: Option<Uuid>,
+}
+
 // =============================================================================
 // STATE OPERATIONS
 // =============================================================================

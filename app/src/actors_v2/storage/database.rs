@@ -427,6 +427,52 @@ impl DatabaseManager {
         }
     }
 
+    /// Retrieve only the block hash at a given height without fetching the full block.
+    ///
+    /// This is an optimization for parent validation during sync. The BLOCK_HEIGHTS
+    /// column family stores `height -> block_hash` directly, so we can retrieve just
+    /// the 32-byte hash without deserializing the full block (~KB-MB).
+    ///
+    /// # Performance
+    ///
+    /// This method is significantly faster than `get_block_by_height()` followed by
+    /// `canonical_root()` because:
+    /// 1. Reads only 32 bytes from the height index CF
+    /// 2. No block deserialization required
+    /// 3. No additional lookup in the BLOCKS CF
+    ///
+    /// # Note on Hash Type
+    ///
+    /// The stored hash is the **consensus hash** (canonical_root) of the block,
+    /// not the execution hash. This matches the hash stored during `put_block()`.
+    pub async fn get_block_hash_by_height(&self, height: u64) -> Result<Option<Hash256>, StorageError> {
+        let db = self.main_db.read().await;
+        let height_cf = db
+            .cf_handle(column_families::BLOCK_HEIGHTS)
+            .ok_or_else(|| {
+                StorageError::Database("BLOCK_HEIGHTS column family not found".to_string())
+            })?;
+
+        let height_key = height.to_be_bytes();
+        match db.get_cf(&height_cf, &height_key).map_err(|e| {
+            StorageError::Database(format!("Failed to retrieve block hash by height: {}", e))
+        })? {
+            Some(block_hash_bytes) => {
+                if block_hash_bytes.len() < 32 {
+                    return Err(StorageError::Serialization(format!(
+                        "Invalid block hash length at height {}: expected 32, got {}",
+                        height,
+                        block_hash_bytes.len()
+                    )));
+                }
+                let mut hash_bytes = [0u8; 32];
+                hash_bytes.copy_from_slice(&block_hash_bytes[..32]);
+                Ok(Some(Hash256::from(hash_bytes)))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Find the highest block stored in the database.
     ///
     /// This is used for chain head reconstruction when the chain_head marker

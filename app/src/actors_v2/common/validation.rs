@@ -12,9 +12,12 @@
 //! parent block (set correctly in tendermint_handlers.rs during block assembly). This matches
 //! how storage indexes blocks, enabling direct hash-based lookups.
 //!
-//! However, we still use height-based lookup as a defense-in-depth measure to handle any
-//! edge cases with missing blocks or reorgs. The parent_hash is verified against the
-//! **consensus hash** (canonical_root) of the looked-up block.
+//! ## Performance Optimization (QueueFull Fix)
+//!
+//! During fast sync, the BLOCK_HEIGHTS column family stores `height -> block_hash` directly.
+//! Instead of fetching the full parent block (~KB-MB) and computing `canonical_root()`,
+//! we now use `GetBlockHashByHeightMessage` to retrieve only the 32-byte hash. This reduces
+//! I/O and deserialization overhead significantly during initial sync.
 //!
 //! ## Consensus Note
 //!
@@ -68,17 +71,18 @@ pub async fn validate_parent_relationship(
         tracing::debug!(
             block_height = block_height,
             parent_hash = %parent_hash,
-            "Block #1 detected - validating genesis parent via height lookup"
+            "Block #1 detected - validating genesis parent via hash lookup"
         );
 
-        // Fetch genesis by HEIGHT (0) for robustness
-        let get_block_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+        // OPTIMIZATION: Fetch only the genesis hash, not the full block
+        // The BLOCK_HEIGHTS CF stores height -> consensus_hash directly
+        let get_hash_msg = crate::actors_v2::storage::messages::GetBlockHashByHeightMessage {
             height: 0,
             correlation_id: Some(uuid::Uuid::new_v4()),
         };
 
-        let parent_block = match storage_actor.send(get_block_msg).await {
-            Ok(Ok(Some(parent))) => parent,
+        let genesis_consensus_hash = match storage_actor.send(get_hash_msg).await {
+            Ok(Ok(Some(hash))) => hash,
             Ok(Ok(None)) => {
                 // Genesis not found - this is an orphan
                 tracing::debug!(
@@ -93,37 +97,26 @@ pub async fn validate_parent_relationship(
             }
             Ok(Err(e)) => {
                 return Err(ChainError::Storage(format!(
-                    "Failed to fetch genesis block: {}",
+                    "Failed to fetch genesis hash: {}",
                     e
                 )));
             }
             Err(e) => {
                 return Err(ChainError::NetworkError(format!(
-                    "Communication error with StorageActor while fetching genesis: {}",
+                    "Communication error with StorageActor while fetching genesis hash: {}",
                     e
                 )));
             }
         };
 
-        // Verify parent is actually genesis (height 0)
-        let parent_height = parent_block.message.execution_payload.block_number;
-        if parent_height != 0 {
-            return Err(ChainError::InvalidBlock(format!(
-                "Block #1 parent is not genesis - parent height is {} (expected 0)",
-                parent_height
-            )));
-        }
-
         // TM-B7 FIX: Validate using CONSENSUS hash
-        // The parent_hash field now contains the consensus hash (canonical_root)
-        let genesis_consensus_hash = parent_block.canonical_root();
+        // The parent_hash field contains the consensus hash (canonical_root)
+        // The height index stores this same hash directly
         if genesis_consensus_hash != parent_hash {
-            let genesis_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
             tracing::warn!(
                 claimed_parent_hash = %parent_hash,
                 genesis_consensus_hash = %genesis_consensus_hash,
-                genesis_execution_hash = %genesis_execution_hash,
-                "Genesis hash mismatch (TM-B7 debug info)"
+                "Genesis hash mismatch"
             );
             return Err(ChainError::InvalidBlock(format!(
                 "Block #1 parent hash mismatch: claimed {} but genesis consensus hash is {}",
@@ -155,24 +148,26 @@ pub async fn validate_parent_relationship(
         block_height = block_height,
         parent_height = parent_height,
         claimed_parent_hash = %parent_hash,
-        "Validating parent relationship via height lookup"
+        "Validating parent relationship via hash lookup"
     );
 
-    // Fetch parent block by HEIGHT
-    let get_block_msg = crate::actors_v2::storage::messages::GetBlockByHeightMessage {
+    // OPTIMIZATION: Fetch only the parent hash, not the full block
+    // The BLOCK_HEIGHTS CF stores height -> consensus_hash directly
+    // This avoids deserializing KB-MB of block data just to get the hash
+    let get_hash_msg = crate::actors_v2::storage::messages::GetBlockHashByHeightMessage {
         height: parent_height,
         correlation_id: Some(uuid::Uuid::new_v4()),
     };
 
-    let parent_block = match storage_actor.send(get_block_msg).await {
-        Ok(Ok(Some(parent))) => parent,
+    let parent_consensus_hash = match storage_actor.send(get_hash_msg).await {
+        Ok(Ok(Some(hash))) => hash,
         Ok(Ok(None)) => {
             // Parent not found at expected height - this is an orphan block
             tracing::debug!(
                 parent_hash = %parent_hash,
                 parent_height = parent_height,
                 block_height = block_height,
-                "Parent block not found at height {} - block is orphan",
+                "Parent hash not found at height {} - block is orphan",
                 parent_height
             );
             return Err(ChainError::OrphanBlock {
@@ -182,40 +177,27 @@ pub async fn validate_parent_relationship(
         }
         Ok(Err(e)) => {
             return Err(ChainError::Storage(format!(
-                "Failed to fetch parent block at height {}: {}",
+                "Failed to fetch parent hash at height {}: {}",
                 parent_height, e
             )));
         }
         Err(e) => {
             return Err(ChainError::NetworkError(format!(
-                "Communication error with StorageActor while fetching parent: {}",
+                "Communication error with StorageActor while fetching parent hash: {}",
                 e
             )));
         }
     };
 
-    // Verify parent is at expected height (sanity check)
-    let actual_parent_height = parent_block.message.execution_payload.block_number;
-    if actual_parent_height != parent_height {
-        return Err(ChainError::InvalidBlock(format!(
-            "Height mismatch: expected parent at {} but found block at {}",
-            parent_height, actual_parent_height
-        )));
-    }
-
     // TM-B7 FIX: Validate using CONSENSUS hash (canonical_root)
-    // The block.parent_hash field now contains the consensus hash, not execution hash
-    let parent_consensus_hash = parent_block.canonical_root();
-
+    // The block.parent_hash field contains the consensus hash
+    // The height index stores this same hash directly
     if parent_consensus_hash != parent_hash {
-        // Log both hash types for debugging
-        let parent_execution_hash = parent_block.message.execution_payload.block_hash.into_root();
         tracing::warn!(
             block_height = block_height,
             claimed_parent_hash = %parent_hash,
             parent_consensus_hash = %parent_consensus_hash,
-            parent_execution_hash = %parent_execution_hash,
-            "Parent hash mismatch (TM-B7 debug info)"
+            "Parent hash mismatch"
         );
         return Err(ChainError::InvalidBlock(format!(
             "Parent consensus hash mismatch: block claims {} but parent's consensus hash is {}",
@@ -227,7 +209,7 @@ pub async fn validate_parent_relationship(
         block_height = block_height,
         parent_height = parent_height,
         parent_consensus_hash = %parent_consensus_hash,
-        "Parent relationship validated successfully (TM-B7 consensus hash verification)"
+        "Parent relationship validated successfully"
     );
 
     Ok(())

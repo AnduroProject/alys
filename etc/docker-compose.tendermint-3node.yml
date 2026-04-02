@@ -346,7 +346,7 @@ services:
       alys-tendermint-3:
         ipv4_address: 172.22.0.13
     ports:
-      - "3030:3000"    # V0 RPC (remapped to avoid conflict with grafana)
+      - "3040:3000"    # V0 RPC (remapped to avoid conflict with grafana)
       - "3031:3001"    # V2 RPC
       - "9003:9000"    # V0 P2P
       - "9094:9090"    # Prometheus Metrics

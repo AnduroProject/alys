@@ -266,3 +266,20 @@ impl Handler<BlockExistsMessage> for StorageActor {
         })
     }
 }
+
+impl Handler<GetBlockHashByHeightMessage> for StorageActor {
+    type Result = ResponseFuture<Result<Option<lighthouse_wrapper::types::Hash256>, StorageError>>;
+
+    fn handle(&mut self, msg: GetBlockHashByHeightMessage, _: &mut Context<Self>) -> Self::Result {
+        let _correlation_id = msg.correlation_id;
+        debug!(
+            "Handling GetBlockHashByHeightMessage for height {}",
+            msg.height
+        );
+
+        let height = msg.height;
+        let database = self.database.clone();
+
+        Box::pin(async move { database.get_block_hash_by_height(height).await })
+    }
+}

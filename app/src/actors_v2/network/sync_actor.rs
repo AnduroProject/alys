@@ -18,7 +18,7 @@ use super::{
     SyncConfig, SyncError, SyncMessage, SyncMetrics, SyncResponse,
 };
 use crate::actors_v2::storage::{StorageActor, messages::GetChainHeadMessage};
-use crate::actors_v2::chain::{ChainActor, messages::ChainMessage};
+use crate::actors_v2::chain::{ChainActor, messages::ChainMessage, error::ChainError};
 
 /// Simplified sync states (linear progression)
 #[derive(Debug, Clone, PartialEq)]
@@ -1416,11 +1416,20 @@ impl Handler<SyncMessage> for SyncActor {
                                                     }
                                                     Ok(Err(chain_err)) => {
                                                         // ChainActor returned an error (e.g., validation failed)
-                                                        tracing::error!(
-                                                            height = block_height,
-                                                            error = ?chain_err,
-                                                            "Block import failed with ChainError"
-                                                        );
+                                                        // Apply backpressure for QueueFull to let the chain actor catch up
+                                                        if matches!(chain_err, ChainError::QueueFull) {
+                                                            tracing::warn!(
+                                                                height = block_height,
+                                                                "Import queue full - applying backpressure (waiting 500ms)"
+                                                            );
+                                                            tokio::time::sleep(Duration::from_millis(500)).await;
+                                                        } else {
+                                                            tracing::error!(
+                                                                height = block_height,
+                                                                error = ?chain_err,
+                                                                "Block import failed with ChainError"
+                                                            );
+                                                        }
                                                         let mut s = state.write().unwrap();
                                                         s.metrics.record_network_error();
                                                         // Don't update height - block was not imported

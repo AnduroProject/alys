@@ -253,4 +253,52 @@ mod tests {
             test_block.message.block_hash().to_block_hash()
         );
     }
+
+    #[actix::test]
+    async fn test_block_hash_by_height_optimization() {
+        // Tests the QueueFull fix optimization: fetching only the block hash
+        // by height instead of the full block data
+        let config = create_test_config();
+        let mut storage = StorageActor::new(config).await.unwrap();
+
+        // Store multiple test blocks
+        let block1 = create_test_block(100);
+        let block2 = create_test_block(101);
+        let block3 = create_test_block(102);
+
+        // Get expected hashes (same as what put_block stores)
+        let expected_hash1 = block1.message.block_hash().to_block_hash();
+        let expected_hash2 = block2.message.block_hash().to_block_hash();
+        let expected_hash3 = block3.message.block_hash().to_block_hash();
+
+        // Store all blocks
+        storage.store_block(block1.clone(), true).await.unwrap();
+        storage.store_block(block2.clone(), true).await.unwrap();
+        storage.store_block(block3.clone(), true).await.unwrap();
+
+        // Test get_block_hash_by_height returns correct hashes
+        let hash1 = storage.database.get_block_hash_by_height(100).await.unwrap();
+        assert!(hash1.is_some(), "Hash at height 100 should exist");
+        assert_eq!(hash1.unwrap(), expected_hash1, "Hash at height 100 mismatch");
+
+        let hash2 = storage.database.get_block_hash_by_height(101).await.unwrap();
+        assert!(hash2.is_some(), "Hash at height 101 should exist");
+        assert_eq!(hash2.unwrap(), expected_hash2, "Hash at height 101 mismatch");
+
+        let hash3 = storage.database.get_block_hash_by_height(102).await.unwrap();
+        assert!(hash3.is_some(), "Hash at height 102 should exist");
+        assert_eq!(hash3.unwrap(), expected_hash3, "Hash at height 102 mismatch");
+
+        // Test non-existent height returns None
+        let missing = storage.database.get_block_hash_by_height(999).await.unwrap();
+        assert!(missing.is_none(), "Hash at height 999 should not exist");
+
+        // Verify the hash matches what canonical_root() would return
+        // This is the key invariant for the QueueFull fix
+        assert_eq!(
+            hash1.unwrap(),
+            block1.canonical_root(),
+            "Stored hash should match canonical_root()"
+        );
+    }
 }
