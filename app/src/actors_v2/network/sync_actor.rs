@@ -1232,13 +1232,23 @@ impl Handler<SyncMessage> for SyncActor {
                                                 s.metrics.record_network_error();
                                             }
                                             Ok(Err(chain_err)) => {
-                                                tracing::error!(
-                                                    height = block_height,
-                                                    error = ?chain_err,
-                                                    "Block import failed with ChainError"
-                                                );
-                                                let mut s = state.write().unwrap();
-                                                s.metrics.record_network_error();
+                                                // Check for QueueFull and re-queue to prevent block loss
+                                                if matches!(chain_err, ChainError::QueueFull) {
+                                                    tracing::warn!(
+                                                        height = block_height,
+                                                        "Import queue full for gossipsub block - re-queuing"
+                                                    );
+                                                    let mut s = state.write().unwrap();
+                                                    s.block_queue.push_front((block_bytes.clone(), peer_id.clone()));
+                                                } else {
+                                                    tracing::error!(
+                                                        height = block_height,
+                                                        error = ?chain_err,
+                                                        "Block import failed with ChainError"
+                                                    );
+                                                    let mut s = state.write().unwrap();
+                                                    s.metrics.record_network_error();
+                                                }
                                             }
                                             Ok(Ok(response)) => {
                                                 use crate::actors_v2::chain::messages::ChainResponse;
@@ -1422,7 +1432,22 @@ impl Handler<SyncMessage> for SyncActor {
                                                                 height = block_height,
                                                                 "Import queue full - applying backpressure (waiting 500ms)"
                                                             );
+
+                                                            // CRITICAL FIX: Re-queue the block to prevent orphan cycle
+                                                            // Without this, the block is dropped and subsequent blocks
+                                                            // fail parent validation, triggering ForceResync repeatedly
+                                                            {
+                                                                let mut s = state.write().unwrap();
+                                                                s.block_queue.push_front((block_bytes.clone(), peer_id.clone()));
+                                                                tracing::debug!(
+                                                                    height = block_height,
+                                                                    queue_size = s.block_queue.len(),
+                                                                    "Re-queued block after QueueFull"
+                                                                );
+                                                            }
+
                                                             tokio::time::sleep(Duration::from_millis(500)).await;
+                                                            continue;
                                                         } else {
                                                             tracing::error!(
                                                                 height = block_height,
